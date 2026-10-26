@@ -70,7 +70,8 @@ internal static class PcapInterfacePropertyKeys
     /// </summary>
     internal static ReadOnlySpan<PcapInterfaceOption> InterfaceOptions => _InterfaceOptions;
 
-    // One shared array: the table is read once per interface registration (reader) and once per IDB (writer).
+    // One shared array: the table is read once per interface registration (reader) and once per IDB (writer). It is
+    // exposed only as a ReadOnlySpan (above), so callers can neither mutate the shared table nor cause a copy per read.
     private static readonly PcapInterfaceOption[] _InterfaceOptions =
     [
         new(PcapConstants.OptIfSpeed, Speed, PcapOptionValueKind.UInt64),

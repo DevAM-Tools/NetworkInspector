@@ -4,7 +4,10 @@ namespace NetworkInspector.Exporters.Blf;
 
 /// <summary>
 /// Compression level presets for BLF container output.
-/// Maps to zlib compression levels used internally.
+/// Maps to zlib compression levels used internally. The numeric values equal the zlib level that is recorded in the
+/// BLF file header (<c>compression_level</c> byte: 0, 1, 6, 9); the exporter converts the preset to the matching
+/// <see cref="System.IO.Compression.CompressionLevel"/> when it is built. LZ4 is a read-side container method only and
+/// is never written.
 /// </summary>
 public enum BlfCompressionLevel
 {

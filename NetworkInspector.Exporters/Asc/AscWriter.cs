@@ -5,8 +5,10 @@ namespace NetworkInspector.Exporters.Asc;
 /// <summary>
 /// Low-level ASCII text writer for the ASC (Vector CANalyzer) log format.
 /// Formats individual frame records as text lines and writes them directly to
-/// the target stream. Uses a reusable <see cref="PooledBuffer"/> scratch buffer so
-/// that no heap allocation occurs on the per-frame hot path.
+/// the target stream. Every line is built as raw ASCII bytes in reusable <see cref="PooledBuffer"/> instances
+/// (stack scratch for numbers, no <c>string</c> formatting) so that no heap allocation occurs on the per-frame hot path;
+/// only the one-time header allocates. Lines are collected in a 64 KiB output buffer and written to the stream in large
+/// blocks.
 /// <para>
 /// The file header (<c>date</c>, <c>base hex</c>, <c>Begin Triggerblock</c>) is
 /// written by the constructor; the footer (<c>End TriggerBlock</c>) is written by
@@ -25,10 +27,13 @@ internal sealed class AscWriter
 {
     #region Constants
 
-    /// <summary>Uppercase hex digit lookup table (ASCII).</summary>
+    /// <summary>
+    /// Uppercase hex digit lookup table (ASCII). A <c>u8</c> literal property returns a span over static data in the
+    /// assembly, so there is no array allocation and no static initialisation cost.
+    /// </summary>
     private static ReadOnlySpan<byte> _HexDigits => "0123456789ABCDEF"u8;
 
-    /// <summary>Windows-style line ending.</summary>
+    /// <summary>Windows-style line ending (CRLF), for compatibility with Vector tooling.</summary>
     private static ReadOnlySpan<byte> _CrLf => "\r\n"u8;
 
     #endregion
@@ -47,15 +52,20 @@ internal sealed class AscWriter
     /// <summary>
     /// Per-line build buffer. Content is appended into <see cref="_OutputBuffer"/> and reset
     /// after every line so that peak per-line memory use is proportional to the longest single line.
+    /// A line is assembled here first (instead of directly in the output buffer) so that a line is either appended
+    /// whole or not at all; a failure while formatting cannot leave a partial line in the output.
+    /// The initial 256 bytes cover typical CAN, LIN and FlexRay lines; longer Ethernet and CAN XL lines grow it once.
     /// </summary>
-    private readonly PooledBuffer _LineBuffer = new(256);
+    private readonly PooledBuffer _LineBuffer;
 
     /// <summary>
     /// Accumulates multiple ASC lines before writing to <see cref="_Stream"/>, reducing
     /// stream write crossings (BufferedStream still helps, but this batches at the writer layer).
     /// Flushed when full, on <see cref="Finish"/>, or when a write would exceed capacity.
+    /// The 64 KiB size is a tuning value, not a format fact; it is rented from the array pool and stays below the
+    /// large-object-heap threshold (about 85 KB). It must match the flush threshold in <see cref="_FlushLine"/>.
     /// </summary>
-    private readonly PooledBuffer _OutputBuffer = new(65_536);
+    private readonly PooledBuffer _OutputBuffer;
 
     /// <summary>Bytes written to <see cref="_Stream"/> (committed output).</summary>
     private long _BytesWritten;
@@ -75,9 +85,9 @@ internal sealed class AscWriter
     #region Construction
 
     /// <summary>
-    /// Creates a new <see cref="AscWriter"/> and writes the ASC file header
+    /// Creates a new <see cref="AscWriter"/> and emits the ASC file header
     /// (<c>date</c>, <c>base hex</c>, <c>no internal events logged</c>,
-    /// <c>Begin Triggerblock</c>) to the stream.
+    /// <c>Begin Triggerblock</c>) into the output buffer (it reaches the stream with the first flush).
     /// </summary>
     /// <param name="stream">Target output stream (must be open for writing).</param>
     /// <param name="anchorNs">
@@ -89,14 +99,39 @@ internal sealed class AscWriter
     /// Fraction digits of the line timestamps, 6 (microseconds, the CANoe default) to 9 (nanoseconds). Values are
     /// rounded half up to that many digits; the ASC reader keeps up to nine.
     /// </param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="timestampDecimals"/> is outside 6..9.</exception>
+    /// <remarks>
+    /// <paramref name="stream"/> is not null-checked: this type is internal and its only caller passes a non-null stream.
+    /// The header is only appended to the internal output buffer, so a failing stream surfaces on a later write or in
+    /// <see cref="Finish"/>, not here.
+    /// </remarks>
     internal AscWriter(Stream stream, long anchorNs, int timestampDecimals = 6)
     {
+        // 6..9 digits: microseconds (CANoe's own resolution) up to nanoseconds (the frame timestamp resolution).
+        // More digits would only append zeros and the lookup table in _AppendTimestamp stops at 10^9.
         ArgumentOutOfRangeException.ThrowIfLessThan(timestampDecimals, 6);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(timestampDecimals, 9);
         _Stream = stream;
+
+        // A negative anchor would make the epoch-based header date and the relative-time subtraction meaningless;
+        // clamping keeps the "anchor >= 0" invariant that _AppendTimestamp relies on to rule out overflow.
         _AnchorNs = Math.Max(0L, anchorNs);
         _TimestampDecimals = timestampDecimals;
-        _WriteHeader(_AnchorNs);
+
+        // The pooled buffers are rented only now, after the arguments passed validation: a field initializer would rent
+        // them before the checks above and leak both arrays to the pool when the constructor throws.
+        _LineBuffer = new PooledBuffer(256);
+        _OutputBuffer = new PooledBuffer(65_536);
+        try
+        {
+            _WriteHeader(_AnchorNs);
+        }
+        catch
+        {
+            // The owner never gets a writer to call Return on, so the buffers go back here.
+            Return();
+            throw;
+        }
     }
 
     #endregion
@@ -117,8 +152,6 @@ internal sealed class AscWriter
     ///   same in both bases, a bus DLC of 10–15 must be <c>A</c>–<c>F</c>.</item>
     /// <item>Data bytes: 2-char uppercase hex each, space-separated.</item>
     /// </list>
-    /// </remarks>
-    /// <remarks>
     /// Direction is always Rx. SocketCAN, DLT_LIN, and LINKTYPE_FLEXRAY payloads
     /// do not carry Tx versus Rx, and the ASC parser discards the direction token.
     /// </remarks>
@@ -181,8 +214,6 @@ internal sealed class AscWriter
     /// <item>Data length: decimal integer (actual byte count, 0–64).</item>
     /// <item>Data bytes: 2-char uppercase hex each, space-separated.</item>
     /// </list>
-    /// </remarks>
-    /// <remarks>
     /// Direction is always Rx. SocketCAN, DLT_LIN, and LINKTYPE_FLEXRAY payloads
     /// do not carry Tx versus Rx, and the ASC parser discards the direction token.
     /// </remarks>
@@ -220,8 +251,10 @@ internal sealed class AscWriter
         _LineBuffer.WriteByte((byte)' ');
         _LineBuffer.WriteByte(esi ? (byte)'1' : (byte)'0');
         _LineBuffer.WriteByte((byte)' ');
-        // DLC is hex under base hex. One digit keeps 10..15 distinct from the decimal data length.
-        _LineBuffer.WriteByte((byte)"0123456789ABCDEF"[dlc]);
+        // DLC is hex under base hex. One digit keeps 10..15 distinct from the decimal data length. The caller passes a DLC
+        // code (0..15) from the FD length table; the mask is the same as on the classic path and keeps a stray value from
+        // indexing past the 16 digits (an exception here would abort the frame's line half-built).
+        _LineBuffer.WriteByte(_HexDigits[dlc & 0x0F]);
         _LineBuffer.WriteByte((byte)' ');
         _AppendDecimalInt(data.Length);
 
@@ -250,8 +283,6 @@ internal sealed class AscWriter
     /// <item>Checksum model: <c>classic</c> or <c>enhanced</c> from DLT_LIN byte 4 bits 1-0 (1 = classic, 2 = enhanced);
     ///   <c>enhanced</c> (the LIN 2.x default) when the frame does not state it.</item>
     /// </list>
-    /// </remarks>
-    /// <remarks>
     /// Direction is always Rx. SocketCAN, DLT_LIN, and LINKTYPE_FLEXRAY payloads
     /// do not carry Tx versus Rx, and the ASC parser discards the direction token.
     /// </remarks>
@@ -304,27 +335,26 @@ internal sealed class AscWriter
     /// Output format:
     /// <c>{ts} Fr {ch} V9 {frameId:X4} {cycle:X2} 0 0 {headerCrc:X4} x {byteCount:X2} [data bytes...]</c>
     /// <list type="bullet">
-    /// <item>Channel: decimal integer (raw value from DLT_FLEXRAY header byte 0).</item>
+    /// <item>Channel: decimal integer, 1 = channel A, 2 = channel B (derived by the caller from the channel bit of the
+    ///   LINKTYPE_FLEXRAY measurement header).</item>
     /// <item>Frame ID: 4-char uppercase hex (11-bit slot ID, 0x0000–0x07FF).</item>
     /// <item>Cycle: uppercase hex (0–63). The file header is <c>base hex</c>.</item>
     /// <item>NM and Sync: always <c>0</c>. The link-type frame does not carry them.</item>
     /// <item>Header CRC: 4-char uppercase hex.</item>
     /// <item>Identifier: literal <c>x</c> placeholder token.</item>
-    /// <item>Byte count: uppercase hex, because the file base is hex.</item>
+    /// <item>Byte count: uppercase hex, because the file base is hex. Written through a <c>byte</c> cast, which is safe
+    ///   because the payload is at most 254 bytes (127 words).</item>
     /// <item>Data bytes: 2-char uppercase hex each, space-separated.</item>
     /// </list>
+    /// FlexRay ASC lines have no direction column, so this method emits no Rx/Tx token (the link-type payload carries
+    /// no direction either).
     /// </remarks>
     /// <param name="timestampNs">Frame timestamp in nanoseconds since Unix epoch.</param>
-    /// <param name="channel">FlexRay physical channel (from DLT_FLEXRAY header byte 0).</param>
+    /// <param name="channel">FlexRay channel number as written to the line: 1 = channel A, 2 = channel B.</param>
     /// <param name="frameId">11-bit FlexRay slot/frame ID.</param>
     /// <param name="cycle">Cycle counter (0–63).</param>
-    /// <param name="headerCrc">FlexRay header CRC value.</param>
+    /// <param name="headerCrc">FlexRay header CRC value (11 bits).</param>
     /// <param name="data">Payload bytes (0–254 bytes).</param>
-    /// <remarks>
-    /// Direction is always Rx. SocketCAN, DLT_LIN, and LINKTYPE_FLEXRAY payloads
-    /// do not carry Tx versus Rx, and the ASC parser discards the direction token.
-    /// FlexRay ASC lines have no direction column, so this method does not emit a token.
-    /// </remarks>
     internal void WriteFlexRayMessage(
         long timestampNs, int channel,
         ushort frameId, byte cycle, ushort headerCrc,
@@ -397,6 +427,9 @@ internal sealed class AscWriter
     /// <param name="frame">Compact 12-byte CAN XL header plus payload.</param>
     internal void WriteCanXlFrame(long timestampNs, int channel, ReadOnlySpan<byte> frame)
     {
+        // Decode the compact CAN XL buffer (the layout the ASC reader builds): word 0 = priority in bits 10-0 and VCID in bits
+        // 23-16 (big-endian), byte 4 = flags (bit 0 SEC, bit 1 RRS), byte 5 = SDT, bytes 6-7 = payload length, bytes 8-11 =
+        // acceptance field (little-endian). The caller has already validated the lengths, so no bounds checks are repeated.
         uint word = BinaryPrimitives.ReadUInt32BigEndian(frame);
         uint priority = word & 0x7FFu;
         byte vcid = (byte)((word >> 16) & 0xFF);
@@ -404,6 +437,9 @@ internal sealed class AscWriter
         byte sdt = frame[5];
         int length = BinaryPrimitives.ReadUInt16LittleEndian(frame.Slice(6, 2));
         uint acceptanceField = BinaryPrimitives.ReadUInt32LittleEndian(frame.Slice(8, 4));
+
+        // Trailing ASC flag word: the XLF bit (0x00400000) is always set for an XLFF line; SEC and RRS are mapped from the
+        // compact flag byte to their ASC positions (0x01000000 and 0x00800000, the same constants the reader decodes).
         uint ascFlags = 0x00400000u;
         if ((flags & 0x01) != 0)
         {
@@ -415,6 +451,9 @@ internal sealed class AscWriter
             ascFlags |= 0x00800000u;
         }
 
+        // Write the columns in the order the CANXL line defines; the constant "0" columns are ones the ASC reader skips.
+        // The data length appears twice: as hex "length - 1" (the DLC column; length is 1..2048, so it never underflows) and
+        // as the decimal byte count; the reader requires the two to agree.
         _AppendTimestamp(timestampNs);
         _LineBuffer.Write(" CANXL "u8);
         _AppendDecimalInt(channel);
@@ -453,6 +492,9 @@ internal sealed class AscWriter
     /// </summary>
     internal void Finish()
     {
+        // The footer is built and appended like any frame line; the output buffer is then forced out and the stream is
+        // flushed so the complete file (header included, even for an empty export) is handed to the stream before the
+        // owner closes it.
         _LineBuffer.Write("End TriggerBlock"u8);
         _LineBuffer.Write(_CrLf);
         _FlushLine();
@@ -476,18 +518,24 @@ internal sealed class AscWriter
     #region Private helpers
 
     /// <summary>
-    /// Writes the ASC file header to the stream. This is a one-time operation called
+    /// Emits the ASC file header (buffered, see the constructor remarks). This is a one-time operation called
     /// from the constructor. String allocations here are acceptable since the header
     /// is written only once per export.
     /// </summary>
     /// <param name="anchorNs">Capture start time in nanoseconds since Unix epoch (non-negative).</param>
     private void _WriteHeader(long anchorNs)
     {
-        // Convert to UTC DateTimeOffset for the date string.
+        // Convert to UTC DateTimeOffset for the date string. The header date has millisecond resolution (the ctime-style
+        // ASC date has no finer field), whereas the line timestamps are relative to the full-resolution anchor, so the
+        // sub-millisecond part of the anchor is not recoverable from the header. A non-negative nanosecond value divided by
+        // 10^6 stays far inside the DateTimeOffset range, so FromUnixTimeMilliseconds cannot throw.
         DateTimeOffset dto = DateTimeOffset.FromUnixTimeMilliseconds(anchorNs / 1_000_000);
         string dateStr = _FormatAscDate(dto);
         byte[] dateBytes = Encoding.ASCII.GetBytes(dateStr);
 
+        // Each header line goes through the normal line path (_FlushLine) so the byte accounting and batching are identical
+        // to frame lines. The header is therefore only buffered here; it reaches the stream with the first output-buffer
+        // flush, so a stream failure surfaces on a later frame write or in Finish, not in the constructor.
         // date <dateStr>
         _LineBuffer.Write("date "u8);
         _LineBuffer.Write(dateBytes);
@@ -537,7 +585,9 @@ internal sealed class AscWriter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _AppendTimestamp(long timestampNs)
     {
-        // timestampNs <= anchor gives 0; otherwise the difference of two values with anchor >= 0 cannot overflow.
+        // Integer arithmetic only: no floating point and no string formatting on the per-frame path.
+        // timestampNs <= anchor gives 0 (a frame older than the first one is clamped, never printed negative);
+        // otherwise the difference of two values with anchor >= 0 cannot overflow.
         long relative = timestampNs <= _AnchorNs ? 0L : timestampNs - _AnchorNs;
         long seconds = relative / 1_000_000_000L;
         long fraction = relative % 1_000_000_000L;
@@ -552,6 +602,8 @@ internal sealed class AscWriter
             rounded -= unit;
         }
 
+        // Format "seconds.fraction" into 32 stack bytes (a long needs at most 19 digits plus '.' plus 9 fraction digits, so
+        // the TryFormat calls cannot fail). The 'D' format with a precision zero-pads the fraction to the configured width.
         Span<byte> scratch = stackalloc byte[32];
         Utf8Formatter.TryFormat(seconds, scratch, out int written);
         scratch[written++] = (byte)'.';
@@ -584,8 +636,9 @@ internal sealed class AscWriter
     /// <param name="minWidth">Minimum output width (1–4). Used for FlexRay slot IDs and CRCs.</param>
     private void _AppendHexUInt16(ushort value, int minWidth)
     {
+        // Fixed-size nibble expansion on the stack instead of ToString("X"): no string allocation per value. All digits are
+        // produced, then leading zeros are skipped down to minWidth (minWidth 4 keeps all four digits).
         ReadOnlySpan<byte> hex = _HexDigits;
-        // Produce all 4 hex digits, then trim leading zeros down to minWidth.
         Span<byte> buf = stackalloc byte[4];
         buf[0] = hex[(value >> 12) & 0xF];
         buf[1] = hex[(value >> 8) & 0xF];
@@ -608,8 +661,8 @@ internal sealed class AscWriter
     /// <param name="minWidth">Minimum output width (1–8). Use 3 for standard CAN IDs, 8 for extended.</param>
     private void _AppendHexUInt32(uint value, int minWidth)
     {
+        // Same technique as _AppendHexUInt16: stack nibble expansion, then skip leading zeros down to minWidth.
         ReadOnlySpan<byte> hex = _HexDigits;
-        // Produce all 8 hex digits, then trim leading zeros down to minWidth.
         Span<byte> buf = stackalloc byte[8];
         buf[0] = hex[(int)((value >> 28) & 0xF)];
         buf[1] = hex[(int)((value >> 24) & 0xF)];
@@ -629,7 +682,8 @@ internal sealed class AscWriter
 
     /// <summary>
     /// Appends a non-negative decimal integer to <see cref="_LineBuffer"/>.
-    /// Uses <c>Utf8Formatter.TryFormat</c> for zero-allocation decimal formatting.
+    /// Uses <c>Utf8Formatter.TryFormat</c> into a 12-byte stack buffer (an <c>int</c> needs at most 11 characters) for
+    /// zero-allocation, culture-independent formatting directly to UTF-8.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _AppendDecimalInt(int value)
@@ -650,6 +704,7 @@ internal sealed class AscWriter
     {
         try
         {
+            // Make room first so appending the line never triggers a pool re-rent and copy of the whole output buffer.
             ReadOnlySpan<byte> line = _LineBuffer.WrittenSpan;
             if (_OutputBuffer.Length + line.Length > _OutputBuffer.Capacity
                 && _OutputBuffer.Length > 0)
@@ -659,7 +714,9 @@ internal sealed class AscWriter
 
             _OutputBuffer.Write(line);
 
-            // Very long single lines / full buffer: flush so stream write crossings stay batched.
+            // Flush once the buffer holds a full 64 KiB block (the initial capacity of _OutputBuffer), so the stream sees a
+            // few large writes instead of one write per line. Lines are far shorter than the buffer (the longest, a CAN XL
+            // line, is about 6 KB), so the buffer never needs to grow.
             if (_OutputBuffer.Length >= 65_536)
             {
                 _FlushOutputBuffer();
@@ -688,6 +745,8 @@ internal sealed class AscWriter
         }
         finally
         {
+            // Reset even when the write throws: a stream that failed mid-write cannot be resumed, and keeping the bytes would
+            // make the next flush write them again after an unknown prefix. The exception still propagates to the caller.
             _OutputBuffer.Reset();
         }
     }

@@ -22,13 +22,17 @@ public interface ISession : ISessionReader, IDisposable
     /// <summary>
     /// Attempts to register a frame source. Must be called while the session is
     /// in the <see cref="SessionPhase.Idle"/> phase.
-    /// Returns <see langword="false"/> if the session is not in the correct phase.
+    /// Returns <see langword="false"/> if the session is not in the correct phase, also when <see cref="TryStart"/> or
+    /// <see cref="Shutdown"/> wins a race with the add (a source is either started or refused, never left unstarted).
+    /// Concurrent adds are safe and lose no source.
     /// After a successful add the session owns <paramref name="source"/> (or a
     /// <see cref="CachedFrameSource"/> wrapper that owns it). The caller must not dispose it.
     /// Non-random-access sources are always wrapped so frames remain readable after ingest.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="source"/> is null.</exception>
     /// <exception cref="SessionException">
-    /// <see cref="SessionErrorCode.JobIdExhausted"/> when the job ID limit is reached.
+    /// <see cref="SessionErrorCode.JobIdExhausted"/> when the job ID limit is reached;
+    /// <see cref="SessionErrorCode.Disposed"/> when the session was disposed.
     /// </exception>
     bool TryAddFrameSource(IFrameSource source, [NotNullWhen(true)] out FrameSourceInfo? info, [NotNullWhen(false)] out SessionFailure? failure);
 
@@ -37,7 +41,9 @@ public interface ISession : ISessionReader, IDisposable
     /// <see cref="FrameSourceAddOptions.CacheRandomAccess"/> wraps an
     /// <see cref="IRandomAccessFrameSource"/> in <see cref="CachedFrameSource"/>
     /// (holds the inner <see cref="Frame"/>; payload memory is not copied).
-    /// Stream sources are always wrapped.
+    /// Stream sources are always wrapped. Phase rule, ownership and failures are those of
+    /// <see cref="TryAddFrameSource(IFrameSource, out FrameSourceInfo?, out SessionFailure?)"/>, which is this
+    /// overload with <see cref="FrameSourceAddOptions.Default"/>.
     /// </summary>
     bool TryAddFrameSource(
         IFrameSource source,
@@ -156,6 +162,8 @@ public interface ISession : ISessionReader, IDisposable
     /// <see cref="SessionErrorCode.ValueCacheIdExhausted"/> when the value-cache ID limit is reached.
     /// <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/> when a field or group name is not a valid identifier.
     /// <see cref="SessionErrorCode.ValueCacheUnknownField"/> when a well-formed field or group name is not on the current stack.
+    /// <see cref="SessionErrorCode.ValueCacheInvalidRequest"/> when the request cannot be built (empty, a field that records
+    /// nothing, a duplicate series, <c>ChunkShift</c> out of range).
     /// </exception>
     bool TryAddValueCache(
         IValueCacheListener listener,
@@ -181,12 +189,10 @@ public interface ISession : ISessionReader, IDisposable
 
     /// <summary>
     /// Removes a completed, cancelled, or failed job from the job list.
-    /// Returns <see langword="false"/> if <paramref name="job"/> is not registered in this session
-    /// or was already removed.
+    /// Returns <see langword="false"/> with <see cref="SessionErrorCode.JobNotFound"/> if <paramref name="job"/> is not
+    /// registered in this session or was already removed, and with <see cref="SessionErrorCode.JobStillRunning"/> if the
+    /// job is still pending or running (cancel it and wait for it first); the job then stays registered.
     /// </summary>
-    /// <exception cref="SessionException">
-    /// <see cref="SessionErrorCode.JobStillRunning"/> when the job is still pending or running.
-    /// </exception>
     bool TryRemoveJob(JobInfo job, [NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
@@ -235,7 +241,9 @@ public interface ISession : ISessionReader, IDisposable
     /// Attempts to start all registered source jobs.
     /// Returns <see langword="true"/> if the session transitioned to
     /// <see cref="SessionPhase.Running"/>, <see langword="false"/> if the session
-    /// was not in the <see cref="SessionPhase.Idle"/> phase.
+    /// was not in the <see cref="SessionPhase.Idle"/> phase (or had started shutting down).
+    /// Of several concurrent callers exactly one succeeds; the others get
+    /// <see cref="SessionErrorCode.InvalidPhase"/>.
     /// </summary>
     bool TryStart([NotNullWhen(false)] out SessionFailure? failure);
 
@@ -304,6 +312,18 @@ public interface ISession : ISessionReader, IDisposable
     /// </para>
     ///
     /// <para>
+    /// <b>Replaced stack:</b> a stack the session created itself (an earlier restart factory) is disposed as soon as it can
+    /// safely be: right after the swap when no session read is parsing on it, otherwise by the thread whose read is the
+    /// last one that ends. <see cref="Restart"/> does not wait for those reads. The stack passed to the
+    /// <see cref="Session"/> constructor stays the caller's and is never disposed by the session. A
+    /// <see cref="Packet"/> handed out before the restart keeps its materialised fields; its still unmaterialised lazy
+    /// containers run on the replaced protocol instances and may report a failed population (an error child) once the
+    /// stack was disposed, so materialise what you need before the restart or re-read after
+    /// <see cref="ISessionListener.OnStackChanged"/>. <see cref="Shutdown"/> disposes the current stack and any replaced
+    /// one that is still in use, waiting for those reads within its timeout budget.
+    /// </para>
+    ///
+    /// <para>
     /// <b>Runtime value caches:</b> slots added with <see cref="TryAddValueCache"/> rebuild their cache
     /// from the stored request on their own thread when they receive <see cref="NotifyFlags.StackChanged"/>.
     /// A request field the new stack does not define fails that slot (its job ends
@@ -340,8 +360,9 @@ public interface ISession : ISessionReader, IDisposable
     /// <exception cref="SessionException">
     /// <see cref="SessionErrorCode.InvalidPhase"/> when the session is not in the <see cref="SessionPhase.Running"/>
     /// or <see cref="SessionPhase.Stopped"/> phase, or shutdown has started (also while the factory ran).
-    /// <see cref="SessionErrorCode.ValueCacheUnknownField"/> or <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/>
-    /// when the new stack cannot satisfy <see cref="SessionOptions.ValueCache"/>; thrown before any state changes.
+    /// <see cref="SessionErrorCode.ValueCacheUnknownField"/>, <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/> or
+    /// <see cref="SessionErrorCode.ValueCacheInvalidRequest"/> when the new stack cannot satisfy
+    /// <see cref="SessionOptions.ValueCache"/>; thrown before any state changes.
     /// <see cref="SessionErrorCode.FrameUnavailable"/> when a mapped frame cannot be re-read; queries then stay
     /// disabled (fail closed).
     /// </exception>
@@ -351,9 +372,10 @@ public interface ISession : ISessionReader, IDisposable
     /// Shuts down the session. The shutdown procedure is:
     /// <list type="number">
     ///   <item>Transition to <see cref="SessionPhase.ShuttingDown"/>.</item>
-    ///   <item>Cancel all source jobs.</item>
-    ///   <item>Wait for source jobs to finish (up to <paramref name="timeout"/> if specified).</item>
-    ///   <item>Cancel and drain all listener slots (queries stay enabled so redissect works).</item>
+    ///   <item>Cancel all source jobs and user jobs (<see cref="TryAddJob"/>).</item>
+    ///   <item>Wait for source jobs and then user jobs to finish (up to <paramref name="timeout"/> if specified).</item>
+    ///   <item>Cancel and drain all listener slots (queries stay enabled so redissect works). A flag raised before the
+    ///         cancellation is still delivered.</item>
     ///   <item>Disable packet queries.</item>
     ///   <item>Transition to <see cref="SessionPhase.Stopped"/>.</item>
     ///   <item>Dispose all jobs and listener slots.</item>
@@ -362,7 +384,7 @@ public interface ISession : ISessionReader, IDisposable
     /// <para>
     /// If <paramref name="timeout"/> is <see langword="null"/>, waits indefinitely for
     /// graceful completion. If a <see cref="TimeSpan"/> is provided, that duration is one
-    /// budget for every source job together before shutdown teardown continues; jobs that are still
+    /// budget for every source job and user job together before shutdown teardown continues; jobs that are still
     /// running remain cancelled but may not have exited yet — inspect job status via
     /// <see cref="ISessionReader.GetJobs"/>. <c>Shutdown(TimeSpan.Zero)</c> skips waiting
     /// for source completion.

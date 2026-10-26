@@ -39,9 +39,17 @@ public readonly record struct ResyncResult
 
 /// <summary>
 /// Heuristic for resynchronizing when PDU boundary detection fails.
+/// The stream buffer runs it after the detector reported <see cref="PduBoundaryResult.Invalid"/>, discards the reported
+/// number of bytes, and resumes detection there; a failed resync (or a skip beyond the buffered bytes) puts the stream
+/// into its error state.
 /// </summary>
 public interface IResyncHeuristic
 {
     /// <summary>Attempts to find a valid sync point in the data.</summary>
+    /// <param name="data">The contiguous buffered bytes, starting at the position where detection failed.</param>
+    /// <returns>
+    /// The number of bytes to discard (counted from the start of <paramref name="data"/>), or a failure when no
+    /// sync point is found. A success should make progress: skipping 0 bytes would leave the same bytes in front and the same detection failure would recur.
+    /// </returns>
     ResyncResult Resync(ReadOnlySpan<byte> data);
 }

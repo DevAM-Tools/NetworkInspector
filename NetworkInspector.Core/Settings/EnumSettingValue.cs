@@ -5,6 +5,8 @@ namespace NetworkInspector.Core.Settings;
 /// <summary>
 /// Represents an enum value with its name and numeric representation.
 /// Used for defining allowed values in enum settings.
+/// An immutable value type; note that <c>default(EnumSettingValue)</c> has a <see langword="null"/> <see cref="Name"/>
+/// (the constructor rejects null, but a default struct bypasses it), so always create instances through the constructor.
 /// </summary>
 public readonly record struct EnumSettingValue
 {

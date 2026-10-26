@@ -265,7 +265,7 @@ internal sealed class PbfInternalTests
     [Test]
     public async Task StandardBlockBuilder_TruncatedFieldCount_IncrementedForDeeplyNestedPacket()
     {
-        Packet packet = _CreateDeepPacket(18);
+        Packet packet = CreateDeepPacket(18);
 
         int maxFieldId = 32768;
         StandardBlockBuilder builder = new(maxFieldId);
@@ -286,7 +286,7 @@ internal sealed class PbfInternalTests
     [Test]
     public async Task StandardBlockBuilder_Reset_ClearsTruncatedFieldCount()
     {
-        Packet packet = _CreateDeepPacket(18);
+        Packet packet = CreateDeepPacket(18);
 
         int maxFieldId = 32768;
         StandardBlockBuilder builder = new(maxFieldId);
@@ -316,7 +316,7 @@ internal sealed class PbfInternalTests
     [Test]
     public async Task PbfExporter_StrictMode_TruncatedFieldAborts_BlockNotWritten()
     {
-        Packet packet = _CreateDeepPacket(18);
+        Packet packet = CreateDeepPacket(18);
 
         using MemoryStream baselineMs = new();
         using MemoryStream strictMs = new();
@@ -364,7 +364,7 @@ internal sealed class PbfInternalTests
     /// </para>
     /// </summary>
     /// <param name="depth">Number of nested container levels to emit.</param>
-    private static Packet _CreateDeepPacket(int depth)
+    internal static Packet CreateDeepPacket(int depth)
     {
         DeepNestingProtocol deepProtocol = new(depth);
 

@@ -9,9 +9,12 @@ namespace NetworkInspector.Sources.Asc;
 /// </summary>
 internal static class AscInterfacePropertyKeys
 {
-    /// <summary>Channel number within the ASC file (int).</summary>
+    /// <summary>Channel number within the ASC file, stored boxed as a <see cref="long"/>.</summary>
     internal const string Channel = "asc.channel";
 
-    /// <summary>Bus type name as string (e.g., "Can", "CanFd", "Lin").</summary>
+    /// <summary>
+    /// Display name of the bus type, stored as a string: the <c>AscBusTypeExtensions.ToDisplayName</c> text
+    /// (e.g. "CAN", "CAN FD", "LIN", "FlexRay", "Ethernet", "CAN XL"), not the enum member name.
+    /// </summary>
     internal const string BusType = "asc.bus_type";
 }

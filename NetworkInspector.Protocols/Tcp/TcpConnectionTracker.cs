@@ -6,34 +6,47 @@ namespace NetworkInspector.Protocols.Tcp;
 /// Manages TCP connection states and performs per-segment analysis.
 /// Implements Wireshark-compatible TCP analysis (retransmission, dup-ack, keep-alive, etc.).
 /// <para>
-/// <b>Analysis order is critical</b> — checks must run in a specific sequence:
-/// 1. ISN/SYN tracking
-/// 2. Initial RTT (SYN → SYN-ACK)
-/// 3. Retransmission / Out-of-Order
-/// 4. Keep-Alive
-/// 5. Zero Window
-/// 6. Window Update (MUST be before Dup-ACK)
-/// 7. Duplicate ACK
+/// <b>Analysis order is critical</b> — the sequence, ACK, window and next-sequence state of a flow is updated only in the final
+/// "state update" step of <see cref="Analyze"/>, so each check compares the segment against the state <i>before</i> it,
+/// and some checks depend on the result of an earlier one:
+/// 1. ISN/SYN tracking, server port, initiator
+/// 2. Initial RTT (first pure SYN → first pure ACK)
+/// 3. Keep-Alive (BEFORE retransmission: a keep-alive is not a retransmission and skips that check)
+/// 4. Retransmission / Out-of-Order / Lost segment
+/// 5. Zero Window, Zero Window Probe, Zero Window Probe ACK
+/// 6. Window Update (MUST be before Dup-ACK: a window change is not a duplicate ACK)
+/// 7. Duplicate ACK, then Keep-Alive ACK (both need the other direction's keep-alive flag)
 /// 8. ACK RTT
-/// 9. Bytes in Flight
-/// 10. State update
+/// 9. Bytes in flight, then Window Full (needs the bytes in flight)
+/// 10. State update (sequence/ack/window, ACK RTT timestamp, keep-alive memory), connection phase, timing, scaled window
+/// The <c>#region</c> markers in the method body number the same steps in finer detail (steps 5, 7 and 9 here are split into several).
 /// </para>
 /// <para>
 /// A 4-entry inline LRU cache sits in front of the dictionary to exploit temporal
 /// locality in TCP traffic (bursts from the same connection). Cache hits avoid the
 /// full dictionary lookup. Promote-to-front uses a swap with position 0 (O(1),
-/// avoids shifting the 40-byte key structs). Insert shifts entries only on cache miss.
+/// avoids shifting the large key structs: two 128-bit addresses plus ports and discriminators).
+/// Insert shifts entries only on cache miss. Because a hit only swaps with slot 0, slots 1..3 are
+/// not kept in strict recency order: the cache is an approximation of LRU, which is enough for its purpose.
+/// </para>
+/// <para>
+/// <b>Thread safety:</b> not thread-safe. The tracker mutates connection state and is used only by the ordered,
+/// single-threaded first parse of each packet; replays never touch it (they use the effects recorded at first parse).
 /// </para>
 /// </summary>
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes",
-    Justification = "Will be instantiated by TcpProtocol in Phase 5 TCP-analysis integration")]
+    Justification = "Instantiated by TcpProtocol (field _ConnectionTracker)")]
 internal sealed class TcpConnectionTracker
 {
     /// <summary>LRU cache capacity — 4 entries provide a good balance between
     /// hit rate and linear scan cost for typical network traffic patterns.</summary>
     private const int _CacheSize = 4;
 
-    /// <summary>All tracked connections keyed by normalized connection key.</summary>
+    /// <summary>
+    /// All tracked connections keyed by normalized connection key. The key's hash is seeded per process, so crafted
+    /// address/port combinations cannot be chosen to collide. The number of entries is capped by the caller through
+    /// the <c>maxStreams</c> argument of <see cref="TryGetOrCreate"/>.
+    /// </summary>
     private readonly Dictionary<TcpConnectionKey, TcpConnectionState> _Connections = [];
 
     /// <summary>Monotonically increasing stream index counter.</summary>
@@ -52,7 +65,15 @@ internal sealed class TcpConnectionTracker
     /// Gets or creates a connection state for the given key.
     /// Returns <see langword="false"/> when the key is new and <paramref name="maxStreams"/> is already reached.
     /// </summary>
-    internal bool TryGetOrCreate(in TcpConnectionKey key, int maxStreams, out TcpConnectionState state)
+    /// <param name="key">Normalized connection key of the segment.</param>
+    /// <param name="maxStreams">
+    /// Upper bound for the number of tracked connections (trust-boundary limit against memory exhaustion by a flood of
+    /// distinct connections; set by the caller from the <c>tcp.max_tracked_streams</c> setting). Reaching it is an
+    /// expected failure that the caller reports, not an exception; existing connections keep working.
+    /// </param>
+    /// <param name="state">The connection state on success; <see langword="null"/> when the limit is reached.</param>
+    /// <returns><see langword="true"/> when a state is available.</returns>
+    internal bool TryGetOrCreate(in TcpConnectionKey key, int maxStreams, [NotNullWhen(true)] out TcpConnectionState? state)
     {
         // Linear probe — sequential access from MRU ([0]) toward LRU.
         for (int i = 0; i < _CacheCount; i++)
@@ -69,11 +90,12 @@ internal sealed class TcpConnectionTracker
                     _CacheValues[0] = hitValue;
                 }
 
-                state = _CacheValues[0]!;
+                state = _CacheValues[0]!; // Invariant: slots 0.._CacheCount-1 hold a state, and a hit is inside that range.
                 return true;
             }
         }
 
+        // Cache miss: known connection, full dictionary lookup, then promote it into the cache.
         if (_Connections.TryGetValue(key, out TcpConnectionState? existing))
         {
             state = existing;
@@ -81,18 +103,27 @@ internal sealed class TcpConnectionTracker
             return true;
         }
 
+        // New connection: refuse beyond the limit. The check sits after the lookups so connections that are already
+        // tracked keep being analyzed when the table is full. No stream index is consumed on refusal.
         if (_Connections.Count >= maxStreams)
         {
-            state = null!;
+            state = null;
             return false;
         }
 
+        // Stream indices are handed out in order of first appearance and are what the user sees as tcp.stream.
         state = new TcpConnectionState { StreamIndex = _NextStreamIndex++ };
         _Connections[key] = state;
         _InsertCache(key, state);
         return true;
     }
 
+    /// <summary>
+    /// Inserts a connection at the front of the cache, shifting the others one slot back. The last slot falls out when
+    /// the cache is full. Only runs on a cache miss, which is why the shift cost is acceptable.
+    /// </summary>
+    /// <param name="key">Connection key.</param>
+    /// <param name="state">Connection state for <paramref name="key"/>.</param>
     private void _InsertCache(in TcpConnectionKey key, TcpConnectionState state)
     {
         int shiftCount = Math.Min(_CacheCount, _CacheSize - 1);
@@ -129,6 +160,11 @@ internal sealed class TcpConnectionTracker
     /// <param name="dstPort">Destination TCP port. Used to learn the server port from a pure SYN.</param>
     /// <param name="windowScale">Window Scale shift count from SYN options, or null if not a SYN or no WScale option.</param>
     /// <param name="relativeSequenceNumbers">When true, <see cref="TcpAnalysisResult.RelativeSeq"/> subtracts the sender ISN.</param>
+    /// <returns>
+    /// The analysis flags and metrics for this segment. The connection state passed in is updated as a side effect, which
+    /// is why this method must only run once per packet (first parse), never on a replay. Static because all state lives
+    /// in <paramref name="conn"/>.
+    /// </returns>
     internal static TcpAnalysisResult Analyze(
         TcpConnectionState conn,
         bool isForward,
@@ -143,6 +179,8 @@ internal sealed class TcpConnectionTracker
         byte? windowScale = null,
         bool relativeSequenceNumbers = true)
     {
+        // "flow" is the direction of this segment, "reverseFlow" the other one (the peer whose data this segment may
+        // acknowledge). RTT results start as NaN = "not measured".
         TcpFlowState flow = isForward ? conn.Forward : conn.Reverse;
         TcpFlowState reverseFlow = isForward ? conn.Reverse : conn.Forward;
         TcpAnalysisFlags analysisFlags = TcpAnalysisFlags.None;
@@ -150,13 +188,16 @@ internal sealed class TcpConnectionTracker
         double initialRtt = double.NaN;
         double ackRtt = double.NaN;
 
+        // Flag bits of the TCP flags byte: FIN 0x01, SYN 0x02, RST 0x04, PSH 0x08, ACK 0x10.
         bool isSyn = (flags & 0x02) != 0;
         bool isAck = (flags & 0x10) != 0;
         bool isFin = (flags & 0x01) != 0;
         bool isRst = (flags & 0x04) != 0;
         bool isPsh = (flags & 0x08) != 0;
 
-        // Calculate end sequence number (seq + payload_len, +1 for SYN/FIN)
+        // Calculate end sequence number (seq + payload_len, +1 for SYN/FIN, because SYN and FIN each occupy one
+        // sequence number). Unsigned arithmetic on purpose: sequence numbers wrap at 2^32, and every later ordering
+        // test uses serial-number comparison (_IsSequenceAfter/_IsSequenceBefore), never plain < or >.
         uint segLen = (uint)payloadLen;
         if (isSyn)
         {
@@ -169,6 +210,8 @@ internal sealed class TcpConnectionTracker
         uint endSeq = seqNum + segLen;
 
         #region 1. ISN / SYN tracking
+        // The first SYN of each direction fixes that direction's initial sequence number (used for relative numbers)
+        // and its window scale option. Later SYNs (retransmitted handshake) do not overwrite them.
         if (isSyn && !flow.IsnSet)
         {
             flow.Isn = seqNum;
@@ -220,6 +263,8 @@ internal sealed class TcpConnectionTracker
         #endregion
 
         #region 2. Initial RTT: pure SYN to the first pure ACK
+        // Measured once per connection from the most recent pure SYN to the first data-less ACK (the third handshake
+        // packet). A negative delta (out-of-order timestamps) is not recorded.
         if (!isSyn && isAck && payloadLen == 0 && !isFin && !isRst
             && !conn.InitialRttSet && conn.PureSynTimestamp.HasValue)
         {
@@ -246,6 +291,9 @@ internal sealed class TcpConnectionTracker
         #endregion
 
         #region 4. Retransmission / Out-of-Order
+        // Only segments that occupy sequence space (data/FIN) in an already seen direction are classified; SYNs and
+        // keep-alives are excluded. All comparisons are wrap-safe serial-number comparisons against NextSeq, the
+        // end of the data already seen in this direction (state before this segment).
         if (!isKeepAlive && flow.Seen && segLen > 0 && !isSyn)
         {
             // Check if this segment's data has already been seen
@@ -280,7 +328,9 @@ internal sealed class TcpConnectionTracker
                 analysisFlags |= TcpAnalysisFlags.SpuriousRetransmission;
             }
 
-            // Lost segment detection: gap between expected and received
+            // Lost segment detection: gap between expected and received (a segment starting after NextSeq means
+            // earlier bytes were never captured). Such a gap segment also satisfies the out-of-order branch above,
+            // so both flags are set for it.
             if (_IsSequenceAfter(seqNum, flow.NextSeq) && !isSyn)
             {
                 analysisFlags |= TcpAnalysisFlags.LostSegment;
@@ -289,15 +339,8 @@ internal sealed class TcpConnectionTracker
 
         #endregion
 
-        #region 4. Keep-Alive
-        if (flow.Seen && payloadLen <= 1 && seqNum == flow.NextSeq - 1 && !isSyn && !isFin && !isRst)
-        {
-            analysisFlags |= TcpAnalysisFlags.KeepAlive;
-        }
-
-        #endregion
-
         #region 5. Zero Window
+        // The advertised window of this segment is zero (not on SYN/FIN/RST, where the window is not meaningful).
         if (window == 0 && !isRst && !isSyn && !isFin)
         {
             analysisFlags |= TcpAnalysisFlags.ZeroWindow;
@@ -305,7 +348,8 @@ internal sealed class TcpConnectionTracker
 
         #endregion
 
-        #region 5. Zero Window Probe (exactly one new byte into a zero window)
+        #region 6. Zero Window Probe (exactly one new byte into a zero window)
+        // Uses the other direction's last advertised window (state before this segment).
         if (payloadLen == 1 && flow.Seen && seqNum == flow.NextSeq
             && reverseFlow.Seen && reverseFlow.LastWindow == 0
             && !isSyn && !isFin && !isRst)
@@ -324,6 +368,9 @@ internal sealed class TcpConnectionTracker
         #endregion
 
         #region 8. Window Update (MUST be before Dup-ACK check)
+        // A pure ACK that repeats the previous ACK number but changes the window. It must be decided first because the
+        // duplicate-ACK test below excludes it (an ACK with a new window is not a duplicate); the PSH exclusion mirrors
+        // the pure-ACK definition of the analysis.
         bool isWindowUpdate = false;
         if (isAck && payloadLen == 0 && !isSyn && !isFin && !isRst && !isPsh
             && flow.Seen && window != flow.LastWindow && ackNum == flow.LastAck)
@@ -335,6 +382,8 @@ internal sealed class TcpConnectionTracker
         #endregion
 
         #region 9. Duplicate ACK
+        // Same ACK number and window as the previous segment of this direction, no data, non-zero window, and not the
+        // reply to a keep-alive. The counter feeds the fast-retransmission test (3+ duplicates) for the other direction.
         if (isAck && payloadLen == 0 && window != 0 && flow.Seen && !isSyn && !isFin && !isRst
             && ackNum == flow.LastAck && window == flow.LastWindow
             && !isWindowUpdate
@@ -366,6 +415,9 @@ internal sealed class TcpConnectionTracker
         #endregion
 
         #region 10. ACK RTT
+        // An ACK completes the RTT sample of the other direction's data segment whose end sequence equals the ACK
+        // number. The slot is cleared on use so a repeated ACK does not yield a second sample for the same segment.
+        // Index mask 255 matches the 256-slot ring in TcpFlowState.
         if (isAck)
         {
             int slot = (int)(ackNum & 255);
@@ -398,6 +450,8 @@ internal sealed class TcpConnectionTracker
         #endregion
 
         #region 12. Window Full
+        // Compares the unacknowledged bytes with the receiver's scaled window. The shift count is at most 14 (the
+        // option scan caps it per RFC 7323), so a 16-bit window shifted in a uint cannot overflow.
         if (bytesInFlight > 0 && reverseFlow.Seen)
         {
             uint scaledWindow = (uint)reverseFlow.LastWindow;
@@ -414,6 +468,8 @@ internal sealed class TcpConnectionTracker
         #endregion
 
         #region 13. State update
+        // From here on the flow state is overwritten with this segment's values; every check above has already used
+        // the previous values. Do not move checks below this point.
         if (payloadLen > 0)
         {
             conn.Completeness |= TcpConnectionState.DataSeen;
@@ -459,12 +515,15 @@ internal sealed class TcpConnectionTracker
         #endregion
 
         #region Connection state machine transitions (RFC 793)
-        // If no pure SYN was seen, IsInitiator stays false and a FIN is reported as FIN_WAIT_1.
+        // IsInitiator is true only for the sender of the first pure SYN; a FIN from the other side leads to CLOSE_WAIT
+        // (see _UpdateConnectionPhase). Runs after the flow update so the phase reflects this segment.
         _UpdateConnectionPhase(conn, flow, isSyn, isAck, isFin, isRst);
 
         #endregion
 
         #region 14. Stream timing
+        // tcp.time_relative: since the first packet of the stream; tcp.time_delta: since the previous packet of the
+        // stream (either direction). NaN means "no previous packet".
         double timeRelative = double.NaN;
         double timeDelta = double.NaN;
 
@@ -497,6 +556,9 @@ internal sealed class TcpConnectionTracker
             scaledWindowSize = (ulong)window << flow.WindowScale.Value;
         }
 
+        // Relative numbers: wire value minus the ISN of the sending direction (sequence) or of the peer (ack). The
+        // uint subtraction wraps correctly modulo 2^32. They stay raw (and flagged as such) while the needed ISN is
+        // unknown, e.g. for a capture that joins mid-connection.
         uint relativeSeq = seqNum;
         bool sequenceIsRelative = false;
         if (relativeSequenceNumbers && flow.IsnSet)
@@ -539,14 +601,22 @@ internal sealed class TcpConnectionTracker
     {
         _Connections.Clear();
         _NextStreamIndex = 0;
+
+        // The cache holds references to the discarded states, so it must be emptied together with the dictionary
+        // (a stale hit would resurrect a connection that no longer exists). Clearing the values also releases them
+        // for garbage collection; the key slots are overwritten before they are read again.
         _CacheCount = 0;
         Array.Clear(_CacheValues);
     }
 
     /// <summary>
     /// Computes time delta in seconds between two timestamps.
-    /// Uses nanosecond-precision subtraction for accuracy.
+    /// Uses nanosecond-precision subtraction for accuracy. The result is negative when the timestamps are out of order
+    /// (callers that need a duration discard negative values).
     /// </summary>
+    /// <param name="t1">Earlier timestamp.</param>
+    /// <param name="t2">Later timestamp.</param>
+    /// <returns>Seconds from <paramref name="t1"/> to <paramref name="t2"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static double _ComputeTimeDelta(Timestamp t1, Timestamp t2) =>
         // Subtract raw nanosecond values and convert to seconds
@@ -572,7 +642,16 @@ internal sealed class TcpConnectionTracker
     /// <summary>
     /// Updates the TCP connection phase based on the current segment's flags.
     /// Follows the simplified RFC 793 state diagram with tracking for both directions.
+    /// A reset in either direction ends in Reset regardless of the current phase. Other segments only advance the phase
+    /// along the transitions below; anything else leaves it unchanged (including every segment of a connection whose
+    /// handshake was not captured).
     /// </summary>
+    /// <param name="conn">Connection whose phase is updated.</param>
+    /// <param name="flow">Direction state of the segment's sender (its IsInitiator flag decides FIN handling).</param>
+    /// <param name="isSyn">SYN flag.</param>
+    /// <param name="isAck">ACK flag.</param>
+    /// <param name="isFin">FIN flag.</param>
+    /// <param name="isRst">RST flag.</param>
     private static void _UpdateConnectionPhase(
         TcpConnectionState conn, TcpFlowState flow, bool isSyn, bool isAck, bool isFin, bool isRst)
     {
@@ -610,8 +689,10 @@ internal sealed class TcpConnectionTracker
             case TcpConnectionPhase.Established:
                 if (isFin)
                 {
-                    // The side that sent the first pure SYN is the active closer. The other side enters CLOSE_WAIT.
-                    // With no pure SYN in the capture, IsInitiator is false and the FIN is reported as FIN_WAIT_1.
+                    // A FIN from the sender of the first pure SYN is reported as FIN_WAIT_1 (active close by the
+                    // initiator). A FIN from the other side (IsInitiator false) is reported as CLOSE_WAIT. This is a
+                    // connection-level simplification, not the state of one host. The Established phase is only
+                    // reachable after a pure SYN was seen, so one side is always flagged as initiator here.
                     conn.Phase = flow.IsInitiator
                         ? TcpConnectionPhase.FinWait1
                         : TcpConnectionPhase.CloseWait;
@@ -619,12 +700,8 @@ internal sealed class TcpConnectionTracker
                 break;
 
             case TcpConnectionPhase.FinWait1:
-                if (isFin && isAck)
-                {
-                    // Simultaneous close: both sides FIN at the same time
-                    conn.Phase = TcpConnectionPhase.Closing;
-                }
-                else if (isFin)
+                // A FIN with or without ACK means the other side closed too (simultaneous close): Closing.
+                if (isFin)
                 {
                     conn.Phase = TcpConnectionPhase.Closing;
                 }
@@ -665,8 +742,10 @@ internal sealed class TcpConnectionTracker
     }
 
     /// <summary>
-    /// Returns a display-friendly text for a TCP connection phase.
+    /// Returns a display-friendly text for a TCP connection phase (RFC 793 state names).
     /// </summary>
+    /// <param name="phase">Phase to describe.</param>
+    /// <returns>The state name, or <c>UNKNOWN</c> for an undefined value.</returns>
     internal static string GetPhaseDisplayText(TcpConnectionPhase phase) => phase switch
     {
         TcpConnectionPhase.Closed => "CLOSED",

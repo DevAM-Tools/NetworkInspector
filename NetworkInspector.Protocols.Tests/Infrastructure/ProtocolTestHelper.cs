@@ -293,6 +293,22 @@ internal static class ProtocolTestHelper
     }
 
     /// <summary>
+    /// Asserts that a String field exists and its value contains <paramref name="expectedSubstring"/>.
+    /// </summary>
+    internal static async Task AssertStringFieldContains(Stack stack, Packet packet, string fieldName, string expectedSubstring)
+    {
+        FieldId? fieldId = stack.GetFieldId(fieldName);
+        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+
+        bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true);
+        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+
+        bool ok = value.Data.TryGetAsString(out string? actual);
+        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be String");
+        await Assert.That(actual).Contains(expectedSubstring).Because($"Field '{fieldName}'");
+    }
+
+    /// <summary>
     /// Asserts that a MAC address field exists and has the expected string representation.
     /// </summary>
     internal static async Task AssertMacField(Stack stack, Packet packet, string fieldName, string expected)

@@ -8,7 +8,10 @@ namespace NetworkInspector.Protocols.SignalMessage;
 /// <remarks>Thread safety: immutable value; safe to share.</remarks>
 /// <param name="ShowRaw">When true, register and populate <c>.raw</c> child fields.</param>
 /// <param name="ShowEnum">When true, register and populate <c>.enum</c> child fields on enum hits.</param>
-/// <param name="MaxEnumValues">Hard cap on enum entries per signal.</param>
+/// <param name="MaxEnumValues">
+/// Hard cap on enum entries per signal: the <c>signal_message.max_enum_values</c> setting, which protects registration
+/// from a config with an unbounded <c>value_names</c> map (see <see cref="SignalEnumTableBuilder.TryBuild"/>).
+/// </param>
 internal readonly record struct SignalMessageCompileSettings(
     bool ShowRaw,
     bool ShowEnum,
@@ -31,7 +34,11 @@ internal readonly record struct MuxGroupRuntime(ulong MuxValue, SignalInfo[] Sig
 /// <param name="Name">Registered protocol name and container field name (JSON <c>name</c>).</param>
 /// <param name="UiName">Protocol UI name (JSON <c>ui_name</c>).</param>
 /// <param name="Description">Protocol description (never null; default when JSON omits <c>description</c>).</param>
-/// <param name="RequiredByteLength">Minimum payload length for unchecked extraction.</param>
+/// <param name="RequiredByteLength">
+/// Minimum payload length for unchecked extraction: the maximum end byte over every static signal, the mux selector
+/// and all signals of all mux groups (see <see cref="SignalMessageBits"/>). The protocol rejects shorter payloads
+/// once per frame so that no signal needs its own bounds check.
+/// </param>
 /// <param name="DispatchBindings">Dispatch table registrations.</param>
 /// <param name="StaticSignals">Compiled static signals (field IDs still invalid until registration).</param>
 /// <param name="MuxSignal">Compiled mux selector; <see langword="null"/> when no mux.</param>
@@ -51,6 +58,13 @@ internal readonly record struct CompiledSignalMessage(
 /// Signal Message is best-effort: invalid or colliding signals are skipped with a warning
 /// so siblings in the same message still compile. A message is skipped only when its
 /// protocol identity or declared <c>byte_length</c> is unusable.
+/// <para>
+/// The JSON config is operator-supplied external input (a trust boundary): every name, bit layout, enum key and
+/// count is validated here, failures are expected outcomes and become warnings (never exceptions that escape), and
+/// no failure may leave a name reserved by a message that was not accepted. Compilation runs once at registration,
+/// so it favours clarity over speed.
+/// </para>
+/// <para>Thread safety: static and stateless; the caller owns the collections it passes in and must not share them.</para>
 /// </summary>
 internal static class SignalMessageCompiler
 {
@@ -97,6 +111,10 @@ internal static class SignalMessageCompiler
             return [];
         }
 
+        // Names are unique across the whole file: protocol names double as container field names, and every signal
+        // field name (plus .raw/.enum suffixes) must be globally unique because field names are registered stack-wide.
+        // Names are compared ordinally (case-sensitive). Only successfully compiled messages add to these sets
+        // (see _TryCompileMessage).
         List<CompiledSignalMessage> result = new(config.Messages.Length);
         HashSet<string> usedProtocolNames = new(StringComparer.Ordinal);
         HashSet<string> usedFieldNames = new(StringComparer.Ordinal);
@@ -209,6 +227,9 @@ internal static class SignalMessageCompiler
             return false;
         }
 
+        // Names of this message are collected in a private set first (starting with the container field) and are
+        // merged into the global set only after the whole message compiled (see the end of this method), so a
+        // rejected message does not block a later valid definition that uses the same names.
         HashSet<string> messageFields = new(StringComparer.Ordinal);
         if (!messageFields.Add(cfg.Name))
         {
@@ -254,6 +275,9 @@ internal static class SignalMessageCompiler
                 out muxGroups);
         }
 
+        // The payload length contract covers every signal that could be read: static signals, the selector, and all
+        // groups (not just the group selected at parse time). byte_length from the JSON is only a declared upper
+        // bound that must not be smaller than what the signals need; it is not used at parse time.
         SignalInfo[][] groupArrays = new SignalInfo[muxGroups.Length][];
         for (int g = 0; g < muxGroups.Length; g++)
         {
@@ -272,6 +296,19 @@ internal static class SignalMessageCompiler
             return false;
         }
 
+        // Every name of this message was checked against the global set when it was reserved, so a collision cannot
+        // happen here. The set is still checked once more, before anything is published, because ignoring a failed
+        // publication would let two messages share a field name unnoticed; a broken invariant rejects the message and
+        // leaves the global sets unchanged.
+        foreach (string fieldName in messageFields)
+        {
+            if (usedFieldNames.Contains(fieldName))
+            {
+                error = $"Message '{cfg.Name}': field name '{fieldName}' collides with an already reserved field.";
+                return false;
+            }
+        }
+
         message = new CompiledSignalMessage(
             cfg.Name,
             cfg.UiName,
@@ -283,20 +320,16 @@ internal static class SignalMessageCompiler
             muxGroups);
 
         // Reserve names only after a fully successful compile so a failed message
-        // does not block a later valid definition with the same name.
+        // does not block a later valid definition with the same name. The earlier Contains checks make a duplicate
+        // impossible here; the Add result is still checked so the invariant cannot break silently.
         if (!usedProtocolNames.Add(cfg.Name))
         {
             error = $"Duplicate message name '{cfg.Name}'.";
             return false;
         }
 
-        foreach (string fieldName in messageFields)
-        {
-            if (!usedFieldNames.Add(fieldName))
-            {
-                continue;
-            }
-        }
+        // Publish the message's names to the global set. They were all checked against it above, so every one is new.
+        usedFieldNames.UnionWith(messageFields);
 
         return true;
     }
@@ -305,7 +338,20 @@ internal static class SignalMessageCompiler
     /// Compiles mux selector and groups. Returns <see langword="false"/> when the selector
     /// itself is unusable; callers keep static signals and treat mux as absent.
     /// Invalid group signals and duplicate <c>mux_value</c> entries are skipped with warnings.
+    /// <para>
+    /// All groups share the message-wide name set, so the same signal name cannot be used in two mux groups of one
+    /// message: the second signal is skipped as a collision.
+    /// </para>
     /// </summary>
+    /// <param name="messageName">Name of the owning message (for warnings).</param>
+    /// <param name="muxCfg">The selector config.</param>
+    /// <param name="groupCfgs">The group configs (may contain null entries).</param>
+    /// <param name="settings">Compile settings.</param>
+    /// <param name="priorFieldNames">Names reserved by earlier accepted messages.</param>
+    /// <param name="messageFields">Names reserved so far by this message; updated.</param>
+    /// <param name="warnings">Receives skip warnings.</param>
+    /// <param name="muxSignal">The compiled selector when this method returns <see langword="true"/>.</param>
+    /// <param name="muxGroups">The kept groups when this method returns <see langword="true"/>.</param>
     private static bool _TryCompileMux(
         string messageName,
         MuxSignalConfig muxCfg,
@@ -360,6 +406,8 @@ internal static class SignalMessageCompiler
             return false;
         }
 
+        // The selector is a plain unsigned value: factor 1, offset 0, no unit, no enum names. Its field ids stay
+        // invalid until the protocol registers its fields.
         ulong muxMaxRaw = SignalMessageBits.MaxRawForBitLength(bitLength);
         muxSignal = new SignalInfo(
             startBit,
@@ -376,6 +424,8 @@ internal static class SignalMessageCompiler
             SignalEnumTable.None,
             CustomTextByRaw: null);
 
+        // Keep a group only when its selector value fits the selector width (a larger value could never be selected)
+        // and is unique (the first group with a value wins; later duplicates would be unreachable).
         List<CompiledMuxGroup> keptGroups = new(groupCfgs.Length);
         HashSet<ulong> muxValues = [];
         for (int g = 0; g < groupCfgs.Length; g++)
@@ -424,6 +474,12 @@ internal static class SignalMessageCompiler
     /// Compiles each signal independently. Invalid or colliding entries are skipped
     /// with a warning; remaining signals are returned (possibly empty).
     /// </summary>
+    /// <param name="messageName">Name of the owning message (for warnings).</param>
+    /// <param name="configs">Signal configs (may contain null entries).</param>
+    /// <param name="settings">Compile settings; decide which <c>.raw</c> and <c>.enum</c> names are reserved.</param>
+    /// <param name="priorFieldNames">Names reserved by earlier accepted messages.</param>
+    /// <param name="messageFields">Names reserved so far by this message; updated for every kept signal.</param>
+    /// <param name="warnings">Receives skip warnings.</param>
     private static SignalInfo[] _CompileSignalArray(
         string messageName,
         SignalFieldConfig[] configs,
@@ -449,6 +505,8 @@ internal static class SignalMessageCompiler
                 continue;
             }
 
+            // Reserve exactly the field names registration will create: the signal itself, plus ".raw" and ".enum"
+            // children only when those are enabled (and, for enum, only when the signal has value names).
             bool reserveRaw = settings.ShowRaw;
             bool reserveEnum = settings.ShowEnum && compiled.Enums.Kind != SignalEnumKind.None;
             if (!_TryReserveSignalFieldNames(
@@ -514,6 +572,10 @@ internal static class SignalMessageCompiler
             return false;
         }
 
+        // JSON object keys are strings; convert them to numeric raw values (invariant culture, so the result does not
+        // depend on the machine's locale). Two keys that denote the same number (for example "1" and "01") are a
+        // configuration mistake: with a plain assignment the later one would win and the other name would vanish
+        // without a trace, so the signal is rejected with a warning that names the key (like an invalid key).
         Dictionary<ulong, string>? numericNames = null;
         if (cfg.ValueNames is { Count: > 0 })
         {
@@ -526,10 +588,15 @@ internal static class SignalMessageCompiler
                     return false;
                 }
 
-                numericNames[key] = kvp.Value;
+                if (!numericNames.TryAdd(key, kvp.Value))
+                {
+                    error = $"duplicate value_names key '{kvp.Key}': another key denotes the same number {key.ToString(CultureInfo.InvariantCulture)}.";
+                    return false;
+                }
             }
         }
 
+        // The table builder enforces the enum count cap, the raw range of the bit length, and chooses the layout.
         if (!SignalEnumTableBuilder.TryBuild(numericNames, bitLength, settings.MaxEnumValues, out SignalEnumTable enums, out string? enumError))
         {
             error = enumError;
@@ -566,6 +633,9 @@ internal static class SignalMessageCompiler
         out bool bigEndian,
         [NotNullWhen(false)] out string? error)
     {
+        // Range rationale: SignalInfo stores the start bit as ushort and the length as byte, which also bounds the
+        // payload length a signal can require to about 8.2 KB (start bit 65535 plus up to 64 bits). A length of at
+        // most 64 bits is the width of the unsigned 64-bit raw value used everywhere.
         startBitU = 0;
         bitLengthB = 0;
         bigEndian = false;
@@ -623,7 +693,14 @@ internal static class SignalMessageCompiler
     /// <summary>
     /// Adds signal field names (and optional <c>.raw</c>/<c>.enum</c> suffixes) to
     /// <paramref name="messageFields"/> when none collide with prior messages or this message.
+    /// All-or-nothing: on a collision nothing is added.
     /// </summary>
+    /// <param name="priorFieldNames">Names reserved by earlier accepted messages.</param>
+    /// <param name="messageFields">Names reserved so far by this message.</param>
+    /// <param name="fieldName">The signal field name.</param>
+    /// <param name="reserveRaw">Whether the <c>.raw</c> child name is reserved too.</param>
+    /// <param name="reserveEnum">Whether the <c>.enum</c> child name is reserved too.</param>
+    /// <param name="collision">The first colliding name, or <see langword="null"/> on success.</param>
     private static bool _TryReserveSignalFieldNames(
         HashSet<string> priorFieldNames,
         HashSet<string> messageFields,
@@ -632,6 +709,8 @@ internal static class SignalMessageCompiler
         bool reserveEnum,
         [NotNullWhen(false)] out string? collision)
     {
+        // Two phases: first check every name, then add them all. A collision therefore never leaves a half-reserved
+        // signal behind in messageFields (all-or-nothing).
         if (!_CanUseFieldName(priorFieldNames, messageFields, fieldName))
         {
             collision = fieldName;

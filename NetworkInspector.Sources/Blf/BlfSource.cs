@@ -58,13 +58,20 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
     private readonly Lock _ContainerCacheLock = new();
 
     // Scanner for lazy/incremental scanning. Declared volatile so a null write from
-    // Dispose() is observed promptly by sequential / random-access paths.
+    // Dispose() is observed promptly by sequential / random-access paths. It is also set to null by the NextFrame thread
+    // once the scan is exhausted (channel names and failure marks are moved to the source first), which releases the
+    // scanner's carry buffers; null therefore means "full scan finished, disposed, or never created" (full scan mode).
     private volatile BlfIncrementalScanner? _Scanner;
+
+    /// <summary>True once the index is complete (a full scan at open, or the lazy scan reached the end of the file).</summary>
     private volatile bool _FullyScanned;
 
-    // Interface registration
+    // Interface registration. _SourceId and _Registry are set once by Start (before any read); _Registry is volatile
+    // because Dispose clears it on another thread (readers snapshot it once per operation).
     private FrameSourceId _SourceId;
     private volatile FrameInterfaceRegistry? _Registry;
+
+    /// <summary>Interface key (object type, channel, hardware channel) to registry id. Guarded by <see cref="_InterfaceLock"/>.</summary>
     private readonly Dictionary<(uint ObjectType, ushort Channel, bool HasHardwareChannel, ushort HardwareChannel), FrameInterfaceId> _InterfaceMap = new();
 
     /// <summary>
@@ -691,6 +698,8 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
 
         try
         {
+            // Dispose sets the latch before it closes the gate, so a section entered in between still sees the latch and
+            // does not start reading from a source that is being torn down.
             if (_Disposed != 0)
             {
                 ObjectDisposedException.ThrowIf(true, this);
@@ -723,6 +732,7 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
             _Gate.Exit(in token);
         }
     }
+
     /// <inheritdoc/>
     /// <remarks>
     /// Thread-safe like <see cref="FrameById"/>. Reads the range forward in chunks of 64 ids, each inside one gate section
@@ -738,6 +748,9 @@ public sealed partial class BlfSource : IRandomAccessFrameSource, IErrorTolerant
             throw new InvalidOperationException("BlfSource has not been started.");
         }
 
+        // One state for the whole range: the row cursor and the current container bytes carry over from id to id (and across
+        // chunks), which is the point of the batch API compared with calling FrameById in a loop. The state is local to
+        // this call, so concurrent FramesById calls share nothing.
         BlfReadState state = BlfReadState.Empty;
         int found = 0;
         for (int chunkStart = 0; chunkStart < frames.Length; chunkStart += _BatchChunk)

@@ -327,15 +327,15 @@ internal sealed class EagerIndexGroupRegistrationTests
 
     [Test]
     public async Task RichTlsClientHello_AllEmittedFieldGroups_RecordedEagerly()
-        => await _AssertAllEmittedFieldGroupsRecordedEagerly(_BuildRichTlsClientHelloFrame()).ConfigureAwait(false);
+        => await AssertAllEmittedFieldGroupsRecordedEagerly(_BuildRichTlsClientHelloFrame()).ConfigureAwait(false);
 
     [Test]
     public async Task HttpJsonBody_AllEmittedFieldGroups_RecordedEagerly()
-        => await _AssertAllEmittedFieldGroupsRecordedEagerly(_BuildHttpJsonFrame()).ConfigureAwait(false);
+        => await AssertAllEmittedFieldGroupsRecordedEagerly(_BuildHttpJsonFrame()).ConfigureAwait(false);
 
     [Test]
     public async Task DnsResponse_AllEmittedFieldGroups_RecordedEagerly()
-        => await _AssertAllEmittedFieldGroupsRecordedEagerly(_BuildDnsResponseFrame()).ConfigureAwait(false);
+        => await AssertAllEmittedFieldGroupsRecordedEagerly(_BuildDnsResponseFrame()).ConfigureAwait(false);
 
     /// <summary>
     /// Systematic, data-driven enforcement of the same eager-registration invariant across a broad
@@ -349,7 +349,7 @@ internal sealed class EagerIndexGroupRegistrationTests
     public async Task Corpus_AllEmittedFieldGroups_RecordedEagerly(string name, byte[] frame)
     {
         _ = name; // surfaced as the test-case label; the assertion is frame-driven.
-        await _AssertAllEmittedFieldGroupsRecordedEagerly(frame).ConfigureAwait(false);
+        await AssertAllEmittedFieldGroupsRecordedEagerly(frame).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -396,9 +396,10 @@ internal sealed class EagerIndexGroupRegistrationTests
     /// index groups before any materialization, then materializes the whole field tree and asserts that
     /// every emitted, group-bearing field's group was already present in the eager snapshot.
     /// </summary>
-    private static async Task _AssertAllEmittedFieldGroupsRecordedEagerly(byte[] frame)
+    internal static async Task AssertAllEmittedFieldGroupsRecordedEagerly(
+        byte[] frame, params (string Name, SettingValue Value)[] settingOverrides)
     {
-        using Stack stack = ProtocolTestHelper.BuildStack();
+        using Stack stack = ProtocolTestHelper.BuildStackWithSettings(settingOverrides);
         NetworkInspector.Core.Index.PacketIndex index = new(stack);
 
         Frame parsedFrame = Frame.Create(

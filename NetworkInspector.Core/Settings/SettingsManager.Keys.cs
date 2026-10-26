@@ -29,17 +29,21 @@ public sealed partial class SettingsManager
     /// </summary>
     /// <param name="names">Names of registered settings; a name that is listed twice counts once.</param>
     /// <returns>The names whose current value changed, in the order given.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="names"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="names"/> or one of its elements is <see langword="null"/>
+    /// (checked before anything is applied).</exception>
     /// <exception cref="ArgumentException">A name is not registered (checked before anything is applied).</exception>
+    /// <exception cref="InvalidOperationException">A <see cref="Load"/> is in progress (raised by the setting).</exception>
     public IReadOnlyList<string> ApplyChanges(IEnumerable<string> names)
     {
         ArgumentNullException.ThrowIfNull(names);
 
+        // Same shape as the all-settings ApplyChanges: apply under the write lock, raise the event after it is released.
         List<string> changed = [];
         _Lock.EnterWriteLock();
         try
         {
-            // Resolve every name first so that an unknown name leaves all pending values as they are.
+            // Resolve every name first so that an unknown name leaves all pending values as they are (all-or-nothing on the
+            // names; the apply itself is then per setting).
             List<Setting> selected = _ResolveLocked(names);
             foreach (Setting setting in selected)
             {
@@ -68,7 +72,8 @@ public sealed partial class SettingsManager
     /// every setting whose pending value changed.
     /// </summary>
     /// <param name="names">Names of registered settings; a name that is listed twice counts once.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="names"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="names"/> or one of its elements is <see langword="null"/>
+    /// (checked before anything is reset).</exception>
     /// <exception cref="ArgumentException">A name is not registered (checked before anything is reset).</exception>
     public void ResetChanges(IEnumerable<string> names)
     {
@@ -121,7 +126,10 @@ public sealed partial class SettingsManager
         return selected;
     }
 
-    /// <summary>Raises <see cref="PendingChanged"/> for each name, after the manager lock was released.</summary>
+    /// <summary>
+    /// Raises <see cref="PendingChanged"/> for each name, after the manager lock was released. A handler that throws ends the
+    /// loop: the names after it are not notified, and the exception reaches the caller of the bulk operation.
+    /// </summary>
     private void _RaisePendingChanged(List<string> names)
     {
         foreach (string name in names)

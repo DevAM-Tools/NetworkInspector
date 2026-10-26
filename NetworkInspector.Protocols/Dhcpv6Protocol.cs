@@ -12,7 +12,7 @@ namespace NetworkInspector.Protocols;
 /// messages until further support is added.
 /// <para>Field tree structure:</para>
 /// <code>
-/// dhcpv6: DHCPv6 SOLICIT (1) - Transaction ID 0x123456
+/// dhcpv6: DHCPv6 SOLICIT (1)
 /// ├── dhcpv6.msgtype: SOLICIT (1)
 /// ├── dhcpv6.xid: 0x00123456
 /// └── dhcpv6.option: (TLV)
@@ -136,14 +136,16 @@ public sealed partial class Dhcpv6Protocol : IProtocol
     private FieldId _OptionIaAddrFieldId;
 
     /// <summary>
-    /// Parses a Dhcpv6 protocol unit from the supplied <paramref name="data"/> buffer,
-    /// appending decoded fields under <paramref name="parentField"/> and dispatching any
-    /// payload via the surrounding <paramref name="context"/>.
+    /// Parses a DHCPv6 message from the supplied <paramref name="data"/> buffer and appends the decoded
+    /// fields under <paramref name="parentField"/>. DHCPv6 is a leaf protocol: nothing is dispatched further.
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
-    /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
-    /// <param name="context">Owning stack used to dispatch the next-protocol payload (when applicable).</param>
-    /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
+    /// <param name="data">Raw protocol bytes starting at this protocol's first header byte (the UDP payload).</param>
+    /// <param name="context">Parse context; used to record protocol and index-group presence.</param>
+    /// <returns>
+    /// The whole <paramref name="data"/> length, or a <see cref="ParseError"/> when the data is shorter than the
+    /// 4-byte client/server header.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         if (data.Length < _FixedHeaderSize)
@@ -151,6 +153,8 @@ public sealed partial class Dhcpv6Protocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, _FixedHeaderSize, (ulong)data.Length);
         }
 
+        // Only the msg-type byte is needed for both layouts, so the 4-byte minimum is checked once for client/server
+        // messages and relay messages are accepted at that size too (their longer header is not validated, see below).
         ReadOnlySpan<byte> span = data.Span;
         byte msgType = span[0];
 
@@ -168,11 +172,13 @@ public sealed partial class Dhcpv6Protocol : IProtocol
         if (msgType is _MsgTypeRelayForward or _MsgTypeRelayReply)
         {
             // Relay messages have a different header layout (msg-type + hop-count + link-addr + peer-addr).
-            // Recognise but do not decode further at this stage.
+            // Recognise but do not decode further at this stage: reading the client/server xid or options here
+            // would misinterpret hop-count and link-address bytes. The whole message stays in the container's bytes.
             return data.Length;
         }
 
-        // 24-bit transaction ID stored in big-endian byte order at offsets 1..4.
+        // 24-bit transaction ID stored in big-endian byte order at offsets 1..3 (RFC 8415 §8). There is no 3-byte
+        // BinaryPrimitives reader, so it is assembled by hand; the result is at most 0xFFFFFF and cannot overflow.
         uint xid = ((uint)span[1] << 16) | ((uint)span[2] << 8) | span[3];
         container.Append(_XidFieldId, FieldValue.NewU64(xid));
 
@@ -183,7 +189,9 @@ public sealed partial class Dhcpv6Protocol : IProtocol
     /// <summary>
     /// Walks the DHCPv6 option block (RFC 8415 §16). Each option is a 2-byte
     /// big-endian code followed by a 2-byte big-endian length and the option
-    /// data. There is no End sentinel — parsing stops at end of data.
+    /// data. There is no End sentinel — parsing stops at end of data. A trailing fragment shorter than a 4-byte
+    /// option header, or an option whose length runs past the end, ends the walk without an error; options decoded
+    /// before that point are kept.
     /// </summary>
     private void _ParseOptions(in MutField container, ReadOnlyMemory<byte> options, in ParseContext context)
     {
@@ -191,6 +199,8 @@ public sealed partial class Dhcpv6Protocol : IProtocol
         int i = 0;
         while (i + 4 <= span.Length)
         {
+            // The loop condition guarantees the 4 header bytes exist; the length check below guarantees the value
+            // bytes exist before anything is sliced. i + 4 + length cannot overflow (length is at most 65535).
             ushort code = BinaryPrimitives.ReadUInt16BigEndian(span[i..(i + 2)]);
             ushort length = BinaryPrimitives.ReadUInt16BigEndian(span[(i + 2)..(i + 4)]);
             if (i + 4 + length > span.Length)
@@ -214,13 +224,13 @@ public sealed partial class Dhcpv6Protocol : IProtocol
             optContainer.Append(_OptionLengthFieldId, FieldValue.NewU64(length));
             optContainer.Append(_OptionValueFieldId, FieldValue.NewBytes(optionData));
 
-            _EmitOptionPayload(in optContainer, code, optionData, in context);
+            _EmitOptionPayload(in optContainer, code, optionData);
             i += 4 + length;
         }
     }
 
     /// <summary>Emits option-specific child fields for known DHCPv6 option codes.</summary>
-    private void _EmitOptionPayload(in MutField optContainer, ushort code, ReadOnlyMemory<byte> data, in ParseContext context)
+    private void _EmitOptionPayload(in MutField optContainer, ushort code, ReadOnlyMemory<byte> data)
     {
         ReadOnlySpan<byte> span = data.Span;
         switch (code)
@@ -239,7 +249,7 @@ public sealed partial class Dhcpv6Protocol : IProtocol
                     FieldValue.NewU64(BinaryPrimitives.ReadUInt16BigEndian(span[..2])));
                 break;
             case _OptionDnsServers:
-                _EmitIpv6List(in optContainer, _OptionDnsServerFieldId, span, in context);
+                _EmitIpv6List(in optContainer, _OptionDnsServerFieldId, span);
                 break;
             case _OptionIaAddr when span.Length >= 16:
                 optContainer.Append(_OptionIaAddrFieldId, FieldValue.NewIPv6(IPv6Address.FromBytes(span[..16])));
@@ -250,8 +260,11 @@ public sealed partial class Dhcpv6Protocol : IProtocol
         }
     }
 
-    /// <summary>Emits each IPv6 address from a tightly packed 16-byte-aligned span.</summary>
-    private static void _EmitIpv6List(in MutField optContainer, FieldId fieldId, ReadOnlySpan<byte> span, in ParseContext context)
+    /// <summary>
+    /// Emits each IPv6 address from a tightly packed 16-byte-aligned span (DNS server list). Trailing bytes that do
+    /// not fill a whole address are ignored.
+    /// </summary>
+    private static void _EmitIpv6List(in MutField optContainer, FieldId fieldId, ReadOnlySpan<byte> span)
     {
         for (int i = 0; i + 16 <= span.Length; i += 16)
         {

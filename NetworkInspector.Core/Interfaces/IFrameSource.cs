@@ -11,6 +11,14 @@ namespace NetworkInspector.Core.Interfaces;
 /// <para>
 /// A single source can be used with multiple <see cref="Stack"/> instances for parallel analysis.
 /// </para>
+/// <para>
+/// <b>Thread-safety:</b> The consumer drives <see cref="Start"/> and <see cref="NextFrame"/> from one thread, so an
+/// implementation needs no lock for sequential reading (this keeps the per-frame read path lock-free).
+/// <see cref="IsRunning"/> may be read from any thread. Concurrent access applies only to the optional interfaces:
+/// <see cref="IRandomAccessFrameSource"/> must serve <c>FrameById</c> from any thread, and
+/// <see cref="IFrameSourceStatistics"/> counters are readable from any thread. <see cref="IDisposable.Dispose"/> is
+/// called by a single owner.
+/// </para>
 /// </summary>
 public interface IFrameSource : IDisposable
 {

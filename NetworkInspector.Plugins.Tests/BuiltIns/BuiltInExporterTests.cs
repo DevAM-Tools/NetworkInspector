@@ -283,6 +283,70 @@ internal sealed class BuiltInExporterTests
         await Assert.That(File.ReadAllBytes(defaults).Take(3).SequenceEqual(new byte[] { 0xEF, 0xBB, 0xBF })).IsFalse();
     }
 
+    [Test]
+    public async Task CsvNeutralizesSpreadsheetFormulasByDefaultAndTheOptionTurnsItOff()
+    {
+        using TempFolder folder = new("exp-csv-formulas");
+        Stack stack = SampleStack.Build(withSample: false);
+        byte[] request = "GET =1+1 HTTP/1.1\r\nHost: example.test\r\n\r\n"u8.ToArray();
+        Frame frame = SampleStack.MakeFrame(stack, RawFrames.Tcp(request, 50000, 80, sequence: 1));
+        List<Packet> packets = [SampleStack.Parse(stack, frame)];
+        (Stack, List<Frame>, List<Packet>) traffic = (stack, [frame], packets);
+
+        // The request line of the packet carries text that the sender of the traffic chose: here a formula.
+        string uri = Expect.NotNull(SampleStack.Text(stack, packets[0], "http.request.uri"));
+        string safe = _WritePackets(folder, "CSV", "safe.csv", traffic, ("columns", SettingValue.String("http.request.uri")),
+            ("bom", SettingValue.Bool(false)));
+        string raw = _WritePackets(folder, "CSV", "raw.csv", traffic, ("columns", SettingValue.String("http.request.uri")),
+            ("bom", SettingValue.Bool(false)), ("neutralizeFormulas", SettingValue.Bool(false)));
+
+        await Assert.That(uri).IsEqualTo("=1+1");
+        await Assert.That(File.ReadAllLines(safe)[1]).IsEqualTo("'=1+1");
+        await Assert.That(File.ReadAllLines(raw)[1]).IsEqualTo("=1+1");
+    }
+
+    [Test]
+    public async Task TheTimestampSortedOptionsDeclareAnOrderAndDoNotPromiseASort()
+    {
+        foreach (string format in new[] { "Parquet", "PBF" })
+        {
+            using SettingsManager options = RegistrationOptions.CreateDefaults(_Packet(format).RegisterOptions);
+            Setting setting = Expect.NotNull(options.GetSetting("timestampSorted"));
+
+            // The Core builder only records the declaration; a description that promises a sort (and memory use) would mislead.
+            string description = Expect.NotNull(setting.Description);
+            await Assert.That($"{format}:{setting.UiName}").IsEqualTo($"{format}:Packets arrive sorted");
+            await Assert.That(description).Contains("Declares that the packets arrive in non-decreasing timestamp order");
+            await Assert.That(description).Contains("sorts nothing");
+            await Assert.That(description).DoesNotContain("more memory");
+        }
+    }
+
+    [Test]
+    public async Task TheCsvDelimiterDescriptionNamesTheRejectedCharactersAndAllowsATab()
+    {
+        using SettingsManager options = RegistrationOptions.CreateDefaults(_Packet("CSV").RegisterOptions);
+
+        string description = Expect.NotNull(Expect.NotNull(options.GetSetting("delimiter")).Description);
+
+        await Assert.That(description).Contains("NUL, CR, LF");
+        await Assert.That(description).Contains("tab is allowed");
+        await Assert.That(description).DoesNotContain("control character");
+    }
+
+    [Test]
+    public async Task CsvAcceptsATabAsTheDelimiter()
+    {
+        using TempFolder folder = new("exp-csv-tab");
+        (Stack stack, List<Frame> frames, List<Packet> packets) = _Traffic(2, 21);
+
+        string tabbed = _WritePackets(folder, "CSV", "tab.csv", (stack, frames, packets), ("delimiter", SettingValue.String("\t")),
+            ("bom", SettingValue.Bool(false)));
+
+        // The option text says what is refused (NUL, CR, LF, and the double quote), and a tab is not one of them.
+        await Assert.That(File.ReadAllLines(tabbed)[0]).IsEqualTo("No.\tTime\tInfo\tLength");
+    }
+
     #endregion
 
     #region Errors

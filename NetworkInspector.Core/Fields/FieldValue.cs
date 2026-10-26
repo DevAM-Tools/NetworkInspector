@@ -4,6 +4,15 @@ namespace NetworkInspector.Core.Fields;
 
 /// <summary>
 /// Wraps <see cref="FieldValueData"/> with an optional custom display representation.
+/// <para>
+/// The data decides everything semantic (equality, ordering, hashing); the custom representation only changes
+/// how the value is shown or formatted (for example a flag value displayed as its name). Keeping them apart means
+/// attaching nicer display text can never change how values compare.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> an immutable value type that may be shared across threads. A lazily evaluated custom text
+/// caches its result inside its own storage location (see <see cref="LazyString"/>), not in this struct.
+/// </para>
 /// </summary>
 [StructLayout(LayoutKind.Auto)]
 public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldValue>, ISpanFormattable, IUtf8SpanFormattable, IStringSize
@@ -69,12 +78,15 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewF64(double value, LazyString custom = default) => new(FieldValueData.NewF64(value), custom);
     /// <summary>Creates a <see cref="FieldType.String"/> field value with an optional custom display representation.</summary>
-    /// <param name="value">String payload. The reference is stored as-is; the caller must not mutate it after the call.</param>
+    /// <param name="value">String payload. The reference is stored as-is (no copy); <see langword="null"/> is stored as the empty string.</param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewString(string value, LazyString custom = default) => new(FieldValueData.NewString(value), custom);
     /// <summary>Creates a <see cref="FieldType.Bytes"/> field value referencing the given byte memory and an optional custom display representation.</summary>
-    /// <param name="value">Byte memory payload. The memory is stored by reference; the caller must not mutate the underlying buffer afterwards.</param>
+    /// <param name="value">
+    /// Byte memory payload. Array-backed memory is referenced without copying, so the caller must not mutate the
+    /// underlying array while the value is in use; memory that is not array-backed is copied.
+    /// </param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewBytes(ReadOnlyMemory<byte> value, LazyString custom = default) => new(FieldValueData.NewBytes(value), custom);
@@ -122,6 +134,9 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
 
     #region Equality (ignores custom representation)
 
+    // Equality, hashing, and ordering use the data only: two values that differ only in their display text are the same
+    // value, so equal values always hash equally whatever text they are shown with.
+
     /// <inheritdoc/>
     public bool Equals(FieldValue other) => Data.Equals(other.Data);
     /// <inheritdoc/>
@@ -162,7 +177,13 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// <summary>
     /// Formats the value into a character span.
     /// Uses <see cref="CustomRepresentation"/> if present, otherwise formats the raw data.
+    /// Expected failure (span too small) is reported by the return value, not by an exception.
     /// </summary>
+    /// <param name="destination">Target span.</param>
+    /// <param name="charsWritten">Characters written; 0 when the method returns <see langword="false"/>.</param>
+    /// <param name="format">Format string forwarded to the data formatter; ignored for a custom representation.</param>
+    /// <param name="provider">Format provider forwarded to the data formatter; ignored for a custom representation.</param>
+    /// <returns><see langword="false"/> when <paramref name="destination"/> is too small.</returns>
     public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
         if (!CustomRepresentation.IsNull)
@@ -183,7 +204,13 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// <summary>
     /// Formats the value into a UTF-8 byte span.
     /// Uses <see cref="CustomRepresentation"/> if present, otherwise formats the raw data.
+    /// A custom representation is transcoded; its UTF-8 length is measured first so nothing is written when it does not fit.
     /// </summary>
+    /// <param name="utf8Destination">Target span.</param>
+    /// <param name="bytesWritten">Bytes written; 0 when the method returns <see langword="false"/>.</param>
+    /// <param name="format">Format string forwarded to the data formatter; ignored for a custom representation.</param>
+    /// <param name="provider">Format provider forwarded to the data formatter; ignored for a custom representation.</param>
+    /// <returns><see langword="false"/> when <paramref name="utf8Destination"/> is too small.</returns>
     public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
         if (!CustomRepresentation.IsNull)
@@ -248,9 +275,10 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
         if (!CustomRepresentation.IsNull)
         {
             ReadOnlySpan<char> text = CustomRepresentation.AsSpan;
-            char[] buffer = ZeroAllocHelper.AcquireCharBuffer(text.Length, out bool isThreadStatic);
+            // The epoch lets Dispose release the thread-static buffer; without it the buffer stays locked on this thread.
+            char[] buffer = ZeroAllocHelper.AcquireCharBuffer(text.Length, true, out bool isThreadStatic, out int epoch);
             text.CopyTo(buffer);
-            return new TempString(buffer, text.Length, isThreadStatic);
+            return new TempString(buffer, text.Length, isThreadStatic, epoch);
         }
         return Data.ToTempString();
     }
@@ -258,6 +286,10 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     #endregion
 
     #region Implicit operators
+
+    // Integral conversions keep the signedness of the source type: signed sources produce I64, unsigned sources U64
+    // (narrow types are widened first). So the field type, and therefore comparison and display behavior, follows the
+    // C# type the protocol author passes in. Floating point maps to F64. Null strings and byte arrays map to None.
 
     /// <summary>Creates a Bool field value.</summary>
     public static implicit operator FieldValue(bool value) => NewBool(value);

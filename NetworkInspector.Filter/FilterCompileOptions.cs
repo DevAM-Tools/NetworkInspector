@@ -65,6 +65,13 @@ public sealed class FilterCompileOptions
     /// <summary>
     /// Optional regular-expression timeout for the <c>matches</c> operator. Defaults to one second.
     /// <para>
+    /// Allowed range: greater than zero and at most <c>int.MaxValue - 1</c> milliseconds (the limit of
+    /// <see cref="Regex"/>), or <see cref="Regex.InfiniteMatchTimeout"/> to remove the bound. A value outside the range
+    /// makes <see cref="Filter.Compile(string, IStack, FilterCompileOptions?)"/> and
+    /// <see cref="Filter.TryParse(string, FilterCompileOptions?, out FilterError?)"/> fail with
+    /// <see cref="FilterErrorKind.InvalidValue"/> and a message that names the range.
+    /// </para>
+    /// <para>
     /// Patterns run on the linear-time <see cref="RegexOptions.NonBacktracking"/> engine whenever it supports
     /// them; such patterns cannot time out. The timeout bounds only patterns that need backtracking
     /// (lookaround, backreferences, atomic groups). The pattern is compiled once at parse time, so a filter

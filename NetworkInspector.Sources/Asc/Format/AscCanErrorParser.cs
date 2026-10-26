@@ -9,9 +9,10 @@ namespace NetworkInspector.Sources.Asc.Format;
 /// </summary>
 internal static class AscCanErrorParser
 {
+    /// <summary>Size of a SocketCAN <c>can_frame</c>: 8 header bytes plus 8 data bytes (error frames carry their class in the data).</summary>
     private const int _FrameLength = 16;
 
-    /// <summary>SocketCAN <c>CAN_ERR_FLAG</c> (bit 29).</summary>
+    /// <summary>SocketCAN <c>CAN_ERR_FLAG</c> (bit 29): marks the id word as an error frame, not a CAN identifier.</summary>
     private const uint _CanErrFlag = 0x20000000u;
 
     /// <summary>
@@ -69,16 +70,25 @@ internal static class AscCanErrorParser
         return true;
     }
 
+    /// <summary>
+    /// Builds the error frame: all bytes zero except <c>CAN_ERR_FLAG</c> in the id word. The zeroing is explicit
+    /// (<see cref="FrameSlabAllocator.RentZeroed"/>) because a slab region is not guaranteed to be clear, and the zero data
+    /// bytes are what says "no error class bits known".
+    /// </summary>
     private static ReadOnlyMemory<byte> _BuildErrorFrame(FrameSlabAllocator? slabs)
     {
         Memory<byte> frame = FrameSlabAllocator.RentZeroed(slabs, _FrameLength);
+
+        // The id word is big-endian like every SocketCAN frame this product stores (see AscCanParser).
         BinaryPrimitives.WriteUInt32BigEndian(frame.Span, _CanErrFlag);
         return frame;
     }
 
+    /// <summary>True for the keywords <c>ErrorFrame</c> and <c>OverloadFrame</c> (ASCII case-insensitive, whole token).</summary>
     private static bool _IsErrorKeyword(ReadOnlySpan<byte> keyword) =>
         _Equals(keyword, "ErrorFrame"u8) || _Equals(keyword, "OverloadFrame"u8);
 
+    /// <summary>ASCII case-insensitive equality; the length check makes the prefix test of the classifier an exact match.</summary>
     private static bool _Equals(ReadOnlySpan<byte> token, ReadOnlySpan<byte> ascii) =>
         token.Length == ascii.Length
         && AscLineClassifier.StartsWithAsciiIgnoreCase(token, ascii);

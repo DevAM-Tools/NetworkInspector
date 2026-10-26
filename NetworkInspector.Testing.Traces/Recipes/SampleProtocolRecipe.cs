@@ -19,22 +19,35 @@ public sealed class SampleProtocolRecipe : TraceRecipe
     /// <summary>Speed value that means "signal not available" in the generated pattern.</summary>
     public const byte SpeedNotAvailable = 255;
 
+    // Wire layout of the sample payload, a private copy of the layout of the sample plugin (the kit must not reference the
+    // plugin): magic "NIS1" at 0 to 3, counter as 8 bytes big endian at 4 to 11, gear at 12, speed at 13, 14 bytes in all.
+    // If the sample layout changes, this copy and the recipe version change together.
+
+    /// <summary>Length of the sample payload in bytes.</summary>
     private const int _PayloadLength = 14;
 
+    /// <summary>Offset of the 8-byte big-endian counter in the payload.</summary>
     private const int _CounterOffset = 4;
 
+    /// <summary>Offset of the gear byte in the payload.</summary>
     private const int _GearOffset = 12;
 
+    /// <summary>Offset of the speed byte in the payload.</summary>
     private const int _SpeedOffset = 13;
 
+    /// <summary>Length of the UDP header in bytes.</summary>
     private const int _UdpHeaderLength = 8;
 
+    /// <summary>Length of the TCP header without options in bytes.</summary>
     private const int _TcpHeaderLength = 20;
 
+    /// <summary>Source port of every frame.</summary>
     private const ushort _SourcePort = 50000;
 
+    /// <summary>Distance of two frame timestamps: 1 ms in nanoseconds.</summary>
     private const long _FrameIntervalNanos = 1_000_000;
 
+    /// <summary>Frames between two cancellation checks.</summary>
     private const int _CancellationCheckInterval = 1024;
 
     #endregion
@@ -95,6 +108,9 @@ public sealed class SampleProtocolRecipe : TraceRecipe
     public static byte SpeedFor(long index)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(index);
+
+        // The error value is checked first; the "not available" window 70 to 76 of each hundred contains no multiple of 50,
+        // so the two special values never compete. Ordinary speeds are below 200 and never equal 254 or 255.
         if (index % 50 == 0)
         {
             return SpeedError;
@@ -122,6 +138,8 @@ public sealed class SampleProtocolRecipe : TraceRecipe
                 cancellationToken.ThrowIfCancellationRequested();
             }
 
+            // Gear cycles through the five gears (0 to 4). Over TCP the sequence advances by the 14 payload bytes of the
+            // previous frame, so the frames form one coherent stream; the 64-bit product keeps 14 * i from overflowing.
             byte gear = (byte)(i % 5);
             byte[] frame = Tcp
                 ? _TcpFrame((ulong)i, gear, SpeedFor(i), Port, (uint)(1 + (14L * i)))
@@ -143,7 +161,7 @@ public sealed class SampleProtocolRecipe : TraceRecipe
         byte[] frame = new byte[Ipv4Wire.EthernetHeaderLength + Ipv4Wire.Ipv4HeaderLength + _UdpHeaderLength + _PayloadLength];
         Ipv4Wire.WriteEthernetAndIpv4(frame, Ipv4Wire.Ipv4HeaderLength + _UdpHeaderLength + _PayloadLength, Ipv4Wire.ProtocolUdp);
 
-        // UDP header: source port, destination port, length, checksum 0 (not used over IPv4).
+        // UDP header: source port, destination port, length, checksum 0 (UDP over IPv4 may omit the checksum).
         Span<byte> udp = frame.AsSpan(Ipv4Wire.EthernetHeaderLength + Ipv4Wire.Ipv4HeaderLength);
         BinaryPrimitives.WriteUInt16BigEndian(udp, _SourcePort);
         BinaryPrimitives.WriteUInt16BigEndian(udp[2..], port);

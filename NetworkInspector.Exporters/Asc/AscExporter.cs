@@ -77,13 +77,18 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <summary>Minimum valid DLT_LIN capture: 8-byte header.</summary>
     private const int _LinMinSize = _LinHeaderSize;
 
+    /// <summary>Most data bytes a LIN frame carries (protocol fact); the 4-bit DLT_LIN length field can say up to 15.</summary>
+    private const int _MaxLinDataLength = 8;
+
     #endregion
 
     #region DLT_FLEXRAY constants
 
     /// <summary>
-    /// DLT_FLEXRAY frame header size: 7 bytes.
-    /// Layout: [channel(1) | type_flags(1) | frame_id(2 BE) | cycle(1) | header_crc(2 BE) | data...].
+    /// LINKTYPE_FLEXRAY header size: 7 bytes, the same value as <c>FlexRayLinkTypeFrame.MinHeaderSize</c>.
+    /// Layout: measurement header (1 byte; bit 7 = channel B) | error flags (1 byte) | ISO 17458-2 frame header (5 bytes,
+    /// bit-packed: indicator bits, 11-bit frame id, 7-bit payload word count, 11-bit header CRC, 6-bit cycle) | payload.
+    /// Only used for the "too short" error message; the parsing itself is done by <c>FlexRayLinkTypeFrame</c>.
     /// </summary>
     private const int _DltFlexRayHeaderSize = 7;
 
@@ -91,8 +96,13 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
     #region Instance fields
 
+    /// <summary>Cooperative cancellation; checked per frame so a cancelled export stops without further writes.</summary>
     private readonly CancellationToken _CancellationToken;
+
+    /// <summary>Maximum number of frames to write; 0 means unlimited.</summary>
     private readonly int _TargetFrameCount;
+
+    /// <summary>Fraction digits of the line timestamps (6 to 9), handed to the <see cref="AscWriter"/>.</summary>
     private readonly int _TimestampDecimals;
 
     /// <summary>
@@ -114,8 +124,13 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// </summary>
     private long _AnchorNs;
 
+    /// <summary>Latched fatal state (start failure or Strict-mode error); every later <see cref="OnFrame"/> returns <c>false</c>.</summary>
     private bool _HasError;
+
+    /// <summary>Set once <see cref="_Start"/> ran, successful or not, so a failed start is never retried.</summary>
     private bool _Started;
+
+    /// <summary>Latch that makes <see cref="OnFinish"/> idempotent and stops <see cref="OnFrame"/> after the footer is written.</summary>
     private bool _Finished;
 
     #endregion
@@ -155,6 +170,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <inheritdoc/>
     public bool OnFrame(Frame frame)
     {
+        // Stop conditions first: a false return tells the driver to stop sending frames.
         if (_CancellationToken.IsCancellationRequested)
         {
             return false;
@@ -165,7 +181,9 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             return false;
         }
 
-        // Lazy initialisation: open the file and write the ASC header on the first frame.
+        // Lazy initialisation: open the file and write the ASC header on the first frame. The first frame's timestamp
+        // becomes the time-zero anchor, so it must be set before the writer is created (the header date derives from it).
+        // Deferring creation also means an export that never receives a frame does not touch the file system here.
         if (!_Started)
         {
             _AnchorNs = frame.Timestamp.AsNanos;
@@ -188,7 +206,9 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
         _Finished = true;
 
-        // Shared finish sequence: finalize, then release every resource even when a step fails.
+        // Shared finish sequence: finalize, then release every resource even when a step fails. The release order is
+        // pooled buffers first and the output last (the output close flushes and may throw); ExporterFinish runs every step
+        // regardless, and rethrows the collected release failures as one AggregateException afterwards.
         ExporterFinish.Run(
             "ASC",
             _FinalizeFile,
@@ -203,6 +223,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// </summary>
     private void _FinalizeFile()
     {
+        // Empty export: no frame fixed the anchor, so the header carries the epoch-zero date.
         if (!_Started && !_HasError && _Output is not null)
         {
             _AnchorNs = 0L;
@@ -303,10 +324,13 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     #region Private implementation — start / handle / skip
 
     /// <summary>
-    /// Lazily opens the output stream and creates the <see cref="AscWriter"/>.
-    /// On first call, also writes the ASC file header.
+    /// Lazily opens the output stream and creates the <see cref="AscWriter"/>, whose constructor emits the ASC file
+    /// header. Runs at most once per exporter (<see cref="_Started"/> is set before any failure can happen), so a failed
+    /// start is never retried with a half-initialised writer.
     /// </summary>
-    /// <returns><c>true</c> if initialization succeeded; <c>false</c> on I/O failure.</returns>
+    /// <returns><c>true</c> if initialization succeeded; <c>false</c> when the output is gone (a disposed exporter: latched
+    /// without an error count, so no error loop starts), the output could not be opened, or the writer could not be
+    /// created. The last two are counted and reported through <see cref="ItemSkipped"/>.</returns>
     private bool _Start()
     {
         if (_Output is null)
@@ -317,31 +341,46 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
         _Started = true;
 
-        Stream? stream = _Output.GetOrCreateUnderlyingStream();
-        if (stream is null)
+        // Opening the file is where a bad path, a missing directory, or a permission problem shows up. It is reported
+        // through the normal error path instead of escaping from OnFrame (a driver would see an unexpected exception for an
+        // ordinary I/O failure).
+        if (!_Output.TryGetOrCreateUnderlyingStream(out Stream? stream, out string openFailure))
         {
-            _HasError = true;
+            _ReportStartFailure($"ASC output could not be opened: {openFailure}");
             return false;
         }
 
+        // The writer constructor emits the header into its output buffer, so a failure here is rare (the stream is only
+        // touched on the first buffer flush, which surfaces as a failed frame write or finish error). Any failure is
+        // reported as item 0 and ends the export.
         try
         {
             _Writer = new AscWriter(stream, _AnchorNs, _TimestampDecimals);
         }
         catch (Exception ex)
         {
-            _HasError = true;
-            if (ErrorCount < int.MaxValue) ErrorCount++;
-            ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-            {
-                ItemIndex = 0,
-                Kind = ExportErrorKind.IoError,
-                Message = $"ASC header write failed: {ex.Message}",
-            });
+            _ReportStartFailure($"ASC header write failed: {ex.Message}");
             return false;
         }
 
         return true;
+    }
+
+    /// <summary>Latches the fatal state for a failed start, counts it, and raises <see cref="ItemSkipped"/> as item 0.</summary>
+    private void _ReportStartFailure(string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = 0,
+            Kind = ExportErrorKind.IoError,
+            Message = message,
+        });
     }
 
     /// <summary>
@@ -352,19 +391,25 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// </summary>
     private bool _HandleFrame(Frame frame)
     {
+        // Target reached: refuse the frame so the driver stops. IsFinished reports the same condition to polling callers.
         if (_TargetFrameCount > 0 && FrameCount >= _TargetFrameCount)
         {
             return false;
         }
 
+        // The span points into the frame's own memory; nothing is copied and nothing may keep it past this call.
+        // currentIndex counts written plus skipped frames, i.e. the position of this frame among the frames offered.
         ReadOnlySpan<byte> data = frame.Data.Span;
         long timestampNs = frame.Timestamp.AsNanos;
         int currentIndex = FrameCount + SkippedCount;
 
+        // Dispatch on the link type; each handler validates its own binary layout before writing a line.
         switch (frame.LinkType)
         {
             case LinkType.CanSocketcan:
             case LinkType.Can20B:
+                // Byte 4 is the payload byte count for classic and FD frames (at most 64), so bit 7 is only ever set by
+                // CAN XL frames. This is the same discriminator the protocol parser uses (see _SocketCanXlfFlag).
                 if (data.Length > 4 && (data[4] & _SocketCanXlfFlag) != 0)
                 {
                     if (data.Length < 12)
@@ -418,8 +463,13 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 currentIndex);
         }
 
-        int channel = _GetChannel(frame);
+        if (!_TryGetChannel(frame, out int channel))
+        {
+            return _HandleInvalidChannel(channel, currentIndex);
+        }
 
+        // A writer exception is an I/O failure of the target stream. It becomes a skip record (so Strict mode stops the
+        // export) rather than escaping into the frame driver. FrameCount advances only after the line is fully written.
         try
         {
             if (isFd)
@@ -455,6 +505,10 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 currentIndex);
         }
 
+        // Compact CAN XL layout: bytes 0-3 priority/VCID word (big-endian), byte 4 flags, byte 5 SDT, bytes 6-7 payload length
+        // (little-endian), bytes 8-11 acceptance field, then the payload. A CAN XL data field holds 1 to 2048 bytes, so
+        // anything else is corrupt; the length is also checked against the buffer because the writer slices the payload
+        // from it without further validation.
         int length = BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(6, 2));
         if (length < 1 || length > 2048 || data.Length < 12 + length)
         {
@@ -464,7 +518,11 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 currentIndex);
         }
 
-        int channel = _GetChannel(frame);
+        if (!_TryGetChannel(frame, out int channel))
+        {
+            return _HandleInvalidChannel(channel, currentIndex);
+        }
+
         try
         {
             _Writer!.WriteCanXlFrame(timestampNs, channel, data);
@@ -485,6 +543,8 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     private bool _HandleEthernetFrame(
         ReadOnlySpan<byte> data, long timestampNs, int currentIndex, Frame frame)
     {
+        // 1518 is the largest data length the ASC Ethernet record allows and the ASC reader accepts
+        // (AscEthernetParser.MaxDataLength). A longer frame could not be read back, so it is rejected instead of written.
         if (data.Length > 1518)
         {
             return _HandleSkip(
@@ -493,7 +553,11 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 currentIndex);
         }
 
-        int channel = _GetChannel(frame);
+        if (!_TryGetChannel(frame, out int channel))
+        {
+            return _HandleInvalidChannel(channel, currentIndex);
+        }
+
         try
         {
             _Writer!.WriteEthernetFrame(timestampNs, channel, data);
@@ -522,7 +586,10 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 currentIndex);
         }
 
-        int channel = _GetChannel(frame);
+        if (!_TryGetChannel(frame, out int channel))
+        {
+            return _HandleInvalidChannel(channel, currentIndex);
+        }
 
         try
         {
@@ -539,10 +606,11 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
     /// <summary>
     /// Handles a FlexRay frame (<see cref="LinkType.Flexray"/>).
-    /// Parses the DLT_FLEXRAY binary format and writes the ASC FlexRay line.
-    /// The physical channel (A/B) is read from DLT_FLEXRAY header byte 0 rather
-    /// than from the interface property, because byte 0 carries the protocol-level
-    /// channel designation rather than the logical interface channel.
+    /// Parses the LINKTYPE_FLEXRAY binary format and writes the ASC FlexRay line.
+    /// The channel (1 = A, 2 = B) is derived from the channel bit (bit 7) of the measurement header in byte 0 rather
+    /// than from the interface property, because the frame itself names the physical FlexRay channel it was captured on,
+    /// whereas the interface channel is only a logical numbering of the capture source. Hence no
+    /// <see cref="_TryGetChannel"/> call and no <c>Frame</c> parameter here.
     /// </summary>
     private bool _HandleFlexRayFrame(
         ReadOnlySpan<byte> data, long timestampNs, int currentIndex)
@@ -580,6 +648,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// </returns>
     private bool _HandleSkip(ExportErrorKind kind, string message, int itemIndex)
     {
+        // Saturating counters: a multi-billion-frame export must not wrap into negative counts.
         if (SkippedCount < int.MaxValue)
         {
             SkippedCount++;
@@ -590,6 +659,8 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             ErrorCount++;
         }
 
+        // Strict: latch the error and stop (no ItemSkipped event; the false return and HasErrors are the signal).
+        // Tolerant: report the item and keep exporting the following frames.
         if (ErrorTolerance == ErrorToleranceMode.Strict)
         {
             _HasError = true;
@@ -644,6 +715,8 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             return false;
         }
 
+        // Identifier word: bits 31-29 are the EFF/RTR/ERR flags, bits 28-0 the identifier (11-bit values sit in the low bits).
+        // The mask drops the flags; EFF and RTR are read from the unmasked word.
         uint socketCanId = BinaryPrimitives.ReadUInt32BigEndian(data);
         rawCanId = socketCanId & 0x1FFFFFFF;
         isExtended = (socketCanId & _SocketCanEffFlag) != 0;
@@ -655,12 +728,16 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         brs = (fdFlags & _SocketCanBrsFlag) != 0;
         esi = (fdFlags & _SocketCanEsiFlag) != 0;
 
+        // The declared byte count is clamped to the bytes actually present (and to the protocol maximum) instead of
+        // rejecting the frame: a truncated capture still exports the data it has, and the slice below cannot run past the
+        // buffer even when the header lies about the length.
         int available = data.Length - _SocketCanHeaderSize;
 
         if (isFd)
         {
             // SocketCAN FD stores the actual payload byte count at offset 4 (0–64),
             // not a DLC code. Convert to ASC DLC (0–15) for the CANFD line syntax.
+            // A clamped count that is not a valid FD size maps to the DLC that covers it (see the lookup table).
             int actualLen = Math.Min((int)payloadByteCount, 64);
             actualLen = Math.Min(actualLen, available);
             payload = data.Slice(_SocketCanHeaderSize, actualLen);
@@ -713,19 +790,20 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             return false;
         }
 
+        // The protected identifier carries two parity bits in bits 7-6; the ASC line wants the plain 6-bit frame id.
         frameId = (byte)(data[5] & 0x3F);
         checksum = data[6];
         checksumTypeBits = (byte)(data[4] & 0x03);
-        int length = data[4] >> 4;
+
+        // The declared length is a 4-bit field (0-15) but a LIN frame carries 8 data bytes at most, so it is limited to 8
+        // (a larger value is a corrupt header, and the ASC reader would clamp it anyway). It is also clamped to the bytes
+        // present (truncated captures export what they have), so the slice below cannot run past the buffer. The buffer
+        // holds at least the 8 header bytes (checked above), so the available count is never negative.
+        int length = Math.Min(data[4] >> 4, _MaxLinDataLength);
         int available = data.Length - _LinHeaderSize;
         if (length > available)
         {
             length = available;
-        }
-
-        if (length < 0)
-        {
-            length = 0;
         }
 
         payload = data.Slice(_LinHeaderSize, length);
@@ -736,7 +814,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// Parses a LINKTYPE_FLEXRAY binary frame.
     /// </summary>
     /// <remarks>
-    /// LINKTYPE_FLEXRAY layout (tcpdump DLT 210 / ISO 17458-2):
+    /// LINKTYPE_FLEXRAY layout (tcpdump DLT 210 / ISO 17458-2), parsed by <c>FlexRayLinkTypeFrame.TryParseDataFrame</c>:
     /// <list type="bullet">
     /// <item>Byte 0: Measurement header — bit 7 = Channel B, bits [6:0] = type index.</item>
     /// <item>Byte 1: Error flags (not exported to ASC).</item>
@@ -755,11 +833,14 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         headerCrc = 0;
         payload = default;
 
+        // Parsing and bounds checks (including payload length versus buffer size) are shared with the protocol layer
+        // (one definition of the bit-packed header). Non-data frames (other measurement type index) are rejected there.
         if (!FlexRayLinkTypeFrame.TryParseDataFrame(data, out FlexRayLinkTypeFrame.Fields fields, out payload))
         {
             return false;
         }
 
+        // ASC FlexRay channels are numbered 1 (A) and 2 (B), not the raw bit.
         channel = (byte)FlexRayLinkTypeFrame.BusChannelToAscChannel(fields.ChannelB);
         frameId = fields.FrameId;
         cycle = fields.Cycle;
@@ -773,21 +854,30 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// number in the interface name). Falls back to channel 1 when the interface has no usable hint.
     /// </summary>
     /// <param name="frame">The frame whose interface to inspect.</param>
-    /// <returns>Resolved channel number.</returns>
-    private int _GetChannel(Frame frame)
+    /// <param name="channel">Resolved channel number (also set when the result is <see langword="false"/>, for the message).</param>
+    /// <returns><see langword="false"/> when the channel is negative and cannot be written to an ASC line.</returns>
+    private bool _TryGetChannel(Frame frame, out int channel)
     {
         const int defaultChannel = 1;
         if (!frame.HasInterface)
         {
-            return defaultChannel;
+            channel = defaultChannel;
+            return true;
         }
 
+        // Cache hit: no registry lookup and no property parsing per frame. Dictionary is safe here because the exporter is
+        // single-threaded (see the class remarks).
         if (_InterfaceChannels.TryGetValue(frame.InterfaceId, out int cached))
         {
-            return cached;
+            channel = cached;
+            return cached >= 0;
         }
 
-        int channel = defaultChannel;
+        // Cache miss: resolve once. The fallback is cached too, so an interface without a usable hint is not re-parsed.
+        // The property value is not range-checked by the converter. A negative channel would be written as "-3" in the
+        // channel column, which no ASC reader accepts, so such frames are rejected (the BLF exporter validates its channel
+        // the same way). The upper end is not limited here: the ASC format fixes no common maximum for all bus types.
+        channel = defaultChannel;
         if (frame.Registry.TryGet(frame.InterfaceId, out FrameInterfaceInfo? info)
             && InterfaceChannelConverter.TryGetChannel(info, out int resolved, out _) == InterfaceChannelLookup.Found)
         {
@@ -795,8 +885,15 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         }
 
         _InterfaceChannels[frame.InterfaceId] = channel;
-        return channel;
+        return channel >= 0;
     }
+
+    /// <summary>Skips a frame whose interface channel is negative (see <see cref="_TryGetChannel"/>).</summary>
+    private bool _HandleInvalidChannel(int channel, int currentIndex) =>
+        _HandleSkip(
+            ExportErrorKind.SerializationError,
+            $"ASC channel value '{channel.ToString(CultureInfo.InvariantCulture)}' is negative and cannot be written.",
+            currentIndex);
 
     #endregion
 
@@ -824,6 +921,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         /// <see cref="OnFinish"/> which still emits a valid ASC header + empty trigger block).
         /// Calling this method more than once replaces the previous output target.
         /// </summary>
+        /// <exception cref="ArgumentException"><paramref name="path"/> is null, empty, or contains invalid path characters.</exception>
         public Builder ToFile(string path)
         {
             _Output = ExportOutput.File(path);
@@ -844,7 +942,8 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         /// <summary>
         /// Directs output to the standard output stream (stdout).
         /// The stdout stream is owned by the exporter and closed on finish.
-        /// Calling this method more than once replaces the previous output target.
+        /// Calling this method more than once replaces the previous output target. The standard output stream is opened
+        /// immediately by this call, not lazily on the first frame.
         /// </summary>
         public Builder ToStdout()
         {
@@ -886,10 +985,15 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         /// When the target is reached, <see cref="OnFrame"/> returns <c>false</c>.
         /// Pass <c>0</c> (the default) for no limit.
         /// </summary>
-        /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is negative.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="count"/> is negative or exceeds <see cref="ArrayIndexIdRange.MaxCount"/>.
+        /// </exception>
         public Builder WithTargetFrameCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+            // Frames are addressed by array-index ids, so a source cannot deliver more than MaxCount frames; a larger
+            // target would be unreachable and is rejected as a configuration error.
             if (count > ArrayIndexIdRange.MaxCount)
             {
                 throw new ArgumentOutOfRangeException(

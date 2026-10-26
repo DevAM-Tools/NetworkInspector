@@ -4,7 +4,10 @@ namespace NetworkInspector.Protocols.SignalMessage;
 
 /// <summary>
 /// Storage strategy for discrete signal value names (enums).
-/// Dense layouts use contiguous arrays for cache-friendly O(1) lookup.
+/// Dense layouts use contiguous arrays for cache-friendly O(1) lookup: the lookup runs for every enum signal that is
+/// materialized, and an array index avoids hashing. They are only chosen when the keys form one gap-free run at
+/// the bottom or the top of the raw range (see <c>SignalEnumTableBuilder</c>); everything else is stored sparse so a
+/// few widely spread keys never cost a large array.
 /// </summary>
 internal enum SignalEnumKind : byte
 {

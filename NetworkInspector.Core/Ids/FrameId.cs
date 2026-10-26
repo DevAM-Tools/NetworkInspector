@@ -6,7 +6,18 @@ namespace NetworkInspector.Core.Ids;
 /// Strongly-typed identifier for a captured frame.
 /// Wraps an <see cref="int"/> with value semantics.
 /// </summary>
-/// <remarks>Creates a new <see cref="FrameId"/> with the specified raw value.</remarks>
+/// <remarks>
+/// Creates a new <see cref="FrameId"/> with the specified raw value.
+/// <para>
+/// Valid values are <c>0</c> to <see cref="ArrayIndexIdRange.MaxValue"/> (the id is used as an array index) plus the single
+/// sentinel <c>-1</c> (<see cref="Invalid"/>). <c>default(FrameId)</c> is id <c>0</c>, which is a valid id and not
+/// <see cref="Invalid"/>; use <see cref="Invalid"/> explicitly to mean "no frame".
+/// </para>
+/// </remarks>
+/// <param name="value">The raw id: <c>-1</c> for <see cref="Invalid"/>, otherwise an index in the valid range.</param>
+/// <exception cref="ArgumentOutOfRangeException">
+/// <c>value</c> is negative but not <c>-1</c>, or is above <see cref="ArrayIndexIdRange.MaxValue"/>.
+/// </exception>
 [StructLayout(LayoutKind.Sequential)]
 [method: MethodImpl(MethodImplOptions.AggressiveInlining)]
 public readonly struct FrameId(int value) : IEquatable<FrameId>, IComparable<FrameId>
@@ -77,7 +88,10 @@ public readonly struct FrameId(int value) : IEquatable<FrameId>, IComparable<Fra
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator !=(FrameId left, FrameId right) => left.Value != right.Value;
 
-    /// <summary>Implicitly converts a <see cref="FrameId"/> to an <see cref="int"/>.</summary>
+    /// <summary>
+    /// Implicitly converts a <see cref="FrameId"/> to an <see cref="int"/> (for indexing). The reverse direction is not implicit:
+    /// construct the id with <c>new FrameId(int)</c> so the range is validated.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator int(FrameId id) => id.Value;
 
@@ -85,9 +99,14 @@ public readonly struct FrameId(int value) : IEquatable<FrameId>, IComparable<Fra
 
     #region Private helpers
 
+    /// <summary>
+    /// Validates the raw value once, at construction, so every existing id is either <see cref="Invalid"/> or a usable
+    /// array index and consumers do not re-check the range. Throws <see cref="ArgumentOutOfRangeException"/> otherwise.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int _StoreValidated(int value)
     {
+        // The sentinel is the only negative value allowed; everything else must be a valid array index.
         if (!ArrayIndexIdRange.IsInvalidSentinel(value))
         {
             ArrayIndexIdRange.ValidateIndexOrThrow(value, nameof(value));

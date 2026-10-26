@@ -11,12 +11,14 @@ namespace NetworkInspector.Sources.Asc.Format;
 /// SocketCAN frame layout (16 bytes):
 ///   [id(4BE) | payload length(1) | flags(1) | reserved(1) | len8_dlc(1) | data(8)]
 /// Byte 4 is the payload byte count (0–8); a DLC of 9–15 is kept in byte 7 (<c>len8_dlc</c>), as the BLF reader does.
+/// The id word is big-endian (the layout of the SocketCAN link type used in capture files), with EFF/RTR/ERR in bits 31/30/29.
+/// Stateless; safe to call from multiple threads.
 /// </summary>
 internal static class AscCanParser
 {
     #region Constants
 
-    /// <summary>SocketCAN header: id(4) + length(1) + flags(1) + reserved(2).</summary>
+    /// <summary>SocketCAN header: id(4) + length(1) + flags(1) + reserved(1) + len8_dlc(1).</summary>
     private const int _SocketCanHeaderSize = 8;
 
     /// <summary>Classic CAN maximum data length.</summary>
@@ -88,6 +90,8 @@ internal static class AscCanParser
             return false;
         }
 
+        // Frame type token: "d" = data frame, "r" = remote request. storedLength is the byte count written to the SocketCAN
+        // length byte; busDlc is the DLC as the bus carried it (it can be 9-15, which classic CAN still allows).
         bool isRemote = typeToken.Length == 1 && (typeToken[0] == (byte)'r' || typeToken[0] == (byte)'R');
         int storedLength;
         int busDlc;
@@ -119,6 +123,8 @@ internal static class AscCanParser
             busDlc = dlc;
         }
 
+        // Compose the SocketCAN id word: the identifier is masked to 29 bits (CAN_EFF_MASK) so that a malformed or negative
+        // id column cannot set the EFF/RTR/ERR flag bits; the flags come only from the line's x suffix and frame type.
         uint socketCanId = canId & 0x1FFFFFFF;
         if (isExtended)
         {
@@ -130,6 +136,8 @@ internal static class AscCanParser
             socketCanId |= _SocketCanRtr;
         }
 
+        // Payload bytes go to a stack scratch first (8 bytes, no allocation); the frame is rented only after the line is
+        // fully validated, so a rejected line leaves the slab untouched. A remote frame has a length but no data tokens.
         Span<byte> dataBytes = stackalloc byte[_MaxDataLength];
         dataBytes.Clear();
 
@@ -142,6 +150,8 @@ internal static class AscCanParser
                     break;
                 }
 
+                // A word longer than a byte token that starts with a letter is the trailing attribute list
+                // (Length = ..., BitCount = ...) of a line with fewer data bytes than its DLC says: stop, keep zeros.
                 if (dataToken.Length > 2 && _IsAsciiLetter(dataToken[0]))
                 {
                     break;
@@ -174,10 +184,22 @@ internal static class AscCanParser
 
     #region Helpers
 
+    /// <summary>
+    /// Parses a decimal channel token. Shared by the CAN, CAN FD and error parsers. Trailing characters after the number are
+    /// not rejected (the consumed count is ignored).
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static bool TryParseChannel(ReadOnlySpan<byte> token, out int channel)
         => System.Buffers.Text.Utf8Parser.TryParse(token, out channel, out _);
 
+    /// <summary>
+    /// Parses the numeric id column. A trailing <c>x</c> marks an extended (29-bit) id. The number is hexadecimal when the
+    /// file header says <c>base hex</c> (<paramref name="numericBase"/> 16), else decimal; the whole token must be consumed.
+    /// </summary>
+    /// <param name="token">The id column.</param>
+    /// <param name="numericBase">16 for hex, 10 for dec — from the file header.</param>
+    /// <param name="canId">The identifier without flags. Zero when the method returns false; a negative decimal value is rejected.</param>
+    /// <param name="isExtended">True when the token ended in <c>x</c>.</param>
     internal static bool TryParseCanId(ReadOnlySpan<byte> token, int numericBase, out uint canId, out bool isExtended)
     {
         canId = 0;
@@ -201,8 +223,11 @@ internal static class AscCanParser
                 && consumed == idPart.Length;
         }
 
+        // A negative decimal id is rejected: the cast to uint used to wrap it into a huge unsigned value that the later
+        // masking turned into a valid-looking id, so a corrupt column became a frame with the wrong identifier.
         if (System.Buffers.Text.Utf8Parser.TryParse(idPart, out int signed, out int consumedDec)
-            && consumedDec == idPart.Length)
+            && consumedDec == idPart.Length
+            && signed >= 0)
         {
             canId = (uint)signed;
             return true;
@@ -211,6 +236,10 @@ internal static class AscCanParser
         return false;
     }
 
+    /// <summary>
+    /// Parses one data byte token: hexadecimal (<paramref name="numericBase"/> 16, at most 255) or decimal (a <see cref="byte"/>).
+    /// Per-byte call inside the payload loop, hence inlined; <c>Utf8Parser</c> works on the bytes without a string.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static bool TryParseByte(ReadOnlySpan<byte> token, int numericBase, out byte value)
     {

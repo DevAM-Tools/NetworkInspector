@@ -20,6 +20,8 @@ namespace NetworkInspector.Sessions.ValueCaches;
 /// <b>Thread safety:</b>
 /// <see cref="Status"/> is a plain volatile read of <see cref="_Status"/>, safe from any thread.
 /// <see cref="Cache"/> returns the slot's current writer view so Restart rebind is visible.
+/// <see cref="Job"/> and the unsubscribe callback are published and read with acquire/release semantics, like the
+/// writer, so a thread that finds the info always sees the job and the callback the session set before it published it.
 /// Status transitions are performed by the session under controlled conditions.
 /// </para>
 /// </summary>
@@ -33,13 +35,22 @@ public sealed class ValueCacheInfo
     // Current writer. Swapped on Restart rebind; readers load via Volatile.
     private ValueCache? _Writer;
 
+    // Job view and unsubscribe callback: set by the session thread that registers the subscription, read by any thread that
+    // holds the info (Job, Unsubscribe). Plain fields would let a reader on another core see the info without them, so they
+    // are published and read like Status and the writer: through Volatile.
+    private JobInfo? _Job;
+    private Action? _UnsubscribeCallback;
+
     /// <summary>
     /// Callback set by the session to implement the Unsubscribe convenience API.
-    /// Invoked at most once; null-guarded. Null when this info is ingest-only (no listener job).
+    /// Null-guarded; invoked on every <see cref="Unsubscribe"/> call (a repeat is harmless: the session answers a job
+    /// that is already terminal with a refusal). Null when this info is ingest-only (no listener job), and cleared
+    /// when the ingest listener unsubscribes.
     /// </summary>
     internal Action? UnsubscribeCallback
     {
-        get; set;
+        get => Volatile.Read(ref _UnsubscribeCallback);
+        set => Volatile.Write(ref _UnsubscribeCallback, value);
     }
 
     #endregion
@@ -61,7 +72,8 @@ public sealed class ValueCacheInfo
     /// </summary>
     public JobInfo? Job
     {
-        get; internal set;
+        get => Volatile.Read(ref _Job);
+        internal set => Volatile.Write(ref _Job, value);
     }
 
     /// <summary>Current subscription status (thread-safe read).</summary>
@@ -73,10 +85,12 @@ public sealed class ValueCacheInfo
     /// Keep the compile-time type as <see cref="ReadOnlyValueCache"/>; assigning to
     /// <see cref="IReadOnlyValueCache"/> boxes.
     /// </summary>
+    /// <exception cref="InvalidOperationException">No writer was installed (not expected for infos the session hands out).</exception>
     public ReadOnlyValueCache Cache
     {
         get
         {
+            // One acquire load, so the null check and the view use the same writer even if Restart rebinds meanwhile.
             ValueCache? writer = Volatile.Read(ref _Writer);
             if (writer is null)
             {
@@ -107,6 +121,8 @@ public sealed class ValueCacheInfo
     internal void SetWriter(ValueCache writer)
     {
         ArgumentNullException.ThrowIfNull(writer);
+
+        // Release store: the writer is fully constructed before readers of Cache can see it.
         Volatile.Write(ref _Writer, writer);
     }
 }

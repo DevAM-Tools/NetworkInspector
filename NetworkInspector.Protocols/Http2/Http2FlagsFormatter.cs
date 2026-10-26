@@ -18,6 +18,12 @@ namespace NetworkInspector.Protocols.Http2;
 /// listed as "0x{value}" when set.
 /// </para>
 /// <para>Output format: <c>0x05 [ES/ACK, END_HDRS]</c>.</para>
+/// <para>
+/// Design: the text depends only on the flags byte, not on the frame type. That is what makes a 256-entry table
+/// possible, but it also means a bit that has different meanings per frame type gets one shared label (0x01 is
+/// END_STREAM on DATA and HEADERS, ACK on SETTINGS and PING), and a bit is labeled even for a frame type that does
+/// not define it. Known flags are listed in ascending bit order, followed by the undefined bits.
+/// </para>
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> All members are static and read from a pre-built immutable array;
@@ -32,10 +38,13 @@ internal static class Http2FlagsFormatter
     /// Returns the display string for the given HTTP/2 frame flags byte.
     /// Output example: <c>0x05 [ES/ACK, END_HDRS]</c>.
     /// </summary>
+    /// <param name="flags">The raw flags octet of the frame header; every value 0-255 is valid.</param>
     internal static string Format(byte flags) => _FlagsTable[flags];
 
     private static string[] _BuildFlagsTable()
     {
+        // Run once by the type initializer: the allocations in _BuildFlagString (arrays, a copied tuple) cost nothing
+        // at parse time because Format only reads this table.
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
         {
@@ -44,6 +53,7 @@ internal static class Http2FlagsFormatter
         return table;
     }
 
+    /// <summary>Builds the display text for one flags value; only called while the table is built.</summary>
     private static string _BuildFlagString(byte flags)
     {
         // Known flag bit definitions
@@ -60,11 +70,11 @@ internal static class Http2FlagsFormatter
 
         if (flags == 0)
         {
-            // Concatenate directly — both are pre-allocated literals.
+            // No flag set: concatenate directly (the hex text comes from the preformatted table, the suffix is a literal).
             return hexPart + " [None]";
         }
 
-        // Build the bracket-enclosed flag list.
+        // Build the bracket-enclosed flag list with string.Create so the result is allocated once at its exact length.
         // First pass: compute total length.
         int totalLen = hexPart.Length + 3; // " [" and "]"
         int count = 0;
@@ -80,8 +90,8 @@ internal static class Http2FlagsFormatter
                 count++;
             }
         }
-        // Reserve space for unknown bits rendered as "0xNN" (max 4 chars each, 4 unknown bits = at most 4 entries)
-        // We use a growable approach: compute actual unknown names first.
+        // Undefined bits are rendered as "0xNN" (4 chars each, at most 4 of them). Their names are computed first so
+        // the exact total length is known before the string is allocated.
         string[] unknownNames = _BuildUnknownNames(flags);
         foreach (string name in unknownNames)
         {
@@ -93,7 +103,9 @@ internal static class Http2FlagsFormatter
             count++;
         }
 
-        // Second pass: fill the string.
+        // Second pass: fill the string. A span cannot be captured by the state tuple, hence the array copy of the
+        // known flags (build-time only). The lambda is static and must write exactly totalLen characters, so its
+        // separator and ordering logic mirrors the first pass above.
         return string.Create(totalLen, (hexPart, flags, knownFlags: knownFlags.ToArray(), unknownNames), static (chars, state) =>
         {
             state.hexPart.AsSpan().CopyTo(chars);

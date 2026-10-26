@@ -1,4 +1,4 @@
-// Copyright � 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
 namespace NetworkInspector.Protocols.SomeIp;
 
@@ -12,6 +12,22 @@ namespace NetworkInspector.Protocols.SomeIp;
 /// Each entry is 16 bytes. Options are variable-length (length(2) + type(1) + data).
 /// <para>Wireshark ref: packet-someip-sd.c</para>
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Thread safety:</b> stateless static class; safe to call concurrently (each call only reads its arguments and
+/// appends to the field passed in).
+/// </para>
+/// <para>
+/// <b>Trust boundary:</b> every length and count comes straight from the wire. The parser appends fields while it
+/// walks the payload, so a malformed array length is reported as a parse error after the already decoded fields have
+/// been appended. No separate limit on the number of entries or options exists: both are bounded by the payload length
+/// (16 bytes per entry, at least 3 bytes per option), i.e. by the frame size.
+/// </para>
+/// <para>
+/// All multi-byte values are big-endian. All numbers are read from spans with <see cref="BinaryPrimitives"/>
+/// instead of copying bytes; the only string created from payload bytes is the configuration option text.
+/// </para>
+/// </remarks>
 internal static class SomeIpSdParser
 {
     /// <summary>SD minimum header size: flags(1) + reserved(3) + entries_length(4).</summary>
@@ -24,16 +40,62 @@ internal static class SomeIpSdParser
     internal const uint SdMessageId = 0xFFFF_8100;
 
     /// <summary>
+    /// Decides which index groups <see cref="Parse"/> will emit fields for, without building any field. The eager parse of
+    /// <see cref="SomeIpProtocol"/> records the groups from this result, so the presence index equals the fields that
+    /// the tree contains: the same length rules as <see cref="Parse"/> are applied, in the same order, on the same bytes.
+    /// </summary>
+    /// <param name="sdData">SD payload (after the 16-byte SOME/IP header); may be empty.</param>
+    /// <param name="hasContainer">True when the SD container (and the flags) are emitted: at least the 8-byte fixed part is present.</param>
+    /// <param name="hasEntries">True when the entries array container is emitted: the declared entries array fits the payload.</param>
+    /// <param name="hasOptions">True when the options array container is emitted: its length field is present, fits, and is not zero.</param>
+    internal static void DetectGroups(
+        ReadOnlySpan<byte> sdData, out bool hasContainer, out bool hasEntries, out bool hasOptions)
+    {
+        hasContainer = sdData.Length >= _SdMinHeaderSize;
+        hasEntries = false;
+        hasOptions = false;
+        if (!hasContainer)
+        {
+            return;
+        }
+
+        // Entries array: unsigned comparison for the same reason as in Parse (no narrowing of a wire value).
+        uint entriesLengthRaw = BinaryPrimitives.ReadUInt32BigEndian(sdData[4..8]);
+        if (entriesLengthRaw > (uint)(sdData.Length - _SdMinHeaderSize))
+        {
+            return;
+        }
+
+        hasEntries = true;
+
+        // Options array: no container when its length field is missing, does not fit, or is zero.
+        int optionsLengthOffset = _SdMinHeaderSize + (int)entriesLengthRaw;
+        if (optionsLengthOffset + 4 > sdData.Length)
+        {
+            return;
+        }
+
+        uint optionsLengthRaw = BinaryPrimitives.ReadUInt32BigEndian(sdData[optionsLengthOffset..(optionsLengthOffset + 4)]);
+        int optionsStart = optionsLengthOffset + 4;
+        hasOptions = optionsLengthRaw > 0 && optionsLengthRaw <= (uint)(sdData.Length - optionsStart);
+    }
+
+    /// <summary>
     /// Parses SOME/IP-SD payload and appends fields to the tree.
     /// Called from <see cref="SomeIpProtocol"/> when message ID == 0xFFFF8100.
     /// </summary>
     /// <param name="parent">The SOME/IP protocol container field.</param>
     /// <param name="sdData">SD payload data (after the 16-byte SOME/IP header).</param>
     /// <param name="fieldIds">Pre-registered field IDs for all SD sub-fields.</param>
-    /// <returns>ParseResult indicating success or error.</returns>
+    /// <returns>
+    /// Zero on success (the caller already accounts for the whole SOME/IP message; the consumed count is not used),
+    /// or a <see cref="ParseError"/> when the payload is shorter than the SD header or an array length points past
+    /// the payload.
+    /// </returns>
     internal static ParseResult Parse(in MutField parent, ReadOnlySpan<byte> sdData,
         in SomeIpSdFieldIds fieldIds)
     {
+        // The fixed part (flags, reserved, entries length) must be present before anything is read.
         if (sdData.Length < _SdMinHeaderSize)
         {
             return ParseError.InsufficientDataWithInfo("someip_sd",
@@ -43,13 +105,17 @@ internal static class SomeIpSdParser
         byte flags = sdData[0];
         // bytes 1..3 are reserved
 
-        int entriesLength = (int)BinaryPrimitives.ReadUInt32BigEndian(sdData[4..8]);
+        // Length of the entries array in bytes. It stays unsigned until it has been compared with the bytes that are
+        // left: narrowing the raw value to int first would turn a wire value above int.MaxValue negative (and make
+        // 8 + length wrap for values from 0x7FFFFFF8 up), so the bounds check below would pass and the later slices
+        // would throw on a crafted payload.
+        uint entriesLengthRaw = BinaryPrimitives.ReadUInt32BigEndian(sdData[4..8]);
 
         // Create SD container
         MutField sdField = parent.AppendWithCustomText(fieldIds.Container,
             FieldValue.None, "SOME/IP-SD");
 
-        // -- Flags --
+        // -- Flags -- (bit 7 reboot, bit 6 unicast, bit 5 explicit initial data events request; remaining bits reserved)
         sdField.AppendWithCustomText(fieldIds.Flags,
             FieldValue.NewU64(flags), Helpers.DisplayTables.FormatHexU8(flags));
         sdField.Append(fieldIds.FlagsReboot, FieldValue.NewBool((flags & 0x80) != 0));
@@ -57,21 +123,29 @@ internal static class SomeIpSdParser
         sdField.Append(fieldIds.FlagsInitialEvents, FieldValue.NewBool((flags & 0x20) != 0));
 
         // -- Entries array --
+        // The declared array must lie inside the payload; otherwise the message is rejected (the SD container and
+        // flags above have already been appended, so the partial tree is still visible for diagnosis).
         int entriesStart = 8; // after flags(1) + reserved(3) + entries_length(4)
-        int entriesEnd = entriesStart + entriesLength;
 
-        if (entriesEnd > sdData.Length)
+        // sdData.Length is at least 8 here, so the number of bytes left after the entries length field is not negative.
+        if (entriesLengthRaw > (uint)(sdData.Length - entriesStart))
         {
             return ParseError.InvalidData("someip_sd",
                 "Entries array extends beyond SD payload");
         }
 
+        // Now known to be at most the payload length, so the conversion and the sum below cannot overflow.
+        int entriesLength = (int)entriesLengthRaw;
+        int entriesEnd = entriesStart + entriesLength;
+
+        // A trailing partial entry (length not a multiple of 16) is ignored: the count rounds down and the loop
+        // below only visits complete 16-byte entries.
         int entryCount = entriesLength / _SdEntrySize;
         MutField entriesField = sdField.AppendWithCustomText(fieldIds.EntriesContainer,
             FieldValue.None,
             "Entries Array (", entryCount, entryCount == 1 ? " entry)" : " entries)");
 
-        // Parse individual entries
+        // Parse individual entries: fixed 16-byte stride, so no per-entry length to validate.
         int offset = entriesStart;
         while (offset + _SdEntrySize <= entriesEnd)
         {
@@ -79,26 +153,32 @@ internal static class SomeIpSdParser
             offset += _SdEntrySize;
         }
 
-        // -- Options array --
+        // -- Options array -- (its 4-byte length field follows the entries array)
         int optionsLengthOffset = entriesEnd;
         if (optionsLengthOffset + 4 > sdData.Length)
         {
-            // No options � valid if there is no space for the options length field
+            // No options: tolerated (not an error) when there is no space for the options length field, so
+            // a message that ends right after the entries array is shown with its entries only.
             return 0;
         }
 
-        int optionsLength = (int)BinaryPrimitives.ReadUInt32BigEndian(
+        uint optionsLengthRaw = BinaryPrimitives.ReadUInt32BigEndian(
             sdData[optionsLengthOffset..(optionsLengthOffset + 4)]);
 
+        // Same bounds rule as for the entries array, and for the same reason compared while still unsigned: the check
+        // above guarantees that the options length field lies inside the payload, so the bytes left are not negative.
         int optionsStart = optionsLengthOffset + 4;
-        int optionsEnd = optionsStart + optionsLength;
 
-        if (optionsEnd > sdData.Length)
+        if (optionsLengthRaw > (uint)(sdData.Length - optionsStart))
         {
             return ParseError.InvalidData("someip_sd",
                 "Options array extends beyond SD payload");
         }
 
+        int optionsLength = (int)optionsLengthRaw;
+        int optionsEnd = optionsStart + optionsLength;
+
+        // An empty options array (length 0) produces no container at all.
         if (optionsLength > 0)
         {
             MutField optionsField = sdField.AppendWithCustomText(fieldIds.OptionsContainer,
@@ -110,10 +190,18 @@ internal static class SomeIpSdParser
         return 0;
     }
 
-    /// <summary>Parses a single 16-byte SD entry.</summary>
+    /// <summary>
+    /// Parses a single 16-byte SD entry: type(1), index of first option run(1), index of second option run(1),
+    /// number of options 1 (high nibble) and 2 (low nibble)(1), service id(2), instance id(2), major version(1),
+    /// TTL(3), then 4 bytes whose meaning depends on the entry type.
+    /// </summary>
+    /// <param name="parent">Entries array container that receives the entry.</param>
+    /// <param name="data">Exactly one entry (16 bytes).</param>
+    /// <param name="f">Registered field ids.</param>
     private static void _ParseEntry(in MutField parent, ReadOnlySpan<byte> data,
         in SomeIpSdFieldIds f)
     {
+        // Defensive: the caller slices exactly 16 bytes, so this guard only protects the fixed offsets below.
         if (data.Length < _SdEntrySize)
         {
             return;
@@ -130,7 +218,7 @@ internal static class SomeIpSdParser
         // TTL is a 24-bit field spanning bytes 9-11
         uint ttl = (uint)((data[9] << 16) | (data[10] << 8) | data[11]);
 
-        // Display name varies based on entry type and TTL (TTL=0 ? stop/nack)
+        // Display name varies based on entry type and TTL (TTL = 0 turns offer/subscribe into stop/nack)
         string displayName = _GetEntryDisplayName(entryType, ttl);
 
         MutField entryField = parent.AppendWithCustomText(f.EntryContainer,
@@ -157,9 +245,11 @@ internal static class SomeIpSdParser
         entryField.Append(f.EntryMajorVer, FieldValue.NewU64(majorVer));
         entryField.Append(f.EntryTtl, FieldValue.NewU64(ttl));
 
-        // Last 4 bytes semantics depend on entry type:
-        //   Service entries (type < 0x04) ? Minor Version (32-bit)
-        //   Eventgroup entries (type >= 0x04) ? reserved(1) + flags(1) + EventgroupID(2)
+        // Last 4 bytes semantics depend on entry type (types below 0x04 are service entries, 0x06 and 0x07 are
+        // eventgroup entries; 0x04 and 0x05 are unassigned and are decoded like eventgroup entries):
+        //   Service entries (type < 0x04)      -> Minor Version (32-bit)
+        //   Eventgroup entries (type >= 0x04)  -> reserved(12 bits) + counter(4 bits) + EventgroupID(2 bytes);
+        //                                         only the EventgroupID is decoded, reserved/counter are not shown
         if (entryType < 0x04)
         {
             uint minorVer = BinaryPrimitives.ReadUInt32BigEndian(data[12..16]);
@@ -174,9 +264,13 @@ internal static class SomeIpSdParser
     }
 
     /// <summary>
-    /// Entry display name based on type and TTL. TTL=0 changes semantics:
-    /// OfferService ? StopOfferService, SubscribeEventgroup ? StopSubscribe, etc.
+    /// Entry display name based on type and TTL. In SOME/IP-SD a TTL of 0 changes the meaning of an entry:
+    /// OfferService becomes StopOfferService, SubscribeEventgroup becomes StopSubscribeEventgroup, and
+    /// SubscribeEventgroupAck becomes SubscribeEventgroupNack. Other types keep their normal name.
     /// </summary>
+    /// <param name="entryType">Entry type byte.</param>
+    /// <param name="ttl">24-bit TTL of the entry.</param>
+    /// <returns>Short display name for the entry container.</returns>
     private static string _GetEntryDisplayName(byte entryType, uint ttl)
     {
         if (ttl == 0)
@@ -193,7 +287,15 @@ internal static class SomeIpSdParser
         return SomeIpSdDisplayTables.GetEntryTypeShortName(entryType);
     }
 
-    /// <summary>Parses all options in the options array.</summary>
+    /// <summary>
+    /// Parses all options in the options array. Walks the variable-length options one after another; parsing stops
+    /// silently at the first option that is truncated by the array end (nothing after it can be located).
+    /// </summary>
+    /// <param name="parent">Options array container that receives each option.</param>
+    /// <param name="fullData">The whole SD payload; offsets are relative to it.</param>
+    /// <param name="start">Offset of the first option.</param>
+    /// <param name="end">Exclusive end offset of the options array (already validated against the payload length).</param>
+    /// <param name="f">Registered field ids.</param>
     private static void _ParseOptions(in MutField parent, ReadOnlySpan<byte> fullData,
         int start, int end, in SomeIpSdFieldIds f)
     {
@@ -202,15 +304,17 @@ internal static class SomeIpSdParser
         while (offset + 3 <= end) // minimum: length(2) + type(1)
         {
             // Option wire format:
-            //   length (2 bytes) � bytes after the type field
+            //   length (2 bytes) - number of bytes after the type field (the reserved byte is counted)
             //   type (1 byte)
-            //   [reserved (1 byte)] � for most option types
+            //   [reserved (1 byte)] - for most option types
             //   option data
-            // Total wire size = length + 3 (per Wireshark packet-someip-sd.c)
+            // Total wire size = length + 3 (per Wireshark packet-someip-sd.c). Every iteration advances by at
+            // least 3 bytes, so the loop terminates even for crafted zero-length options.
             int optLength = BinaryPrimitives.ReadUInt16BigEndian(
                 fullData[offset..(offset + 2)]);
             byte optType = fullData[offset + 2];
 
+            // A declared size that runs past the array end ends the walk (cannot overflow: optLength <= 65535).
             int totalOptSize = optLength + 3;
             if (offset + totalOptSize > end)
             {
@@ -223,7 +327,16 @@ internal static class SomeIpSdParser
         }
     }
 
-    /// <summary>Parses a single SD option.</summary>
+    /// <summary>
+    /// Parses a single SD option. Unknown option types still get their container, length and type fields; only their
+    /// type-specific data is not decoded. Options whose data is shorter than their type requires are shown
+    /// without the missing fields (no error), because the option length was already validated by the caller.
+    /// </summary>
+    /// <param name="parent">Options array container.</param>
+    /// <param name="data">Exactly one option, including its length and type bytes.</param>
+    /// <param name="optLength">Length field of the option (bytes after the type byte).</param>
+    /// <param name="optType">Option type byte.</param>
+    /// <param name="f">Registered field ids.</param>
     private static void _ParseSingleOption(in MutField parent, ReadOnlySpan<byte> data,
         int optLength, byte optType, in SomeIpSdFieldIds f)
     {
@@ -241,6 +354,9 @@ internal static class SomeIpSdParser
         // Payload starts at byte 4: skip length(2) + type(1) + reserved(1)
         int payloadStart = 4;
 
+        // Type-specific data. Each branch re-checks that enough bytes exist, because a crafted option can declare a
+        // length that is valid for the array walk but too small for its type.
+
         switch (optType)
         {
             // IPv4 Endpoint / IPv4 Multicast / IPv4 SD Endpoint
@@ -253,7 +369,9 @@ internal static class SomeIpSdParser
                 _ParseIpv6EndpointOption(in optField, data, payloadStart, in f);
                 break;
 
-            // Configuration option
+            // Configuration option: the rest of the option is shown as text. Invalid UTF-8 is replaced with U+FFFD
+            // by the decoder (no exception); the text is not split into its key/value items. The string length is
+            // bounded by the 16-bit option length.
             case 0x01:
                 if (data.Length > payloadStart)
                 {
@@ -280,8 +398,14 @@ internal static class SomeIpSdParser
     }
 
     /// <summary>
-    /// Parses IPv4 endpoint/multicast option: 4 bytes IPv4 + 1 reserved + 1 protocol + 2 port.
+    /// Parses IPv4 endpoint/multicast option: 4 bytes IPv4 + 1 reserved + 1 protocol + 2 port
+    /// (12 bytes in total including length, type and the leading reserved byte). Shown without any field when
+    /// shorter than that.
     /// </summary>
+    /// <param name="optField">Option container that receives the fields.</param>
+    /// <param name="data">The whole option, starting at its length field.</param>
+    /// <param name="payloadStart">Offset of the first data byte inside <paramref name="data"/> (after the reserved byte).</param>
+    /// <param name="f">Registered field ids.</param>
     private static void _ParseIpv4EndpointOption(in MutField optField, ReadOnlySpan<byte> data,
         int payloadStart, in SomeIpSdFieldIds f)
     {
@@ -305,8 +429,14 @@ internal static class SomeIpSdParser
     }
 
     /// <summary>
-    /// Parses IPv6 endpoint/multicast option: 16 bytes IPv6 + 1 reserved + 1 protocol + 2 port.
+    /// Parses IPv6 endpoint/multicast option: 16 bytes IPv6 + 1 reserved + 1 protocol + 2 port
+    /// (24 bytes in total including length, type and the leading reserved byte). Shown without any field when
+    /// shorter than that.
     /// </summary>
+    /// <param name="optField">Option container that receives the fields.</param>
+    /// <param name="data">The whole option, starting at its length field.</param>
+    /// <param name="payloadStart">Offset of the first data byte inside <paramref name="data"/> (after the reserved byte).</param>
+    /// <param name="f">Registered field ids.</param>
     private static void _ParseIpv6EndpointOption(in MutField optField, ReadOnlySpan<byte> data,
         int payloadStart, in SomeIpSdFieldIds f)
     {
@@ -315,6 +445,7 @@ internal static class SomeIpSdParser
             return;
         }
 
+        // The 128-bit address is read as two big-endian halves (high = first 8 bytes), the form IPv6Address expects.
         ulong high = BinaryPrimitives.ReadUInt64BigEndian(
             data[payloadStart..(payloadStart + 8)]);
         ulong low = BinaryPrimitives.ReadUInt64BigEndian(

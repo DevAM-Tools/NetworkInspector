@@ -18,6 +18,10 @@ internal sealed class FrameIndex
 {
     #region Fields
 
+    /// <summary>
+    /// Block offsets in frame order (non-decreasing in practice, but the encoding does not rely on it: it stores signed
+    /// deltas modulo 2^64). The compact encoding is what keeps the index small for very large captures.
+    /// </summary>
     private readonly PackedLongSequence _BlockOffsets = new();
 
     #endregion
@@ -47,7 +51,12 @@ internal sealed class FrameIndex
     /// <summary>Seals the last partial group once the scan ended. Idempotent. Single writer.</summary>
     internal void Complete() => _BlockOffsets.Complete();
 
-    /// <summary>Start offset of the block of frame <paramref name="index"/>. Any thread; false for an id not indexed yet.</summary>
+    /// <summary>
+    /// Start offset of the block of frame <paramref name="index"/>. Any thread; false for an id not indexed yet.
+    /// Reads through the calling thread's decoded-group cache, because callers (<c>FrameById</c>, the index-driven
+    /// sequential path) mostly walk ids in order: the second read inside one group of 64 decodes it once and the rest are
+    /// array loads. A binary search over offsets would use the uncached <c>PackedLongSequence.TryGet</c> instead.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryGetBlockOffset(int index, out long blockOffset) => _BlockOffsets.TryGetCached(index, out blockOffset);
 
@@ -55,7 +64,8 @@ internal sealed class FrameIndex
     /// Start offset of the block of frame <paramref name="index"/>, and the start of the next indexed block as an upper
     /// bound of its end (−1 when <paramref name="index"/> is the newest indexed frame; the caller then bounds by the file
     /// end). Non-packet blocks between two frames only make the bound larger. Any thread; false for an id not indexed
-    /// yet.
+    /// yet. The upper bound feeds the cache prefetch of the block (<c>DataBackend.PrefetchLength</c>); both values come
+    /// from one cached group read, so the neighbouring offset costs no second lookup.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryGetBlockSpan(int index, out long blockOffset, out long nextBlockOffset)

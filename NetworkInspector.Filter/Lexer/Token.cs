@@ -7,7 +7,8 @@ namespace NetworkInspector.Filter.Lexer;
 /// <param name="Span">Source span of the token.</param>
 /// <param name="Text">
 /// The token text. For <see cref="TokenKind.StringLiteral"/> this is the unescaped
-/// content without the surrounding quotes; for all other kinds it is the raw source text.
+/// content without the surrounding quotes (so it can differ from the source slice and from <paramref name="Span"/>);
+/// for <see cref="TokenKind.Eof"/> it is empty; for all other kinds it is the raw source text.
 /// </param>
 internal readonly record struct Token(TokenKind Kind, FilterSpan Span, string Text)
 {

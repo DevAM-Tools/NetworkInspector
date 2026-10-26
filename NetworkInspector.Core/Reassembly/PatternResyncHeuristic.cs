@@ -41,7 +41,9 @@ public sealed class PatternResyncHeuristic : IResyncHeuristic
     /// <inheritdoc/>
     public ResyncResult Resync(ReadOnlySpan<byte> data)
     {
-        // Start search from offset 1 (skip current position)
+        // Start the search at offset 1: offset 0 is the position where the boundary detector just failed. Matching the
+        // pattern there could return Skip(0) and the owner would fail on the same bytes again without progress.
+        // The returned skip is relative to the start of data (index in the sliced span plus the one skipped byte).
         if (data.Length <= 1)
         {
             return ResyncResult.Failure;

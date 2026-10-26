@@ -22,6 +22,8 @@ public enum BuildCallbackWarningKind
     /// <summary>
     /// Required frame protocol (<c>"frame"</c>) was not registered during
     /// <see cref="StackBuilder.Build"/>; link-layer parsing will be skipped.
+    /// Unlike the other values this is not tied to a deferred callback: <see cref="StackBuilder.Build"/> reports it
+    /// whenever no protocol with that name exists, with a callback count of 0.
     /// </summary>
     MissingFrameProtocol,
 

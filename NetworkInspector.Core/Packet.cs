@@ -13,6 +13,8 @@ namespace NetworkInspector.Core;
 /// allocated from thread-local <see cref="SlabAllocator{T}"/> instances — a generic slab
 /// allocator. Multiple packets share the same backing array; when a slab is full, a new
 /// one is created and the old slab stays alive as long as any packet references its buffer.
+/// Sharing one array across many packets replaces one small heap array per packet and per chunk, which keeps the number of
+/// objects the GC must trace and reclaim low when a trace holds millions of packets.
 /// </para>
 /// <para>
 /// <b>Recycling:</b> For high-throughput loops over packets owned by one thread (initial trace
@@ -58,6 +60,9 @@ public sealed class Packet
 {
     #region Constants & Fields
 
+    // Limit of fields per packet. Format fact, so a constant and not a setting: field links are ushort storage indices and
+    // 0xFFFF (NullIndex) and 0xFFFE (SkipStorageIndex) are reserved sentinels, so a count of 0xFFFE keeps the highest slot
+    // index at 0xFFFD. Exceeding it is an expected failure that is reported as a packet.error field, never silently dropped.
     private const int _MaxFieldCount = ushort.MaxValue - 1;
 
     /// <summary>
@@ -128,11 +133,6 @@ public sealed class Packet
 
     // 0 = idle/readable, 1 = recycle in progress. Exclusive recycle vs concurrent MaterializeAll.
     private volatile int _RecycleGate;
-
-    // Side-channel info LazyString set by sub-protocols during Parse().
-    // Used as the source for the lazy packet.info field value. After PacketProtocol.Parse
-    // creates the packet.info field and calls SetInfoFieldIndex(), InfoFieldIndex is valid
-    // and Packet.Info reads directly from the boxed LazyString field for in-heap caching.
 
     #endregion
 
@@ -213,6 +213,9 @@ public sealed class Packet
         // that observes the gate cannot claim a field while Array.Clear runs.
         // MaterializeAll and MaterializeLazyField increment _ActiveLazyMaterializations before
         // they re-read the gate. Recycle never plain-stores that counter to 0.
+        // On success the gate intentionally stays at 1 until Seal clears it at the end of the re-parse, so a second
+        // recycle of the same packet fails with MaterializerActive instead of corrupting the parse in progress.
+        // Every failure path below must release it again.
         if (Interlocked.CompareExchange(ref _RecycleGate, 1, 0) != 0)
         {
             return RecycleError.MaterializerActive;
@@ -256,6 +259,8 @@ public sealed class Packet
         }
 
         // ── 2. Clear lazy populator references ───────────────────────────────────────
+        // Unconsumed populators are closures over the previous frame's parse state; clearing them lets the GC reclaim that
+        // state. The table itself (a slab slice) is kept: _EnsureLazyCapacity reuses it while its capacity suffices.
         if (_LazyTable is not null && _LazyPopulatorCount > 0)
         {
             LazyPopulatorTable lazyTable = _LazyTable;
@@ -265,6 +270,9 @@ public sealed class Packet
         _LazyPopulatorCount = 0;
         _AllocatedLazyCount = 0;
         _PendingLazyCount = 0;
+
+        // ── 3. Drop additional buffers and skip scratch; reset the field tree root ──
+        // Additional buffers hold reassembled bytes of the previous parse. A reparse of the same packet binds them again.
         if (_AdditionalBufferCount > 0 && _AdditionalBuffers is not null)
         {
             Array.Clear(_AdditionalBuffers, 0, _AdditionalBufferCount);
@@ -509,7 +517,12 @@ public sealed class Packet
     #endregion
 
     #region Buffer Management
-    /// <summary>Adds an additional data buffer (e.g., reassembled data). Returns 1-based buffer index.</summary>
+    /// <summary>
+    /// Adds an additional data buffer (e.g., reassembled data). Returns the 1-based buffer index of the stored buffer.
+    /// After <see cref="Seal"/> or when the table of 255 buffers is full, nothing is stored and the unchanged count is
+    /// returned, so a caller detects the miss by comparing <see cref="BufferCount"/> before and after (see
+    /// <see cref="BindParseBuffer"/>). Not thread-safe: one writer until Seal.
+    /// </summary>
     internal int AddBuffer(ReadOnlyMemory<byte> buffer)
     {
         if (_Finalized != 0)
@@ -523,6 +536,8 @@ public sealed class Packet
             return _AdditionalBufferCount;
         }
 
+        // The table is allocated lazily on the first bound buffer (packets without reassembly never pay for it) and grows
+        // by doubling from a small start.
         if (_AdditionalBuffers is null)
         {
             _AdditionalBuffers = new ReadOnlyMemory<byte>[2];
@@ -654,6 +669,11 @@ public sealed class Packet
     internal static int PackEffectLayerKeyForTests(int bufferIndex, int offset) =>
         _PackEffectLayerKey(bufferIndex, offset);
 
+    /// <summary>
+    /// Packs a buffer index (bits 31–24) and a byte offset (bits 23–0) into one effect-layer key. Throws for values
+    /// that do not fit, because a silent wrap would make two different layers share a key.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The index is above 255 or the offset is above 16777215.</exception>
     private static int _PackEffectLayerKey(int bufferIndex, int offset)
     {
         if ((uint)bufferIndex > 0xFFu)
@@ -673,6 +693,12 @@ public sealed class Packet
         return (bufferIndex << 24) | offset;
     }
 
+    /// <summary>
+    /// Finds the byte offset of <paramref name="slice"/> inside <paramref name="owner"/> when both views cover the same
+    /// backing store. <see cref="ReadOnlyMemory{T}"/> exposes no address, so identity is established through the shared
+    /// array segment or the shared memory manager instead of pointer arithmetic. Bounds are compared in
+    /// <see cref="long"/> so offset plus length cannot overflow.
+    /// </summary>
     private static bool _TryGetSliceOffset(ReadOnlyMemory<byte> owner, ReadOnlyMemory<byte> slice, out int offset)
     {
         if (slice.Length > owner.Length)
@@ -729,6 +755,9 @@ public sealed class Packet
     internal void RegisterLazyPopulator(
         FieldId fieldId, ushort fieldIndex, in FieldValue value, LazyString customText, LazyPopulator populator)
     {
+        // Skip mode: no tree exists, so a deferred container would never be read later. Run the populator right now on a
+        // scratch body, but only when the value cache or a watch needs the children; otherwise drop it and pay nothing.
+        // The scratch stack is bounded by the same depth limit as targeted materialization because populators can nest.
         if (!_HasFieldTree)
         {
             bool cacheWants = _ActiveValueCache is not null && _ActiveValueCache.ShouldMaterialize(fieldId);
@@ -769,6 +798,8 @@ public sealed class Packet
             return;
         }
 
+        // Build mode: reserve a slot, make sure the table covers it, store the delegate, then link it to the field.
+        // The populator is stored before the field's LazyIndex is set, so a materializer that sees the index finds it.
         int slot = _ReserveLazyPopulatorSlot();
         if (slot < 0)
         {
@@ -790,6 +821,7 @@ public sealed class Packet
             }
         }
 
+        // Registering on a container that is being materialized right now would overwrite the in-flight populator index.
         ref FieldBody target = ref GetFieldRef(fieldIndex);
         if ((target.ReadLazyIndexVolatile() & FieldBody.LazyIndexMaterializingBit) != 0)
         {
@@ -797,6 +829,8 @@ public sealed class Packet
             return;
         }
 
+        // LazyIndex is 1-based so that 0 means "not lazy". The pending count is raised last: a reader that sees a
+        // non-zero count can always find the registered field.
         target.LazyIndex = (ushort)(slot + 1);
         _PublishLazyPopulatorCount(slot + 1);
         Interlocked.Increment(ref _PendingLazyCount);
@@ -817,7 +851,14 @@ public sealed class Packet
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int _ReserveLazyPopulatorSlot()
     {
-        const int maxSlots = ushort.MaxValue - 1;
+        // Format limit, a constant: the 1-based slot number is stored in the low 15 bits of FieldBody.LazyIndex, because bit 15
+        // is the materializing marker. A slot number of 0x8000 or more would look like "being materialized": the field would
+        // never be populated, no claim would succeed and a waiting reader would spin forever. Such a slot must not be handed out.
+        // Exceeding it is reported as a field error by the caller (return -1), never dropped silently.
+        const int maxSlots = FieldBody.LazyIndexMaterializingBit - 1;
+
+        // Post-Seal several materializers can register nested containers at once: reserve with a CAS loop (lock-free, no
+        // allocation). Pre-Seal exactly one thread parses this instance, so a plain read and write suffice.
         if (_Finalized != 0)
         {
             int current = _AllocatedLazyCount;
@@ -854,6 +895,9 @@ public sealed class Packet
     /// </summary>
     private void _EnsureLazyCapacity(int slot)
     {
+        // Growth is lock-free by designating one grower: slot numbers are unique, so exactly the thread that reserved the
+        // slot equal to the current capacity (or slot 0 for the first table) allocates; everyone else spins until the
+        // new table is published (a reader of _LazyTable never sees a half-built table: it is one immutable object).
         SpinWait waiter = default;
         while (true)
         {
@@ -927,7 +971,10 @@ public sealed class Packet
     /// <summary>
     /// Materializes a lazy field's children if not already populated.
     /// <para>
-    /// <b>Pre-Seal (single-threaded):</b> Uses per-field CAS on <see cref="FieldBody.LazyIndex"/>.
+    /// <b>Pre-Seal (single-threaded):</b> Makes one claim attempt on <see cref="FieldBody.LazyIndex"/> (the same CAS
+    /// that marks the field as materializing, so a nested re-registration is detected). It neither counts the
+    /// materializer in <c>_ActiveLazyMaterializations</c> nor consults the recycle gate nor spins, because no other thread
+    /// reads or recycles the packet before <see cref="Seal"/>.
     /// </para>
     /// <para>
     /// <b>Post-Seal (concurrent):</b> Counts the materializer in
@@ -1012,6 +1059,8 @@ public sealed class Packet
                 return false;
             }
 
+            // Re-read the table: a nested register may have grown it since the snapshot above. The newest table holds every
+            // populator, because growth copies the old buffer and then backfills late stores (see _EnsureLazyCapacity).
             LazyPopulatorTable? publishedTable = _LazyTable;
             if (publishedTable is not null)
             {
@@ -1069,8 +1118,8 @@ public sealed class Packet
     /// <summary>
     /// Materializes all lazy fields that have not been populated yet.
     /// <para>
-    /// <b>Pre-Seal:</b> Called single-threaded during parse. Uses plain reads (no Volatile)
-    /// and relies on <see cref="MaterializeLazyField"/> skipping the CAS guard.
+    /// <b>Pre-Seal:</b> Called single-threaded during parse. Takes no recycle-gate or active-materializer accounting
+    /// and does not spin; <see cref="MaterializeLazyField"/> makes a single claim attempt per field.
     /// </para>
     /// <para>
     /// <b>Post-Seal:</b> Thread-safe. Multiple threads may call concurrently; each waits
@@ -1111,8 +1160,8 @@ public sealed class Packet
     }
 
     /// <summary>
-    /// Pre-Seal materialization: single-threaded, no CAS guard, no Volatile reads in loop.
-    /// Delegates to <see cref="MaterializeLazyField"/> which skips the CAS when pre-Seal.
+    /// Pre-Seal materialization: single-threaded, no spin-wait and no recycle-gate accounting.
+    /// Delegates to <see cref="MaterializeLazyField"/>, which makes a single claim attempt per field when pre-Seal.
     /// </summary>
     private void _MaterializeAllPreSeal()
     {
@@ -1238,13 +1287,19 @@ public sealed class Packet
 
     /// <summary>
     /// Whether custom display text should be built for <paramref name="fieldId"/>.
-    /// Step 1: true only when a field tree will store it. Step 2 ORs an attached cache's display probe.
+    /// True when a field tree will store it, or when the attached value cache asks for display text of this field.
+    /// Callers use it to skip building text nobody reads (a Skip parse without a display-text cache).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool WantsCustomText(FieldId fieldId)
         => _HasFieldTree
             || (_ActiveValueCache is { } cache && cache.WantsDisplayText(fieldId));
 
+    /// <summary>
+    /// Constructor guard for an undefined <see cref="FieldTreeMode"/> value. <c>TryParse</c> reports the same condition
+    /// as <see cref="ParseFailure.InvalidFieldTree"/> before it ever reaches the constructor, so this throw only fires
+    /// for an internal caller that bypassed it.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void _ThrowIfInvalidFieldTree(FieldTreeMode fieldTree)
     {
@@ -1254,6 +1309,11 @@ public sealed class Packet
         }
     }
 
+    /// <summary>
+    /// Pushes a throwaway container body for a skip-mode lazy populator (see <see cref="RegisterLazyPopulator"/>). The
+    /// stack array is allocated on first use and then recycled in place, so a skip parse allocates only for nesting
+    /// deeper than before. Parse-thread only.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _PushSkipScratch(FieldBody body)
     {
@@ -1270,6 +1330,7 @@ public sealed class Packet
         _SkipScratchDepth++;
     }
 
+    /// <summary>Pops the top skip scratch body and clears its slot so the value and text references are not retained.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _PopSkipScratch()
     {
@@ -1824,6 +1885,11 @@ public sealed class Packet
         }
     }
 
+    /// <summary>
+    /// Calls <c>BeginPacket</c> on one observer unless its watch is none. An observer is user code at a trust boundary:
+    /// its exception is caught and stored on the packet (the parse must still succeed), and the failed flag mutes all
+    /// further observer calls for this packet.
+    /// </summary>
     private void _BeginOne(in ParseObserver entry)
     {
         if (entry.Watch.IsNone || _ObserverFailed)
@@ -1872,6 +1938,11 @@ public sealed class Packet
         }
     }
 
+    /// <summary>
+    /// Delivers one produced field to one observer when its watch accepts the field id. Same containment as
+    /// <see cref="_BeginOne"/>: a throwing observer is recorded once and then muted for this packet. In skip mode there is
+    /// no stored field, so the visit carries the value only (<paramref name="hasField"/> is false).
+    /// </summary>
     private void _ObserveOne(
         in ParseObserver entry,
         FieldId fieldId,
@@ -1897,6 +1968,7 @@ public sealed class Packet
         }
     }
 
+    /// <summary>Records a produced field into the active value cache, if any. Parse-thread only.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _RecordValueCache(FieldId fieldId, in FieldValue value, LazyString customText)
     {
@@ -1914,6 +1986,10 @@ public sealed class Packet
         Packet packet, ValueCache cache, FieldId fieldId, in FieldValue value, LazyString customText) =>
         cache.Record(packet.Id.Value, packet.Timestamp.AsNanos, fieldId, in value, customText);
 
+    /// <summary>
+    /// Records a custom-text change into the active value cache, if any. Same inline-stub plus out-of-line-slow-path split
+    /// as <see cref="_RecordValueCache"/>, so the unrecorded common case costs one null test.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _RecordValueCacheCustomText(FieldId fieldId, LazyString customText)
     {
@@ -1956,7 +2032,11 @@ public sealed class Packet
     #endregion
 
     #region Error Handling
-    /// <summary>Records a packet-level error as a field in the tree.</summary>
+    /// <summary>
+    /// Records a packet-level error as a <c>packet.error</c> child of the root. Does nothing when the stack has no
+    /// packet-error field. Uses the regular field limit, so it throws like any append when the tree is full; boundaries
+    /// that catch exceptions use <see cref="RecordCaughtError"/> instead.
+    /// </summary>
     internal void SetError(string message)
     {
         FieldId errorFieldId = Stack.PacketErrorFieldId;
@@ -2045,6 +2125,9 @@ public sealed class Packet
     /// has no <see cref="ParseError"/>. The JIT specializes it per <typeparamref name="T"/>, so there is no boxing or
     /// virtual dispatch overhead.
     /// </para>
+    /// <para>
+    /// Thread-safety: the caller passes its own thread-static slab by reference, so no synchronization is needed.
+    /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void AllocateFromSlab<T>(
@@ -2058,6 +2141,9 @@ public sealed class Packet
 
         // Current slab is full or doesn't exist — create a new slab large enough for count.
         // The old slab's backing array stays alive via consumer references.
+        // The capacity is at least count, so the first attempt cannot fail (TryAllocate fails only when count exceeds the
+        // free space). The bounded retry with doubling is a defensive guard that turns an impossible state into a reported
+        // error instead of an endless loop.
         const int _MaxSlabGrowAttempts = 8;
         int capacity = Math.Max(slabCapacity, count);
         for (int attempt = 0; attempt < _MaxSlabGrowAttempts; attempt++)
@@ -2134,6 +2220,9 @@ public sealed class Packet
         // On x86-64 this is a plain store (TSO provides release ordering natively).
         // On ARM64 this emits STLR (store-release) — no expensive DSB/DMB barrier.
         _Finalized = 1;
+
+        // Release the gate that PrepareForReuse left held for the duration of a re-parse (no-op for a first parse).
+        // It is cleared after _Finalized so a recycle that gets in sees a sealed packet.
         _RecycleGate = 0;
     }
 
@@ -2300,6 +2389,11 @@ public sealed class Packet
         }
     }
 
+    /// <summary>
+    /// Checks the preconditions shared by both <c>TryParse</c> overloads and reports the first violation as a
+    /// <see cref="ParseFailure"/> code. Expected failures are codes, not exceptions, so a recycle loop over bad input
+    /// pays no exception cost. Every check runs before any packet is created or mutated.
+    /// </summary>
     private static bool _TryValidateCommon(
         Stack stack,
         Frame frame,
@@ -2340,6 +2434,10 @@ public sealed class Packet
         return true;
     }
 
+    /// <summary>
+    /// Copies the optional first-protocol choice onto the packet. A recycle already reset the override, so a missing
+    /// option leaves the stack default in place.
+    /// </summary>
     private static void _ApplyFirstProtocol(Packet packet, in ParseOptions options)
     {
         if (options.FirstProtocol is ProtocolId protocol)
@@ -2355,7 +2453,17 @@ public sealed class Packet
     /// An invalid frame, an invalid packet id, a registry mismatch, a bad cache or index, and an
     /// id jump return false and do not throw. A dissector error or a watch exception is stored on
     /// the packet and this method still returns true, because the parse ran.
+    /// Thread-safety: see the parse concurrency remarks on <see cref="Packet"/>; a fresh id must be parsed in order.
     /// </summary>
+    /// <param name="id">Packet id. Must be valid and not jump past the stack's next first-parse id.</param>
+    /// <param name="stack">The protocol stack that owns the packet.</param>
+    /// <param name="frame">The captured frame. Its registry must be the stack's frame-interface registry.</param>
+    /// <param name="options">Field tree mode, cache, index, first protocol, and observers for this parse.</param>
+    /// <param name="packet">The sealed packet on success; null when the method returns false.</param>
+    /// <param name="failure">Why nothing was parsed; <see cref="ParseFailure.None"/> on success.</param>
+    /// <returns><see langword="true"/> when the frame was parsed; <see langword="false"/> with <paramref name="failure"/> set otherwise.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="stack"/> is null.</exception>
+    /// <exception cref="ArgumentException">An entry of <see cref="ParseOptions.Observers"/> has a null observer.</exception>
     public static bool TryParse(
         PacketId id,
         Stack stack,
@@ -2370,7 +2478,6 @@ public sealed class Packet
         if (!id.IsValid)
         {
             failure = ParseFailure.InvalidPacketId;
-            packet = null;
             return false;
         }
 
@@ -2399,7 +2506,18 @@ public sealed class Packet
     /// A null recycle returns <see cref="ParseFailure.NullRecycle"/> and does not throw.
     /// See <see cref="TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>
     /// for the null-stack rule.
+    /// The recycle packet must be sealed and exclusively owned by the calling thread; see the recycling remarks on
+    /// <see cref="Packet"/>. A failed recycle (for example a gate held by a materializer) leaves the packet untouched.
     /// </summary>
+    /// <param name="recycle">A sealed packet of the same stack whose storage is reused for this parse.</param>
+    /// <param name="id">Packet id. Must be valid and not jump past the stack's next first-parse id.</param>
+    /// <param name="stack">The protocol stack that owns <paramref name="recycle"/>.</param>
+    /// <param name="frame">The captured frame. Its registry must be the stack's frame-interface registry.</param>
+    /// <param name="options">Field tree mode, cache, index, first protocol, and observers for this parse.</param>
+    /// <param name="failure">Why nothing was parsed; <see cref="ParseFailure.None"/> on success.</param>
+    /// <returns><see langword="true"/> when the frame was parsed into <paramref name="recycle"/>; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="stack"/> is null.</exception>
+    /// <exception cref="ArgumentException">An entry of <see cref="ParseOptions.Observers"/> has a null observer.</exception>
     public static bool TryParse(
         Packet recycle,
         PacketId id,

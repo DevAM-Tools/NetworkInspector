@@ -40,6 +40,8 @@ internal sealed class Job : IDisposable
     private DateTimeOffset _EndTimeValue;
     private volatile int _EndTimeSet;    // 0 = not set, 1 = set
     private volatile Exception? _FailureException;
+    // 0 = live, 1 = Dispose ran. Read by Cancel on any thread; see Cancel.
+    private volatile int _DisposedFlag;
 
     #endregion
 
@@ -137,11 +139,32 @@ internal sealed class Job : IDisposable
     /// </summary>
     internal void Start()
     {
+        if (!TryStart(out Exception? failure))
+        {
+            // Rethrow the recorded start failure with its original stack, as the previous in-place `throw;` did.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
+        }
+    }
+
+    /// <summary>
+    /// Starts the job like <see cref="Start"/>, but reports a thread that could not be started as a return value instead of
+    /// an exception. The failure is already recorded on the job (<see cref="FailureException"/>, status
+    /// <see cref="JobStatus.Failed"/>, status callback raised), so a caller that has nothing more to do with it can continue
+    /// with its other jobs without a catch block.
+    /// </summary>
+    /// <param name="failure">The exception that stopped the thread from starting; <see langword="null"/> on success.</param>
+    /// <returns>
+    /// <see langword="true"/> when the job was started by this call or had been started before; <see langword="false"/>
+    /// when this call tried to start the thread and failed.
+    /// </returns>
+    internal bool TryStart([NotNullWhen(false)] out Exception? failure)
+    {
         // CAS guard: only the first caller proceeds. Concurrent or repeated
         // calls return immediately without creating a second thread.
         if (Interlocked.CompareExchange(ref _StartAttempted, 1, 0) != 0)
         {
-            return;
+            failure = null;
+            return true;
         }
         Thread thread = new(_RunCore)
         {
@@ -151,6 +174,8 @@ internal sealed class Job : IDisposable
         };
         // Set start time before transitioning to Running so that observers
         // never see Status==Running with a null StartTime.
+        // Running is also published before the thread starts: a very short job could otherwise reach a terminal
+        // status first, and the late Running write would then overwrite it (and Join would wait forever).
         _StartTimeValue = DateTimeOffset.UtcNow;
         _StartTimeSet = 1;
         _SetStatus(JobStatus.Running);
@@ -160,19 +185,45 @@ internal sealed class Job : IDisposable
         }
         catch (Exception ex)
         {
-            // thread.Start() failed — the thread never ran and never will.
-            // Transition to Failed immediately so WaitForCompletion() does not block.
+            // thread.Start() failed — the thread never ran and never will. Any exception is possible here (resource
+            // exhaustion above all), and none may leave the job in Running. Transition to Failed immediately so
+            // WaitForCompletion() does not block; the exception is recorded and handed to the caller, not swallowed.
             _FailureException = ex;
             _EndTimeValue = DateTimeOffset.UtcNow;
             _EndTimeSet = 1;
             _SetStatus(JobStatus.Failed);
-            throw;
+            failure = ex;
+            return false;
         }
+
+        failure = null;
+        return true;
     }
     /// <summary>Requests cancellation. The job's work delegate observes this via its
-    /// <see cref="CancellationToken"/>. Thread-safe.
+    /// <see cref="CancellationToken"/>. Thread-safe. After <see cref="Dispose"/> the call does nothing: the session
+    /// disposes a job at shutdown while callers still hold its <see cref="JobInfo"/>, and a concurrent unsubscribe may
+    /// cancel a job that shutdown just disposed; neither may fail on the disposed token source.
     /// </summary>
-    internal void Cancel() => _Cts.Cancel();
+    internal void Cancel()
+    {
+        // A disposed job is over (Dispose runs after Join, or after shutdown already cancelled it), so there is nothing
+        // left to cancel and no caller has to be told.
+        if (_DisposedFlag != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _Cts.Cancel();
+        }
+        catch (ObjectDisposedException) when (_DisposedFlag != 0)
+        {
+            // Dispose ran between the check above and the cancel. Same outcome as the early return; any other
+            // ObjectDisposedException (the filter is false) is a bug and propagates.
+            return;
+        }
+    }
     /// <summary>
     /// Blocks the calling thread until the job reaches a terminal state
     /// (<see cref="JobStatus.Completed"/>, <see cref="JobStatus.Cancelled"/>,
@@ -199,9 +250,20 @@ internal sealed class Job : IDisposable
         }
         return _Completed.Wait(timeout);
     }
-    /// <summary>Disposes wait handles and the <see cref="CancellationTokenSource"/>.</summary>
+    /// <summary>
+    /// Disposes wait handles and the <see cref="CancellationTokenSource"/>. The session may dispose a job while its
+    /// thread is still running (shutdown with a timeout), which is why the thread uses a token captured at
+    /// construction and why <see cref="Join()"/> must not be used after disposal.
+    /// </summary>
     public void Dispose()
     {
+        // The flag is raised first, so a Cancel that races with this call takes the early return or the filtered catch.
+        // The exchange also makes a repeated Dispose a no-op.
+        if (Interlocked.Exchange(ref _DisposedFlag, 1) != 0)
+        {
+            return;
+        }
+
         _Completed.Dispose();
         _Cts.Dispose();
     }
@@ -219,6 +281,8 @@ internal sealed class Job : IDisposable
     /// </summary>
     private void _RunCore()
     {
+        // Every branch stores end time (and the failure exception) BEFORE publishing the terminal status, because
+        // _SetStatus releases waiters; a thread woken by Join must see them already set.
         try
         {
             _Work(_Token);
@@ -238,6 +302,8 @@ internal sealed class Job : IDisposable
         }
         catch (Exception ex)
         {
+            // Top-level boundary of a dedicated job thread: an unhandled exception here would take the process down,
+            // so it is captured and exposed as the Failed status plus FailureException instead of being rethrown.
             _FailureException = ex;
             _EndTimeValue = DateTimeOffset.UtcNow;
             _EndTimeSet = 1;
@@ -254,6 +320,9 @@ internal sealed class Job : IDisposable
         Interlocked.Exchange(ref _Status, (int)status);
         if (_IsTerminal(status))
         {
+            // The session may have disposed this job already (shutdown with a timeout while the thread still runs). Setting
+            // a disposed ManualResetEventSlim does not throw (it only needs the event's state word; nobody can be waiting
+            // on a disposed event), so the late terminal status is published without a guard. A test pins this.
             _Completed.Set();
         }
         _OnStatusChanged(this, status);

@@ -4,7 +4,9 @@ namespace NetworkInspector.Exporters.Pbf;
 
 /// <summary>
 /// Thin wrapper around <see cref="Lz4Codec"/> scoped to the PBF exporter.
-/// All logic lives in <see cref="Lz4Codec"/> (NetworkInspector.Core).
+/// All logic lives in <see cref="Lz4Codec"/> (NetworkInspector.Core); these methods only forward.
+/// PBF blocks use the raw LZ4 block format (no frame header), so the reader needs the uncompressed size, which the
+/// block header stores next to the stored size.
 /// <para>
 /// <b>Thread safety:</b> All methods delegate to <see cref="Lz4Codec"/>, which is
 /// fully thread-safe.
@@ -16,7 +18,10 @@ internal static class Lz4Compressor
     /// Returns the maximum possible compressed size for <paramref name="inputSize"/> bytes.
     /// </summary>
     /// <param name="inputSize">Uncompressed input size in bytes.</param>
-    /// <returns>Upper bound on compressed size in bytes.</returns>
+    /// <returns>
+    /// Upper bound on compressed size in bytes, or <c>-1</c> when <paramref name="inputSize"/> exceeds the LZ4
+    /// per-block input limit (see <see cref="Lz4Codec.MaxCompressedSize"/>).
+    /// </returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static int MaxCompressedSize(int inputSize) =>
         Lz4Codec.MaxCompressedSize(inputSize);

@@ -27,6 +27,7 @@ internal static class BitPlanes
     /// </remarks>
     internal static void Scatter(ReadOnlySpan<ulong> values, int width, Span<ulong> planes)
     {
+        // Clear first: a reused buffer holds the previous group's planes, and the loop below only ORs bits in.
         planes[..width].Clear();
 
         // Visit only set bits: constant-size workloads have few, so the loop cost follows the data.
@@ -112,6 +113,11 @@ internal static class BitPlanes
     }
 
     /// <summary>Mask of the lanes whose value equals <paramref name="value"/> (only the plane bits are compared).</summary>
+    /// <remarks>
+    /// Bits of <paramref name="value"/> at or above <c>planes.Length</c> are not compared: every stored lane has zeros
+    /// there, so the caller must pass a value that fits the stored width, otherwise a larger value would match lanes
+    /// that hold its low bits.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static ulong EqualMask(ReadOnlySpan<ulong> planes, ulong value)
     {

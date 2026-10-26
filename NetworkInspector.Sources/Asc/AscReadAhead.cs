@@ -23,6 +23,12 @@ namespace NetworkInspector.Sources.Asc;
 /// match an old window.
 /// </para>
 /// <para><b>Thread-safety:</b> an instance is only reachable from its own thread (<c>[ThreadStatic]</c>).</para>
+/// <para>
+/// <b>Memory:</b> at most <see cref="Ways"/> × <see cref="BufferSize"/> (256 KiB) per reading thread, allocated lazily
+/// and kept for the life of the thread, also after the source that filled a way is disposed (the way is reused by the next
+/// owner). The cost is fixed per thread and independent of the file size; a disposed source's window is simply never
+/// matched again, because owner ids are never reused.
+/// </para>
 /// </remarks>
 internal sealed class AscReadAhead
 {
@@ -41,13 +47,20 @@ internal sealed class AscReadAhead
 
     #region Fields
 
+    /// <summary>
+    /// The calling thread's windows, created on its first read. <c>[ThreadStatic]</c> instead of a shared table keyed by
+    /// thread: no lock and no lookup on the per-frame read path, and no cross-thread state to keep consistent.
+    /// </summary>
     [ThreadStatic]
     private static AscReadAhead? _Current;
 
-    /// <summary>Last issued owner id; ids start at 1, so 0 marks an empty way.</summary>
+    /// <summary>Last issued owner id; ids start at 1, so 0 marks an empty way. Advanced with <c>Interlocked</c> by <see cref="NewOwner"/>.</summary>
     private static long _LastOwner;
 
+    /// <summary>The ways of this thread, one per source; scanned linearly (there are only <see cref="Ways"/>).</summary>
     private readonly Entry[] _Entries = new Entry[Ways];
+
+    /// <summary>Next way to give to a new owner (round robin; the oldest claim is replaced first).</summary>
     private int _Victim;
 
     #endregion
@@ -79,6 +92,7 @@ internal sealed class AscReadAhead
 
     #region Private helpers
 
+    /// <summary>Instance part of <see cref="TryRead"/>: runs on the owning thread only, so it needs no synchronisation.</summary>
     private bool _TryRead(long owner, int frameIndex, long offset, int count, CaptureFileGuard guard, out ReadOnlySpan<byte> data)
     {
         data = default;
@@ -110,6 +124,8 @@ internal sealed class AscReadAhead
             return false;
         }
 
+        // Forward walks fill from the requested record on; backward walks fill so that the window ends where the request
+        // ends, because the next records lie before it. The buffer is allocated on the first refill of this way only.
         entry.Buffer ??= new byte[BufferSize];
         long start = forward
             ? offset

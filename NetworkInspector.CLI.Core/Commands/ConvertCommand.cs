@@ -6,12 +6,18 @@ namespace NetworkInspector.CLI.Commands;
 /// Frame-level format conversion command.
 /// Reads frames from one or more sources and writes them to a target format
 /// (PCAPNG, BLF, ASC, or a plugin's frame format) without protocol parsing. Sources and formats come from the plugin registry.
+/// A frame is parsed only when <c>--filter</c> is set; without a filter the frames are handed to the exporter as they were read.
+/// Stateless; each run owns its sources, listener, and plugin session, and its frame loop is single-threaded.
 /// </summary>
 internal static class ConvertCommand
 {
     #region Types
 
-    /// <summary>The parsed arguments of one run.</summary>
+    /// <summary>
+    /// The parsed arguments of one run. Units: <c>MaxFrames</c> and <c>SplitCount</c> count frames and <c>ProgressInterval</c> is
+    /// a frame interval (zero disables each); <c>SplitSizeBytes</c> and <c>BlfCacheBudgetBytes</c> are bytes, already converted
+    /// from the MiB the user typed (zero disables the split / leaves the BLF default).
+    /// </summary>
     private sealed record ConvertArguments(
         List<string> SourceSpecs,
         string OutputPath,
@@ -30,7 +36,7 @@ internal static class ConvertCommand
 
     #region Public API
 
-    /// <summary>Runs the convert command on the console.</summary>
+    /// <summary>Runs the convert command on the console (the real standard output and error, no cancellation from outside).</summary>
     /// <param name="args">The arguments after the command name.</param>
     /// <returns>The exit code.</returns>
     internal static Task<int> RunAsync(string[] args) => RunAsync(args, CliIo.FromConsole(), CancellationToken.None);
@@ -59,9 +65,41 @@ internal static class ConvertCommand
     /// <see langword="null"/>. A filter that cannot produce a verdict aborts the loop rather than
     /// writing an output whose contents silently depend on where filtering stopped. A cancelled or failed
     /// conversion ends without <c>OnFinish</c>: the listener is disposed and its output is deleted, so no partial file looks
-    /// like a result.
+    /// like a result. Thread safety: single-threaded; the sources, the filter, and the listeners are driven from the calling thread
+    /// only (none of them is thread-safe).
     /// </remarks>
-    internal static int RunConvertLoop(
+    /// <param name="sources">Active, already-started frame sources; read round-robin, one frame per source per turn.</param>
+    /// <param name="createExporter">Opens the listener for an output path; called for the first output and for every split.</param>
+    /// <param name="splitManager">The split policy and the numbering of output paths.</param>
+    /// <param name="stack">The stack for parsing; needed only when <paramref name="filter"/> is set.</param>
+    /// <param name="filter">Optional packet filter; frames of rejected packets are not written.</param>
+    /// <param name="maxFrames">Stop after this many frames were written (0 = unlimited).</param>
+    /// <param name="progressInterval">Print a progress line every N written frames (0 = silent).</param>
+    /// <param name="tolerant">
+    /// When <see langword="true"/>, an exception from reading a frame is reported as a warning and the loop moves on to the next
+    /// source. A source that fails again before it delivered a frame is dropped with a warning that names it, so a source that
+    /// fails on every read cannot keep the loop running forever. It does not cover parse or filter errors, and a failing writer
+    /// always aborts.
+    /// </param>
+    /// <param name="error">Receives progress lines and warnings.</param>
+    /// <param name="cancellationToken">Passed to the sources; a cancelled read throws <see cref="OperationCanceledException"/>.</param>
+    /// <param name="filesWritten">Number of output files that were finished (<c>OnFinish</c> called).</param>
+    /// <param name="listenerStopped">
+    /// <see langword="true"/> when the loop ended early because a listener returned <see langword="false"/> from <c>OnFrame</c>
+    /// (it unsubscribed itself, for example after an error); the open output was finished normally, but the input was not
+    /// converted completely. A listener that stops because of a cancellation is not reported here: that run ends as cancelled.
+    /// </param>
+    /// <returns>
+    /// The number of frames handed to the listener. A <see langword="long"/>: several sources can together deliver more than
+    /// <see cref="int.MaxValue"/> frames when no frame limit is set.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// The filter or a parse failed, size splitting is requested for an exporter without byte progress, or an output could not be
+    /// prepared; the unfinished output was discarded.
+    /// </exception>
+    /// <exception cref="CliUsageException"><paramref name="createExporter"/> found an invalid option text; the unfinished output was discarded.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled; the unfinished output was discarded.</exception>
+    internal static long RunConvertLoop(
         List<IFrameSource> sources,
         Func<string, IFrameListener> createExporter,
         SplitOutputManager splitManager,
@@ -72,15 +110,25 @@ internal static class ConvertCommand
         bool tolerant,
         TextWriter error,
         CancellationToken cancellationToken,
-        out int filesWritten)
+        out int filesWritten,
+        out bool listenerStopped)
     {
-        int totalFrames = 0;
-        int fileFrames = 0;
+        // Loop state. exporter and currentPath describe the output that is open right now (and only that one): they are cleared
+        // as soon as an output is finished, so the cleanup in the catch block can never delete a finished output.
+        // filterPacketId counts every parsed frame, not only the written ones: packet ids must be dense and in order.
+        // The frame counters are 64 bits wide: with no frame limit and several sources the total can pass int.MaxValue, and a
+        // wrapped 32-bit counter would turn negative, break the progress interval, and compare wrongly against the split count.
+        long totalFrames = 0;
+        long fileFrames = 0;
         int filterPacketId = 0;
         filesWritten = 0;
+        listenerStopped = false;
         IFrameListener? exporter = null;
         string? currentPath = null;
         IExportByteProgress? byteProgress = null;
+
+        // The index exists only for a filter. One index serves the whole run: the filter reads protocol presence from it in O(1)
+        // instead of walking the field tree of each packet. Without a filter no index (and no parsing) costs anything.
         PacketIndex? filterIndex = filter is not null && stack is not null ? new PacketIndex(stack) : null;
 
         RoundRobinSourceIterator iterator = new(sources);
@@ -89,6 +137,8 @@ internal static class ConvertCommand
         {
             while (iterator.HasActive && (maxFrames == 0 || totalFrames < maxFrames))
             {
+                // Read the next frame of the current source. A cancelled read must reach the catch block below; any other read
+                // error is skipped only in tolerant mode.
                 IFrameSource source = iterator.Current;
                 Frame? frame;
                 try
@@ -99,23 +149,32 @@ internal static class ConvertCommand
                 {
                     if (tolerant)
                     {
-                        error.WriteLine(
-                            $"Warning: Skipping frame from {source.UiName}: {ex.Message}");
-                        iterator.Advance();
+                        // A source that fails again before it delivered a frame cannot move past the problem: it is dropped, so
+                        // that a source which throws on every read cannot keep the run alive forever.
+                        bool dropped = iterator.RecordReadFailureAndAdvance();
+                        error.WriteLine(dropped
+                            ? Invariant($"Warning: Giving up on {source.UiName}: it failed again without delivering a frame: {ex.Message}")
+                            : Invariant($"Warning: Skipping frame from {source.UiName}: {ex.Message}"));
                         continue;
                     }
 
                     throw;
                 }
 
+                // A null frame is the end of that source: it leaves the rotation and the others carry on.
                 if (frame is null)
                 {
                     iterator.MarkCurrentExhaustedAndAdvance();
                     continue;
                 }
 
+                iterator.RecordFrameRead();
+
                 // Judged before an output is opened, so a filter that matches nothing leaves no
-                // empty file behind.
+                // empty file behind. This is the only place where a frame is parsed during a conversion. The packet is parsed with
+                // the shared index so that the filter finds protocol presence in O(1); the capacity check comes first so that a
+                // run over too many packets ends with an error that names the packets. Each frame is parsed into a new packet
+                // here (the export loop reuses one packet instead).
                 if (filter is not null && stack is not null && filterIndex is not null)
                 {
                     ArrayIndexIdRange.ThrowIfInvalidNextIndex(filterPacketId, "packet");
@@ -136,6 +195,8 @@ internal static class ConvertCommand
                             "Filter evaluation failed; the conversion was aborted to avoid writing a partially filtered output.");
                     }
 
+                    // A rejected frame still consumes the source's turn, so a selective filter does not let one source starve the
+                    // others.
                     if (!matched)
                     {
                         iterator.Advance();
@@ -143,11 +204,14 @@ internal static class ConvertCommand
                     }
                 }
 
+                // Open the first output, or rotate to the next one when the split policy asks for it. The size comes from an
+                // in-memory counter of the exporter (no file-system probe), which is cheap enough to read for every frame.
                 long estimatedBytes = byteProgress?.EstimatedOutputBytes ?? 0;
                 if (exporter is null
                     || (splitManager.IsSplitting
                         && splitManager.NeedsSplit(estimatedBytes, fileFrames)))
                 {
+                    // Finish the previous output first: OnFinish completes it, Dispose releases the file handle.
                     if (exporter is not null)
                     {
                         exporter.OnFinish();
@@ -159,9 +223,14 @@ internal static class ConvertCommand
                         currentPath = null;
                     }
 
+                    // currentPath is set only after the factory returned, so a factory that fails leaves nothing to discard here
+                    // (the factory removes what its own attempt left behind).
                     string nextPath = splitManager.NextPath();
                     exporter = createExporter(nextPath);
                     currentPath = nextPath;
+
+                    // Size splitting reads the exporter's live byte counter; an exporter without one cannot be split by size, which
+                    // is refused here instead of silently never splitting.
                     byteProgress = exporter as IExportByteProgress;
                     if (splitManager.IsSizeSplitting && byteProgress is null)
                     {
@@ -173,13 +242,28 @@ internal static class ConvertCommand
                     fileFrames = 0;
                 }
 
-                exporter.OnFrame(frame.Value);
+                // Write the frame, then count it. Counters change only after the write, so a failing write is not counted. false
+                // means the listener unsubscribed itself (for example an exporter in strict mode after its first recoverable
+                // error): reading on would hand frames to a listener that no longer takes them and drop them silently. A listener
+                // that stops because the run was cancelled makes the loop end as cancelled, so its output is discarded.
+                bool continueConvert = exporter.OnFrame(frame.Value);
+                if (!continueConvert)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
                 totalFrames++;
                 fileFrames++;
 
                 if (progressInterval > 0 && totalFrames % progressInterval == 0)
                 {
-                    error.WriteLine($"Progress: {totalFrames} frames written");
+                    error.WriteLine(Invariant($"Progress: {totalFrames} frames written"));
+                }
+
+                if (!continueConvert)
+                {
+                    listenerStopped = true;
+                    break;
                 }
 
                 if (maxFrames > 0 && totalFrames >= maxFrames)
@@ -190,6 +274,8 @@ internal static class ConvertCommand
                 iterator.Advance();
             }
 
+            // Normal end (sources exhausted or limit reached): finish the last output. This is the only path that finalizes the
+            // output that is still open; every other exit discards it in the catch block.
             if (exporter is not null)
             {
                 exporter.OnFinish();
@@ -203,7 +289,8 @@ internal static class ConvertCommand
         }
         catch
         {
-            // Cancelled or failed: the output was not finished, so it is disposed and deleted instead of finalized.
+            // Cancelled or failed: the output was not finished, so it is disposed and deleted instead of finalized. A cancellation
+            // arrives here as the OperationCanceledException of a source read; the caller maps it to its own exit code.
             CliCommandSupport.DiscardUnfinished(ref exporter, ref currentPath, splitManager.IsDirectoryOutput, error);
             throw;
         }
@@ -213,9 +300,17 @@ internal static class ConvertCommand
 
     #region Private Helpers
 
-    /// <summary>Parses arguments and executes conversion; throws <see cref="ArgumentException"/> on bad args.</summary>
+    /// <summary>
+    /// Parses arguments and executes conversion; throws <see cref="ArgumentException"/> on bad args (the caller maps it to exit
+    /// code 1).
+    /// </summary>
+    /// <param name="args">The arguments after the command name.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="cancellationToken">Cancels the run.</param>
+    /// <returns>The exit code.</returns>
     private static async Task<int> _RunCoreAsync(string[] args, CliIo io, CancellationToken cancellationToken)
     {
+        // Help is only recognized as the first argument; no arguments at all is an error with the same usage text.
         if (args.Length == 0 || CliArgumentParsing.IsHelpFlag(args[0]))
         {
             _PrintUsage(io.Error);
@@ -240,6 +335,9 @@ internal static class ConvertCommand
         bool tolerant = false;
         bool overwrite = false;
 
+        // One pass over the arguments. Settings options are offered first so that they behave the same in every command; a
+        // value-taking option consumes the next argument (GetNextArg advances i). Everything that is not an option is a source
+        // spec, including a mistyped option such as "--outptu": it is then rejected by the source parsing with its own message.
         for (int i = 0; i < args.Length; i++)
         {
             if (CliArgumentParsing.ParseSettingsOption(args, ref i, settings))
@@ -293,6 +391,8 @@ internal static class ConvertCommand
             }
         }
 
+        // Required parts, checked before anything is opened. "-" (standard output) is refused as a target: every output is a
+        // path that the run prepares, finishes, and, when the run does not complete, deletes or restores.
         if (sourceSpecs.Count == 0)
         {
             io.Error.WriteLine("Error: No source files specified.");
@@ -306,6 +406,7 @@ internal static class ConvertCommand
             return (int)ExitCode.ArgumentError;
         }
 
+        // MiB to bytes with overflow checks, so a typo such as 99999999999 is a usage error here and not a wrapped negative size.
         int blfCacheBudgetBytes = 0;
         if (blfCacheSize > 0)
         {
@@ -322,10 +423,19 @@ internal static class ConvertCommand
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Executes the conversion pipeline inside a plugin session.</summary>
+    /// <summary>
+    /// Executes the conversion pipeline inside a plugin session. The session (plugins started, settings loaded) is open for the
+    /// whole run and disposed after it, so the plugins are stopped even when the run fails or is cancelled; Ctrl+C cancels the
+    /// token for both the plugin start and the frame loop.
+    /// </summary>
+    /// <param name="arguments">The parsed arguments.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="cancellationToken">The outer token; linked with Ctrl+C.</param>
+    /// <returns>The exit code.</returns>
     private static Task<int> _ExecuteAsync(ConvertArguments arguments, CliIo io, CancellationToken cancellationToken) =>
         CliCommandSupport.RunCancellableAsync(io, async token =>
         {
+            // A session that cannot open has already printed its error line; its exit code ends the command.
             (CliPluginSession? opened, int openExit) = await CliPluginSession.OpenAsync(arguments.Settings, io, token)
                 .ConfigureAwait(false);
             if (opened is null)
@@ -333,15 +443,27 @@ internal static class ConvertCommand
                 return openExit;
             }
 
+            // The conversion itself is synchronous (sources and listeners are blocking APIs); only the session open and close are
+            // asynchronous.
             await using (opened.ConfigureAwait(false))
             {
                 return _Run(opened, arguments, io, token);
             }
         }, cancellationToken);
 
-    /// <summary>Resolves the specs, builds the stack, opens the sources, and runs the loop.</summary>
+    /// <summary>
+    /// Resolves the specs, builds the stack, opens the sources, and runs the loop. The steps are ordered from cheap to
+    /// expensive so that a mistake of the user is reported before any source is opened or any file is touched.
+    /// </summary>
+    /// <param name="session">The open plugin session.</param>
+    /// <param name="arguments">The parsed arguments.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="token">Cancels the run (Ctrl+C).</param>
+    /// <returns>The exit code.</returns>
     private static int _Run(CliPluginSession session, ConvertArguments arguments, CliIo io, CancellationToken token)
     {
+        // Specs resolve through the registry, so plugin kinds and formats work exactly like built-in ones. A bad spec is a
+        // usage error (exit 1), not a source error.
         FrameFormatConfig format;
         List<SourceConfig> configs;
         try
@@ -368,11 +490,16 @@ internal static class ConvertCommand
             }
         }
 
-        // An existing output is refused (or accepted with --overwrite) before a long run starts; nothing is deleted yet.
+        // An existing output is refused (or accepted with --overwrite) before a long run starts; nothing is deleted yet. The
+        // check uses a manager of its own, so the manager of the run still starts at its first path. Only the first path is
+        // checked here; a later split path that exists is refused when its output is opened.
         SplitOutputManager firstPathManager = new(arguments.OutputPath, arguments.SplitSizeBytes, arguments.SplitCount);
-        if (!ExportTargets.TryCheck(firstPathManager.NextPath(), isDirectory: false, arguments.Overwrite, out _, out PluginError? targetError))
+        // The refusal names the path that was checked. In a split run that is the first split file (base_00001.ext), not the base
+        // name the user typed, which is never written: naming the typed path would point at a file that does not exist.
+        string firstPath = firstPathManager.NextPath();
+        if (!ExportTargets.TryCheck(firstPath, isDirectory: false, arguments.Overwrite, out _, out PluginError? targetError))
         {
-            io.Error.WriteLine("Error: " + CliCommandSupport.TargetText(targetError, arguments.OutputPath));
+            io.Error.WriteLine("Error: " + CliCommandSupport.TargetText(targetError, firstPath));
             return (int)ExitCode.ArgumentError;
         }
 
@@ -384,6 +511,8 @@ internal static class ConvertCommand
             return stackExit;
         }
 
+        // The stack outlives the sources: sources are disposed in the inner finally, the stack by the using around it. The filter
+        // is compiled before the first source opens, so an invalid expression ends the command without touching any input.
         List<IFrameSource> sources = [];
         using (stack)
         {
@@ -396,6 +525,8 @@ internal static class ConvertCommand
                     return (int)ExitCode.ArgumentError;
                 }
 
+                // Sources are plugin code: a failure to open one ends the command with the exit code of OpenSources; the sources
+                // opened so far are in the list and are disposed below.
                 int sourceExit = CliCommandSupport.OpenSources(configs, stack, frames, sources, io);
                 if (sourceExit != (int)ExitCode.Success)
                 {
@@ -411,7 +542,19 @@ internal static class ConvertCommand
         }
     }
 
-    /// <summary>Runs the convert loop and prints the summary.</summary>
+    /// <summary>
+    /// Runs the convert loop and prints the summary on the error writer (the conversion has no result for standard output).
+    /// The exceptions of the loop become exit codes here: a cancellation is a success (0) because it is the user's decision, a
+    /// <see cref="CliUsageException"/> is a usage error (1), everything else a runtime failure (3).
+    /// </summary>
+    /// <param name="arguments">The parsed arguments.</param>
+    /// <param name="format">The output format.</param>
+    /// <param name="sources">The opened sources.</param>
+    /// <param name="stack">The stack of the session.</param>
+    /// <param name="filter">The compiled filter, or <see langword="null"/>.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="token">Cancels the run (Ctrl+C).</param>
+    /// <returns>The exit code.</returns>
     private static int _RunLoop(ConvertArguments arguments, FrameFormatConfig format, List<IFrameSource> sources, Stack stack,
         IFilter? filter, CliIo io, CancellationToken token)
     {
@@ -420,7 +563,7 @@ internal static class ConvertCommand
         try
         {
             SplitOutputManager splitManager = new(arguments.OutputPath, arguments.SplitSizeBytes, arguments.SplitCount);
-            int totalFrames = RunConvertLoop(
+            long totalFrames = RunConvertLoop(
                 sources,
                 path => _CreateListener(format, path, stack, arguments.Overwrite, replacements, token),
                 splitManager,
@@ -431,9 +574,18 @@ internal static class ConvertCommand
                 arguments.Tolerant,
                 io.Error,
                 token,
-                out int filesWritten);
+                out int filesWritten,
+                out bool listenerStopped);
 
-            io.Error.WriteLine($"Conversion complete: {totalFrames} frames written to {filesWritten} file(s).");
+            // The loop ended early because the writer stopped taking frames: that is a failure, not a complete conversion.
+            if (listenerStopped)
+            {
+                io.Error.WriteLine(Invariant(
+                    $"Error during conversion: the output format stopped after {totalFrames} frames, before the input was converted completely."));
+                return (int)ExitCode.RuntimeError;
+            }
+
+            io.Error.WriteLine(Invariant($"Conversion complete: {totalFrames} frames written to {filesWritten} file(s)."));
             return (int)ExitCode.Success;
         }
         catch (OperationCanceledException)
@@ -465,6 +617,15 @@ internal static class ConvertCommand
     /// <see cref="CliUsageException"/>; the rest are errors of the run. A listener that cannot be created gives the old output
     /// back after the run.
     /// </summary>
+    /// <param name="format">The output format.</param>
+    /// <param name="path">The path of the output (a split path when splitting).</param>
+    /// <param name="stack">The stack of the session.</param>
+    /// <param name="overwrite">Whether an existing output may be replaced.</param>
+    /// <param name="replacements">Collects the old outputs that were moved aside; settled after the run.</param>
+    /// <param name="token">Cancels the export.</param>
+    /// <returns>The listener.</returns>
+    /// <exception cref="InvalidOperationException">The target cannot be used or the listener cannot be created.</exception>
+    /// <exception cref="CliUsageException">An option text of the format is invalid.</exception>
     private static IFrameListener _CreateListener(FrameFormatConfig format, string path, Stack stack, bool overwrite,
         List<TargetReplacement> replacements, CancellationToken token)
     {

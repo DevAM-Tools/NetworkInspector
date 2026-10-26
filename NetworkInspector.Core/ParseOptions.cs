@@ -8,7 +8,8 @@ namespace NetworkInspector.Core;
 /// <remarks>
 /// <para>
 /// The default watch is <see cref="FieldWatch.None"/>, which accepts nothing.
-/// A null <see cref="Observer"/> is rejected by <c>Packet.TryParse</c> before the packet is mutated.
+/// A null <see cref="Observer"/> makes <c>Packet.TryParse</c> throw <see cref="ArgumentException"/> before the packet is
+/// created or mutated; it is a caller bug and not a <see cref="ParseFailure"/> code.
 /// </para>
 /// <para><b>Thread-safety:</b> a readonly struct. The observer it points at is not thread-safe.</para>
 /// </remarks>
@@ -16,7 +17,7 @@ public readonly struct ParseObserver
 {
     #region Properties
 
-    /// <summary>The observer called for this parse. Null is rejected before parse.</summary>
+    /// <summary>The observer called for this parse. Null makes <c>Packet.TryParse</c> throw before the parse starts.</summary>
     public IFieldObserver? Observer { get; init; }
 
     /// <summary>Which fields <see cref="Observer"/> receives. Default is <see cref="FieldWatch.None"/>.</summary>
@@ -60,7 +61,10 @@ public readonly struct ParseOptions(
     /// <summary>Value cache filled by this parse, or null to record nothing.</summary>
     public ValueCache? Cache { get; init; } = cache;
 
-    /// <summary>When true, a replay of an already first-parsed id still writes <see cref="Cache"/>.</summary>
+    /// <summary>
+    /// When true, a replay of an already first-parsed id still writes <see cref="Cache"/>. By default a replay does not
+    /// write the cache; the session pull-fill path sets this to fill a cache from replayed packets.
+    /// </summary>
     public bool RecordOnReplay { get; init; } = recordOnReplay;
 
     /// <summary>Packet index filled by this parse, or null to record no presence.</summary>

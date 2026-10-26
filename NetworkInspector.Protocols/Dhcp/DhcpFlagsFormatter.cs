@@ -18,7 +18,9 @@ namespace NetworkInspector.Protocols.Dhcp;
 /// </remarks>
 internal static class DhcpFlagsFormatter
 {
-    // Index 0 = broadcast flag clear, index 1 = broadcast flag set.
+    // Index 0 = broadcast flag clear, index 1 = broadcast flag set. The reserved bits (14..0) are ignored on purpose:
+    // they must be zero per RFC 2131, and a non-zero value is still visible in the hex prefix the caller prints.
+    // Preformatted strings keep the per-packet call allocation-free.
     private static readonly string[] _BracketTable = [" [None]", " [Broadcast]"];
 
     /// <summary>

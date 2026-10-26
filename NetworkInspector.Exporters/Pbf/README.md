@@ -86,6 +86,13 @@ static void WritePbf(IEnumerable<Packet> packets)
 - Blocks of 64 bytes or less, and blocks that do not shrink, are stored uncompressed.
 - The per-block field-presence bitmap covers up to 32 768 field ids.
 - Packets parsed with `FieldTreeMode.Skip` are skipped.
+- A packet that fails while it is added to a standard block leaves the block unchanged; the next packet is written in
+  full (no same-as-previous flags refer to the failed packet).
+- A file that cannot be created is reported through `ItemSkipped` and counted as an error; `OnPacket()` returns `false`
+  and does not throw.
+- A standard block whose field tree was cut at the maximum nesting depth is written in `Tolerant` mode (one
+  `MalformedData` event). In `Strict` mode the block is dropped: its packets count as skipped, not as written, and the
+  trailer does not count them.
 
 ## Links
 

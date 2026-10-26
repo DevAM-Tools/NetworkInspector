@@ -12,6 +12,14 @@ namespace NetworkInspector.Protocols.Helpers;
 /// so distinct addresses with equal folds would collide whatever the seed. Adding 32-bit words keeps the input
 /// injective; only the seeded mix decides the bucket.
 /// </para>
+/// <para>
+/// Security: the addresses are attacker-controlled packet fields, and the keys index per-connection dictionaries, so
+/// predictable hash codes would let one sender craft many keys that land in the same bucket (hash flooding, which
+/// degrades every lookup towards a linear scan). Mitigation: <see cref="HashCode"/> is seeded randomly per process, so
+/// the bucket of a crafted key cannot be predicted. Rejected alternative: the former unkeyed XOR-rotate mix, for which
+/// colliding keys are easy to construct. Residual risk: a 32-bit hash can still collide by chance, and an attacker who
+/// learns the process seed could precompute collisions.
+/// </para>
 /// <para><b>Thread-safety:</b> stateless.</para>
 /// </remarks>
 internal static class ConnectionKeyHash
@@ -21,6 +29,10 @@ internal static class ConnectionKeyHash
     /// <summary>Adds the four 32-bit words of <paramref name="address"/>, low word first.</summary>
     /// <param name="hash">The hash being built.</param>
     /// <param name="address">A 128-bit address (IPv4 addresses are IPv4-mapped).</param>
+    // Inlined because the connection-key GetHashCode methods that call it are themselves inlined hot-path members
+    // (one call per packet lookup); the body is four hash.Add calls on locals and never allocates.
+    // The word order is fixed so equal addresses always produce the same hash input (the connection keys normalize
+    // the endpoint order themselves, which is what makes both directions of a connection hash alike).
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void AddAddress(ref HashCode hash, UInt128 address)
     {

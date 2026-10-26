@@ -13,6 +13,12 @@ public delegate ParseResult ParseDelegate(in MutField parentField, ReadOnlyMemor
 /// <summary>
 /// Contract for protocol parsers.
 /// Implementations parse a specific protocol's header from raw packet data.
+/// <para>
+/// Thread-safety: one protocol instance serves every packet of its stack, and different packets can be parsed on
+/// different threads at the same time. An implementation must therefore be stateless per call, or keep cross-packet
+/// state only under the first-parse versus re-parse rules described in the parse concurrency remarks of
+/// <see cref="Packet"/> and in <c>PROTOCOL_GUIDE.md</c>.
+/// </para>
 /// </summary>
 public interface IProtocol
 {

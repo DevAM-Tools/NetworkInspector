@@ -74,6 +74,10 @@ static void WritePcapng(IEnumerable<Frame> frames)
 
 - Not thread-safe; call `OnFrame()` and `OnFinish()` from one thread.
 - The file is created lazily on the first frame. An empty export still produces a valid file with a section header.
+  A file that cannot be created is reported through `ItemSkipped` and counted as an error; `OnFrame()` returns `false`
+  and does not throw.
+- The interface description block stores the link type in 16 bits. A frame whose link type is larger is skipped
+  (`SerializationError`) instead of being written with a wrong link type.
 - The CLI value `pcap` is an alias: there is no classic PCAP writer, the output is always PCAPNG.
 
 ## Links

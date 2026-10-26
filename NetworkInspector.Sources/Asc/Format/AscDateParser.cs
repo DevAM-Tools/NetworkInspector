@@ -24,7 +24,7 @@ internal static class AscDateParser
         // European formats
         "ddd MMM dd HH:mm:ss yyyy",
         "ddd MMM  d HH:mm:ss yyyy",
-        // Compact formats
+        // Variants with a millisecond fraction
         "ddd MMM dd HH:mm:ss.fff yyyy",
         "ddd MMM  d HH:mm:ss.fff yyyy",
         "ddd MMM dd hh:mm:ss.fff tt yyyy",
@@ -46,8 +46,11 @@ internal static class AscDateParser
 
     /// <summary>
     /// Tries to parse a date string from an ASC header into nanoseconds since the Unix epoch.
-    /// Returns 0 when the string could not be parsed or the instant does not fit in a <see cref="long"/>.
+    /// Returns 0 when the string could not be parsed or the instant does not fit in a <see cref="long"/>. Zero doubles as
+    /// the "unknown" sentinel, so a header date of exactly 1970-01-01T00:00:00 in the chosen zone cannot be told from a
+    /// failure; <see cref="AscHeader"/> treats zero as "the date did not parse".
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="dateTimeZone"/> is <see langword="null"/>.</exception>
     /// <param name="dateString">The date string from the ASC header (e.g., "Sun Nov 24 11:44:00 AM 2019").</param>
     /// <param name="dateTimeZone">
     /// Timezone in which the date string is interpreted. Pass
@@ -64,7 +67,8 @@ internal static class AscDateParser
             return 0;
         }
 
-        // Vector German abbreviations are not de-DE "ddd" names (Di, Do, …).
+        // Runs once per file (header), so the string allocations of the normalization and the three parse attempts below
+        // are not a per-frame cost. Vector German abbreviations are not de-DE "ddd" names (Di, Do, …).
         dateString = _NormalizeVectorDateTokens(dateString);
 
         // Try the known formats with invariant culture first (covers all English/US variants
@@ -79,7 +83,8 @@ internal static class AscDateParser
             return _CivilToUnixNanos(parsed, dateTimeZone);
         }
 
-        // Fallback 1: try general parsing with invariant culture.
+        // Fallback 1: try general parsing with invariant culture (accepts forms the explicit list lacks). Invariant, so
+        // the result never depends on the host's CurrentCulture.
         if (DateTime.TryParse(dateString, CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out DateTime fallback))
         {
@@ -114,9 +119,12 @@ internal static class AscDateParser
     /// </summary>
     private static long _CivilToUnixNanos(DateTime civil, TimeZoneInfo dateTimeZone)
     {
+        // The header date is a wall-clock time without zone: attach the configured zone's offset for that civil time.
         DateTime unspecified = DateTime.SpecifyKind(civil, DateTimeKind.Unspecified);
         DateTimeOffset dto = new(unspecified, dateTimeZone.GetUtcOffset(unspecified));
         long ticks = dto.UtcDateTime.Ticks - DateTime.UnixEpoch.Ticks;
+
+        // 1 tick = 100 ns; reject a tick count whose nanosecond value would not fit in a long instead of wrapping.
         if (ticks > long.MaxValue / 100L || ticks < long.MinValue / 100L)
         {
             return 0;
@@ -131,6 +139,7 @@ internal static class AscDateParser
     /// </summary>
     private static string _NormalizeVectorDateTokens(string dateString)
     {
+        // Splitting on blanks also collapses runs of blanks to one, so the output has single spaces between tokens.
         string[] parts = dateString.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         for (int i = 0; i < parts.Length; i++)
         {

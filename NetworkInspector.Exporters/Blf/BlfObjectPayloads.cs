@@ -5,7 +5,10 @@ namespace NetworkInspector.Exporters.Blf;
 /// <summary>
 /// Static helpers that build BLF object payloads from raw frame data.
 /// Each method resets the provided <see cref="PooledBuffer"/>, writes the
-/// payload, and returns <c>true</c> on success.
+/// payload, and returns <c>true</c> on success. After a <c>false</c> return the buffer content is unspecified and must not
+/// be used. The builders write directly into the caller's reusable buffer with <see cref="PooledBuffer.Reserve"/> so that
+/// no per-frame array is allocated.
+/// All methods are stateless and thread-safe as long as each thread uses its own buffer.
 /// <para>
 /// <b>Direction loss:</b> Direction is intentionally set to 0 (RX) for all protocols.
 /// The <see cref="Frame"/> struct does not carry direction information, so the original
@@ -28,7 +31,9 @@ internal static class BlfObjectPayloads
     #region Ethernet
 
     /// <summary>
-    /// Builds an Ethernet Frame (Type 71) payload from a raw Ethernet frame.
+    /// Builds an Ethernet Frame (Type 71) payload from a raw Ethernet frame. <see cref="BlfExporter"/> writes Type 120
+    /// (<see cref="TryBuildEthernetFrameExPayload"/>) instead, which keeps the frame bytes unchanged; this older layout
+    /// splits out the VLAN tag and is currently exercised by tests only.
     /// <para>
     /// BLF layout:
     /// <c>src(6) + channel(2) + dst(6) + dir(2) + ethertype(2 LE) + tpid(2 LE) + tci(2 LE) + payload_len(2 LE) + payload_data</c>.
@@ -130,6 +135,8 @@ internal static class BlfObjectPayloads
     internal static bool TryBuildEthernetFrameExPayload(
         ReadOnlySpan<byte> frame, ushort channel, PooledBuffer output, ushort? hardwareChannel = null)
     {
+        // 14 bytes = dst + src + ethertype. The upper bound is the u16 frame_length field of the header: a longer frame is
+        // rejected (reported as malformed by the caller) instead of being written with a truncated length.
         if (frame.Length < 14 || frame.Length > ushort.MaxValue)
         {
             return false;
@@ -200,6 +207,8 @@ internal static class BlfObjectPayloads
             blfFlags |= BlfConstants.BlfCanMessageFlagRtr;
         }
 
+        // Data length: the bus DLC (0-15) maps to at most 8 bytes for classic CAN. It is clamped to the bytes actually
+        // present (a remote frame or truncated capture carries none) and to 8, so the copy below cannot run past the input.
         byte dataLen = BlfConstants.CanDlcToLength[Math.Min(dlc, (byte)15)];
         int dataAvailable = Math.Max(0, socketCanFrame.Length - 8);
         int actualDataLen = Math.Min(dataLen, Math.Min(dataAvailable, 8));
@@ -224,6 +233,8 @@ internal static class BlfObjectPayloads
     /// <summary>
     /// Builds a CAN Error (Type 2) payload from a SocketCAN error frame.
     /// Layout: channel (u16 LE), length 0 (u16 LE), reserved 0 (u32 LE).
+    /// Only the occurrence of an error frame is exported: the SocketCAN error class and data bytes of the input are not
+    /// copied, because the Type 2 object written here carries no error details.
     /// </summary>
     /// <param name="socketCanFrame">SocketCAN frame; only the 8-byte header size is required.</param>
     /// <param name="channel">BLF channel number.</param>
@@ -391,10 +402,12 @@ internal static class BlfObjectPayloads
             blfFlags |= BlfConstants.BlfCanMessageFlagRtr;
         }
 
+        // Valid data bytes never exceed the declared count (<= 64), the bytes present, or the length the DLC stands for.
         byte dataLen = BlfConstants.CanFdDlcToLength[Math.Min(dlc, (byte)15)];
+        // The minimum is taken in int before narrowing: casting the available byte count to byte first would wrap a buffer of
+        // 256 or more bytes to a small number and silently shorten (or drop) the data of a valid 64-byte frame.
         int dataAvailable = Math.Max(0, socketCanFrame.Length - 8);
-        byte validDataBytes = (byte)Math.Min(payloadByteCount, (byte)dataAvailable);
-        validDataBytes = (byte)Math.Min(validDataBytes, dataLen);
+        byte validDataBytes = checked((byte)Math.Min(Math.Min((int)payloadByteCount, dataAvailable), (int)dataLen));
 
         const int CanFdMessageHeaderSize = 20;
         Span<byte> header = output.Reserve(CanFdMessageHeaderSize);
@@ -476,8 +489,10 @@ internal static class BlfObjectPayloads
             flags |= BlfConstants.CanFd64FlagEsi;
         }
 
+        // The minimum is taken in int before narrowing: casting the available byte count to byte first would wrap a buffer of
+        // 256 or more bytes to a small number and silently shorten (or drop) the data of a valid 64-byte frame.
         int dataAvailable = Math.Max(0, socketCanFrame.Length - 8);
-        byte validDataBytes = (byte)Math.Min(payloadByteCount, (byte)dataAvailable);
+        byte validDataBytes = checked((byte)Math.Min((int)payloadByteCount, dataAvailable));
 
         const int CanFdMessage64HeaderSize = 40;
         Span<byte> header = output.Reserve(CanFdMessage64HeaderSize);
@@ -520,6 +535,7 @@ internal static class BlfObjectPayloads
 
         output.Reset();
 
+        // The LINKTYPE_FLEXRAY frame is parsed by the shared protocol helper; BLF wants the channel as a mask (A = 1, B = 2).
         byte flexRaySubChannel = fields.ChannelB ? (byte)1 : (byte)0;
         ushort channelMask = flexRaySubChannel == 0 ? (ushort)0x0001 : (ushort)0x0002;
         ushort frameId = fields.FrameId;
@@ -625,8 +641,11 @@ internal static class BlfObjectPayloads
         // Extract 6-bit frame ID from PID (strip parity bits)
         byte id = (byte)(pid & 0x3F);
 
-        // Clamp DLC to max LIN data length
-        int dataLength = Math.Min((int)dlc, (int)_MaxLinDataLength);
+        // The declared DLC is a 4-bit field (0-15), but a LIN frame carries 8 data bytes at most and a truncated capture can
+        // hold fewer bytes than it declares. The data length is the smallest of the three, and the dlc field below states
+        // that length: a DLC above 8 or above the stored data would make a reader invent bytes (zero padding) that the
+        // capture never held.
+        int dataLength = Math.Min(Math.Min((int)dlc, _MaxLinDataLength), dltLinFrame.Length - 8);
 
         // BLF LIN_MESSAGE2 (Type 57) — 132 packed bytes, stored as 136 with 4-byte alignment:
         //   [0..8)     SOF timestamp (u64 LE)
@@ -671,8 +690,10 @@ internal static class BlfObjectPayloads
         // messageId(34..36)  = 0
         // configuredNodeAddress(36) = 0
         payload[37] = id;           // id (6-bit frame id)
-        payload[38] = dlc;          // dlc
-        // DLT byte 4 bits 1-0: 1 = classic → model 0, 2 = enhanced → model 1.
+        payload[38] = (byte)dataLength; // dlc (at most 8, equal to the data bytes copied below)
+        // DLT byte 4 bits 1-0: 1 = classic → model 0, 2 = enhanced → model 1. A frame that does not state a model (0) is
+        // written as model 0 (classic), which is also how the LIN protocol validates such a frame. The ASC exporter writes
+        // "enhanced" for it; the two defaults are deliberately left as they are until the owner picks one.
         byte checksumTypeBits = (byte)(dltLinFrame[4] & 0x03);
         payload[39] = checksumTypeBits == 2 ? (byte)1 : (byte)0;
 
@@ -681,7 +702,8 @@ internal static class BlfObjectPayloads
 
         // ── message extra (offset 112..132) ──
         // data[8] (112..120)
-        if (dataLength > 0 && dltLinFrame.Length >= 8 + dataLength)
+        // dataLength is already limited to the bytes present, so the slice cannot run past the input.
+        if (dataLength > 0)
         {
             dltLinFrame.Slice(8, dataLength).CopyTo(payload.Slice(112));
         }
@@ -712,6 +734,9 @@ internal static class BlfObjectPayloads
         }
 
         output.Reset();
+
+        // 121 bytes is the smallest LIN V2 object the BLF reader accepts (its LinParser minimum size), so these error
+        // objects round-trip; the bytes after the data field are left zero.
         const int LinError2Size = 121;
         Span<byte> payload = output.Reserve(LinError2Size);
         payload.Clear();

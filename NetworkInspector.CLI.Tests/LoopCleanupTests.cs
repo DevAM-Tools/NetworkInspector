@@ -94,7 +94,7 @@ internal sealed class LoopCleanupTests
             try
             {
                 ExportCommand.RunExportLoop([source], p => JsonExporter.CreateBuilder().ToFile(p).Build(),
-                    new SplitOutputManager(path, 0, 0), stack, null, 0, 0, false, TextWriter.Null, ref counter, cts.Token, out _);
+                    new SplitOutputManager(path, 0, 0), stack, null, 0, 0, false, TextWriter.Null, ref counter, cts.Token, out _, out _);
             }
             catch (OperationCanceledException)
             {
@@ -118,7 +118,8 @@ internal sealed class LoopCleanupTests
         {
             int counter = 0;
             await Assert.That(() => ExportCommand.RunExportLoop([source], p => JsonExporter.CreateBuilder().ToFile(p).Build(),
-                new SplitOutputManager(sandbox.Combine("out.json"), 0, 2), stack, null, 0, 0, false, TextWriter.Null, ref counter, CancellationToken.None, out _))
+                new SplitOutputManager(sandbox.Combine("out.json"), 0, 2), stack, null, 0, 0, false, TextWriter.Null, ref counter, CancellationToken.None,
+                out _, out _))
                 .Throws<InvalidOperationException>();
         }
 
@@ -140,7 +141,8 @@ internal sealed class LoopCleanupTests
         {
             int counter = 0;
             await Assert.That(() => ExportCommand.RunExportLoop([source], _CreatePrepared,
-                new SplitOutputManager(sandbox.Combine("out.json"), 0, 2), stack, null, 0, 0, false, TextWriter.Null, ref counter, CancellationToken.None, out _))
+                new SplitOutputManager(sandbox.Combine("out.json"), 0, 2), stack, null, 0, 0, false, TextWriter.Null, ref counter, CancellationToken.None,
+                out _, out _))
                 .Throws<InvalidOperationException>();
         }
 
@@ -164,7 +166,7 @@ internal sealed class LoopCleanupTests
         {
             await Assert.That(() => ConvertCommand.RunConvertLoop([new CancellingNextSource(source, cts.Token)],
                 p => NetworkInspector.Exporters.Pcapng.PcapngExporter.CreateBuilder().ToFile(p).Build(),
-                new SplitOutputManager(path, 0, 0), null, null, 0, 0, false, TextWriter.Null, cts.Token, out _))
+                new SplitOutputManager(path, 0, 0), null, null, 0, 0, false, TextWriter.Null, cts.Token, out _, out _))
                 .Throws<OperationCanceledException>();
         }
 

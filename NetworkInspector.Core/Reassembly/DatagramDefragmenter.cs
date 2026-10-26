@@ -23,10 +23,17 @@ namespace NetworkInspector.Core.Reassembly;
 /// replays the recorded outcome instead of calling <see cref="ProcessFragment"/> again. Without
 /// that guard, a concurrent re-parse would corrupt the fragment buffers — see
 /// <c>PROTOCOL_GUIDE.md</c>, "First parse vs. re-parse".
-/// <see cref="ReassembledCount"/> and <see cref="EvictedCount"/> may be read from a monitoring
-/// thread only after all packet parsing on the owning thread has completed (i.e., with a
-/// happens-before edge established by the caller). For live diagnostic sampling across threads,
-/// use <c>Volatile.Read</c> on the backing field or synchronize externally.
+/// <see cref="ReassembledCount"/> and <see cref="EvictedCount"/> are backed by <see langword="volatile"/> fields that
+/// the owning thread updates with <see cref="Interlocked"/>, so a monitoring thread may read them at any time.
+/// <see cref="PendingCount"/> reads the dictionary and is only valid on the owning thread (or after the caller has
+/// established a happens-before edge with it).
+/// </para>
+/// <para>
+/// <b>Memory limits (threat: a capture of incomplete or hostile fragment sequences exhausts memory):</b>
+/// the number of concurrent in-progress datagrams is bounded by <c>maxEntries</c> and the oldest entry is evicted first;
+/// the size of one datagram is bounded by the IP payload limit and a fragment-count limit (see
+/// <see cref="DatagramFragmentBuffer"/>). Every discard, completion, eviction, and <see cref="Clear"/> returns the
+/// pooled fragment arrays.
 /// </para>
 /// </summary>
 /// <typeparam name="TKey">
@@ -37,7 +44,15 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
 {
     #region Constants
 
-    /// <summary>Default maximum number of concurrent in-progress reassembly entries.</summary>
+    /// <summary>
+    /// Default maximum number of concurrent in-progress reassembly entries.
+    /// Limit record: threat is memory exhaustion by datagrams whose remaining fragments never arrive (each entry holds
+    /// pooled copies of its fragments). Configurable by the code that creates the defragmenter (the <c>maxEntries</c>
+    /// constructor parameter, any positive value; no end-user setting). Posture: secure by default, because the default
+    /// is finite and loosening is an explicit constructor argument. When the limit is reached the entry created
+    /// first (insertion order, not last activity) is evicted and the eviction is counted in <see cref="EvictedCount"/>.
+    /// The number 1024 itself has no recorded derivation.
+    /// </summary>
     private const int _DefaultMaxEntries = 1024;
 
     #endregion
@@ -53,7 +68,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
     /// </summary>
     private readonly Queue<(TKey Key, DatagramFragmentBuffer Buffer)> _InsertionOrder = new();
 
-    /// <summary>Maximum concurrent reassembly entries to prevent unbounded memory usage.</summary>
+    /// <summary>Maximum concurrent reassembly entries to prevent unbounded memory usage (set once by the constructor).</summary>
     private readonly int _MaxEntries = _DefaultMaxEntries;
 
     /// <summary>
@@ -71,6 +86,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
 
     /// <summary>
     /// Number of in-progress entries dropped due to capacity pressure.
+    /// Volatile so a monitoring thread sees current values; written only by the owning thread via Interlocked.
     /// </summary>
     private volatile int _EvictedCount;
 
@@ -102,7 +118,9 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
     /// <param name="maxEntries">
     /// Maximum number of concurrent in-progress reassembly buffers.
     /// Excess entries are evicted oldest-first to prevent unbounded memory growth.
+    /// Must be greater than zero.
     /// </param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxEntries"/> is zero or negative.</exception>
     public DatagramDefragmenter(bool dropOnOverlap = false, int maxEntries = _DefaultMaxEntries)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEntries);
@@ -130,7 +148,9 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
     /// <returns>
     /// The complete reassembled payload when all fragments are received,
     /// <c>null</c> if reassembly is still in progress or the datagram was discarded.
+    /// The returned array is a fresh allocation owned by the caller (not pooled); the fragment copies stay internal.
     /// </returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="offset"/> is negative.</exception>
     public byte[]? ProcessFragment(
         TKey key,
         int offset,
@@ -138,6 +158,10 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
         ReadOnlySpan<byte> data)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
+
+        // A fragment that reaches past the 65535-byte datagram limit can never belong to a valid datagram. Drop any
+        // partial state under this key as well (the datagram is poisoned) and report "not complete". No entry is created,
+        // so such a fragment cannot consume a slot of the entry limit.
         if (offset >= 65535 || data.Length > 65535 - offset)
         {
             if (_Buffers.Remove(key, out DatagramFragmentBuffer? oversize))
@@ -147,9 +171,9 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
             return null;
         }
 
-        // Opportunistic drain of stale queue heads. On the success path of a previous
-        // call we removed the entry from `_Buffers` but left its key in `_InsertionOrder`
-        // (the queue tracks raw insertion order, not membership). Without this drain the
+        // Opportunistic drain of stale queue heads. When a previous call completed or discarded a datagram we removed
+        // its entry from `_Buffers` but left its queue entry in `_InsertionOrder` (removing from the middle of a
+        // Queue is not possible; the queue tracks raw insertion order, not membership). Without this drain the
         // queue would grow linearly with every reassembled datagram on long-running
         // captures. Bounded work per call: at most O(stale prefix length) and amortized
         // O(1) because each enqueue can only be drained once.
@@ -158,13 +182,15 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
             _InsertionOrder.Dequeue();
         }
 
-        // Non-fragmented datagram check: if MF=0 and offset=0, it's a complete datagram.
-        // This case should be handled by the caller before calling this method.
+        // Precondition for callers: a non-fragmented datagram (MF=0 and offset=0) is complete by itself and must not be
+        // passed here; this method would still treat it as a one-fragment datagram.
 
+        // Find or open the buffer of this datagram.
         if (!_Buffers.TryGetValue(key, out DatagramFragmentBuffer? buffer))
         {
             // Enforce max entries limit — evict oldest entry if at capacity.
             // This prevents unbounded growth from incomplete fragment sequences.
+            // Eviction happens before the insert so the dictionary never exceeds the limit.
             if (_Buffers.Count >= _MaxEntries)
             {
                 _EvictOldestEntry();
@@ -176,6 +202,7 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
         }
 
         // buffer is guaranteed non-null: either found by TryGetValue or freshly created above.
+        // The buffer copies the payload into pooled arrays: the caller's span is only valid for this call.
         FragmentAddResult addResult = buffer!.AddFragment(offset, moreFragments, data, _DropOnOverlap);
 
         if (addResult == FragmentAddResult.OverlapDiscarded)
@@ -205,6 +232,8 @@ public sealed class DatagramDefragmenter<TKey> where TKey : struct, IEquatable<T
         // Datagram complete — reassemble and remove the entry. The corresponding
         // entry in `_InsertionOrder` becomes a stale tombstone and is drained at the
         // top of the next call (or by `_EvictOldestEntry`).
+        // Reassemble returns null when the fragments are inconsistent (a fragment extends past the terminal length); the
+        // datagram is then dropped, and the pooled copies are released either way.
         byte[]? reassembled = buffer.Reassemble();
         buffer.Release();
         _Buffers.Remove(key);

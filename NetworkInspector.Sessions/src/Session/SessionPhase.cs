@@ -4,7 +4,15 @@ namespace NetworkInspector.Sessions;
 
 /// <summary>
 /// Lifecycle phase of a <see cref="Session"/>.
-/// Transitions are monotonically increasing except for <see cref="Running"/> after a restart.
+/// <para>
+/// Transitions: <see cref="Idle"/> to <see cref="Running"/> on start (or straight to <see cref="Stopped"/> without any
+/// source); <see cref="Running"/> to <see cref="Stopped"/> when the last source job ends; <see cref="Running"/> or
+/// <see cref="Stopped"/> to <see cref="Restarting"/> and back to <see cref="Running"/> (a source is still active) or
+/// <see cref="Stopped"/> (none is); <see cref="Idle"/> or <see cref="Running"/> to <see cref="ShuttingDown"/> and then
+/// <see cref="Stopped"/> (a session that is already <see cref="Stopped"/> stays so during shutdown, and shutdown waits
+/// for a running restart first). The numeric order of the values is therefore not a transition order: a restart goes back from
+/// <see cref="Restarting"/> to <see cref="Running"/>, and <see cref="Stopped"/> is left again by a restart.
+/// </para>
 /// </summary>
 public enum SessionPhase
 {
@@ -16,13 +24,20 @@ public enum SessionPhase
     /// <summary>Session started, source jobs are running.</summary>
     Running,
 
-    /// <summary>Session is restarting: protocol stack swapped, frames being re-parsed.</summary>
+    /// <summary>
+    /// Session is restarting: protocol stack swapped, frames being re-parsed. Source threads wait at the parse gate
+    /// and packet queries are disabled until the re-parse ends.
+    /// </summary>
     Restarting,
 
     /// <summary>Session is shutting down gracefully or forcefully.</summary>
     ShuttingDown,
 
-    /// <summary>Session has fully stopped. All jobs completed or cancelled.</summary>
+    /// <summary>
+    /// Ingest has ended: all source jobs finished (or were cancelled), or shutdown completed. After a normal source
+    /// end the session can still be restarted and its listener threads keep running until <c>Shutdown</c>; after
+    /// shutdown, queries are disabled and the session is final.
+    /// </summary>
     Stopped,
 
     #endregion

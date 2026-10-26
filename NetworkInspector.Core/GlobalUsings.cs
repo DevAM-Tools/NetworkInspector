@@ -25,10 +25,13 @@ global using System.Threading.Tasks;
 #endregion
 
 #region External Dependencies
+// ZeroAlloc (NuGet package): LazyString (deferred, cached text), TempString / ZA (allocation-free formatting) and IStringSize.
 global using ZeroAlloc;
 #endregion
 
 #region NetworkInspector.Core
+// Static import so the marker singleton types (BoolMarker, I64Marker, ...) that FieldValueData uses as its type
+// discriminant can be named without the FieldTypeMarkers prefix.
 global using static NetworkInspector.Core.Fields.FieldTypeMarkers;
 global using NetworkInspector.Core.Collections;
 global using NetworkInspector.Core.Errors;

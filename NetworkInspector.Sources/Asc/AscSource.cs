@@ -60,6 +60,8 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     public string UiName { get; }
 
     // ── Interface registration (pre-populated in Start(), read-only afterwards) ──
+
+    /// <summary>Id the registry assigned to this source; written once in <see cref="Start"/>, read-only afterwards.</summary>
     private FrameSourceId _SourceId;
 
     // Cleared by Dispose from any thread. _BuildFrame snapshots it once per call, so every helper of one frame sees the same
@@ -70,17 +72,16 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// Maps (busType, channel) → FrameInterfaceId. Pre-populated in <see cref="Start"/>
     /// from the scanned interface set. A lazy fallback path in
     /// <see cref="_RegisterInterface"/> may add entries after Start returns;
-    /// all mutations are guarded by <see cref="_InterfaceLock"/> to preserve
+    /// every access (read and write) is guarded by <see cref="_InterfaceLock"/> to preserve
     /// the thread-safety guarantee of <see cref="FrameById"/>.
     /// </summary>
     private readonly Dictionary<(AscBusType, int), FrameInterfaceId> _InterfaceMap = [];
 
     /// <summary>
     /// Synchronises concurrent <see cref="_RegisterInterface"/> calls that arrive via
-    /// the thread-safe <see cref="FrameById"/> path. All writes to <see cref="_InterfaceMap"/>
-    /// are guarded by this lock; reads before the lock are a fast-path optimisation
-    /// because .NET Dictionary read operations are safe when no concurrent write is
-    /// in progress — the lock ensures writes are serialised.
+    /// the thread-safe <see cref="FrameById"/> path. Reads and writes of <see cref="_InterfaceMap"/> both take this
+    /// lock: a <see cref="Dictionary{TKey,TValue}"/> is not safe for a reader while another thread resizes it, and the
+    /// lock is uncontended in the common case (all interfaces are registered in <see cref="Start"/>).
     /// </summary>
     private readonly Lock _InterfaceLock = new();
 
@@ -101,8 +102,14 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
     /// <summary>Frame slab allocator of the sequential path; null when slabs are off. NextFrame thread only.</summary>
     private FrameSlabAllocator? _Slabs;
-    /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
+
+    /// <summary>Atomic dispose latch (0 = live, 1 = disposed); flipped with <c>Interlocked.Exchange</c> so that <see cref="Dispose"/> runs once.</summary>
     private volatile int _Disposed;
+
+    /// <summary>
+    /// Set when sequential reading must stop for good: a strict-mode frame error (<see cref="_HandleSkip"/>) or a changed
+    /// file (<see cref="_ReportFileChanged"/>). Only <see cref="NextFrame"/> consults it; <see cref="FrameById"/> ignores it.
+    /// </summary>
     private volatile bool _Aborted;
 
     // ── Error tolerance statistics (use Interlocked / saturating volatile counters) ──
@@ -252,6 +259,8 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         ArgumentNullException.ThrowIfNull(data);
         options ??= new();
         uiName ??= options.UiName ?? "ASC Data";
+        // The scan and the parsers work on bytes. Latin-1 maps every char below U+0100 to exactly one byte, so ASCII content
+        // (all that the format uses) is unchanged and byte offsets equal char offsets.
         byte[] bytes = Encoding.Latin1.GetBytes(data);
         return _BuildFromInMemory(bytes, options, uiName, guard: null);
     }
@@ -480,12 +489,32 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         HashSet<(AscBusType, int, LinkType)> discovered = [];
         AscTimestamp runningClock = _InitialClock(header);
 
+        // True while the last Ethernet packet may still continue on the following lines (same rule as the disk scan).
+        bool ethernetOpen = false;
         while (hasDataLine)
         {
-            ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimAscii(bytes.Slice(start, length));
-            if (!trimmed.IsEmpty)
+            ReadOnlySpan<byte> physicalLine = bytes.Slice(start, length);
+            ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimAscii(physicalLine);
+
+            // A hex continuation of the open packet is payload, never a logging event. Without this skip a payload line
+            // written with blanks and starting with decimal digits ("56 78") was classified as a CAN message ("<time>
+            // <channel> ..."): a phantom frame that could only fail later, while the packet itself was cut short.
+            bool continuation = false;
+            if (ethernetOpen)
             {
-                _ = _IndexFrameLine(trimmed, start, ref runningClock, relativeClock, index, discovered, out _);
+                bool? endsPacket = AscEthernetParser.EndsPacket(physicalLine);
+                continuation = endsPacket == false;
+                if (endsPacket == true)
+                {
+                    ethernetOpen = false;
+                }
+            }
+
+            if (!continuation && !trimmed.IsEmpty
+                && _IndexFrameLine(trimmed, start, ref runningClock, relativeClock, index, discovered, out AscLineType lineType))
+            {
+                ethernetOpen = lineType == AscLineType.EthernetPacket
+                    && AscEthernetParser.HeaderFitsLine(trimmed, header.NumericBase);
             }
 
             hasDataLine = reader.TryNext(out start, out length);
@@ -558,12 +587,15 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         AscTimestamp runningClock = default;
         bool relativeClock = false;
 
-        // Primary read buffer — raw bytes from disk, no string conversions during the scan pass.
+        // Primary read buffer — raw bytes from disk, no string conversions during the scan pass. One large buffer (4 MiB,
+        // allocated once per open, so it lives on the large object heap) keeps the number of positional reads of a multi-GB
+        // file low; lines are cut out of it as spans, so the scan allocates nothing per line.
         byte[] buffer = new byte[AscSourceOptions.DiskReadBufferSize];
 
-        // Carry-over buffer: holds bytes of a line that started in the previous chunk
-        // and has not yet been terminated by \n.  Grown lazily; pre-sized to a
-        // reasonable line maximum to avoid reallocation in the common case.
+        // Carry-over buffer: holds bytes of a line that started in the previous chunk and has not yet been terminated by \n.
+        // Fixed at MaxLineLength: a straddling line that outgrows it is not buffered further (this keeps the scan's memory
+        // bounded however long a line is); it is marked too long and skipped once its LF arrives. Lines that lie wholly
+        // inside one chunk are not carried and are therefore not subject to this limit.
         byte[] carryBuffer = new byte[AscSourceOptions.MaxLineLength];
         int carryLen = 0;               // valid bytes in carryBuffer
         bool carryTooLong = false;      // line in carry exceeded MaxLineLength — skip once complete
@@ -747,10 +779,21 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
 
         // An open Ethernet record runs over blank and hex continuation lines. The first other line ends it, and the
         // window must hold that whole line, because the parser reads all of it to decide that the packet ended.
-        if (pending.Frame >= 0 && AscEthernetParser.EndsPacket(physicalLine) == true)
+        if (pending.Frame >= 0)
         {
-            index!.RequireReadBytes(pending.Frame, lineEnd - pending.Start);
-            pending = new(-1, 0);
+            bool? endsPacket = AscEthernetParser.EndsPacket(physicalLine);
+            if (endsPacket == true)
+            {
+                index!.RequireReadBytes(pending.Frame, lineEnd - pending.Start);
+                pending = new(-1, 0);
+            }
+            else if (endsPacket == false)
+            {
+                // A hex continuation of the open packet is payload, not a logging event. Without this return a payload line
+                // written with blanks and starting with decimal digits ("56 78") fell through to the classifier, which reads
+                // "<digits> <digit>..." as a CAN message: the line became a phantom frame that could only fail later.
+                return;
+            }
         }
 
         if (trimmed.IsEmpty)
@@ -1016,6 +1059,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             return 0;
         }
 
+        // The length is the one taken at open (CaptureFileGuard.Length): bytes appended later are never read.
         long available = fileLength - byteOffset;
         int toRead = available < destination.Length ? (int)available : destination.Length;
 
@@ -1293,7 +1337,9 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
     /// Quickly extracts the channel number from a trimmed ASC line for interface pre-discovery.
     /// Returns -1 if the channel cannot be determined cheaply.
     /// A full parse via the individual parsers is done again in <see cref="_ParseAndBuildFrame"/>.
-    /// Byte-span variant for the disk scan path (avoids UTF-16 conversion).
+    /// Byte-span variant, used by both backends' scan (avoids UTF-16 conversion). This is the open-time hot path: it runs
+    /// once per frame line, reads at most a handful of tokens and allocates nothing. It exists so the scan can pre-register
+    /// every interface without running the (more expensive) frame parsers, which build the frame bytes.
     /// </summary>
     private static int _PeekChannel(ReadOnlySpan<byte> line, AscLineType lineType)
     {
@@ -1305,6 +1351,10 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             return -1;
         }
 
+        // The channel sits at a different token position per line layout: after the timestamp for classic CAN and error
+        // frames, after the CANFD / CANXL / ETH keyword for those, in the bus token for LIN ("Li", "L2"..), and behind
+        // RMSG/PDU, cluster and client for the new FlexRay layout. A line that does not fit yields -1: the interface is
+        // then registered lazily by _RegisterInterface when its frame is built.
         switch (lineType)
         {
             case AscLineType.CanMessage:

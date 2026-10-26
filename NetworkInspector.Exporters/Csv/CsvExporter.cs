@@ -6,6 +6,24 @@ namespace NetworkInspector.Exporters.Csv;
 /// Exports packets to CSV format with configurable columns and delimiter.
 /// Each row represents one packet, with columns for selected fields.
 /// <para>
+/// Output format: UTF-8 with an optional BOM (default on), rows terminated by <c>\r\n</c>, fields quoted per RFC 4180
+/// only when they contain the delimiter, a double quote, CR, or LF.
+/// </para>
+/// <para>
+/// <b>Formula neutralization (default on):</b> a spreadsheet application treats a cell that starts with <c>=</c>,
+/// <c>+</c>, <c>-</c>, <c>@</c>, TAB, or CR as a formula, so text from a capture (a DNS name, a packet info line) could run
+/// a formula when the file is opened (CSV injection). Such a text cell gets a leading single quote (<c>'</c>) before the
+/// CSV quoting is applied. Only text is changed: the <c>Info</c> column and field columns of type
+/// <see cref="FieldType.String"/>. Numeric columns, timestamps, addresses, and the header row are written as they are, so a
+/// negative number keeps its minus sign. <see cref="Builder.WithFormulaNeutralization"/> switches it off for machine
+/// processing, where the added quote would corrupt the data.
+/// </para>
+/// <para>
+/// A row is assembled completely in an internal buffer and handed to the output in one write, so a failure while
+/// formatting a field never leaves a partial row in the output. The per-row path reuses that buffer and formats the
+/// packet number, frame length, timestamp, and field columns straight to UTF-8 without intermediate strings.
+/// </para>
+/// <para>
 /// <b>Thread safety:</b> Not thread-safe. <see cref="OnPacket"/> and <see cref="OnFinish"/>
 /// must be called sequentially from a single thread. The caller is responsible for
 /// synchronization when driving this exporter from multiple threads.
@@ -13,28 +31,57 @@ namespace NetworkInspector.Exporters.Csv;
 /// </summary>
 public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisposable
 {
-    /// <summary>UTF-8 BOM bytes.</summary>
+    /// <summary>UTF-8 BOM bytes (a span over static data: no allocation).</summary>
     private static ReadOnlySpan<byte> _Utf8Bom => [0xEF, 0xBB, 0xBF];
 
+    /// <summary>Row terminator: CRLF, as RFC 4180 specifies.</summary>
     private static ReadOnlySpan<byte> _NewLine => "\r\n"u8;
 
+    /// <summary>Cooperative cancellation; checked per packet.</summary>
     private readonly CancellationToken _CancellationToken;
+
+    /// <summary>Whether a UTF-8 BOM is written before the first row.</summary>
     private readonly bool _WriteBom;
+
+    /// <summary>
+    /// Delimiter as a single ASCII byte. The builder restricts it to ASCII so that one byte is always a complete UTF-8
+    /// character and the byte-level quoting scan cannot match inside a multi-byte sequence.
+    /// </summary>
     private readonly byte _Delimiter;
+
+    /// <summary>Whether a header row is written before the first packet row.</summary>
     private readonly bool _WriteHeader;
+
+    /// <summary>Whether text cells that start with a spreadsheet formula character get a leading apostrophe.</summary>
+    private readonly bool _NeutralizeFormulas;
+
+    /// <summary>Maximum number of packets to write; 0 means unlimited.</summary>
     private readonly int _TargetPacketCount;
+
+    /// <summary>Column layout; copied from the builder, so later builder changes do not affect a built exporter.</summary>
     private readonly CsvColumnDefinition[] _Columns;
 
+    /// <summary>Output target. Cleared to <c>null</c> after disposal to prevent a double dispose.</summary>
     private ExportOutput? _Output;
+
+    /// <summary>
+    /// Row assembly buffer, reset per row and reused for the whole export; the 4 KiB initial capacity grows to the longest
+    /// row seen (pooled rental).
+    /// </summary>
     private readonly PooledBuffer _Buffer = new(4096);
 
+    /// <summary>Latched fatal state; every later <see cref="OnPacket"/> returns <c>false</c>.</summary>
     private bool _HasError;
+
+    /// <summary>Set once the BOM and header row were written successfully.</summary>
     private bool _Started;
+
+    /// <summary>Latch that makes <see cref="OnFinish"/> idempotent and stops <see cref="OnPacket"/> after the output is closed.</summary>
     private bool _Finished;
 
-    // Instance UTF-8 scratch buffer for _WriteCsvField.
-    // Grows to the maximum bytes ever needed by this exporter instance and is then
-    // reused without allocation. Buffer lifetime is tied to the exporter instance.
+    // Instance UTF-8 scratch buffer for _WriteCsvField, rented from the array pool.
+    // Grows geometrically to the maximum bytes ever needed by this exporter instance and is then
+    // reused without allocation. It is returned to the pool when the exporter finishes.
     private byte[]? _Utf8Scratch;
 
     /// <summary>Creates a new exporter (use <see cref="CreateBuilder"/> for construction).</summary>
@@ -45,6 +92,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         bool writeBom,
         byte delimiter,
         bool writeHeader,
+        bool neutralizeFormulas,
         int targetPacketCount,
         CsvColumnDefinition[] columns,
         CancellationToken cancellationToken)
@@ -55,6 +103,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         _WriteBom = writeBom;
         _Delimiter = delimiter;
         _WriteHeader = writeHeader;
+        _NeutralizeFormulas = neutralizeFormulas;
         _TargetPacketCount = targetPacketCount;
         _Columns = columns;
         _CancellationToken = cancellationToken;
@@ -118,6 +167,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     /// <inheritdoc/>
     public bool OnPacket(Packet packet)
     {
+        // Stop conditions first: a false return tells the driver to stop sending packets.
         if (_CancellationToken.IsCancellationRequested)
         {
             return false;
@@ -128,6 +178,8 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             return false;
         }
 
+        // Lazy start: the BOM and header row are written with the first packet, so an export that receives no packet
+        // leaves the output untouched (a file output is not even created).
         if (!_Started && !_Start())
         {
             return false;
@@ -152,7 +204,20 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             () => _Output?.Flush(),
             _ReportFinishError,
             new ExporterReleaseStep("buffer return", _Buffer.Return),
+            new ExporterReleaseStep("scratch return", _ReturnScratch),
             new ExporterReleaseStep("output disposal", _DisposeOutput));
+    }
+
+    /// <summary>Returns the UTF-8 scratch array to the pool, if one was rented. Idempotent.</summary>
+    private void _ReturnScratch()
+    {
+        byte[]? scratch = _Utf8Scratch;
+        _Utf8Scratch = null;
+        if (scratch is not null)
+        {
+            // Not cleared: the bytes are export data the process already holds, the same trade-off as PooledBuffer.Return.
+            ArrayPool<byte>.Shared.Return(scratch);
+        }
     }
 
     /// <summary>Disposes the output once (closes the stream unless the caller owns it).</summary>
@@ -183,7 +248,11 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     /// <inheritdoc/>
     public void Dispose() => OnFinish();
 
-    /// <summary>Writes the BOM and header row on first packet.</summary>
+    /// <summary>
+    /// Writes the BOM and header row on the first packet.
+    /// </summary>
+    /// <returns><c>true</c> when the preamble was written; <c>false</c> on an output failure, which is reported and ends
+    /// the export in both error-tolerance modes (the failure is not tied to one packet).</returns>
     private bool _Start()
     {
         try
@@ -203,9 +272,9 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         }
         catch (Exception ex)
         {
-            // Bump ErrorCount so HasErrors reflects the failure; in Tolerant mode
-            // the _OnError event subscribers see it via ItemSkipped, in Strict mode
-            // the next OnPacket call will be rejected via the _HasError gate.
+            // Bump ErrorCount so HasErrors reflects the failure. The event is raised in both modes, and _HasError makes
+            // every following OnPacket call return false: a failed preamble cannot be repaired, and continuing would write
+            // rows into an output that lacks the header (or has half of it).
             if (ErrorCount < int.MaxValue) ErrorCount++;
             _HasError = true;
             _OnError(0, ExportErrorKind.IoError, ex.Message);
@@ -225,7 +294,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             }
 
             // Header names are escaped in case they contain the delimiter or quotes
-            _WriteCsvField(_Columns[i].Header);
+            _WriteCsvField(_Columns[i].Header, neutralize: false);
         }
 
         _Buffer.Write(_NewLine);
@@ -235,11 +304,14 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     /// <summary>Handles a single packet, writing one CSV row.</summary>
     private bool _HandlePacket(Packet packet)
     {
+        // Target reached: refuse the packet so the driver stops. IsFinished reports the same condition to polling callers.
         if (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount)
         {
             return false;
         }
 
+        // A skip packet has no parsed field tree, so its columns cannot be filled. It is an expected, per-item failure:
+        // Strict mode stops (without an event), Tolerant mode counts it as skipped, raises ItemSkipped, and continues.
         if (!packet.HasFieldTree)
         {
             if (ErrorCount < int.MaxValue)
@@ -247,16 +319,17 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
                 ErrorCount++;
             }
 
+            // The item counts as skipped in both modes (like in the other exporters); Strict then stops the export.
             int index = PacketCount;
+            if (SkippedCount < int.MaxValue)
+            {
+                SkippedCount++;
+            }
+
             if (ErrorTolerance == ErrorToleranceMode.Strict)
             {
                 _HasError = true;
                 return false;
-            }
-
-            if (SkippedCount < int.MaxValue)
-            {
-                SkippedCount++;
             }
 
             _OnError(index, ExportErrorKind.Other, "Skip packets cannot be exported (HasFieldTree is false).");
@@ -267,12 +340,16 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         {
             // Field columns materialize via TryGetFieldValue(..., materialize: true).
             // Builtin columns (Id/Timestamp/Length/Info) do not need the full tree.
+            // The whole row is built in _Buffer first and written once below, so a failure in any column (an exception
+            // from a field formatter) leaves nothing of this row in the output.
             _Buffer.Reset();
 
             // Pre-allocate the timestamp formatting buffer once outside the column loop
             // to avoid a potential stack overflow from repeated stackalloc inside the loop (CA2014).
             Span<byte> tsBuf = stackalloc byte[Timestamp.MaxFormattedLength];
 
+            // One pass over the configured columns. Each branch appends directly to the byte buffer; only the Info
+            // column (and a Field column without a field id) goes through the string-based _ExtractColumnValue path.
             for (int i = 0; i < _Columns.Length; i++)
             {
                 if (i > 0)
@@ -296,13 +373,21 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
                         {
                             _Buffer.Write(tsBuf[..tsWritten]);
                         }
+                        else
+                        {
+                            // Cannot happen with a MaxFormattedLength buffer, but an empty cell would silently break the
+                            // meaning of the column, so the text form is written instead.
+                            _WriteCsvField(packet.Timestamp.Format(), neutralize: false);
+                        }
                         break;
                     case CsvColumnKind.Field when column.FieldId.HasValue:
                         _WriteFieldColumn(packet, column.FieldId.Value);
                         break;
                     default:
+                        // The remaining branch writes the Info text and, for a field column without an id, an empty cell.
+                        // Info is free text from the capture, so it is the cell that can carry a formula.
                         string value = _ExtractColumnValue(packet, column);
-                        _WriteCsvField(value);
+                        _WriteCsvField(value, _NeutralizeFormulas && column.Kind == CsvColumnKind.Info);
                         break;
                 }
             }
@@ -315,8 +400,19 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         }
         catch (Exception ex)
         {
-            if (ErrorCount < int.MaxValue) ErrorCount++;
+            // Any exception while building or writing the row is a per-item failure (reported as a serialization
+            // error). Note that an I/O failure of the output is also classified this way.
+            if (ErrorCount < int.MaxValue)
+            {
+                ErrorCount++;
+            }
+
+            // The item counts as skipped in both modes (like in the other exporters); Strict then stops the export.
             int index = PacketCount;
+            if (SkippedCount < int.MaxValue)
+            {
+                SkippedCount++;
+            }
 
             if (ErrorTolerance == ErrorToleranceMode.Strict)
             {
@@ -324,7 +420,6 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
                 return false;
             }
 
-            if (SkippedCount < int.MaxValue) SkippedCount++;
             _OnError(index, ExportErrorKind.SerializationError, ex.Message);
             return true;
         }
@@ -336,11 +431,16 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     /// </summary>
     private void _WriteFieldColumn(Packet packet, FieldId fieldId)
     {
+        // A packet that lacks the field writes an empty cell (the delimiter was already appended by the caller), so every
+        // row keeps the same number of columns.
         if (!packet.TryGetFieldValue(fieldId, out FieldValue value, materialize: true))
         {
             return;
         }
 
+        // Size the UTF-8 scratch from the formatted length when the value can tell it cheaply: 3 bytes per UTF-16 char is
+        // the UTF-8 worst case for the BMP (a surrogate pair needs 4 bytes for 2 chars, i.e. 2 per char, so it fits too).
+        // Otherwise a 256-byte guess is used, and an underestimate is handled by the string fallback below.
         int maxUtf8 = 256;
         if (value.TryGetStringSize(format: default, CultureInfo.InvariantCulture, out int charCount))
         {
@@ -348,23 +448,49 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             maxUtf8 = Math.Max(64, charCount * 3);
         }
 
+        // Small values use the stack (no allocation); larger ones the instance scratch buffer, which grows to the
+        // high-water mark and is reused, so a long field costs at most one allocation per size increase.
         Span<byte> scratch = maxUtf8 <= 512
             ? stackalloc byte[maxUtf8]
             : _GetQuotedScratch(maxUtf8);
 
+        // Only text values can carry a formula. A number keeps its sign (-5 is not a formula), and timestamps, addresses and
+        // byte values are formatted by the library into digits and hex, so they are never rewritten.
+        bool neutralize = _NeutralizeFormulas && value.Type == FieldType.String;
         if (!value.TryFormat(scratch, out int written, default, CultureInfo.InvariantCulture))
         {
             // Rare: estimate too small — fall back to string path.
-            _WriteCsvField(value.ToString());
+            _WriteCsvField(value.ToString(), neutralize);
             return;
         }
 
-        _WriteCsvFieldUtf8(scratch[..written]);
+        _WriteCsvFieldUtf8(scratch[..written], neutralize);
     }
 
-    /// <summary>Writes a CSV field from already-encoded UTF-8 with RFC 4180 quoting.</summary>
-    private void _WriteCsvFieldUtf8(ReadOnlySpan<byte> utf8)
+    /// <summary>
+    /// Whether a spreadsheet application would read a cell starting with this character as a formula (OWASP CSV injection
+    /// guidance: <c>=</c>, <c>+</c>, <c>-</c>, <c>@</c>, TAB, CR).
+    /// </summary>
+    private static bool _IsFormulaTrigger(int first) =>
+        first is '=' or '+' or '-' or '@' or '\t' or '\r';
+
+    /// <summary>
+    /// Writes a CSV field from already-encoded UTF-8 with RFC 4180 quoting.
+    /// </summary>
+    /// <param name="utf8">The encoded text.</param>
+    /// <param name="neutralize">Whether a leading formula character gets a leading apostrophe (before the quoting).</param>
+    private void _WriteCsvFieldUtf8(ReadOnlySpan<byte> utf8, bool neutralize)
     {
+        // Threat: a text cell that starts with a formula character is executed by a spreadsheet (CSV injection).
+        // Mitigation: a single leading apostrophe, written inside the quotes when the cell is quoted. Rejected alternative:
+        // wrapping every cell in quotes, which does not stop a spreadsheet from reading the content as a formula. Residual
+        // risk: the apostrophe is data for machine readers (hence the opt-out), and a formula that starts after leading
+        // whitespace is not covered because the spreadsheets this guards against read only the first character.
+        bool prefix = neutralize && utf8.Length > 0 && _IsFormulaTrigger(utf8[0]);
+
+        // First pass: decide whether quoting is needed. Scanning bytes is safe because the delimiter is ASCII (builder
+        // guarantee) and, in UTF-8, ASCII bytes never occur inside a multi-byte sequence. Most values need no quoting and
+        // are copied in one write.
         bool needsQuoting = false;
         for (int i = 0; i < utf8.Length; i++)
         {
@@ -378,11 +504,22 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
 
         if (!needsQuoting)
         {
+            if (prefix)
+            {
+                _Buffer.WriteByte((byte)'\'');
+            }
+
             _Buffer.Write(utf8);
             return;
         }
 
+        // Second pass (quoted): copy runs between quotes in bulk and double every quote (RFC 4180).
         _Buffer.Write("\""u8);
+        if (prefix)
+        {
+            _Buffer.WriteByte((byte)'\'');
+        }
+
         int start = 0;
         for (int i = 0; i < utf8.Length; i++)
         {
@@ -446,22 +583,47 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
     /// growing it if needed. The buffer never shrinks — it is grown to the
     /// high-water mark so subsequent calls for a smaller size reuse the existing
     /// allocation. Used as the heap fallback in the conditional-stackalloc pattern
-    /// for large quoted-field encoding (avoids a per-call heap allocation).
+    /// for large field encoding, quoted or not (avoids a per-call heap allocation). The buffer is not cleared between
+    /// uses; callers read back only the bytes they just wrote. It is rented from the array pool, grows to at least twice
+    /// its previous size (so a run of slowly growing values reallocates O(log n) times, not once per value), and is
+    /// returned to the pool by <see cref="_ReturnScratch"/>. It is never bounded: its size follows the largest field value
+    /// that is already held in memory by the packet. The returned span may be longer than <paramref name="minSize"/>.
     /// </summary>
     private Span<byte> _GetQuotedScratch(int minSize)
     {
-        if (_Utf8Scratch is null || _Utf8Scratch.Length < minSize)
+        byte[]? current = _Utf8Scratch;
+        if (current is null || current.Length < minSize)
         {
-            int newSize = Math.Max(_Utf8Scratch?.Length ?? minSize, minSize);
-            _Utf8Scratch = new byte[newSize];
+            // Doubling is computed in long and capped at the largest array, then raised to the requested size; the pool
+            // may hand out a bigger array than asked for, which is fine.
+            long doubled = current is null
+                ? minSize
+                : Math.Min((long)current.Length * 2, Array.MaxLength);
+            byte[] bigger = ArrayPool<byte>.Shared.Rent(checked((int)Math.Max(doubled, minSize)));
+
+            // Rent first, return second: if the rent fails, the old scratch is still owned and gets returned at finish.
+            if (current is not null)
+            {
+                ArrayPool<byte>.Shared.Return(current);
+            }
+
+            _Utf8Scratch = bigger;
+            current = bigger;
         }
-        return _Utf8Scratch;
+
+        return current;
     }
 
     /// <summary>Writes a CSV field with proper escaping (RFC 4180).</summary>
-    private void _WriteCsvField(string value)
+    /// <param name="value">The text.</param>
+    /// <param name="neutralize">Whether a leading formula character gets a leading apostrophe (before the quoting).</param>
+    private void _WriteCsvField(string value, bool neutralize)
     {
-        // Check if quoting is needed
+        // Same formula protection as _WriteCsvFieldUtf8 (see the threat note there).
+        bool prefix = neutralize && value.Length > 0 && _IsFormulaTrigger(value[0]);
+
+        // First pass: decide whether quoting is needed. The delimiter is ASCII (builder guarantee), so comparing it as a
+        // char against the UTF-16 text is exact.
         bool needsQuoting = false;
         char delimChar = (char)_Delimiter;
 
@@ -476,7 +638,13 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
 
         if (!needsQuoting)
         {
-            // Write value directly as UTF-8; use instance scratch for large values
+            if (prefix)
+            {
+                _Buffer.WriteByte((byte)'\'');
+            }
+
+            // Write value directly as UTF-8; use instance scratch for large values (GetMaxByteCount is the worst case, so
+            // GetBytes cannot run out of space).
             int maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
             if (maxBytes <= 512)
             {
@@ -486,12 +654,9 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             }
             else
             {
-                if (_Utf8Scratch is null || _Utf8Scratch.Length < maxBytes)
-                {
-                    _Utf8Scratch = new byte[maxBytes];
-                }
-                int written = Encoding.UTF8.GetBytes(value, _Utf8Scratch);
-                _Buffer.Write(_Utf8Scratch.AsSpan(0, written));
+                Span<byte> large = _GetQuotedScratch(maxBytes);
+                int written = Encoding.UTF8.GetBytes(value, large);
+                _Buffer.Write(large[..written]);
             }
             return;
         }
@@ -502,6 +667,10 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         // level is safe because '"' (0x22) is ASCII and cannot appear inside the
         // continuation bytes of a multi-byte UTF-8 sequence.
         _Buffer.Write("\""u8);
+        if (prefix)
+        {
+            _Buffer.WriteByte((byte)'\'');
+        }
 
         int quotedMaxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
 
@@ -537,7 +706,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         _Buffer.Write("\""u8);
     }
 
-    /// <summary>Raises the <see cref="ItemSkipped"/> event.</summary>
+    /// <summary>Raises the <see cref="ItemSkipped"/> event. Counters are updated by the callers, not here.</summary>
     private void _OnError(int index, ExportErrorKind kind, string message)
     {
         ItemSkipped?.Invoke(this, new ExportErrorEventArgs
@@ -560,10 +729,19 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         private bool _WriteBom = true;
         private byte _Delimiter = (byte)',';
         private bool _WriteHeader = true;
+        // Posture: secure by default. Spreadsheet formula neutralization is on unless the caller turns it off, because the
+        // text comes from captures (untrusted network data) and the output is commonly opened in a spreadsheet. Threat: CSV
+        // injection (formula execution in the spreadsheet). Constant or configurable: configurable by the library caller
+        // through WithFormulaNeutralization; there is no end-user setting in this library. Turn it off for machine
+        // processing, where the added apostrophe would change the data. Residual risk when off: any text cell may run as a
+        // formula in a spreadsheet; when on: spreadsheets that read a formula after leading whitespace, and the apostrophe
+        // is visible in tools that do not treat it as a text marker.
+        private bool _NeutralizeFormulas = true;
         private int _TargetPacketCount;
         private readonly List<CsvColumnDefinition> _Columns = [];
 
-        /// <summary>Sets the output to a file path.</summary>
+        /// <summary>Sets the output to a file path. The file is created lazily on the first write.</summary>
+        /// <exception cref="ArgumentException"><paramref name="path"/> is null, empty, or contains invalid path characters.</exception>
         public Builder ToFile(string path)
         {
             _Output = ExportOutput.File(path);
@@ -609,9 +787,12 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         /// Sets the column delimiter. Default: comma.
         /// </summary>
         /// <param name="delimiter">An ASCII character (≤ <c>0x7F</c>) that is not a control
-        /// character (<c>NUL</c>, <c>CR</c>, <c>LF</c>) or a double-quote (<c>\"</c>).  Non-ASCII
+        /// character (<c>NUL</c>, <c>CR</c>, <c>LF</c>) or a double-quote (<c>"</c>).  Non-ASCII
         /// chars are rejected because the on-disk byte cannot represent them in the UTF-8
         /// single-byte form used by the writer.</param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="delimiter"/> is non-ASCII, <c>NUL</c>, <c>CR</c>, <c>LF</c>, or a double quote.
+        /// </exception>
         public Builder WithDelimiter(char delimiter)
         {
             // The CSV writer stores the delimiter as a single byte and uses it
@@ -639,6 +820,20 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             return this;
         }
 
+        /// <summary>
+        /// Enables or disables formula neutralization of text cells. Default: <see langword="true"/> (secure by default).
+        /// When enabled, a text cell (the <c>Info</c> column and field columns of type <see cref="FieldType.String"/>) that
+        /// starts with <c>=</c>, <c>+</c>, <c>-</c>, <c>@</c>, TAB, or CR gets a leading single quote, so a spreadsheet reads
+        /// it as text instead of running it as a formula (CSV injection). Numeric columns, timestamps, addresses, and the
+        /// header row are never changed. Turn it off when the file is read by a program that must see the exact text.
+        /// </summary>
+        /// <param name="enabled"><see langword="true"/> to prefix such cells; <see langword="false"/> to write them unchanged.</param>
+        public Builder WithFormulaNeutralization(bool enabled)
+        {
+            _NeutralizeFormulas = enabled;
+            return this;
+        }
+
         /// <summary>Controls whether a header row is written. Default: true.</summary>
         public Builder WithHeader(bool write)
         {
@@ -647,9 +842,15 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
         }
 
         /// <summary>Stops after writing the specified number of packets. 0 means unlimited.</summary>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="count"/> is negative or exceeds <see cref="ArrayIndexIdRange.MaxCount"/>.
+        /// </exception>
         public Builder WithTargetPacketCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+            // Packets are addressed by array-index ids, so a source cannot deliver more than MaxCount packets; a larger
+            // target would be unreachable and is rejected as a configuration error.
             if (count > ArrayIndexIdRange.MaxCount)
             {
                 throw new ArgumentOutOfRangeException(
@@ -723,7 +924,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
             }
 
             return new CsvExporter(
-                _Output, _UiName, _Description, _WriteBom, _Delimiter, _WriteHeader,
+                _Output, _UiName, _Description, _WriteBom, _Delimiter, _WriteHeader, _NeutralizeFormulas,
                 _TargetPacketCount, [.. _Columns], _CancellationToken);
         }
     }

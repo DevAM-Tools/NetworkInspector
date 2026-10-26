@@ -47,13 +47,21 @@ public sealed partial class IPv4Protocol
     /// In-flight first-parse nesting for this protocol on the serialized ingest thread.
     /// Replay does not touch this field. The outermost finally raises the watermark.
     /// </summary>
+    // Plain int, no volatile or Interlocked: only the serialized first-parse thread reads or writes it (a replay
+    // returns before touching it), so there is no concurrent access to protect.
     private int _ParseNesting;
 
     #endregion
 
     #region Effect store access
 
-    /// <summary>Records the defragmentation outcome of one IPv4 layer during its first parse.</summary>
+    /// <summary>
+    /// Records the defragmentation outcome of one IPv4 layer during its first parse. Called only from the ordered
+    /// first parse (single writer), and before the watermark is raised so a replay always sees the entry.
+    /// </summary>
+    /// <param name="id">The packet being parsed.</param>
+    /// <param name="layerKey">The IPv4 layer within the packet.</param>
+    /// <param name="reassembled">The completed datagram payload, or <see langword="null"/> when the fragment did not complete one.</param>
     private void _RecordDefragEffect(PacketId id, int layerKey, byte[]? reassembled) =>
         _Effects.Record(id.Value, layerKey, new DefragLayerEffect(reassembled));
 
@@ -61,6 +69,8 @@ public sealed partial class IPv4Protocol
     /// Finds the defragmentation outcome recorded for the given layer, or <see langword="null"/> when
     /// the layer never reached the defragmenter.
     /// </summary>
+    /// <param name="id">The packet being replayed.</param>
+    /// <param name="layerKey">The IPv4 layer within the packet.</param>
     private byte[]? _FindReassembledDatagram(PacketId id, int layerKey) =>
         _Effects.TryGet(id.Value, layerKey, out DefragLayerEffect effect)
             ? effect.ReassembledDatagram
@@ -68,8 +78,11 @@ public sealed partial class IPv4Protocol
 
     /// <summary>
     /// Raises the first-parse watermark monotonically. Only the ordered first-parse path calls this,
-    /// so a plain read-then-write is sufficient — no competing writer can interleave.
+    /// so a plain read-then-write is sufficient — no competing writer can interleave. The volatile write is the
+    /// release that publishes the packet's recorded effect to replay threads; an <c>Interlocked</c> maximum was not
+    /// chosen because there is no second writer to race with.
     /// </summary>
+    /// <param name="id">The packet whose first parse has just completed.</param>
     private void _RaiseWatermark(PacketId id)
     {
         if (id.Value > _IngestWatermark)
@@ -82,6 +95,11 @@ public sealed partial class IPv4Protocol
     /// Whether the given packet id was already parsed once and must therefore replay its recorded
     /// defragmentation outcome instead of feeding the shared fragment buffers again.
     /// </summary>
+    /// <param name="id">The packet being parsed.</param>
+    /// <remarks>
+    /// A single volatile read decides the verdict. Packet ids are first parsed in dense ascending order, so
+    /// <c>id &lt;= watermark</c> means this id (or a later one) already completed its first parse.
+    /// </remarks>
     private bool _IsReplay(PacketId id) => id.Value <= _IngestWatermark;
 
     #endregion

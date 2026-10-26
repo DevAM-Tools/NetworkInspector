@@ -5,6 +5,7 @@ namespace NetworkInspector.Core.Reassembly;
 /// <summary>
 /// Context information passed to PDU boundary detectors during stream reassembly.
 /// Contains stream identity and protocol metadata for stateful detection decisions.
+/// Passed by <c>in</c> reference so the per-call context costs no copy or allocation on the reassembly path.
 /// </summary>
 public readonly record struct StreamDetectionContext
 {

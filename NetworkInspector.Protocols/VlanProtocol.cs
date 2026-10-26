@@ -15,10 +15,14 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
-/// (single-threaded build phase) and is read-only thereafter, so <see cref="IProtocol.Parse"/> may
-/// be invoked concurrently from any number of threads on the same instance without external
-/// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
+/// The only instance state is the field and protocol ids (assigned by the generated registration code) and the
+/// populator delegate and dispatch cache (assigned in <c>_OnStartCustom</c>), all during the single-threaded build phase
+/// and read-only thereafter, so <see cref="IProtocol.Parse"/> may be invoked concurrently from any number of threads
+/// on the same instance without external synchronisation. The innermost VLAN id of the packet being parsed is kept in a
+/// <c>[ThreadStatic]</c> slot (see <see cref="SetLastVlan"/>), so it is never shared between threads. The protocol keeps
+/// no cross-packet state, so a replay simply parses again and refills that slot.</para>
+/// <para>Both 0x8100 (802.1Q customer tag) and 0x88A8 (802.1ad service tag, Q-in-Q) are dispatched here; stacked tags
+/// are handled by dispatching back into this protocol, one call per tag.</para>
 /// </remarks>
 [Protocol("vlan", "802.1Q Virtual LAN", Description = "IEEE 802.1Q VLAN tagging")]
 [RegisterAtTable(EthernetProtocol.EtherTypeTableName, EtherTypeKey8021Q)]
@@ -74,7 +78,8 @@ public sealed partial class VlanProtocol : IProtocol
     /// <summary>Pre-allocated delegate for VLAN field population — captures only 'this'.</summary>
     private LazyPopulator _Populator = null!;
 
-    // Sparse dispatch cache built from the EtherType protocol table at stack start.
+    // Sparse dispatch cache built from the EtherType protocol table at stack start. It holds only the EtherTypes that have
+    // exactly one registered protocol; the rest go through the table lookup in _DispatchEtherType.
     // Linear scan over typically 4–6 entries; avoids dictionary hash computation per packet.
     private (ulong Key, ProtocolId Id)[] _EtherTypeSparseCache = [];
 
@@ -90,7 +95,8 @@ public sealed partial class VlanProtocol : IProtocol
 
     /// <summary>
     /// Populates VLAN child fields at materialisation time.
-    /// Re-parses the 4-byte header from the stored bytes to avoid per-packet closures.
+    /// Re-parses the 4-byte header from the stored bytes to avoid per-packet closures: the container value is the only
+    /// state a populator receives, and capturing the decoded values would allocate a closure per packet.
     /// </summary>
     private ParseResult _PopulateVlanFields(in MutField container)
     {
@@ -154,17 +160,19 @@ public sealed partial class VlanProtocol : IProtocol
 
         // Last write wins, so a nested tag replaces the outer one. TCP reads this as the innermost VLAN.
         // Per-thread, replaced on every VLAN of this packet, valid only until the next packet parsed on this thread.
+        // A thread-static slot is used instead of a field-tree lookup so the TCP stream key can use it without a tree
+        // (skip mode) and without any locking.
         SetLastVlan(parentField.Packet.Id, vid);
 
-        // Summary closure captures pcp (byte), dei (bool), vid (ushort) via ZA.Lazy.
-
-        // Store the 4-byte header so _PopulateVlanFields can re-parse without captured variables.
+        // Store the 4-byte header so _PopulateVlanFields can re-parse without captured variables. The container title
+        // is built from the typed pcp/dei/vid values as format fragments, only if the packet wants custom text.
         ReadOnlyMemory<byte> headerBytes = data[.._HeaderSize];
         FieldValue headerValue = FieldValue.NewBytes(headerBytes)
             .WithCustomRepresentation(new LazyString("4 bytes"));
         parentField.AppendLazyWithCustomText(_ProtocolFieldId, headerValue, "802.1Q Virtual LAN, PRI: ", pcp, ", DEI: ", dei ? 1 : 0, ", ID: ", vid, _Populator);
 
-        // Dispatch to next protocol on parentField (sibling dispatch)
+        // Dispatch to next protocol on parentField (sibling dispatch: the next layer is a sibling of the lazy vlan node, and
+        // is parsed eagerly; only the VLAN's own child fields are deferred). The payload is a slice, not a copy.
         ReadOnlyMemory<byte> payload = data[_HeaderSize..];
         if (_EtherTypeTableId.IsValid)
         {
@@ -189,8 +197,12 @@ public sealed partial class VlanProtocol : IProtocol
 
     /// <summary>
     /// Reads the last VLAN id cached for <paramref name="packetId"/>.
-    /// Returns <see langword="false"/> when the slot is empty, belongs to another packet, or the id is 0.
+    /// Returns <see langword="false"/> when the slot is empty, belongs to another packet, or the id is 0
+    /// (VID 0 is a priority-only tag that carries no VLAN identity, IEEE 802.1Q).
     /// </summary>
+    /// <param name="packetId">Packet whose innermost VLAN id is wanted; a slot written for another packet is ignored.</param>
+    /// <param name="vlanId">The VLAN id, or 0 when none is available.</param>
+    /// <returns><see langword="true"/> when a non-zero VLAN id of this packet is cached.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static bool TryGetLastVlan(PacketId packetId, out ushort vlanId)
     {
@@ -213,6 +225,8 @@ public sealed partial class VlanProtocol : IProtocol
     /// Dispatches to the next protocol by EtherType.
     /// Scans the pre-built sparse cache first (typically 4–6 entries, all in L1 D-cache);
     /// falls back to full table dispatch for multi-protocol keys or unknown EtherTypes.
+    /// An EtherType without any protocol is not an error: the table dispatch reports "not dispatched" and the payload
+    /// is left undecoded.
     /// </summary>
     private ParseResult _DispatchEtherType(
         in MutField parentField, ulong etherType, ReadOnlyMemory<byte> payload, in ParseContext context)
@@ -229,6 +243,8 @@ public sealed partial class VlanProtocol : IProtocol
         // Fallback: multi-protocol EtherType key or EtherType not in cache.
         return parentField.TryCallNextProtocolU64(_EtherTypeTableId, etherType, payload, in context);
     }
+
+    #endregion
 }
 
 /// <summary>
@@ -273,5 +289,4 @@ internal readonly partial struct VlanHeader
 
     /// <summary>Serialized header size in bytes (4).</summary>
     internal const int _HeaderSize = 4;
-    #endregion
 }

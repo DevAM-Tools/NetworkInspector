@@ -6,6 +6,8 @@ namespace NetworkInspector.Sources.Pcapng.Format.Blocks;
 /// PCAPNG option header — 4 bytes.
 /// Each option within a block body starts with this TLV header.
 /// The value that follows is padded to a 4-byte boundary.
+/// Read little-endian like the other block structs; <c>PcapOptionIterator</c> swaps both fields for a swapped section
+/// and validates the length against the data actually present before it exposes the value.
 /// </summary>
 [BinaryParsable]
 internal readonly partial struct OptionHeader

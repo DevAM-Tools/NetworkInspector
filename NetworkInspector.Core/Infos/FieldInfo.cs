@@ -2,12 +2,26 @@
 
 namespace NetworkInspector.Core.Infos;
 
-/// <summary>Metadata for a registered field definition.</summary>
+/// <summary>
+/// Metadata for a registered field definition.
+/// <para>
+/// <b>Thread-safety:</b> Effectively immutable. Only <see cref="IndexGroup"/> is assigned after construction, by
+/// <see cref="StackBuilder"/> during registration (<c>RegisterFieldInGroup</c>); once the stack is built nothing
+/// writes to the instance, so concurrent reads need no synchronization.
+/// </para>
+/// </summary>
 public sealed class FieldInfo
 {
     #region Constructors
 
     /// <summary>Creates field metadata during stack registration.</summary>
+    /// <param name="id">The unique identifier assigned by the builder.</param>
+    /// <param name="protocolId">The protocol that owns this field.</param>
+    /// <param name="name">Machine-readable field name.</param>
+    /// <param name="uiName">Human-readable display name.</param>
+    /// <param name="fieldType">The data type of values stored in this field.</param>
+    /// <param name="description">Optional description text.</param>
+    /// <param name="indexGroup">The index group, or <see langword="null"/> to assign it later through <see cref="IndexGroup"/>.</param>
     internal FieldInfo(
         FieldId id,
         ProtocolId protocolId,
@@ -66,7 +80,11 @@ public sealed class FieldInfo
         get;
     }
 
-    /// <summary>Optional index group for cross-packet presence indexing.</summary>
+    /// <summary>
+    /// Optional index group for cross-packet presence indexing. <see langword="null"/> when the field was registered
+    /// without a group. The setter is internal because the group is only known after the field itself is registered
+    /// (the builder creates the field first, then resolves or creates the named group and assigns it here).
+    /// </summary>
     public IndexGroupId? IndexGroup
     {
         get; internal set;

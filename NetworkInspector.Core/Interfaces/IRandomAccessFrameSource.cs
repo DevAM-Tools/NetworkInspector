@@ -55,7 +55,9 @@ public interface IRandomAccessFrameSource : IFrameSource
     /// <para>
     /// A range lets a source read its frames one after another: sources that re-read a capture file walk their index and
     /// the file forward and request the bytes of the next frames from memory early, which is faster than one
-    /// <see cref="FrameById"/> per id. The default implementation calls <see cref="FrameById"/> per id.
+    /// <see cref="FrameById"/> per id. The default implementation calls <see cref="FrameById"/> per id; it is a default
+    /// interface method so that existing implementations of this interface keep compiling unchanged, and sources with a
+    /// cheaper range read override it.
     /// </para>
     /// </summary>
     /// <param name="first">Id of the frame that goes into <paramref name="frames"/>[0].</param>
@@ -79,6 +81,8 @@ public interface IRandomAccessFrameSource : IFrameSource
     /// </exception>
     int FramesById(FrameId first, Span<Frame?> frames, CancellationToken cancellationToken = default)
     {
+        // Fallback loop: one FrameById call per id, writing every entry (null where no frame exists) so the caller never
+        // sees stale data in the buffer. Allocation-free apart from what FrameById itself allocates.
         int found = 0;
         for (int i = 0; i < frames.Length; i++)
         {

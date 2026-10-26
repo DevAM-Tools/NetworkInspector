@@ -235,6 +235,8 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <remarks>
     /// This method is <b>not</b> thread-safe. It must be called from a single thread only.
     /// All mutable state (stream position, container state, frame index) is accessed without synchronization.
+    /// The token is checked once per call, before any read: a <see cref="Stream.Read(Span{byte})"/> that blocks (network
+    /// stream, pipe) is not interrupted by it, and a call that already returned a frame is never cancelled halfway.
     /// </remarks>
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
@@ -331,8 +333,21 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             throw new BlfException("Invalid BLF stream: missing or corrupt LOGG file header.");
         }
 
-        // If the header extends beyond the minimum, read and discard the rest
-        int extraHeaderBytes = (int)fileInfo.HeaderSize - BlfConstants.FileHeaderMinSize;
+        // If the header extends beyond the minimum, read and discard the rest (a forward-only stream cannot seek). The size
+        // is untrusted: the buffer _EnsureBuffer allocates for it is bounded by MaxBlockReadSize.
+        //
+        // The subtraction is done in a long and the result is range-checked before it becomes an int: a header_size above
+        // int.MaxValue used to turn negative through a bare (int) cast, so the extra header bytes were neither read nor
+        // discarded and the first object was then looked for in the middle of the header. Such a size cannot be a real
+        // header (it is not representable as a buffer length), so the stream is rejected like any other corrupt header.
+        long extraHeaderBytesLong = (long)fileInfo.HeaderSize - BlfConstants.FileHeaderMinSize;
+        if (extraHeaderBytesLong > int.MaxValue)
+        {
+            throw new BlfException(
+                $"Invalid BLF stream: file header size {fileInfo.HeaderSize} is larger than {int.MaxValue} bytes.");
+        }
+
+        int extraHeaderBytes = (int)extraHeaderBytesLong;
         if (extraHeaderBytes > 0)
         {
             byte[] extraBuffer = _EnsureBuffer(extraHeaderBytes);
@@ -434,6 +449,11 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         uint objectLength = blockHeader.ObjectLength.Value;
         uint objectType = blockHeader.ObjectType.Value;
 
+        // object_length comes from the (untrusted) stream and decides how many bytes are buffered next. Skip rule as in
+        // BlfBlockHeader.TryGetSkipDistance, so file and stream readers agree on object boundaries. The cap below is the
+        // same constant the file backend uses (a constant of the reader, not configurable): it stops a forged length from
+        // forcing a multi-hundred-megabyte allocation per object. Accepted residual risk: one buffer of up to 256 MiB can
+        // still be allocated for a plausible-looking length, and it is reused afterwards.
         long rawObjectSize = Math.Max(
             Math.Max(BlfConstants.BlockHeaderSize, objectLength),
             headerSize);
@@ -592,9 +612,14 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         ReadOnlySpan<byte> containerSpan = _PendingContainer.AsSpan();
 
+        // Pull-based, unlike the file scanner: the loop returns at the first frame and _ContainerOffset keeps the resume
+        // point, so a consumer reads frames one at a time without buffering a whole container's frames.
         while (_ContainerOffset + BlfConstants.BlockHeaderSize <= containerSpan.Length)
         {
             ReadOnlySpan<byte> objectData = containerSpan[_ContainerOffset..];
+
+            // The container array is never reused (a new container gets a new array), so frames may alias it: with
+            // FrameSlabSize 0 an Ethernet frame (types 102, 120-123) keeps the container alive instead of being copied.
             ReadOnlyMemory<byte> objectMemory = _PendingContainer.AsMemory(_ContainerOffset);
 
             if (!BlfObjectHeaderParser.TryParse(objectData, _ContainerOffset, objectMemory,
@@ -622,6 +647,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                         Kind = FrameReadErrorKind.CorruptedBlock,
                         Message = $"Corrupt object at container offset {_ContainerOffset}, attempting LOBJ magic scan recovery."
                     });
+                    // Strict mode: _HandleSkip exhausted the source; drop the container state so nothing is read further.
                     if (_Exhausted)
                     {
                         _PendingContainer = null;
@@ -630,6 +656,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                     }
                 }
 
+                // Resynchronise on the next LOBJ magic inside the container (bytes before it are padding or corruption).
                 _ContainerOffset += 1 + nextMagic;
                 continue;
             }
@@ -869,6 +896,9 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             return false;
         }
 
+        // Shift register over the 4 magic bytes: a mismatch drops the oldest byte and reads exactly one more, so every
+        // stream byte is read once (no re-reading, no seeking) and padding or garbage between objects is skipped in
+        // linear time. The single-byte reads are cheap because _Stream is buffered or in memory (see the constructor).
         while (true)
         {
             if (BinaryPrimitives.ReadUInt32LittleEndian(header16) == BlfConstants.ObjectMagic)
@@ -968,6 +998,9 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private byte[] _EnsureBuffer(int minSize)
     {
+        // Doubling growth keeps the number of reallocations logarithmic for a stream of growing objects; the buffer is
+        // reused for every block and never shrinks. The cap is the same constant as for object sizes (an untrusted
+        // header_size can reach here through the file header), so no input can request more than MaxBlockReadSize.
         if (minSize > BlfConstants.MaxBlockReadSize)
         {
             throw new BlfException(

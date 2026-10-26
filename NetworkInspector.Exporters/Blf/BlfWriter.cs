@@ -19,9 +19,12 @@ namespace NetworkInspector.Exporters.Blf;
 /// CANoe and our own <c>BlfSource</c>) count objects themselves and do not rely
 /// on the header statistics. Seeking is only used by
 /// <see cref="BlfWriterFinishResult.UpdateHeader"/> to rewrite the file header at
-/// position 0 after all data is written — this is a best-effort optimization for
+/// the position where the file started (0 for a fresh stream) after all data is written, and by
+/// <see cref="TryRealignStartEarlier"/> to move the start anchor before
+/// the first object — both are best-effort optimizations for
 /// seekable streams. For non-seekable streams (pipes, network), the header
 /// placeholders remain and the file is still valid.
+/// <b>Thread safety:</b> Not thread-safe; all calls must come from one thread (the owning exporter).
 /// </para>
 /// </summary>
 internal sealed class BlfWriter
@@ -35,7 +38,12 @@ internal sealed class BlfWriter
     private const int _ObjectHeaderTotalSize =
         BlfConstants.BlockHeaderSize + BlfConstants.LogObjectHeaderType1Size; // 32
 
-    /// <summary>Maximum uncompressed container buffer size before flushing (10 MB).</summary>
+    /// <summary>
+    /// Maximum uncompressed container buffer size before flushing (10 MiB). A tuning value, not a format limit: it only
+    /// bounds the memory of the container buffer and the size of one compression call. It is defined in
+    /// <see cref="BlfConstants"/>. A single object larger than this still gets its own container (see
+    /// <see cref="WriteRawObject"/>).
+    /// </summary>
     private const int _MaxContainerBufferSize = BlfConstants.MaxContainerBufferSize;
 
     /// <summary>
@@ -44,9 +52,22 @@ internal sealed class BlfWriter
     /// </summary>
     private const int _InitialContainerBufferSize = 256 * 1024;
 
+    /// <summary>Target stream. Owned by the caller; not disposed here.</summary>
     private readonly Stream _Stream;
+
+    /// <summary>
+    /// The LOGG <c>start_date</c> anchor in nanoseconds (always a whole number of milliseconds). Mutable only because
+    /// <see cref="TryRealignStartEarlier"/> may lower it before the first object is written.
+    /// </summary>
     private long _StartNs;
+
+    /// <summary>zlib level of the containers; <see cref="CompressionLevel.NoCompression"/> stores them raw.</summary>
     private readonly CompressionLevel _Compression;
+
+    /// <summary>
+    /// Uncompressed objects of the container being built. Each object is reserved and written in place, so no per-object
+    /// array is allocated. Flushed (compressed and written) by <see cref="FlushContainer"/>.
+    /// </summary>
     private readonly PooledBuffer _ContainerBuffer;
 
     /// <summary>
@@ -56,8 +77,11 @@ internal sealed class BlfWriter
     /// </summary>
     private readonly PooledBuffer _CompressedBuf = new(0);
 
+    /// <summary>Number of objects written into containers so far (the header <c>obj_count</c>).</summary>
     private int _ObjectCount;
-    private long _BytesWritten; // bytes written to stream after the file header
+
+    /// <summary>Bytes of containers written to the stream after the file header (padded, as stored).</summary>
+    private long _BytesWritten;
 
     /// <summary>
     /// Count of frames whose absolute timestamp was earlier than <see cref="_StartNs"/>.
@@ -77,6 +101,13 @@ internal sealed class BlfWriter
     /// <summary>Zone of the header SYSTEMTIME fields (see the constructor).</summary>
     private readonly TimeZoneInfo _TimestampTimeZone;
 
+    /// <summary>
+    /// Stream position where the file header starts: 0 for a fresh stream, but a caller may hand over a seekable stream that
+    /// already holds other data. Header rewrites must go back to this position, not to 0, or they overwrite that data.
+    /// Always 0 for a stream that cannot seek (no rewrite is possible there).
+    /// </summary>
+    private readonly long _HeaderPosition;
+
     #endregion
 
     #region Constructors
@@ -85,7 +116,9 @@ internal sealed class BlfWriter
     /// Creates a BLF writer and writes the 144-byte file header immediately.
     /// </summary>
     /// <param name="stream">Target output stream.</param>
-    /// <param name="startNs">_Start timestamp in nanoseconds since Unix epoch.</param>
+    /// <param name="startNs">
+    /// Start timestamp in nanoseconds since Unix epoch. Floored to whole milliseconds (the header resolution).
+    /// </param>
     /// <param name="compression">Compression level for container output. Use
     /// <see cref="CompressionLevel.NoCompression"/> to disable compression.</param>
     /// <param name="timestampTimeZone">
@@ -108,6 +141,12 @@ internal sealed class BlfWriter
         _StartNs = (startNs / 1_000_000L) * 1_000_000L;
         _Compression = compression;
         _ContainerBuffer = new PooledBuffer(_InitialContainerBufferSize);
+
+        // Remember where the file begins before the header goes out; a stream that already holds earlier data must not have
+        // that data overwritten when the header is patched later.
+        _HeaderPosition = stream.CanSeek
+            ? stream.Position
+            : 0L;
         _WriteFileHeader(_StartNs);
     }
 
@@ -122,19 +161,23 @@ internal sealed class BlfWriter
     /// If no objects have been written yet, the container buffer is empty, the stream is
     /// seekable, and <paramref name="earliestAbsoluteNanos"/> floor-ms is earlier than the
     /// current anchor, rewinds and rewrites only the 144-byte file header so the anchor
-    /// matches the minimum seen timestamp. This absorbs out-of-order arrivals where a
-    /// later frame opened the file before an earlier timestamp was observed, as long as
-    /// no LOBJ data was flushed yet.
+    /// matches the minimum seen timestamp. The condition is "no object written at all" (the object count is zero), so it
+    /// only helps when the frames before the early one produced no objects, for example because they were skipped.
+    /// Once an object exists, the header can no longer be moved because its relative timestamp is already encoded.
     /// </summary>
+    /// <returns><c>true</c> when the header was rewritten with the earlier anchor; <c>false</c> when nothing changed.</returns>
     internal bool TryRealignStartEarlier(long earliestAbsoluteNanos)
     {
+        // Called once per frame by the exporter, so the common case (no earlier timestamp, or an object already written)
+        // must be a few integer compares: the stream is not touched before these checks pass.
         long newStart = (earliestAbsoluteNanos / 1_000_000L) * 1_000_000L;
         if (newStart >= _StartNs || _ObjectCount != 0 || _ContainerBuffer.Length != 0)
         {
             return false;
         }
 
-        if (!_Stream.CanSeek || _Stream.Position != _FileHeaderSize)
+        long headerEnd = _HeaderPosition + _FileHeaderSize;
+        if (!_Stream.CanSeek || _Stream.Position != headerEnd)
         {
             return false;
         }
@@ -143,15 +186,16 @@ internal sealed class BlfWriter
         // the position reflects bytes actually written and not bytes pending in a
         // BufferedStream or FileStream internal buffer that hasn't yet been flushed.
         _Stream.Flush();
-        if (_Stream.Position != _FileHeaderSize)
+        if (_Stream.Position != headerEnd)
         {
             return false;
         }
 
+        // Rewind to where this file's header begins (not to 0): earlier bytes in the stream belong to the caller.
         _StartNs = newStart;
-        _Stream.Seek(0, SeekOrigin.Begin);
+        _Stream.Seek(_HeaderPosition, SeekOrigin.Begin);
         _WriteFileHeader(_StartNs);
-        return _Stream.Position == _FileHeaderSize;
+        return _Stream.Position == headerEnd;
     }
 
     /// <summary>
@@ -394,7 +438,7 @@ internal sealed class BlfWriter
         // h[72..76] = 0  (restore_point_offset, already zeroed)
         // h[76..144] = 0 (padding, already zeroed)
 
-        return new BlfWriterFinishResult(finalHeader, _ObjectCount);
+        return new BlfWriterFinishResult(finalHeader, _ObjectCount, _HeaderPosition);
     }
 
     #endregion
@@ -429,6 +473,9 @@ internal sealed class BlfWriter
     /// </summary>
     private void _CompressWithZlib(ReadOnlySpan<byte> data, PooledBuffer destination)
     {
+        // The zlib stream is declared after (so disposed before) the destination stream: disposing it writes the final
+        // deflate block and the zlib trailer, so the destination holds the complete container only after this method
+        // returns. leaveOpen keeps destStream usable until its own disposal; the PooledBuffer is never owned by the stream.
         destination.Reset();
         using PooledBufferWriteStream destStream = new(destination);
         using ZLibStream zlib = new(destStream, _Compression, leaveOpen: true);
@@ -439,10 +486,10 @@ internal sealed class BlfWriter
     /// Writes a 16-byte BLF date (Windows SYSTEMTIME layout) from Unix nanoseconds.
     /// Layout: Year(2) + Month(2) + DayOfWeek(2) + Day(2) + Hour(2) + Minute(2) + Second(2) + Millisecond(2).
     /// <para>
-    /// The fields are written in the system's <b>local</b> time zone because Vector's
-    /// reference tooling interprets the on-disk SYSTEMTIME using the
-    /// reader's local timezone. Writing UTC components instead would
-    /// shift every reported frame timestamp by the local UTC offset.
+    /// The fields are written as wall-clock components in the configured time zone (default UTC, see the constructor).
+    /// A SYSTEMTIME carries no zone, and Vector's reference tooling interprets it in the reader's zone, so writer and
+    /// reader must agree on the zone to recover the absolute timestamps. A fixed, configurable zone (instead of the
+    /// host's local zone) keeps files reproducible across machines. A timestamp of 0 or less writes all zeros.
     /// </para>
     /// </summary>
     private void _WriteBlfDate(Span<byte> dest, long unixNanos)
@@ -495,6 +542,9 @@ internal sealed class BlfWriterFinishResult
 
     private readonly byte[] _FinalizedHeader;
 
+    /// <summary>Stream position where the file header was written; <see cref="UpdateHeader"/> rewrites it there.</summary>
+    private readonly long _HeaderPosition;
+
     #endregion
 
     #region Constructors
@@ -502,10 +552,12 @@ internal sealed class BlfWriterFinishResult
     /// <summary>Creates a new finish result.</summary>
     /// <param name="finalizedHeader">The complete 144-byte finalized file header.</param>
     /// <param name="objectCount">Total number of objects written.</param>
-    internal BlfWriterFinishResult(byte[] finalizedHeader, int objectCount)
+    /// <param name="headerPosition">Stream position where the file (and its header) starts; 0 for a fresh stream.</param>
+    internal BlfWriterFinishResult(byte[] finalizedHeader, int objectCount, long headerPosition = 0)
     {
         _FinalizedHeader = finalizedHeader;
         ObjectCount = objectCount;
+        _HeaderPosition = headerPosition;
     }
 
     #endregion
@@ -519,7 +571,8 @@ internal sealed class BlfWriterFinishResult
     }
 
     /// <summary>
-    /// Seeks to position 0 and rewrites the file header with finalized statistics
+    /// Seeks to the position where the file started (0 for a fresh stream; the writer's start position when the caller
+    /// supplied a stream that already held data) and rewrites the file header with finalized statistics
     /// (object count, end date, file sizes). No-op for non-seekable streams (pipes,
     /// network). In that case, the initial placeholder header (ObjectCount=0,
     /// measurement_end=0) remains — BLF readers count objects themselves and do not
@@ -533,8 +586,9 @@ internal sealed class BlfWriterFinishResult
             return;
         }
 
+        // Seek back to the start of this file, not to 0: bytes before it belong to the caller and must stay untouched.
         long endPos = stream.Position;
-        stream.Seek(0, SeekOrigin.Begin);
+        stream.Seek(_HeaderPosition, SeekOrigin.Begin);
         stream.Write(_FinalizedHeader);
         stream.Seek(endPos, SeekOrigin.Begin);
     }

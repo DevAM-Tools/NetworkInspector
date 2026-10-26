@@ -4,7 +4,8 @@ namespace NetworkInspector.Core.Errors;
 
 /// <summary>
 /// Describes a recoverable error encountered while reading a frame.
-/// Passed to <see cref="IErrorTolerantFrameSource.FrameSkipped"/> subscribers.
+/// Passed to subscribers of <see cref="IErrorTolerantFrameSource.FrameSkipped"/>, an event that is raised synchronously
+/// on the reading thread. Created per reported error only, so the allocation is not a hot-path cost.
 /// </summary>
 public sealed class FrameReadErrorEventArgs : EventArgs
 {
@@ -17,7 +18,7 @@ public sealed class FrameReadErrorEventArgs : EventArgs
     public int FrameIndex { get; init; } = -1;
 
     /// <summary>
-    /// File offset where the error occurred. Defaults to -1 (unknown).
+    /// File offset in bytes where the error occurred. Defaults to -1 (unknown).
     /// </summary>
     public long FileOffset { get; init; } = -1;
 

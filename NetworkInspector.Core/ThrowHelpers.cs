@@ -5,6 +5,14 @@ namespace NetworkInspector.Core;
 /// <summary>
 /// Centralized throw helpers. Prevents the JIT from inlining exception-throwing
 /// code into hot-path methods, improving branch prediction and code density.
+/// <para>
+/// Why: a <c>throw</c> expression (and the exception construction before it) adds code and a call to the method that
+/// contains it, which can push a tiny hot method such as an indexer or a field append over the JIT's inlining budget. Moving
+/// the throw into a <see cref="MethodImplOptions.NoInlining"/> method keeps the guarded method small and inlinable and
+/// places the cold code out of line. Every helper is marked <see cref="DoesNotReturnAttribute"/> so flow analysis knows
+/// the guarded path ends there. The generic <c>Throw...&lt;T&gt;</c> variants return <c>T</c> only so they can
+/// stand in a <c>return</c> statement of a value-returning getter; they never return a value. Thread-safe (stateless).
+/// </para>
 /// </summary>
 internal static class ThrowHelpers
 {
@@ -19,7 +27,10 @@ internal static class ThrowHelpers
     internal static void ThrowFieldAppend(ParseError error)
         => throw Errors.FieldAppendException.FromError(error);
 
-    /// <summary>Throws when accessing Value on a failed ParseResult.</summary>
+    /// <summary>
+    /// Throws when accessing Value on a failed ParseResult. Callers that must not throw use the success check first
+    /// (expected parse failures are results, not exceptions); this guards only the misuse of reading the wrong side.
+    /// </summary>
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static T ThrowParseResultNoValue<T>()
@@ -31,7 +42,10 @@ internal static class ThrowHelpers
     internal static T ThrowParseResultNoError<T>()
         => throw new InvalidOperationException("Cannot access Error on a successful ParseResult.");
 
-    /// <summary>Throws when a non-finite F64 value is encountered during JSON serialization.</summary>
+    /// <summary>
+    /// Throws when a non-finite F64 setting value is encountered during JSON serialization. JSON has no NaN or infinity, and
+    /// settings are validated to be finite, so reaching this is a broken invariant (a bug), not an expected failure.
+    /// </summary>
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void ThrowNonFiniteF64(double value)

@@ -87,13 +87,28 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
     /// <summary><see cref="_Format"/> as legacy PCAP state, or null for PCAPNG.</summary>
     private readonly LegacyPcapFormat? _LegacyFormat;
 
-    /// <summary>Scanner for lazy mode (null after full scan or when lazy scan completes).</summary>
+    /// <summary>
+    /// Scanner for lazy mode; null after a full scan, once the lazy scan completed, and after <see cref="Dispose"/>.
+    /// Volatile because <see cref="EstimatedFrameCount"/> (any thread) and <see cref="Dispose"/> read or write it while
+    /// the <see cref="NextFrame"/> thread owns the scanner; <see cref="NextFrame"/> reads it once into a local.
+    /// </summary>
     private volatile IncrementalScanner? _Scanner;
 
-    /// <summary>Registered interfaces; the only interface lookup <see cref="FrameById"/> uses.</summary>
+    /// <summary>
+    /// True once the whole file is indexed: from the start after a full scan, and when a lazy scan reaches the end. Set
+    /// before <see cref="_Scanner"/> is cleared and never reset, so <see cref="EstimatedFrameCount"/> does not change when
+    /// <see cref="Dispose"/> drops the scanner of a scan that was still running.
+    /// </summary>
+    private volatile bool _ScanComplete;
+
+    /// <summary>
+    /// Registered interfaces, keyed by section and interface index. The sequential path resolves interfaces here;
+    /// <see cref="FrameById"/> prefers the entry carried by the re-read <see cref="InterfaceInfo"/> and uses this table
+    /// only when that entry is not published yet (and for legacy PCAP).
+    /// </summary>
     private readonly PcapInterfaceTable _Interfaces = new();
 
-    /// <summary>Sequential frame counter for NextFrame().</summary>
+    /// <summary>Sequential frame counter for NextFrame(). Touched by the <see cref="NextFrame"/> thread only.</summary>
     private int _CurrentFrame;
 
     /// <summary>Source ID assigned during Start().</summary>
@@ -126,8 +141,16 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
 
     #region Error Tolerance Fields
 
+    /// <summary>
+    /// Frames the sequential path produced. Written by the <see cref="NextFrame"/> thread only; volatile so statistics
+    /// readers on any thread see it. Random-access reads are not counted.
+    /// </summary>
     private volatile int _ReadFrameCount;
+
+    /// <summary>Skipped frames; saturates at <see cref="int.MaxValue"/> instead of wrapping (statistics may be read on any thread).</summary>
     private readonly SaturatingVolatileCounter _SkippedFrameCount = new();
+
+    /// <summary>Reported errors (skips and file changes); saturates at <see cref="int.MaxValue"/> instead of wrapping.</summary>
     private readonly SaturatingVolatileCounter _ErrorCount = new();
 
     /// <summary>
@@ -163,15 +186,22 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
         UiName = uiName;
         _Description = description;
         _Backend = backend;
+
+        // Only a mapped view can disappear under a reader; preloaded bytes are a managed array that stays valid after
+        // Dispose, so in-memory sources skip the gate (and its per-read cost) entirely.
         _Gate = backend.IsInMemory
             ? null
             : new ReaderGate();
         _Guard = guard;
+
+        // The source takes over the scanner's index and format state: in lazy mode the scanner keeps appending to them
+        // (single writer) while FrameById reads them from other threads.
         _Index = scanner.Index;
         _Format = scanner.Format;
         _PcapNgFormat = scanner.Format as PcapNgFormat;
         _LegacyFormat = scanner.Format as LegacyPcapFormat;
         _Scanner = lazy ? scanner : null;
+        _ScanComplete = !lazy;
         _FrameSlabSize = options.FrameSlabSize;
         _PendingScanSkips = pendingScanSkips;
 
@@ -179,6 +209,9 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
         // mode while reading (IErrorTolerantFrameSource contract).
         ErrorTolerance = options.ErrorTolerance;
 
+        // Lazy mode scans while the source runs, so skips and IDBs must reach the source as they are found. A full scan
+        // already finished: its skips were collected in pendingScanSkips and are replayed at their original positions
+        // (_ReplayPendingSkipsBefore), and all interfaces are registered in Start.
         if (lazy)
         {
             scanner.OnSkip = _HandleSkip;
@@ -197,6 +230,7 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
     /// <param name="options">Reader options, or null for defaults. <see cref="PcapngSourceOptions.ErrorTolerance"/>
     /// becomes the initial <see cref="ErrorTolerance"/>.</param>
     /// <returns>A configured PcapngSource ready for <see cref="IFrameSource.Start"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> is <see langword="null"/>.</exception>
     /// <exception cref="PcapException">The file format is unrecognized or corrupt.</exception>
     /// <exception cref="FileNotFoundException">The file does not exist.</exception>
     /// <exception cref="IOException">
@@ -217,17 +251,22 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
         string uiName = options.UiName ?? Path.GetFileName(path);
         string? description = null;
 
+        // A clear message with the path for the common mistake; a file that disappears after this check still surfaces
+        // as FileNotFoundException from the guard below.
         if (!File.Exists(path))
         {
             throw new FileNotFoundException("Capture file not found.", path);
         }
 
         // The guard denies writers (Windows) and detects changes (Linux/macOS) for the whole lifetime of the source.
+        // It is opened before the backend so that the bytes read or mapped next are the bytes it protects.
         CaptureFileGuard guard = CaptureFileGuard.Open(path);
         DataBackend? backend = null;
         try
         {
             // Decide backend: in-memory (bounded by the budget and Array.MaxLength) or one read-only mapping.
+            // The preloaded copy is read through the guard's own handle; the mapping opens the path again, which the
+            // guard's share mode (FileShare.Read) allows because both only read.
             backend = PreloadDecision.ShouldPreload(guard.Length, options.PreloadBudget)
                 ? DataBackend.FromMemory(guard.ReadAll())
                 : DataBackend.FromMmap(path);
@@ -264,7 +303,12 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
     /// ignored — in-memory data is always fully scanned; <see cref="PcapngSourceOptions.ErrorTolerance"/> behaves as in
     /// <see cref="Open"/>; the display name is <paramref name="uiName"/>.</param>
     /// <returns>A configured PcapngSource ready for <see cref="IFrameSource.Start"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="data"/> or <paramref name="uiName"/> is <see langword="null"/>.</exception>
     /// <exception cref="PcapException">The data format is unrecognized or corrupt.</exception>
+    /// <remarks>
+    /// The source aliases <paramref name="data"/> (zero-copy frames): the caller must not modify the array while the
+    /// source or any frame read from it is in use. There is no file, so no change detection runs.
+    /// </remarks>
     public static PcapngSource FromData(byte[] data, string uiName = "In-Memory Capture", PcapngSourceOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(data);
@@ -286,10 +330,14 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
         PcapngSourceOptions options)
     {
         IncrementalScanner scanner = new(backend, backend.FileSize);
+
+        // Nobody can subscribe to FrameSkipped before Open returns, so skips are collected here and replayed at their
+        // original positions during NextFrame (_ReplayPendingSkipsBefore); the sequence then matches a lazy scan.
         List<FrameReadErrorEventArgs> skips = [];
         scanner.OnSkip = skips.Add;
 
-        // Packet skips return false without exhausting; keep scanning until EOF.
+        // Packet skips return false without exhausting; keep scanning until EOF. Only the index is built here: the
+        // scanned frame views are discarded because frames are re-read from their block on demand.
         while (true)
         {
             if (scanner.NextFrame(out _))
@@ -339,7 +387,9 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
     {
         get
         {
-            if (_Scanner is null)
+            // The flag, not the scanner: Dispose clears the scanner of a half-scanned lazy source, and the count of the index so
+            // far would then be reported as if it were the total. A half-scanned source stays "unknown" after Dispose.
+            if (_ScanComplete)
             {
                 return _Index.Count;
             }
@@ -396,7 +446,11 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
     /// For thread-safe random access, use <see cref="FrameById"/> instead.
     /// A <see cref="Dispose"/> on another thread is safe: a call already reading finishes its frame on the still-mapped
     /// view; a call that starts after disposal began returns <c>null</c> or throws <see cref="ObjectDisposedException"/>.
+    /// A <see cref="FrameSkipped"/> handler runs on this thread inside the call and may dispose the source.
     /// </remarks>
+    /// <exception cref="ObjectDisposedException">The source was disposed before the call started.</exception>
+    /// <exception cref="InvalidOperationException"><see cref="Start"/> has not been called.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was canceled.</exception>
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_Disposed != 0, this);
@@ -416,7 +470,8 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
         // The mapped backend is scanned and copied through the view pointer without a per-copy reference. One lease
         // per call keeps the view mapped while this call reads, also when Dispose runs concurrently (a session shutdown
         // with a timeout disposes sources whose read loop may still be inside NextFrame). Disposed before the lease:
-        // nothing more is read.
+        // nothing more is read. A lease rather than a ReaderGate section: FrameSkipped handlers run inside this call and
+        // may dispose the source, and Dispose waits for gate sections but only defers the unmap for a lease.
         if (!_Backend.TryAcquireScanLease())
         {
             return null;
@@ -455,11 +510,14 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
     /// waits until this call left the mapped view.
     /// </remarks>
     /// <exception cref="ObjectDisposedException">The source was disposed before the call started reading.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was canceled.</exception>
     public Frame? FrameById(FrameId id, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_Disposed != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // The offset lookup only touches the managed index (lock-free, safe during a lazy scan), so it needs no gate;
+        // an id the scan has not indexed yet (or a negative id) is a normal null, not an error.
         int frameId = id.Value;
         if (!_Index.TryGetBlockSpan(frameId, out long blockOffset, out long nextBlockOffset))
         {
@@ -498,6 +556,8 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
             _ExitView(in token);
         }
 
+        // Outside the gate on purpose: data is already an owned copy (mapped) or a slice of the preloaded array, so the
+        // view is no longer touched and a concurrent Dispose does not wait for frame creation.
         return _CreateIndexedFrame(frameId, in packet, data, registry);
     }
 
@@ -509,8 +569,12 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
     /// memory. A concurrent <see cref="Dispose"/> waits for at most one chunk; later chunks throw
     /// <see cref="ObjectDisposedException"/>. Allocates one array per frame on the mapped backend.
     /// </remarks>
+    /// <exception cref="ObjectDisposedException">The source was disposed before a chunk started reading.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was canceled between two chunks.</exception>
     public int FramesById(FrameId first, Span<Frame?> frames, CancellationToken cancellationToken = default)
     {
+        // Per-chunk scratch (block start and prefetch bound of each id) lives on the stack, 2 x 512 B, reused by every
+        // chunk: the batch API adds no heap allocation beyond the frames themselves.
         Span<long> starts = stackalloc long[_BatchChunk];
         Span<long> bounds = stackalloc long[_BatchChunk];
         int found = 0;
@@ -547,14 +611,15 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
             return;
         }
 
-        // _Scanner is read by FrameById and other public surface from any
-        // thread; publish the null write with a release barrier (SOURCE_GUIDE §13.3).
+        // _Scanner is read by NextFrame and EstimatedFrameCount (any thread); _Scanner is volatile, so the null write
+        // is published with release semantics (SOURCE_GUIDE §13.2). A NextFrame already running keeps the scanner it read.
         _Scanner = null;
         // Clear the registry reference so the session can be GC'd after Dispose().
         _Registry = null;
         // _Slabs stays: it belongs to the NextFrame thread, which may still be finishing a frame; it dies with the source.
         // GC.SuppressFinalize is called before the backend disposal so it executes
-        // even if _Backend.Dispose() throws, preserving finalizer suppression.
+        // even if _Backend.Dispose() throws, preserving finalizer suppression. (This class declares no finalizer
+        // itself; the call is the standard dispose pattern and keeps a future finalizer from running twice.)
         GC.SuppressFinalize(this);
         try
         {
@@ -597,6 +662,7 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
             }
         }
 
+        // Not started, disposed, or the gate closed: no entry can be read, so every slot is null (not left unwritten).
         FrameInterfaceRegistry? registry = _Registry;
         if (registry is null || !_TryEnterView(out ReaderGateToken token))
         {
@@ -604,10 +670,15 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
             return 0;
         }
 
+        // One gate section for the whole chunk (not per frame): a section costs a full fence on entry, so 64 ids share it,
+        // while the chunk size keeps the wait of a concurrent Dispose short.
         int found = 0;
         try
         {
-            // Software pipeline: blocks i + 1 … i + 8 are on their way while block i is parsed and copied.
+            // Software pipeline: blocks i + 1 … i + 8 are on their way while block i is parsed and copied. The
+            // first loop primes the window (a prefetch is only a hint: it never changes what is read), the second
+            // loop requests block i + 8 and then reads block i. Naive alternative: parse each block after its first
+            // cache miss, which serialises one memory latency per block.
             int ahead = Math.Min(_BatchPrefetchDistance, length);
             for (int i = 0; i < ahead; i++)
             {
@@ -736,8 +807,8 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Abort early if another thread disposed the source mid-iteration; the
-            // backend may have already released its mmap pointer.
+            // Stop early if another thread disposed the source mid-iteration. The scan lease of NextFrame keeps the
+            // view mapped for this call, so this is about not reading on for a disposed source, not about safety.
             if (_Disposed != 0 || _Aborted)
             {
                 return null;
@@ -781,7 +852,8 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
             }
         }
 
-        // End of the index: one last change check, then skips recorded after the last frame (trailing corruption).
+        // End of the index: one last change check (frame index 0 always asks the file, see CaptureFileGuard.HasChangedAt),
+        // then skips recorded after the last frame (trailing corruption).
         if (!_CheckFileUnchanged(0))
         {
             return null;
@@ -848,6 +920,9 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
     /// </summary>
     private bool _TryReadIndexedPacket(long blockOffset, out IndexedPacket packet)
     {
+        // The offset comes from the index, but the bytes behind it are read again and re-validated with the scan's own
+        // rules: the file may have changed (Linux/macOS, where writers are not denied). Every mismatch returns false,
+        // so a changed block yields no frame instead of a wrong one.
         packet = default;
         long fileSize = _Backend.FileSize;
         PcapNgFormat? format = _PcapNgFormat;
@@ -856,6 +931,8 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
             return _TryReadLegacyRecord(_LegacyFormat!, blockOffset, fileSize, out packet);
         }
 
+        // The section current when the scanner read this block decides byte order and the interface list; sections
+        // are published before any block they contain is indexed (see PcapNgFormat), so a miss means a bad offset.
         if (!format.TryFindSection(blockOffset, out ushort sectionIndex, out SectionInfo? section)
             || blockOffset + 8 > fileSize)
         {
@@ -914,6 +991,8 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
             return false;
         }
 
+        // The parser already resolved the InterfaceInfo; its registry entry (null until registered) saves a table lookup
+        // per frame. The ushort cast is exact: the parser rejected interface ids beyond SectionInfo.MaxInterfaceCount.
         packet = new IndexedPacket(
             blockOffset + bytesBeforeData, fields.CapturedLength, fields.TimestampNanos, sectionIndex, (ushort)fields.InterfaceId,
             fields.Interface?.Registered);
@@ -945,6 +1024,8 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
             return false;
         }
 
+        // inclLen passed the snaplen/MaxBlockSize check above, so it fits an int. Legacy PCAP has one implicit section and
+        // interface (0, 0); the registry entry is looked up in the table because no InterfaceInfo carries it.
         long timestampNanos = legacy.Info.TimestampToNanos(reader.Swap(record.TsSec.Value), reader.Swap(record.TsFrac.Value));
         packet = new IndexedPacket(dataOffset, (int)inclLen, timestampNanos, 0, 0, Registered: null);
         return true;
@@ -964,8 +1045,8 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
 
         while (true)
         {
-            // Abort early if Dispose() was called from another thread mid-scan; the
-            // backend pointer might already be released.
+            // Stop early if Dispose() was called from another thread mid-scan (or a FrameSkipped handler disposed the
+            // source). The scan lease of NextFrame keeps the view mapped for this call, but a disposed source reads no more.
             if (_Disposed != 0 || _Aborted)
             {
                 return null;
@@ -987,6 +1068,7 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
                 // Scanning complete. The index and the format already belong to this source; dropping the scanner
                 // switches NextFrame to the index path and makes EstimatedFrameCount available. A file that changed
                 // during the scan is reported before the end of the stream.
+                _ScanComplete = true;
                 _Scanner = null;
                 _ = _CheckFileUnchanged(0);
                 return null;
@@ -1075,6 +1157,7 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
 
                 for (int i = 0; i < section.InterfaceCount; i++)
                 {
+                    // A malformed IDB's placeholder reserves its position there (see _RegisterPcapngInterface).
                     _RegisterPcapngInterface(registry, (ushort)s, (ushort)i, section, section.Interface(i)!);
                 }
             }
@@ -1108,13 +1191,23 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
             return;
         }
 
+        // A malformed IDB takes its position in the table and registers nothing: its packets are skipped by the parser, and
+        // the interfaces after it keep their positions.
+        if (info.IsMalformed)
+        {
+            _ = _Interfaces.TryAddGap(sectionIndex, interfaceIndex);
+            return;
+        }
+
         // if_name comes from the file: a name the registry would reject (empty, control characters) falls back to the
         // positional name instead of failing the whole read.
         string name = info.Name is { } ifName && NameValidation.IsValidUiName(ifName) ? ifName : $"Interface {interfaceIndex}";
         FrameInterfaceId id = registry.Register(
             _SourceId, name, info.Description, info.LinkType, PcapInterfaceProperties.ForPcapng(info, section));
 
-        // Table first (sequential path, legacy fallback), then the InterfaceInfo the re-read parser hands back.
+        // Table first (sequential path, legacy fallback), then the InterfaceInfo the re-read parser hands back. This
+        // order means a FrameById that still sees no Registered entry (it is set last) falls back to the table and
+        // finds the interface there.
         PcapInterfaceEntry entry = new(id, info.LinkType);
         _ = _Interfaces.TryAdd(sectionIndex, interfaceIndex, entry);
         info.SetRegistered(entry);
@@ -1135,7 +1228,8 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
 
         // Always signal the error so subscribers can log the first offending block
         // regardless of the tolerance mode. In strict mode the source additionally
-        // sets _Aborted so the next NextFrame() call returns null.
+        // sets _Aborted so the next NextFrame() call returns null. Raised on the NextFrame thread, inside its scan
+        // lease: a handler may dispose the source (the reason NextFrame uses a lease and not a gate section).
         FrameSkipped?.Invoke(this, error);
 
         if (ErrorTolerance == ErrorToleranceMode.Strict)

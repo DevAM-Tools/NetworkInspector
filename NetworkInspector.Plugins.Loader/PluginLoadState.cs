@@ -8,7 +8,10 @@ public enum PluginLoadState : byte
     /// <summary>The plugin was configured and committed; it is started by the lifecycle.</summary>
     Loaded,
 
-    /// <summary>Something went wrong; the record's reason says what. The application continues without the plugin.</summary>
+    /// <summary>
+    /// Something went wrong; the record's reason says what. The application continues without the plugin. Set by the loader
+    /// (load, configure, commit) and later by the lifecycle (a failed or timed-out start).
+    /// </summary>
     Failed,
 
     /// <summary>The plugin needs a higher tier than the application offers and was not loaded.</summary>

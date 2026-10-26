@@ -35,7 +35,9 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
     // Active writer (set on lazy init)
     private PcapngWriter? _Writer;
 
-    // Interface tracking: (FrameInterfaceId, LinkType) → pcapng interface ID
+    // Interface tracking: (FrameInterfaceId, LinkType) → pcapng interface ID.
+    // The key includes the link type because a PCAPNG Interface Description Block carries exactly one link type: the
+    // same source interface delivering frames of two link types needs two IDBs.
     private readonly Dictionary<(FrameInterfaceId, LinkType), uint> _Interfaces = new();
     private uint _NextInterfaceId;
 
@@ -79,7 +81,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         get;
     }
 
-    /// <summary>Number of frames written so far.</summary>
+    /// <summary>Number of frames written so far (each frame is written to the stream as soon as it arrives).</summary>
     public int FrameCount
     {
         get; private set;
@@ -132,6 +134,8 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
     /// <inheritdoc/>
     public bool OnFrame(Frame frame)
     {
+        // Stop signals first: cancellation, an earlier fatal error, or a finished exporter all end the export. After
+        // OnFinish the writer's buffers are returned, so a late frame must never reach the writer.
         if (_CancellationToken.IsCancellationRequested)
         {
             return false;
@@ -152,6 +156,8 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
     }
 
     /// <inheritdoc/>
+    /// <remarks>Idempotent: only the first call finalizes the file. Also invoked by <see cref="Dispose"/>.</remarks>
+    /// <exception cref="AggregateException">One or more resource release steps failed.</exception>
     public void OnFinish()
     {
         if (_Finished)
@@ -232,6 +238,9 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
     /// <returns>True if initialization succeeded.</returns>
     private bool _Start(Frame? firstFrame)
     {
+        // Output already released or never configured: nothing can be written. Note that this path sets the error
+        // flag without raising ItemSkipped or incrementing ErrorCount, so a late call on a disposed exporter does not start
+        // an error loop.
         if (_Output is null)
         {
             _HasError = true;
@@ -240,10 +249,12 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
 
         _Started = true;
 
-        Stream? underlyingStream = _Output.GetOrCreateUnderlyingStream();
-        if (underlyingStream is null)
+        // Creates the file or opens stdout on demand, so nothing is touched before the first frame. An open failure (bad
+        // path, missing directory, access denied) or a missing stream goes through the normal error path instead of
+        // escaping from OnFrame.
+        if (!_Output.TryGetOrCreateUnderlyingStream(out Stream? underlyingStream, out string openFailure))
         {
-            _HasError = true;
+            _ReportStartFailure($"PCAPNG output could not be opened: {openFailure}");
             return false;
         }
 
@@ -256,31 +267,40 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         }
         catch (Exception ex)
         {
-            _HasError = true;
-            if (ErrorCount < int.MaxValue)
-            {
-                ErrorCount++;
-            }
-            ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-            {
-                ItemIndex = 0,
-                Kind = ExportErrorKind.IoError,
-                Message = $"PCAPNG SHB write failed: {ex.Message}",
-            });
+            _ReportStartFailure($"PCAPNG SHB write failed: {ex.Message}");
             return false;
         }
 
         return true;
     }
 
+    /// <summary>Latches the fatal state for a failed start, counts it, and raises <see cref="ItemSkipped"/> as item 0.</summary>
+    private void _ReportStartFailure(string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = 0,
+            Kind = ExportErrorKind.IoError,
+            Message = message,
+        });
+    }
+
     /// <summary>Processes a single frame: registers interface if new, writes IDB+EPB.</summary>
     private bool _HandleFrame(Frame frame)
     {
+        // Target reached: refuse further frames so the caller stops feeding the exporter.
         if (_TargetFrameCount > 0 && FrameCount >= _TargetFrameCount)
         {
             return false;
         }
 
+        // Map the frame's source interface to a PCAPNG interface; an IDB must precede the first EPB that uses it.
         FrameInterfaceId interfaceId = frame.InterfaceId;
         LinkType linkType = frame.LinkType;
         (FrameInterfaceId, LinkType) key = (interfaceId, linkType);
@@ -315,6 +335,8 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         // value omits the option; it does not fail the frame.
         // Description and the reader's interface properties (speed, filter, OS, hardware, TX / RX speed) travel back
         // into the IDB through the option table shared with the reader.
+        // The registry lookup runs only for a frame that needs a new IDB, i.e. once per interface, not once per
+        // frame; the common frame takes the dictionary hit and skips all of this.
         string? idbName = null;
         string? idbDescription = null;
         IReadOnlyDictionary<string, object>? idbProperties = null;
@@ -333,7 +355,8 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             }
         }
 
-        // _Writer is guaranteed non-null after _Start() succeeds
+        // _Writer is guaranteed non-null after _Start() succeeds. The IDB (when needed) and the EPB are written in
+        // this order so the interface is always described before the first packet that references it.
         try
         {
             if (needsIdb)
@@ -439,7 +462,13 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         private string _UiName = "PCAPNG Exporter";
         private string? _Description;
         private CancellationToken _CancellationToken;
+        // Snap length limit: frames longer than this are truncated on export (original length is kept in the EPB).
+        // Default is the readers' default packet size cap (PcapConstants.DefaultSnapLength, 262 144 bytes), which is
+        // also written into every IDB; configurable by the caller through WithSnapLength up to int.MaxValue.
+        // Raising it is opt-in, so by default larger frames lose their tail bytes.
         private uint _SnapLength = PcapConstants.DefaultSnapLength;
+
+        // Nanoseconds are the native resolution of NI timestamps, so the default loses no precision.
         private byte _TsResolution = PcapngWriter.TsResolNanoseconds;
         private string? _Hardware;
         private string? _Os;
@@ -454,7 +483,10 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             return this;
         }
 
-        /// <summary>Sets the output to an existing stream.</summary>
+        /// <summary>
+        /// Sets the output to an existing stream. The caller keeps ownership: the exporter flushes the stream when
+        /// it finishes but does not close it.
+        /// </summary>
         public Builder ToStream(Stream stream)
         {
             _Output = ExportOutput.FromStream(stream);
@@ -489,7 +521,12 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             return this;
         }
 
-        /// <summary>Sets the maximum captured packet length in bytes (must be &gt; 0 and ≤ <see cref="int.MaxValue"/>).</summary>
+        /// <summary>
+        /// Sets the maximum captured packet length in bytes (must be &gt; 0 and ≤ <see cref="int.MaxValue"/>).
+        /// Frames longer than this are truncated; the EPB keeps the original length.
+        /// </summary>
+        /// <param name="length">Snap length in bytes.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> is zero or above <see cref="int.MaxValue"/>.</exception>
         public Builder WithSnapLength(uint length)
         {
             // Zero snap length would truncate every captured payload to empty,
@@ -512,8 +549,11 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         /// <summary>
         /// Sets the timestamp resolution as a decimal power-of-ten exponent (0..19).
         /// 6 is microseconds and 9 is nanoseconds. Binary resolutions (bit 7 set) are rejected
-        /// because this writer divides nanoseconds by a power of ten.
+        /// because this writer divides nanoseconds by a power of ten. Resolutions finer than nanoseconds saturate:
+        /// timestamps of about 1.8e18 nanoseconds since the epoch fit only up to resolution 10, so finer values
+        /// produce <see cref="ulong.MaxValue"/> ticks for realistic timestamps.
         /// </summary>
+        /// <param name="resolution">Decimal exponent of the tick length (6 = microseconds, 9 = nanoseconds).</param>
         /// <exception cref="ArgumentOutOfRangeException">
         /// <paramref name="resolution"/> is above 19 or has bit 7 set.
         /// </exception>
@@ -563,9 +603,15 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         /// When the target is reached, <see cref="OnFrame"/> returns <c>false</c> and
         /// <see cref="IsFinished"/> becomes <c>true</c>.
         /// </summary>
+        /// <param name="count">Frame limit; 0 means unlimited.</param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="count"/> is negative or exceeds <see cref="ArrayIndexIdRange.MaxCount"/>.
+        /// </exception>
         public Builder WithTargetFrameCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+            // The upper limit is the number of items an array-index ID can address (ArrayIndexIdRange.MaxCount).
             if (count > ArrayIndexIdRange.MaxCount)
             {
                 throw new ArgumentOutOfRangeException(

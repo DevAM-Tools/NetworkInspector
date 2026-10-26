@@ -2,7 +2,10 @@
 
 namespace NetworkInspector.Filter.Errors;
 
-/// <summary>Categorizes filter errors by the phase that produced them.</summary>
+/// <summary>
+/// Categorizes filter errors by the phase that produced them. Members keep their numeric values when another member is
+/// retired (value 5 is a gap, see <see cref="UnknownField"/>), so do not renumber them or reuse a retired value.
+/// </summary>
 public enum FilterErrorKind : byte
 {
     #region Front-end
@@ -16,7 +19,10 @@ public enum FilterErrorKind : byte
     /// <summary>Malformed literal value.</summary>
     InvalidValue = 2,
 
-    /// <summary>Language construct that was deliberately removed in v1 (<c>seq</c>, <c>stream</c>, <c>window</c>, <c>let</c>, <c>where</c>, <c>nav</c>).</summary>
+    /// <summary>
+    /// Language construct that was deliberately removed in v1 (<c>seq</c>, <c>stream</c>, <c>window</c>, <c>let</c>,
+    /// <c>where</c>, <c>nav</c>).
+    /// </summary>
     UnsupportedFeature = 3,
 
     #endregion

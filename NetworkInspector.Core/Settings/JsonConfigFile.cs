@@ -8,7 +8,17 @@ namespace NetworkInspector.Core.Settings;
 /// testable in isolation. File loads take explicit size and JSON-depth caps; stream loads do not.
 /// <para>
 /// Handles path resolution, existence checks, and all I/O and deserialization exceptions,
-/// mapping each failure mode to a human-readable error message.
+/// mapping each failure mode to a human-readable error message. Expected failures are returned as an error string, never
+/// thrown, because a bad or missing configuration file is normal input, not a bug.
+/// </para>
+/// <para>
+/// Security decisions for file loads. Threat 1, path traversal: the path names a file that a settings value refers to (so
+/// it is not fully trusted); it is resolved with <see cref="Path.GetFullPath(string)"/> and must stay under a mandatory
+/// base directory, and a missing base denies the load. Accepted residual risk: a symbolic link or junction inside the base
+/// that points outside is followed, because the check is on the normalized path text and does not resolve links. Threat 2, resource
+/// exhaustion: the size and depth caps (see <see cref="SettingsManager.DefaultMaxConfigFileBytes"/> and
+/// <see cref="SettingsManager.DefaultMaxJsonDepth"/>) bound memory, parse time, and recursion. Threat 3, information
+/// disclosure: error text uses only the file name, never the resolved path.
 /// </para>
 /// </summary>
 internal static class JsonConfigFile
@@ -22,7 +32,7 @@ internal static class JsonConfigFile
     /// <param name="filePath">Absolute or relative path to the JSON file.</param>
     /// <param name="baseDirectory">
     /// Required directory that confines <paramref name="filePath"/>.
-    /// Paths containing <c>..</c> segments or resolving outside the base are rejected.
+    /// Paths that resolve outside the base after normalization (including through <c>..</c> segments) are rejected.
     /// When <see langword="null"/> or whitespace, the load fails (default-deny).
     /// </param>
     /// <param name="typeInfo">AOT-compatible type info for deserialization.</param>
@@ -60,7 +70,7 @@ internal static class JsonConfigFile
     /// <param name="filePath">Absolute or relative path to the JSON file.</param>
     /// <param name="baseDirectory">
     /// Required directory that confines <paramref name="filePath"/>.
-    /// Paths containing <c>..</c> segments or resolving outside the base are rejected.
+    /// Paths that resolve outside the base after normalization (including through <c>..</c> segments) are rejected.
     /// When <see langword="null"/> or whitespace, the load fails (default-deny).
     /// </param>
     /// <param name="typeInfo">AOT-compatible type info for deserialization.</param>
@@ -101,7 +111,7 @@ internal static class JsonConfigFile
     /// <param name="filePath">Absolute or relative path to the JSON file.</param>
     /// <param name="baseDirectory">
     /// Required directory that confines <paramref name="filePath"/>.
-    /// Paths containing <c>..</c> segments or resolving outside the base are rejected.
+    /// Paths that resolve outside the base after normalization (including through <c>..</c> segments) are rejected.
     /// When <see langword="null"/> or whitespace, the load fails (default-deny).
     /// </param>
     /// <param name="typeInfo">AOT-compatible type info for deserialization.</param>
@@ -130,15 +140,18 @@ internal static class JsonConfigFile
         out string? error)
         where T : class
     {
+        // Confine the path first; nothing touches the file system before this check passes.
         if (!_TryResolvePath(filePath, baseDirectory, out string resolvedPath, out error))
         {
             value = null;
             return false;
         }
 
+        // The label (file name only) is what error text may show; the resolved path stays out of messages.
         string label = SettingsFileAccess.SafeFileLabel(filePath);
         try
         {
+            // Cheap early reject by the length the file system reports, before any byte is parsed.
             using FileStream stream = SettingsFileAccess.OpenSharedRead(resolvedPath);
             if (maxFileBytes > 0 && stream.Length > maxFileBytes)
             {
@@ -218,6 +231,9 @@ internal static class JsonConfigFile
             return false;
         }
 
+        // Seekable streams are parsed in place (no copy). A stream that reports CanSeek but cannot give its length
+        // falls through to the copy path, as do non-seekable streams. No size or depth cap applies on this path: the
+        // caller owns and must bound the stream (see JsonConfigStream), and the non-seekable copy below is unbounded.
         if (stream.CanSeek)
         {
             long remaining;
@@ -272,6 +288,9 @@ internal static class JsonConfigFile
     {
         try
         {
+            // The caller's options are read-only once they have been used, so the depth cap goes onto a copy and the type
+            // info is re-resolved from it. This allocates per load, which is acceptable: configuration loads are cold.
+            // maxJsonDepth <= 0 maps to a very large ceiling, because System.Text.Json reads 0 as "default of 64".
             JsonSerializerOptions options = new(typeInfo.Options)
             {
                 MaxDepth = SettingsManager.EffectiveJsonMaxDepth(maxJsonDepth)
@@ -390,6 +409,8 @@ internal static class JsonConfigFile
             return false;
         }
 
+        // Normalize both sides with GetFullPath (collapses ".." and "."), then compare as text. A rooted file path is
+        // taken as is and must still land under the base, so an absolute path elsewhere is rejected, not trusted.
         string baseFullPath = Path.GetFullPath(baseDirectory);
         string candidatePath = Path.IsPathRooted(filePath)
             ? filePath
@@ -410,6 +431,9 @@ internal static class JsonConfigFile
     /// <summary>Returns true when <paramref name="path"/> is equal to or nested under <paramref name="baseFullPath"/>.</summary>
     private static bool _IsPathUnderBase(string path, string baseFullPath)
     {
+        // File names are case-insensitive on Windows and case-sensitive elsewhere; a wrong choice would either reject valid
+        // paths or accept a sibling folder that differs only by case. The trailing separator on the prefix below prevents
+        // a sibling such as "<base>-other" from matching "<base>".
         StringComparison comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;

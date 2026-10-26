@@ -18,7 +18,21 @@ namespace NetworkInspector.Protocols;
 /// bit  [11]    = Channel B (0 = A, 1 = B)
 /// bits [17:12] = Cycle count (6 bits)
 /// </code>
+/// <para>
+/// ISO frame header bits (bytes 2-6, 40 bits, big-endian): reserved (1), PPI, NFI, SFI, STFI (4 indicator bits),
+/// frame ID (11), payload length in 16-bit words (7), header CRC (11), cycle count (6).
+/// </para>
+/// <para>
+/// Shared by the capture sources that synthesize LINKTYPE_FLEXRAY frames from Vector ASC and BLF files
+/// (<see cref="BuildFrame"/> and the flag mappers) and by the exporters that read such frames back
+/// (<see cref="TryParseDataFrame"/>), so that both directions of the bit layout live in one place.
+/// <c>FlexRayProtocol</c> only uses <see cref="EncodeDispatchKey"/>: it decodes the header with its own copy of the
+/// bit layout and, unlike <see cref="TryParseDataFrame"/>, tolerates a payload that is shorter than the header declares.
+/// </para>
 /// </summary>
+/// <remarks>
+/// <para><b>Thread safety:</b> stateless static helpers; safe for concurrent use.</para>
+/// </remarks>
 internal static class FlexRayLinkTypeFrame
 {
     #region Constants
@@ -132,7 +146,14 @@ internal static class FlexRayLinkTypeFrame
 
     /// <summary>
     /// Encodes slot, channel, and cycle into a <c>flexray.id</c> dispatch key.
+    /// The three parts occupy disjoint bit ranges (see the class summary), which is why both inputs are range checked:
+    /// an oversized value would otherwise spill into a neighbouring part and silently select the wrong binding.
     /// </summary>
+    /// <param name="frameId">Slot / frame ID, at most 0x7FF (11 bits).</param>
+    /// <param name="channelB"><see langword="true"/> for channel B.</param>
+    /// <param name="cycle">Cycle count, at most 63 (6 bits).</param>
+    /// <returns>The dispatch key.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="frameId"/> or <paramref name="cycle"/> exceeds its bit width.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong EncodeDispatchKey(ushort frameId, bool channelB, byte cycle)
     {
@@ -152,8 +173,13 @@ internal static class FlexRayLinkTypeFrame
     }
 
     /// <summary>
-    /// Decodes a <c>flexray.id</c> dispatch key into slot, channel, and cycle.
+    /// Decodes a <c>flexray.id</c> dispatch key into slot, channel, and cycle. Inverse of
+    /// <see cref="EncodeDispatchKey"/>; bits above bit 17 are ignored.
     /// </summary>
+    /// <param name="key">A dispatch key.</param>
+    /// <param name="frameId">Slot / frame ID (11 bits).</param>
+    /// <param name="channelB"><see langword="true"/> when the key selects channel B.</param>
+    /// <param name="cycle">Communication cycle (6 bits, 0-63).</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void DecodeDispatchKey(ulong key, out ushort frameId, out bool channelB, out byte cycle)
     {
@@ -166,7 +192,10 @@ internal static class FlexRayLinkTypeFrame
 
     #region ASC channel mapping
 
-    /// <summary>Maps an ASC channel number (1 = A, 2 = B) to a bus channel flag.</summary>
+    /// <summary>
+    /// Maps an ASC channel number (1 = A, 2 = B) to a bus channel flag. Every value of 2 or more maps to channel B and
+    /// every smaller value to channel A, so out-of-range channel numbers do not fail.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool AscChannelToBusChannel(int ascChannel)
     {
@@ -191,8 +220,24 @@ internal static class FlexRayLinkTypeFrame
 
     /// <summary>
     /// Builds a LINKTYPE_FLEXRAY data frame (measurement header + ISO header + payload).
-    /// Payload is zero-padded to an even byte count per the FlexRay specification.
+    /// Payload is zero-padded to an even byte count per the FlexRay specification (the payload length field counts
+    /// 16-bit words). Allocates the returned array; used when importing captures, not on the parse path.
     /// </summary>
+    /// <param name="channelB"><see langword="true"/> for channel B.</param>
+    /// <param name="frameId">Slot / frame ID, at most 0x7FF.</param>
+    /// <param name="cycle">Cycle count, at most 63.</param>
+    /// <param name="headerCrc">11-bit header CRC; bits above bit 10 are dropped.</param>
+    /// <param name="payload">Payload bytes, at most <see cref="MaxPayloadBytes"/>.</param>
+    /// <param name="errorFlags">Error-flags byte of the measurement header.</param>
+    /// <param name="ppi">Payload Preamble Indicator.</param>
+    /// <param name="nfi">Null Frame Indicator; <see langword="true"/> (default) marks a normal, non-null frame.</param>
+    /// <param name="sfi">Sync Frame Indicator.</param>
+    /// <param name="stfi">Startup Frame Indicator.</param>
+    /// <param name="typeIndex">Measurement-header type index; only the low 7 bits are used.</param>
+    /// <returns>The frame: 2 measurement bytes, the 5-byte ISO header and the padded payload.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="frameId"/>, <paramref name="cycle"/> or the payload length is out of range.
+    /// </exception>
     public static byte[] BuildFrame(
         bool channelB,
         ushort frameId,
@@ -221,12 +266,18 @@ internal static class FlexRayLinkTypeFrame
             throw new ArgumentOutOfRangeException(nameof(payload));
         }
 
+        // Round the payload up to whole 16-bit words; the 7-bit length field below holds the word count (at most 127
+        // because MaxPayloadBytes was checked above).
         int payloadWords = (payload.Length + 1) / 2;
         int paddedPayloadBytes = payloadWords * 2;
         byte[] frame = new byte[MinHeaderSize + paddedPayloadBytes];
 
+        // Measurement header: bit 7 = channel, bits 6..0 = type index; then the error-flags byte.
         frame[0] = (byte)((channelB ? _ChannelBitMask : 0) | (typeIndex & _TypeIndexMask));
         frame[1] = errorFlags;
+
+        // ISO 17458-2 header, bytes 2-6: indicators + frame ID high bits, frame ID low byte, payload words (7 bits)
+        // + CRC bit 10, CRC bits 9..2, CRC bits 1..0 + cycle (6 bits). Must stay the exact inverse of TryParseDataFrame.
         frame[2] = (byte)(
             (ppi ? _PpiBitMask : 0)
             | (nfi ? _NfiBitMask : 0)
@@ -238,14 +289,11 @@ internal static class FlexRayLinkTypeFrame
         frame[5] = (byte)((headerCrc >> 2) & 0xFF);
         frame[6] = (byte)(((headerCrc & 0x03) << 6) | (cycle & 0x3F));
 
+        // The pad byte of an odd payload length needs no write: only payload.Length bytes are copied and the array is
+        // zero-initialised, so the byte after the payload is already 0.
         if (payload.Length > 0)
         {
             payload.CopyTo(frame.AsSpan(MinHeaderSize));
-        }
-
-        if (paddedPayloadBytes > payload.Length)
-        {
-            frame[MinHeaderSize + payload.Length] = 0;
         }
 
         return frame;
@@ -253,7 +301,14 @@ internal static class FlexRayLinkTypeFrame
 
     /// <summary>
     /// Maps a legacy Vector/BLF <c>type_flags</c> byte to ISO 17458-2 indicator bits.
+    /// In the legacy encoding bit 0x40 means "null frame", which is the inverse of the ISO null-frame indicator
+    /// (NFI is set for a normal frame), hence the negation.
     /// </summary>
+    /// <param name="typeFlags">Legacy flags: 0x80 payload preamble, 0x40 null frame, 0x20 sync, 0x10 startup.</param>
+    /// <param name="ppi">Payload Preamble Indicator.</param>
+    /// <param name="nfi">Null Frame Indicator (set for a non-null frame).</param>
+    /// <param name="sfi">Sync Frame Indicator.</param>
+    /// <param name="stfi">Startup Frame Indicator.</param>
     public static void MapLegacyTypeFlags(
         byte typeFlags, out bool ppi, out bool nfi, out bool sfi, out bool stfi)
     {
@@ -267,7 +322,13 @@ internal static class FlexRayLinkTypeFrame
     /// <summary>
     /// Maps BLF Type 50/66 <c>frameFlags</c> to ISO 17458-2 indicator bits
     /// (<c>NULL_FRAME=0x01</c>, <c>SYNC=0x04</c>, <c>STARTUP=0x08</c>, <c>PAYLOAD_PREAM=0x10</c>).
+    /// As for the legacy mapping, NULL_FRAME is inverted into the ISO null-frame indicator.
     /// </summary>
+    /// <param name="frameFlags">BLF frame flags.</param>
+    /// <param name="ppi">Payload Preamble Indicator.</param>
+    /// <param name="nfi">Null Frame Indicator (set for a non-null frame).</param>
+    /// <param name="sfi">Sync Frame Indicator.</param>
+    /// <param name="stfi">Startup Frame Indicator.</param>
     public static void MapBlfFrameFlags(uint frameFlags, out bool ppi, out bool nfi, out bool sfi, out bool stfi)
     {
         ppi = (frameFlags & 0x10) != 0;
@@ -283,8 +344,13 @@ internal static class FlexRayLinkTypeFrame
 
     /// <summary>
     /// Parses a LINKTYPE_FLEXRAY data frame. Returns <see langword="false"/> when the
-    /// buffer is too short or the measurement type index is not <see cref="TypeIndexFrame"/>.
+    /// buffer is too short, the measurement type index is not <see cref="TypeIndexFrame"/>, or the buffer is shorter
+    /// than the header plus the payload length the header declares. Bytes after the declared payload are ignored.
     /// </summary>
+    /// <param name="data">The LINKTYPE_FLEXRAY frame starting at the measurement header.</param>
+    /// <param name="fields">The decoded header fields, or <see langword="default"/> on failure.</param>
+    /// <param name="payload">A slice of <paramref name="data"/> (no copy), empty when the frame has no payload.</param>
+    /// <returns><see langword="true"/> when a data frame was decoded.</returns>
     public static bool TryParseDataFrame(
         ReadOnlySpan<byte> data, out Fields fields, out ReadOnlySpan<byte> payload)
     {
@@ -304,6 +370,8 @@ internal static class FlexRayLinkTypeFrame
             return false;
         }
 
+        // The payload length is a 7-bit word count from the (untrusted) header, so at most 254 bytes; the length check
+        // below is therefore overflow free and guarantees the Slice cannot throw.
         byte headerByte0 = data[2];
         int payloadWords = (data[4] >> 1) & 0x7F;
         int payloadSize = payloadWords * 2;

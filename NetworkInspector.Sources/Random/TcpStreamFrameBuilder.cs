@@ -18,6 +18,15 @@ namespace NetworkInspector.Sources.Random;
 /// This is O(N) per frame, bounded by <see cref="TcpStreamOptions.SegmentsPerStream"/>
 /// which is typically small (10–100).
 /// </para>
+/// <para>
+/// <b>Why stateless:</b> the source supports random access by frame id, so a frame must not depend on the frames
+/// generated before it. The alternative (a generator that carries the per-stream sequence state from frame to frame)
+/// would make <c>FrameById</c> replay the stream. The price is the repeated derivation of endpoints and sequence numbers
+/// per frame, acceptable for a synthetic test source. Sequence numbers are <see cref="uint"/> sums that wrap, which is
+/// exactly TCP's arithmetic modulo 2^32 (the project does not enable overflow checking). The generated TCP checksum is
+/// zero and the window is 65535; only the IPv4 header checksum is computed.
+/// </para>
+/// <para><b>Thread-safety:</b> static and pure; safe from any thread.</para>
 /// </summary>
 internal static class TcpStreamFrameBuilder
 {
@@ -33,7 +42,15 @@ internal static class TcpStreamFrameBuilder
     private const byte _IpProtoTcp = 6;
     private const byte _IPv4VersionIhl = 0x45;
 
+    // ─── Seed namespaces (see SegmentSeedId) ─────────────────────────────────
+    /// <summary>Historical seed namespace of the payload size of a data segment: 2 x 2^32.</summary>
+    internal const ulong PayloadSizeNamespace = 0x2_0000_0000UL;
+
+    /// <summary>Historical seed namespace of the payload bytes of a data segment: 3 x 2^32.</summary>
+    internal const ulong PayloadBytesNamespace = 0x3_0000_0000UL;
+
     // ─── TCP flags ────────────────────────────────────────────────────────────
+    // Bit values of the flags byte of the TCP header (RFC 9293 section 3.1).
     private const byte _FlagSyn = 0x02;
     private const byte _FlagAck = 0x10;
     private const byte _FlagPsh = 0x08;
@@ -62,12 +79,16 @@ internal static class TcpStreamFrameBuilder
         int globalIndex,
         bool isIpv6)
     {
+        // Where the frame sits (stream, local position) comes from arithmetic on the layout; an index outside the layout
+        // is an expected result (null), not an error.
         TcpFrameLocation? location = layout.Locate(globalIndex);
         if (location is null)
         {
             return null;
         }
 
+        // Everything the frame needs is derived from (masterSeed, stream, local position): no state is carried over,
+        // which keeps any frame reproducible on its own (see the class remarks for the cost).
         TcpFrameLocation loc = location.Value;
         TcpStreamEndpoints ep = new(masterSeed, loc.StreamIndex, isIpv6);
         TcpFramePhase phase = layout.ClassifyPhase(loc.LocalFrameIndex);
@@ -109,7 +130,7 @@ internal static class TcpStreamFrameBuilder
                 ep.ServerMac, ep.ClientMac,
                 ep.ServerIp, ep.ClientIp,
                 ep.ServerPort, ep.ClientPort,
-                ep.ServerIsn, ep.ClientIsn + 1,
+                ep.ServerIsn, unchecked(ep.ClientIsn + 1),
                 (byte)(_FlagSyn | _FlagAck), ReadOnlySpan<byte>.Empty, isIpv6),
 
             // ACK: client → server, seq=ISN+1, ack=server ISN+1
@@ -117,7 +138,7 @@ internal static class TcpStreamFrameBuilder
                 ep.ClientMac, ep.ServerMac,
                 ep.ClientIp, ep.ServerIp,
                 ep.ClientPort, ep.ServerPort,
-                ep.ClientIsn + 1, ep.ServerIsn + 1,
+                unchecked(ep.ClientIsn + 1), unchecked(ep.ServerIsn + 1),
                 _FlagAck, ReadOnlySpan<byte>.Empty, isIpv6),
         };
     }
@@ -139,9 +160,16 @@ internal static class TcpStreamFrameBuilder
         bool isIpv6)
     {
         // Compute accumulated sequence numbers up to this data frame.
-        // SYN consumes 1 seq byte for both client and server.
-        uint clientSeq = ep.ClientIsn + 1;
-        uint serverSeq = ep.ServerIsn + 1;
+        // SYN consumes 1 seq byte for both client and server. The +1 applies even when the handshake is not generated:
+        // the data then looks like a capture that started after the handshake. Data segments alternate direction
+        // (even index client to server, odd server to client); a sender's sequence number advances by the payload
+        // size of every earlier segment it sent, and the acknowledgement number of a segment is the other side's
+        // current sequence number (everything it received so far).
+        // Sequence numbers are uint sums that wrap modulo 2^32, which is TCP's own arithmetic. The wrap is spelled out with
+        // unchecked instead of relying on the project's default, so a build with overflow checking cannot turn it into an
+        // OverflowException.
+        uint clientSeq = unchecked(ep.ClientIsn + 1);
+        uint serverSeq = unchecked(ep.ServerIsn + 1);
 
         for (int i = 0; i < dataStep; i++)
         {
@@ -149,11 +177,11 @@ internal static class TcpStreamFrameBuilder
             bool priorIsClientToServer = (i % 2) == 0;
             if (priorIsClientToServer)
             {
-                clientSeq += (uint)priorPayloadSize;
+                clientSeq = unchecked(clientSeq + (uint)priorPayloadSize);
             }
             else
             {
-                serverSeq += (uint)priorPayloadSize;
+                serverSeq = unchecked(serverSeq + (uint)priorPayloadSize);
             }
         }
 
@@ -198,20 +226,22 @@ internal static class TcpStreamFrameBuilder
         int teardownStep,
         bool isIpv6)
     {
-        // Accumulate all data segment payload sizes
-        uint clientSeq = ep.ClientIsn + 1;
-        uint serverSeq = ep.ServerIsn + 1;
+        // Accumulate all data segment payload sizes (every data frame precedes the teardown, so all of them count).
+        // The loop re-derives each payload size from its seed, the same values the data frames used.
+        // uint sums that wrap modulo 2^32, spelled out with unchecked (see _BuildDataFrame).
+        uint clientSeq = unchecked(ep.ClientIsn + 1);
+        uint serverSeq = unchecked(ep.ServerIsn + 1);
 
         for (int i = 0; i < layout.DataFrames; i++)
         {
             int size = _DerivePayloadSize(masterSeed, streamIndex, i, options);
             if ((i % 2) == 0)
             {
-                clientSeq += (uint)size;
+                clientSeq = unchecked(clientSeq + (uint)size);
             }
             else
             {
-                serverSeq += (uint)size;
+                serverSeq = unchecked(serverSeq + (uint)size);
             }
         }
 
@@ -230,7 +260,7 @@ internal static class TcpStreamFrameBuilder
                 ep.ServerMac, ep.ClientMac,
                 ep.ServerIp, ep.ClientIp,
                 ep.ServerPort, ep.ClientPort,
-                serverSeq, clientSeq + 1,  // FIN consumes 1 seq
+                serverSeq, unchecked(clientSeq + 1),  // FIN consumes 1 seq
                 _FlagAck, ReadOnlySpan<byte>.Empty, isIpv6),
 
             // FIN-ACK: server → client
@@ -238,7 +268,7 @@ internal static class TcpStreamFrameBuilder
                 ep.ServerMac, ep.ClientMac,
                 ep.ServerIp, ep.ClientIp,
                 ep.ServerPort, ep.ClientPort,
-                serverSeq, clientSeq + 1,
+                serverSeq, unchecked(clientSeq + 1),
                 (byte)(_FlagFin | _FlagAck), ReadOnlySpan<byte>.Empty, isIpv6),
 
             // Final ACK: client → server
@@ -246,8 +276,8 @@ internal static class TcpStreamFrameBuilder
                 ep.ClientMac, ep.ServerMac,
                 ep.ClientIp, ep.ServerIp,
                 ep.ClientPort, ep.ServerPort,
-                clientSeq + 1,  // After client's FIN consumed 1
-                serverSeq + 1,  // Server's FIN consumed 1
+                unchecked(clientSeq + 1),  // After client's FIN consumed 1
+                unchecked(serverSeq + 1),  // Server's FIN consumed 1
                 _FlagAck, ReadOnlySpan<byte>.Empty, isIpv6),
         };
     }
@@ -261,13 +291,43 @@ internal static class TcpStreamFrameBuilder
     private static int _DerivePayloadSize(
         ulong masterSeed, int streamIndex, int dataIndex, TcpStreamOptions options)
     {
-        // Seed namespace: high bits for stream, low bits for data index,
-        // plus a distinct offset to avoid collisions with endpoint seeds.
+        // The size and the bytes of one segment use separate seeds (see SegmentSeedId), so the payload size can be derived
+        // without generating the bytes (the sequence sums need only sizes).
         ulong seed = Xoroshiro128PlusPlus.DeriveFrameSeed(
             masterSeed,
-            0x2_0000_0000UL + ((ulong)streamIndex << 16) + (ulong)dataIndex);
+            SegmentSeedId(PayloadSizeNamespace, streamIndex, dataIndex));
+
+        // NextRange takes an exclusive upper bound, hence + 1 (the options guarantee Min <= Max, and Max is at most 65 515, far
+        // below int.MaxValue, so the bound cannot wrap).
         Xoroshiro128PlusPlus rng = new(seed);
         return rng.NextRange(options.MinPayloadSize, options.MaxPayloadSize + 1);
+    }
+
+    /// <summary>
+    /// Seed id of one data segment in one of the two segment namespaces (size, bytes).
+    /// <para>
+    /// Seed namespaces in <c>DeriveFrameSeed(masterSeed, id)</c>: frame ids of the random frame modes are below 2^32;
+    /// endpoint ids are <c>2^32 + stream</c> (below 2^32 + 2^31); the segment ids below keep their historical layout
+    /// (<c>namespace + (stream &lt;&lt; 16) + segment</c>, in 2 x 2^32 and 3 x 2^32) as long as both indexes are below
+    /// 65 536, so the output of every existing seed stays the same. Beyond that the historical layout lets the ids of
+    /// different (stream, segment) pairs, and of the two namespaces, coincide (the stream bits overlap the segment
+    /// bits), which repeated or correlated the generated values between those pairs. Such pairs get a second layout
+    /// instead: bit 63 set, bit 62 selecting size or bytes, then the stream index in bits 31..61 and the segment index in
+    /// bits 0..30. Both indexes are non-negative ints (31 bits each), so that layout is collision-free, and bit 63 keeps
+    /// it out of every historical range (all of them are below 2^34).
+    /// </para>
+    /// </summary>
+    internal static ulong SegmentSeedId(ulong historicalNamespace, int streamIndex, int dataIndex)
+    {
+        if (streamIndex < 0x1_0000 && dataIndex < 0x1_0000)
+        {
+            return historicalNamespace + ((ulong)streamIndex << 16) + (ulong)dataIndex;
+        }
+
+        ulong namespaceBit = historicalNamespace == PayloadBytesNamespace
+            ? 1UL << 62
+            : 0UL;
+        return (1UL << 63) | namespaceBit | ((ulong)streamIndex << 31) | (uint)dataIndex;
     }
 
     /// <summary>
@@ -279,7 +339,7 @@ internal static class TcpStreamFrameBuilder
     {
         ulong seed = Xoroshiro128PlusPlus.DeriveFrameSeed(
             masterSeed,
-            0x3_0000_0000UL + ((ulong)streamIndex << 16) + (ulong)dataIndex);
+            SegmentSeedId(PayloadBytesNamespace, streamIndex, dataIndex));
         Xoroshiro128PlusPlus rng = new(seed);
         byte[] payload = new byte[size];
         rng.FillBytes(payload);
@@ -338,6 +398,8 @@ internal static class TcpStreamFrameBuilder
     private static void _WriteIpv4Header(
         byte[] frame, int offset, byte[] srcIp, byte[] dstIp, int payloadLength)
     {
+        // The unchecked cast to 16 bits assumes payloadLength <= 65 495; larger payloads (not rejected by the options)
+        // would wrap the length field.
         ushort totalLength = (ushort)(_IPv4HeaderSize + _TcpHeaderSize + payloadLength);
 
         frame[offset] = _IPv4VersionIhl;       // Version 4, IHL 5
@@ -352,7 +414,8 @@ internal static class TcpStreamFrameBuilder
         srcIp.CopyTo(frame.AsSpan(offset + 12));
         dstIp.CopyTo(frame.AsSpan(offset + 16));
 
-        // Compute one's-complement checksum
+        // Compute the header checksum (RFC 791): one's-complement sum of the ten 16-bit big-endian words of the header,
+        // the checksum field still zero at this point, carries folded back into the low 16 bits, then inverted.
         uint sum = 0;
         for (int i = 0; i < _IPv4HeaderSize; i += 2)
         {
@@ -371,6 +434,7 @@ internal static class TcpStreamFrameBuilder
     private static void _WriteIpv6Header(
         byte[] frame, int offset, byte[] srcIp, byte[] dstIp, int payloadLength)
     {
+        // 16-bit payload length (TCP header plus data); assumes payloadLength <= 65 515, see the IPv4 header above.
         ushort ipPayloadLength = (ushort)(_TcpHeaderSize + payloadLength);
 
         frame[offset] = 0x60;                // Version 6

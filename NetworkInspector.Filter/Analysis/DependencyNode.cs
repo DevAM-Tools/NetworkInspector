@@ -11,6 +11,10 @@ namespace NetworkInspector.Filter.Analysis;
 /// match, expressed purely in terms of protocol and field presence. Turning the tree into a
 /// bitmap therefore never drops a matching packet, which is what makes index pruning safe.
 /// </para>
+/// <para>
+/// Nodes are immutable after construction (the child arrays are never modified) and therefore thread-safe; one tree is
+/// shared by every consumer of the compiled filter.
+/// </para>
 /// </summary>
 internal abstract class DependencyNode
 {
@@ -43,7 +47,9 @@ internal sealed class DependencyAny(DependencyNode[] children) : DependencyNode
 
 /// <summary>
 /// Nothing can be said about this sub-expression — for example a negation, a boolean constant,
-/// or a field with no index group. Treated as "every packet may match".
+/// a <c>flank</c>, or a name the stack does not know. Treated as "every packet may match". A field that merely has no
+/// index group is not unknown here: it stays a <see cref="DependencyLeaf"/> and is reported as unresolvable when the
+/// bitmaps are looked up, because that depends on the index, not on the expression.
 /// </summary>
 internal sealed class DependencyUnknown : DependencyNode
 {

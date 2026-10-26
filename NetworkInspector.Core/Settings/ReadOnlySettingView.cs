@@ -14,6 +14,10 @@ namespace NetworkInspector.Core.Settings;
 /// interface type, or pass it to a non-generic parameter of that type. Those conversions
 /// box. Prefer this struct (or a generic constraint) at call sites.
 /// </para>
+/// <para>
+/// Thread-safety: a readonly struct that only forwards to its <see cref="Setting"/>; it adds no state, so it is as
+/// thread-safe as the setting (lock-free reads of an immutable snapshot).
+/// </para>
 /// </summary>
 public readonly struct ReadOnlySettingView : IReadOnlySetting
 {

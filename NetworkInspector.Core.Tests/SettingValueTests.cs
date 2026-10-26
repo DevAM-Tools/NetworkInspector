@@ -1154,6 +1154,30 @@ internal sealed class SettingValueTests
     }
 
     [Test]
+    public async Task FormatTemp_StringAndNumber_DisposeReleasesTheThreadStaticBuffer()
+    {
+        // No await between acquire and check: the thread-static buffer belongs to this thread.
+        bool availableAfterString;
+        bool availableAfterNumber;
+        string numberText;
+        using (SettingValue.String("plain").FormatTemp())
+        {
+        }
+
+        availableAfterString = ZeroAllocHelper.IsCharBufferAvailable();
+        using (TempString temp = SettingValue.I64(-12345).FormatTemp())
+        {
+            numberText = temp.AsSpan().ToString();
+        }
+
+        availableAfterNumber = ZeroAllocHelper.IsCharBufferAvailable();
+
+        await Assert.That(availableAfterString).IsTrue();
+        await Assert.That(numberText).IsEqualTo("-12345");
+        await Assert.That(availableAfterNumber).IsTrue();
+    }
+
+    [Test]
     public async Task FormatTemp_EmptyString_ReturnsEmpty()
     {
         int length;
@@ -1258,6 +1282,22 @@ internal sealed class SettingValueTests
         string text = v.ToString("F300", CultureInfo.InvariantCulture);
         await Assert.That(text.StartsWith("1.", StringComparison.Ordinal)).IsTrue();
         await Assert.That(text.Length).IsEqualTo(302);
+    }
+
+    [Test]
+    public async Task ToString_LongCustomFormat_IgnoresTheProviderLikeTheShortOne()
+    {
+        // TryFormat always formats with the invariant culture; the text must not change only because it outgrew the stack buffer.
+        NumberFormatInfo commaDecimal = new() { NumberDecimalSeparator = ",", NegativeSign = "~" };
+        SettingValue negative = SettingValue.F64(-1.5);
+
+        string shortText = negative.ToString("F1", commaDecimal);
+        string longText = negative.ToString("F300", commaDecimal);
+        string longIntegerText = SettingValue.I64(-1).ToString("D300", commaDecimal);
+
+        await Assert.That(shortText).IsEqualTo("-1.5");
+        await Assert.That(longText.StartsWith("-1.5", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(longIntegerText.StartsWith('-')).IsTrue();
     }
 
     [Test]

@@ -11,6 +11,7 @@ public interface IFileSourceOptions
 
     /// <summary>
     /// Scan mode: Full scans the entire file upfront, Lazy scans on demand.
+    /// A source that cannot scan lazily reports <see cref="ScanMode.Full"/> (the ASC options always do).
     /// </summary>
     ScanMode ScanMode
     {
@@ -19,8 +20,10 @@ public interface IFileSourceOptions
 
     /// <summary>
     /// Maximum file size in bytes for in-memory preloading.
-    /// Files larger than this use memory-mapped I/O.
-    /// Null or negative means always use memory-mapped I/O.
+    /// Files larger than this are not loaded into memory: PCAPNG and BLF memory-map them, ASC reads its lines from disk.
+    /// <see langword="null"/> means never preload (always the memory-mapped or disk-backed path).
+    /// The shipped implementations reject a negative value with <see cref="ArgumentOutOfRangeException"/> when the option
+    /// is set, so a negative budget never reaches a source.
     /// </summary>
     long? PreloadBudget
     {

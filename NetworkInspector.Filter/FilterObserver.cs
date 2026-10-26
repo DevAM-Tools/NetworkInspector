@@ -163,7 +163,8 @@ public sealed class FilterObserver : IFieldObserver
         }
 
         // A frame the caller did not read still has to update flank state. Commit it
-        // before the per-frame bits and the sample slot are cleared.
+        // before the per-frame bits and the sample slot are cleared. The commit uses the id and timestamp of the frame
+        // that is ending, so it must run before they are overwritten below.
         _CommitFlank();
         _PacketId = id;
         _Timestamp = timestamp;
@@ -192,6 +193,9 @@ public sealed class FilterObserver : IFieldObserver
             return;
         }
 
+        // Per observed value: a dense slot table maps the field id to the leaves that test it (no dictionary lookup, no
+        // allocation). A leaf latches on its first passing occurrence; later occurrences of that leaf are skipped. Leaves
+        // are a struct array accessed by ref so the large struct is not copied per value.
         int[] indexes = _LeafIndexes[slot];
         FieldValueData data = visit.Value.Data;
         bool anyNewHit = false;
@@ -379,6 +383,11 @@ public sealed class FilterObserver : IFieldObserver
             return false;
         }
 
+        // The same comparison and predicate code as the field-tree filter runs here (stack-allocated predicate structs, no
+        // allocation), so an observer and a Filter of one expression cannot disagree. The null-forgiving operators below
+        // rely on the observer compiler setting exactly the member that belongs to leaf.Kind.
+        // A regex timeout is stored instead of thrown: OnField runs inside the parse, and the failure is delivered by
+        // TryReadMatch; the stored failure also stops all further leaf tests of the frame.
         try
         {
             switch (leaf.Kind)
@@ -421,6 +430,11 @@ public sealed class FilterObserver : IFieldObserver
             : -1;
     }
 
+    /// <summary>
+    /// Evaluates the boolean tree over the latched leaf bits. The nodes are a flat array indexed by node id, so the
+    /// verdict needs no allocation and no tree objects; the recursion depth is the expression depth. The default arm is
+    /// <see cref="BitOp.Const"/>.
+    /// </summary>
     private bool _Eval(int index)
     {
         ref BitNode node = ref _Nodes[index];

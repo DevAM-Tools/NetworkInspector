@@ -7,6 +7,8 @@ namespace NetworkInspector.Sessions;
 /// Session validates each name with <see cref="NameValidation.IsValidName"/> (same rule as
 /// stack registration), then resolves with <see cref="Stack.GetFieldId"/> /
 /// <see cref="Stack.GetIndexGroupId"/> so Restart can rebind the same request to a new stack.
+/// A request must name at least one field or group, or set <see cref="RecordAllFields"/>; the value cache rejects an
+/// empty one, and the session reports that as <see cref="SessionErrorCode.ValueCacheInvalidRequest"/>.
 /// </summary>
 public sealed class ValueCacheRequest
 {
@@ -47,7 +49,11 @@ public sealed class ValueCacheRequest
     public bool RecordContainerPresence { get; init; }
 
     /// <summary>
-    /// Log₂ of rows per inner column chunk. Default 12 (4096). Allowed range 4…20.
+    /// Log₂ of rows per inner column chunk. Default 12 (4096). Allowed range 4…20 (the bounds of
+    /// <c>ValueCacheBuildOptions</c>). This property does not validate: an out-of-range value is rejected when the
+    /// session builds the cache, and surfaces as a <see cref="SessionException"/> with
+    /// <see cref="SessionErrorCode.ValueCacheInvalidRequest"/>. A smaller shift suits short captures, so the first chunk of
+    /// a series is not 4096 slots.
     /// </summary>
     public int ChunkShift { get; init; } = 12;
 

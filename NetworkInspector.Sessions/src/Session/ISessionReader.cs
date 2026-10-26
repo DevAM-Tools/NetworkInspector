@@ -17,7 +17,11 @@ public interface ISessionReader
 
     // ── Counters ─────────────────────────────────────────────────────────────
 
-    /// <summary>Total packets parsed so far. Volatile read.</summary>
+    /// <summary>
+    /// Total packets parsed so far. Volatile read. The count is published after the frame mapping of every id below
+    /// it, so each id in <c>[0, PacketCount)</c> can be read even while ingest keeps appending; a count read once
+    /// is a safe upper bound for a following read loop.
+    /// </summary>
     int PacketCount
     {
         get;
@@ -205,7 +209,12 @@ public interface ISessionReader
 
     // ── Stack ────────────────────────────────────────────────────────────────
 
-    /// <summary>The protocol stack currently bound to this session. Replaced by <see cref="ISession.Restart"/>.</summary>
+    /// <summary>
+    /// The protocol stack currently bound to this session. Replaced by <see cref="ISession.Restart"/>. A caller that parses
+    /// with it outside the session's reads holds no protection: a stack the session owns is disposed once a restart replaced
+    /// it and the session's own reads ended, so read the property again after <c>OnStackChanged</c> and do not keep the old
+    /// reference.
+    /// </summary>
     Stack Stack
     {
         get;

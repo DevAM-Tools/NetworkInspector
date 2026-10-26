@@ -7,6 +7,15 @@ namespace NetworkInspector.Protocols.Helpers;
 /// network-order 16-bit words and keeps every carry, so the result does not depend on the hardware path.
 /// Provides three tiers: Vector256 (AVX2), Vector128 (SSE2/NEON), scalar fallback.
 /// Used for IPv4 header checksum and UDP/TCP checksum validation.
+/// <para>
+/// Design: the checksum runs over every validated packet, so the sum is accumulated in a <see cref="ulong"/> and the
+/// carries are folded once at the end instead of after every word. The SIMD paths exist to cut the per-byte cost of
+/// large TCP/UDP segments; short inputs (an IPv4 header is 20 to 60 bytes) use the narrower path because the vector
+/// setup and the horizontal sum would not pay off. The thresholds (64 and 32 bytes) are two vector blocks each.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> all members are stateless and safe for concurrent use.
+/// </para>
 /// </summary>
 internal static class InternetChecksum
 {
@@ -20,11 +29,17 @@ internal static class InternetChecksum
     /// Computes the one's complement checksum of the given data.
     /// Returns 0x0000 if the checksum is valid (when verifying a received packet).
     /// </summary>
+    /// <param name="data">
+    /// The bytes to sum, read as network-order 16-bit words. A trailing odd byte is padded with a zero byte on the
+    /// right (RFC 1071). When verifying, include the received checksum field; when generating, zero it first.
+    /// </param>
+    /// <returns>The complemented 16-bit sum; 0x0000 when verifying a packet with a correct checksum.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static ushort Compute(ReadOnlySpan<byte> data)
     {
         ulong sum;
 
+        // Pick the widest path that has at least two full vector blocks to work on; every path returns the same sum.
         if (Vector256.IsHardwareAccelerated && data.Length >= 64)
         {
             sum = _ComputeVector256(data);
@@ -45,11 +60,21 @@ internal static class InternetChecksum
     /// Computes the one's complement checksum for a pseudo-header + UDP/TCP segment.
     /// The pseudo-header sum is pre-computed from IP source/destination and protocol info.
     /// </summary>
+    /// <param name="data">
+    /// The UDP/TCP/ICMPv6 segment including its checksum field, summed as in <see cref="Compute"/>.
+    /// </param>
+    /// <param name="pseudoHeaderSum">
+    /// The unfolded pseudo-header sum from <see cref="ComputeIPv4PseudoHeaderSum"/> or
+    /// <see cref="ComputeIPv6PseudoHeaderSum"/>. It is passed as a number, not as bytes, so no pseudo-header buffer
+    /// has to be built or copied in front of the segment.
+    /// </param>
+    /// <returns>The complemented 16-bit sum; 0x0000 when verifying a segment with a correct checksum.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static ushort ComputeWithPseudoHeader(ReadOnlySpan<byte> data, ulong pseudoHeaderSum)
     {
         ulong sum;
 
+        // Same tier selection and thresholds as Compute; the pseudo-header sum is added only after the data is summed.
         if (Vector256.IsHardwareAccelerated && data.Length >= 64)
         {
             sum = _ComputeVector256(data);
@@ -91,8 +116,10 @@ internal static class InternetChecksum
         byte protocol, ushort transportLength)
     {
         // Extract the 4 × 16-bit words directly from the 32-bit address values.
-        // No byte conversion needed — the checksum is endian-neutral at the word level
-        // because both halves are summed and the one's complement sum is commutative.
+        // The raw address holds the first octet in its top byte (network byte order read as a number), so its upper and
+        // lower halves are exactly the two network-order words the pseudo-header carries, matching the network-order
+        // words the data paths sum. The one's complement sum is commutative, so the order of the additions is free.
+        // The result stays unfolded and cannot overflow a ulong (six terms of at most 32 bits).
         ulong sum = (srcIp >> 16) + (srcIp & 0xFFFF)
                   + (dstIp >> 16) + (dstIp & 0xFFFF)
                   + protocol
@@ -121,7 +148,8 @@ internal static class InternetChecksum
         byte nextHeader, uint transportLength)
     {
         // Extract 16-bit words from each 64-bit half via bit-shifts.
-        // Each 64-bit value yields 4 × 16-bit words.
+        // Each 64-bit value yields 4 × 16-bit words. The high half holds the first 8 octets (network order), so the
+        // top word of every half is the first word on the wire.
         ulong sum = _SumU64AsU16Words(srcHigh)
                   + _SumU64AsU16Words(srcLow)
                   + _SumU64AsU16Words(dstHigh)
@@ -131,7 +159,8 @@ internal static class InternetChecksum
         sum += (transportLength >> 16) & 0xFFFF;
         sum += transportLength & 0xFFFF;
 
-        // Next-header (zero-padded to 16 bits)
+        // Next-header (zero-padded to 16 bits): the pseudo-header carries 3 zero octets before it, so it is the low
+        // octet of the last word (RFC 8200 section 8.1).
         sum += nextHeader;
 
         return sum;
@@ -148,11 +177,13 @@ internal static class InternetChecksum
     /// <summary>Scalar one's complement accumulation, processing 4 bytes per iteration.</summary>
     private static ulong _ComputeScalar(ReadOnlySpan<byte> data)
     {
+        // The ulong accumulator absorbs all carries: a span holds at most int.MaxValue bytes, i.e. fewer than 2^30
+        // words of at most 0xFFFF, so the sum stays below 2^46 and never wraps. Folding is left to _FoldAndFinalize.
         ulong sum = 0;
         int offset = 0;
         int length = data.Length;
 
-        // Process 4 bytes (two 16-bit words) per iteration
+        // Process 4 bytes (two 16-bit words) per iteration (unrolled once to reduce loop overhead).
         while (offset + 3 < length)
         {
             sum += BinaryPrimitives.ReadUInt16BigEndian(data[offset..]);
@@ -221,13 +252,15 @@ internal static class InternetChecksum
             offset += 32;
         }
 
-        // Horizontal sum of all 8 u32 lanes
+        // Horizontal sum of all 8 u32 lanes. Added lane by lane into the u64 sum: Vector256.Sum on the u32 lanes
+        // would add in 32 bits and could wrap, which is the carry loss the block counter above prevents.
         for (int i = 0; i < Vector256<uint>.Count; i++)
         {
             sum += acc.GetElement(i);
         }
 
-        // Process remaining bytes with scalar
+        // Process the remaining bytes (fewer than one vector block) with scalar reads. A trailing odd byte is the high
+        // octet of a final word whose low octet is zero (RFC 1071 padding).
         while (offset + 1 < length)
         {
             sum += BinaryPrimitives.ReadUInt16BigEndian(data[offset..]);
@@ -283,7 +316,7 @@ internal static class InternetChecksum
             offset += 16;
         }
 
-        // Horizontal sum of all 4 u32 lanes
+        // Horizontal sum of all 4 u32 lanes, widened lane by lane into the u64 sum (see the Vector256 path).
         for (int i = 0; i < Vector128<uint>.Count; i++)
         {
             sum += acc.GetElement(i);
@@ -312,11 +345,14 @@ internal static class InternetChecksum
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ushort _FoldAndFinalize(ulong sum)
     {
+        // Each pass replaces the sum by (high part + low 16 bits), which keeps its value modulo 0xFFFF (2^16 ≡ 1);
+        // a ulong needs only a few passes. The loop (instead of two fixed folds) is what keeps sums near 2^64 correct.
         while ((sum >> 16) != 0)
         {
             sum = (sum >> 16) + (sum & 0xFFFF);
         }
 
+        // The sum is now at most 0xFFFF, so the cast after the complement only drops the (all-ones) upper bits.
         return (ushort)~sum;
     }
 }

@@ -5,6 +5,9 @@ namespace NetworkInspector.Protocols.Attributes;
 /// <summary>
 /// Abstract base for protocol dispatch table attributes.
 /// Provides common properties for table name, UI name, and description.
+/// The source generator emits a <c>RegisterProtocolTable</c> call (with the key type of the concrete attribute) in
+/// <c>RegisterFields</c> and assigns the resulting <see cref="ProtocolTableId"/> to the annotated field; the table
+/// is later filled by <c>RegisterAtTable</c>-style attributes on other protocols and read through that ID at parse time.
 /// </summary>
 /// <remarks>Initializes a new protocol table attribute.</remarks>
 /// <param name="name">Machine-readable table name.</param>

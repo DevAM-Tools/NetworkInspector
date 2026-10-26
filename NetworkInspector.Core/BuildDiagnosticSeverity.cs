@@ -10,7 +10,10 @@ public enum BuildDiagnosticSeverity
     /// <summary>A non-fatal configuration issue that may require attention but does not prevent the stack from functioning.</summary>
     Warning,
 
-    /// <summary>A protocol startup exception that may indicate a broken protocol.</summary>
+    /// <summary>
+/// A protocol startup exception that may indicate a broken protocol. The stack is still built and the remaining
+/// protocols are still started.
+/// </summary>
     Error,
 
     #endregion

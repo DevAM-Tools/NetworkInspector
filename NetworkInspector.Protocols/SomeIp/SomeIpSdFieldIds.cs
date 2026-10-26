@@ -4,8 +4,14 @@ namespace NetworkInspector.Protocols.SomeIp;
 
 /// <summary>
 /// Groups all registered field IDs for SOME/IP-SD sub-fields.
-/// Populated in <see cref="SomeIpProtocol._OnStartCustom"/> from attribute-registered field IDs.
+/// Populated once in <c>SomeIpProtocol._RegisterFieldsCustom</c> (field registration time) from the
+/// attribute-registered field IDs.
 /// </summary>
+/// <remarks>
+/// Exists so the SD parser, a static class outside the protocol type, can receive all ids as one read-only value
+/// (passed by <see langword="in"/> reference, no copy per call) instead of 29 loose parameters. Thread safety:
+/// immutable after construction; safe for concurrent reads.
+/// </remarks>
 internal readonly struct SomeIpSdFieldIds
 {
     #region Top-level SD fields

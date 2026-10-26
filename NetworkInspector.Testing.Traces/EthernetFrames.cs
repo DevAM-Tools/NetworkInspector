@@ -23,7 +23,10 @@ internal static class EthernetFrames
     /// <summary>Destination IPv4 address of every frame (192.0.2.2).</summary>
     internal static readonly IPv4Address DestinationAddress = new(0xC0000202);
 
-    /// <summary>Largest frame size the Ethernet layer accepts when jumbo frames are requested.</summary>
+    /// <summary>
+    /// Largest value of the <c>maxFrameSize</c> parameter of the Ethernet layer (a <see cref="ushort"/>). Jumbo recipes pass it
+    /// as the link limit so that a large payload still fits into one frame.
+    /// </summary>
     internal const ushort MaxJumboFrameSize = ushort.MaxValue;
 
     /// <summary>DNS record type A (IPv4 address).</summary>
@@ -41,6 +44,9 @@ internal static class EthernetFrames
     /// <returns>The frame bytes.</returns>
     internal static byte[] Udp(ushort sourcePort, ushort destinationPort, ReadOnlySpan<byte> payload, ushort maxFrameSize = 1518)
     {
+        // Don't-fragment is set explicitly although it is the layer default: with fragmentation allowed a payload above the
+        // link limit would become several frames and EmitFrame would keep only the first. With DF set the build fails instead
+        // (see FrameEmitting), so a recipe that asks for more than maxFrameSize is a visible error, not a silently short frame.
         EthernetLayer eth = new(DestinationMac, SourceMac, maxFrameSize: maxFrameSize);
         IPv4Layer ip = new(SourceAddress, DestinationAddress, dontFragment: true);
         UdpLayer udp = new(sourcePort, destinationPort);

@@ -71,6 +71,46 @@ internal sealed class FieldBitmaskTests
     }
 
     [Test]
+    public async Task InsertInvalidFieldIdSentinelDoesNotThrowAndIsRememberedOnce()
+    {
+        FieldBitmask bitmask = new(64);
+
+        bool first = bitmask.Insert(-1);
+        bool second = bitmask.Insert(-1);
+
+        await Assert.That(first).IsTrue();
+        await Assert.That(second).IsFalse();
+    }
+
+    [Test]
+    public async Task InsertNegativeFieldIdDoesNotDisturbValidIds()
+    {
+        FieldBitmask bitmask = new(64);
+        bitmask.Insert(int.MinValue);
+
+        bool zero = bitmask.Insert(0);
+        bool minValueAgain = bitmask.Insert(int.MinValue);
+
+        await Assert.That(zero).IsTrue();
+        await Assert.That(minValueAgain).IsFalse();
+    }
+
+    [Test]
+    public async Task ClearForgetsEveryInsertedId()
+    {
+        FieldBitmask bitmask = new(64);
+        bitmask.Insert(3);
+        bitmask.Insert(300);
+        bitmask.Insert(-1);
+
+        bitmask.Clear();
+
+        await Assert.That(bitmask.Insert(3)).IsTrue();
+        await Assert.That(bitmask.Insert(300)).IsTrue();
+        await Assert.That(bitmask.Insert(-1)).IsTrue();
+    }
+
+    [Test]
     public async Task Insert_FieldIdZeroAndBeyondCapacity_IndependentBits()
     {
         // Ensure that a write beyond capacity does not corrupt the low field IDs.

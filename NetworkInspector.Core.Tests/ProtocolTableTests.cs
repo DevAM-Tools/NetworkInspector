@@ -95,6 +95,28 @@ internal sealed class ProtocolTableTests
         _ = Assert.Throws<InvalidOperationException>(() => table.RegisterU64(1, _Proto(1)));
     }
 
+    [Test]
+    public async Task Bool_WrongKeyType_ThrowsOnRegisterAndStoresNothing()
+    {
+        ProtocolTable table = _CreateTable(ProtocolTableKeyType.U64);
+
+        _ = Assert.Throws<InvalidOperationException>(() => table.RegisterBool(true, _Proto(1)));
+
+        await Assert.That(table.GetBool(true)).IsNull();
+        await Assert.That(table.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Any_WrongKeyType_ThrowsOnRegisterAndStoresNothing()
+    {
+        ProtocolTable table = _CreateTable(ProtocolTableKeyType.String);
+
+        _ = Assert.Throws<InvalidOperationException>(() => table.RegisterAny(_Proto(1)));
+
+        await Assert.That(table.GetAny()).IsNull();
+        await Assert.That(table.Count).IsEqualTo(0);
+    }
+
     // === String table ===
 
     [Test]

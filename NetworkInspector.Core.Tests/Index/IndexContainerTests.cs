@@ -11,6 +11,24 @@ internal sealed class IndexContainerTests
     // === ArrayContainer ===
 
     [Test]
+    public async Task ArrayContainer_LinearContainsWithCountAboveArrayLength_StaysInsideTheArray()
+    {
+        // A torn read pairs an old, shorter array (length 10, not a multiple of 8) with the count of a later insert. The
+        // unchecked 8-lane load must not run past the array: the call completes with an answer instead of reading beyond it and
+        // then failing at the first element past the end.
+        MethodInfo? linearContains = typeof(ArrayContainer).GetMethod(
+            "_SimdLinearContains", BindingFlags.NonPublic | BindingFlags.Static);
+        ushort[] values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        await Assert.That(linearContains).IsNotNull();
+        bool found = (bool)linearContains!.Invoke(null, [values, 20, (ushort)9])!; // non-null: the method returns bool
+        bool absent = (bool)linearContains.Invoke(null, [values, 20, (ushort)500])!; // non-null: the method returns bool
+
+        await Assert.That(found).IsTrue();
+        await Assert.That(absent).IsFalse();
+    }
+
+    [Test]
     public async Task ArrayContainer_AddContainsMinMaxClone()
     {
         ArrayContainer a = new();

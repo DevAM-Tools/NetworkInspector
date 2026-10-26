@@ -131,6 +131,11 @@ no `SET` is issued. `ColumnarDetailFlags` lives in `NetworkInspector.Exporters.C
 - If no packets arrive, no database file is created.
 - In tolerant mode an unwritable path raises `ItemSkipped` and the export ends cleanly; strict mode aborts.
 - Packets parsed with `FieldTreeMode.Skip` are reported as `SerializationError`.
+- A packet that cannot be added to a batch leaves the batch unchanged and is skipped. When writing a batch fails, its
+  transaction is rolled back and the batch is dropped: its packets count as skipped, not as written, and one error is
+  raised. Field tables created by the rolled-back batch are created again by the next batch.
+- The database path is passed to DuckDB as one value, so characters such as `;` or quotes in a path stay part of the
+  file name and cannot change connection options.
 - Call `OnFinish()` (or dispose) to release the file handle.
 
 ## Links

@@ -28,11 +28,13 @@ internal enum FilterSymbolKind : byte
 /// deals with <see cref="FieldId"/> arrays; a canonical field produces a one-element array. The
 /// arrays are shared by every emitted closure and must never be mutated.
 /// </para>
+/// <para><b>Thread-safety:</b> immutable after construction (provided the shared arrays are not modified), so it can be shared freely.</para>
 /// </summary>
 internal sealed class FilterSymbol
 {
     #region Fields
 
+    // One shared empty array for every protocol symbol, so creating a protocol symbol allocates no array.
     private static readonly FieldId[] _NoFields = [];
 
     #endregion
@@ -89,7 +91,11 @@ internal sealed class FilterSymbol
     /// <summary>The canonical fields this symbol reads; empty for a protocol symbol.</summary>
     public FieldId[] Fields { get; }
 
-    /// <summary>Index group of a canonical field, or <see cref="IndexGroupId.Invalid"/>.</summary>
+    /// <summary>
+    /// Index group of a canonical field, or <see cref="IndexGroupId.Invalid"/>. Always invalid for protocol and alias
+    /// symbols: an alias spans several fields that may sit in different groups, so presence pruning looks up each member
+    /// field instead.
+    /// </summary>
     public IndexGroupId IndexGroup { get; }
 
     /// <summary>Whether this symbol produces values (field or alias) rather than only presence.</summary>

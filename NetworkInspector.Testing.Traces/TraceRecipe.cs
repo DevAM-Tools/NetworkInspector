@@ -12,10 +12,16 @@ public abstract class TraceRecipe
 {
     #region Constants
 
+    // Limit: frames per recipe, 1 to 10,000,000. Threat: none from input; test support only, so this protects the test
+    // machine from a typo (a multi-gigabyte file in the temp folder). Constant: it is not a host-derived or user setting.
+    // Recipes that are meant to be larger (the large random trace) pass their own maximum to CheckCount.
     /// <summary>Largest frame or packet count of a recipe, so that a test cannot ask for a file of unbounded size by accident.</summary>
     public const int MaxFrames = 10_000_000;
 
-    /// <summary>Base time of every trace: 2026-01-01T00:00:00Z in nanoseconds since the Unix epoch.</summary>
+    /// <summary>
+    /// Base time of every trace: 2026-01-01T00:00:00Z in nanoseconds since the Unix epoch. A fixed instant (never the clock)
+    /// keeps the written bytes identical on every run, which the cache key and the byte-for-byte tests depend on.
+    /// </summary>
     public const long BaseNanos = 1_767_225_600L * 1_000_000_000L;
 
     #endregion

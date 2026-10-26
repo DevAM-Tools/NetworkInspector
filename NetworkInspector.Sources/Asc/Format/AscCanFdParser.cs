@@ -10,7 +10,9 @@ namespace NetworkInspector.Sources.Asc.Format;
 ///
 /// SocketCAN FD frame layout (8 header + up to 64 data):
 ///   [id(4BE) | payload length(1) | fd_flags(1) | reserved(2) | data(0–64)]
-/// Byte 4 is the payload byte count (<c>canfd_frame.len</c>), not the ASC DLC code.
+/// Byte 4 is the payload byte count (<c>canfd_frame.len</c>), not the ASC DLC code. The stored frame holds the header and
+/// only the payload bytes that the line actually carries, not a fixed 64-byte data area.
+/// Stateless; safe to call from multiple threads.
 /// </summary>
 internal static class AscCanFdParser
 {
@@ -34,7 +36,11 @@ internal static class AscCanFdParser
     /// <summary>SocketCAN FD: ESI (Error State Indicator).</summary>
     private const byte _SocketCanFdEsi = 0x02;
 
-    /// <summary>CAN FD DLC to data length mapping.</summary>
+    /// <summary>
+    /// CAN FD DLC to data length mapping (ISO 11898-1): DLC 0-8 are the byte counts, then 9-15 map to 12, 16, 20, 24, 32, 48, 64.
+    /// A <c>ReadOnlySpan</c> property over a constant array literal: the runtime stores the bytes in the data section, so
+    /// no array is allocated per access.
+    /// </summary>
     private static ReadOnlySpan<byte> _DlcToLength =>
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
 
@@ -110,6 +116,8 @@ internal static class AscCanFdParser
                 return false;
             }
 
+            // An FD error line has no id and no data: it becomes a 16-byte SocketCAN error frame (CAN_ERR_FLAG, bit 29, and
+            // zero data), the same shape that AscCanErrorParser produces for classic CAN.
             if (_TokenIs(idOrError, "ErrorFrame"u8))
             {
                 Memory<byte> errorFrame = FrameSlabAllocator.RentZeroed(slabs, _SocketCanHeaderSize + 8);
@@ -147,7 +155,8 @@ internal static class AscCanFdParser
         }
         else
         {
-            // Optional symbolic name: skip tokens until BRS (0 or 1).
+            // Optional symbolic name: skip tokens until BRS (0 or 1). The first lone "0"/"1" token ends the skip, so a
+            // database name that is literally "0" or "1" would be taken as BRS. A line without any such token fails the parse.
             while (true)
             {
                 if (!tokenizer.TryNextToken(out brsToken))
@@ -206,8 +215,11 @@ internal static class AscCanFdParser
             }
         }
 
+        // The data-length column comes from the file: clamp it to 64 so it can neither overrun the stack scratch below
+        // nor make the frame larger than a CAN FD payload can be.
         dataLen = Math.Min(dataLen, _MaxDataLength);
 
+        // Compose the SocketCAN id word; the 29-bit mask keeps a malformed id from setting the flag bits (see AscCanParser).
         uint socketCanId = canId & 0x1FFFFFFF;
         if (isExtended)
         {
@@ -225,6 +237,8 @@ internal static class AscCanFdParser
             fdFlags |= _SocketCanFdEsi;
         }
 
+        // Payload bytes go to a 64-byte stack scratch first (no allocation); the frame is rented only after the line is
+        // validated and the stored length is known, so a rejected line leaves the slab untouched.
         Span<byte> dataBytes = stackalloc byte[_MaxDataLength];
         dataBytes.Clear();
         int parsedCount = 0;
@@ -248,21 +262,19 @@ internal static class AscCanFdParser
         }
 
         // Byte 4 is the payload count. The DLC table is an upper bound; the data-length column
-        // and the bytes actually present are what SocketCAN stores.
-        int frameDlc = Math.Min(dlc, 15);
-        int fromTable = frameDlc < _DlcToLength.Length ? _DlcToLength[frameDlc] : dataLen;
-        int socketDataLen = Math.Min(fromTable, dataLen);
-        socketDataLen = Math.Min(socketDataLen, parsedCount);
-        if (socketDataLen < 0)
-        {
-            socketDataLen = 0;
-        }
+        // and the bytes actually present are what SocketCAN stores: the smallest of the three wins, so a line with fewer
+        // data tokens than its DLC claims yields a shorter frame instead of invented zero bytes.
+        //
+        // No range guards are needed here: TryParseDlc returns 0..15 (the length of the table is 16), and dataLen, parsedCount
+        // and the table entries are all non-negative, so neither the index nor the minimum can leave its range.
+        int fromTable = _DlcToLength[dlc];
+        int socketDataLen = Math.Min(Math.Min(fromTable, dataLen), parsedCount);
 
         Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, _SocketCanHeaderSize + socketDataLen);
         Span<byte> socketCanFd = buffer.Span;
         BinaryPrimitives.WriteUInt32BigEndian(socketCanFd, socketCanId);
-        socketCanFd[4] = (byte)socketDataLen;
-        socketCanFd[5] = fdFlags;
+        socketCanFd[4] = (byte)socketDataLen;   // canfd_frame.len
+        socketCanFd[5] = fdFlags;               // canfd_frame.flags: FDF always set, BRS and ESI from the line
 
         int copyLen = Math.Min(parsedCount, socketDataLen);
         dataBytes[..copyLen].CopyTo(socketCanFd[_SocketCanHeaderSize..]);
@@ -274,15 +286,18 @@ internal static class AscCanFdParser
 
     #region Helpers
 
+    /// <summary>True for the single-character flag tokens <c>0</c> and <c>1</c> (BRS, ESI).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsBoolToken(ReadOnlySpan<byte> token) =>
         token.Length == 1 && (token[0] == (byte)'0' || token[0] == (byte)'1');
 
+    /// <summary>True for the direction tokens <c>Rx</c>, <c>Tx</c> and <c>TxRq</c> (ASCII case-insensitive, whole token).</summary>
     private static bool _IsDirection(ReadOnlySpan<byte> token) =>
         (token.Length == 2 && AscLineClassifier.StartsWithAsciiIgnoreCase(token, "Rx"u8))
         || (token.Length == 2 && AscLineClassifier.StartsWithAsciiIgnoreCase(token, "Tx"u8))
         || (token.Length == 4 && AscLineClassifier.StartsWithAsciiIgnoreCase(token, "TxRq"u8));
 
+    /// <summary>ASCII case-insensitive whole-token comparison (the length check turns the prefix test into equality).</summary>
     private static bool _TokenIs(ReadOnlySpan<byte> token, ReadOnlySpan<byte> expected) =>
         token.Length == expected.Length && AscLineClassifier.StartsWithAsciiIgnoreCase(token, expected);
 

@@ -13,6 +13,10 @@ namespace NetworkInspector.Sources.Asc.Format;
 /// DLT_LIN frame layout (LINKTYPE_LIN, 212): 8-byte header, then data padded to 4 or 8 bytes. Byte 5 is the
 /// protected identifier (id plus parity, as the BLF reader writes it); the <c>CSM</c> token goes into bits 1-0 of byte 4
 /// (1 = classic, 2 = enhanced, 0 = not stated).
+/// Header bytes: 0 = format revision (1), 1-3 reserved (zero), 4 = payload length in bits 7-4 and checksum type in bits 1-0
+/// (message type 0 = frame), 5 = protected identifier, 6 = checksum, 7 = error flags (zero: the ASC line carries none).
+/// The buffer is always header plus 4 or 8 data bytes (unused data bytes are zero), the same shape the BLF reader produces.
+/// Stateless; safe to call from multiple threads.
 /// </summary>
 internal static class AscLinParser
 {
@@ -79,6 +83,8 @@ internal static class AscLinParser
             return false;
         }
 
+        // The frame id is a 6-bit LIN identifier (0..0x3F), written in the file's numeric base. Values above 0x3F are not a
+        // LIN id and reject the line instead of being truncated to a different id.
         bool isHex = numericBase == 16;
         byte frameId;
         if (isHex)
@@ -92,7 +98,8 @@ internal static class AscLinParser
         }
         else
         {
-            if (!System.Buffers.Text.Utf8Parser.TryParse(idToken, out int signedId, out _) || signedId > 0x3F)
+            // A negative decimal id is not a LIN id either: the (byte) cast below would wrap it into a valid-looking 6-bit id.
+            if (!System.Buffers.Text.Utf8Parser.TryParse(idToken, out int signedId, out _) || signedId < 0 || signedId > 0x3F)
             {
                 return false;
             }
@@ -119,6 +126,8 @@ internal static class AscLinParser
             dlcTokenBytes = dirOrDlcToken;
         }
 
+        // The DLC token is parsed as decimal whatever the file base. It comes from the file, so it is clamped to the 8-byte LIN maximum before
+        // it bounds the loop and the stack scratch below.
         if (!System.Buffers.Text.Utf8Parser.TryParse(dlcTokenBytes, out int dlc, out _))
         {
             return false;
@@ -126,6 +135,9 @@ internal static class AscLinParser
 
         int dataLength = Math.Min(dlc, _MaxLinDataLength);
 
+        // Payload bytes go to an 8-byte stack scratch (no allocation); the frame is rented after the line is parsed. A line
+        // with fewer data tokens than its DLC (or a trailing word such as "checksum") stops the loop early; parsedCount
+        // then becomes the stored length, so the frame never contains invented bytes.
         Span<byte> dataBytes = stackalloc byte[_MaxLinDataLength];
         dataBytes.Clear();
         int parsedCount = 0;
@@ -153,7 +165,8 @@ internal static class AscLinParser
             }
         }
 
-        // Extract checksum from remaining bytes
+        // Extract the checksum from the text after the data: "checksum = <value>" (also ':' as separator). The keyword is
+        // searched anywhere in the rest of the line, case-insensitively; an absent or unparseable value leaves 0.
         byte checksum = 0;
         ReadOnlySpan<byte> remaining = tokenizer.Remaining;
         int csIdx = _IndexOfAsciiIgnoreCase(remaining, "checksum"u8);
@@ -193,6 +206,8 @@ internal static class AscLinParser
         // Checksum model: "CSM = classic|enhanced" maps to DLT_LIN byte 4 bits 1-0, so the ASC writer can restore it.
         byte checksumTypeBits = _ParseChecksumModel(remaining);
 
+        // Byte 5 carries the protected identifier (id plus parity), computed with the rule shared with the BLF reader so
+        // both formats produce identical frames for the same LIN traffic.
         byte pid = LinProtectedId.Compute(frameId);
         frame = _BuildDltLinFrame(slabs, pid, parsedCount, dataBytes[..parsedCount], checksum, checksumTypeBits);
         return true;
@@ -202,6 +217,10 @@ internal static class AscLinParser
 
     #region Helpers
 
+    /// <summary>
+    /// Builds the DLT_LIN record: 8-byte header plus the data area padded to 4 or 8 bytes. The zeroed rental provides the
+    /// reserved header bytes (1-3), the error flags (7) and the data padding, none of which is written here.
+    /// </summary>
     private static ReadOnlyMemory<byte> _BuildDltLinFrame(
         FrameSlabAllocator? slabs, byte pid, int dlc, ReadOnlySpan<byte> data, byte checksum, byte checksumTypeBits)
     {
@@ -209,7 +228,9 @@ internal static class AscLinParser
         int dataPad = clampedDlc <= 4 ? 4 : 8;
         Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, _DltLinHeaderSize + dataPad);
         Span<byte> frame = buffer.Span;
-        frame[0] = 1;
+        frame[0] = 1;   // message format revision
+
+        // Byte 4: payload length in the high nibble, checksum type in bits 1-0 (message type bits 3-2 stay 0 = frame).
         frame[4] = (byte)((clampedDlc << 4) | (checksumTypeBits & 0x03));
         frame[5] = pid;
         frame[6] = checksum;
@@ -275,6 +296,7 @@ internal static class AscLinParser
             && channel <= 255;
     }
 
+    /// <summary>True for the optional direction word between id and DLC: <c>Tx</c>, <c>Rx</c>, <c>Slave</c>, <c>Master</c>.</summary>
     private static bool _IsLikelyLinDirectionToken(ReadOnlySpan<byte> token) =>
         _AscLinDirectionBytesEqual(token, "Tx"u8)
         || _AscLinDirectionBytesEqual(token, "Rx"u8)
@@ -288,6 +310,10 @@ internal static class AscLinParser
     private static bool _IsAsciiLetter(byte value) =>
         (value >= (byte)'A' && value <= (byte)'Z') || (value >= (byte)'a' && value <= (byte)'z');
 
+    /// <summary>
+    /// Index of the first case-insensitive ASCII occurrence of <paramref name="needle"/>, or -1. A plain scan: the text
+    /// searched is the short tail of one line (after the data bytes) and the needles are at most 8 bytes.
+    /// </summary>
     private static int _IndexOfAsciiIgnoreCase(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)
     {
         if (needle.IsEmpty || haystack.Length < needle.Length)

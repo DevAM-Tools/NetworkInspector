@@ -66,6 +66,7 @@ internal sealed class ExportCommandRecycleTests
             TextWriter.Null,
             ref counter,
             cancellationToken,
+            out _,
             out _);
     }
 
@@ -91,7 +92,8 @@ internal sealed class ExportCommandRecycleTests
             TextWriter.Null,
             ref counter,
             CancellationToken.None,
-            out outputsWritten);
+            out outputsWritten,
+            out _);
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────────────────
@@ -198,6 +200,73 @@ internal sealed class ExportCommandRecycleTests
 
         await Assert.That(result).IsEqualTo(3);
         await Assert.That(exporter.CapturedIds.Count).IsEqualTo(3);
+    }
+
+    /// <summary>
+    /// An exporter that returns <see langword="false"/> stopped taking packets: the loop still ends early without an exception,
+    /// and now also tells the caller, which reports a failure. A complete run and a run cut by <c>maxPackets</c> do not.
+    /// </summary>
+    [Test]
+    public async Task RunExportLoop_ExporterSignalsStop_ReportsTheStoppedListener()
+    {
+        FrameInterfaceRegistry registry = new();
+        using Stack stack = _BuildStack(registry);
+        using RandomFrameSource stopped = _CreateAndStartSource(count: 10, registry);
+        using RandomFrameSource complete = _CreateAndStartSource(count: 4, registry);
+        int counter = 0;
+
+        _ = ExportCommand.RunExportLoop([stopped], _ => new CapturingExporter(stopAfter: 3), new SplitOutputManager("c.json", 0, 0), stack,
+            filter: null, maxPackets: 0, progressInterval: 0, tolerant: false, TextWriter.Null, ref counter, CancellationToken.None,
+            out _, out bool stoppedByListener);
+        _ = ExportCommand.RunExportLoop([complete], _ => new CapturingExporter(), new SplitOutputManager("c.json", 0, 0), stack,
+            filter: null, maxPackets: 0, progressInterval: 0, tolerant: false, TextWriter.Null, ref counter, CancellationToken.None,
+            out _, out bool stoppedAfterCompleteRun);
+
+        await Assert.That(stoppedByListener).IsTrue();
+        await Assert.That(stoppedAfterCompleteRun).IsFalse();
+    }
+
+    /// <summary>
+    /// A source that fails on every read is dropped in tolerant mode when it fails again before it delivered a frame, so the
+    /// loop ends; the other source is exported completely and the warnings name the dropped one.
+    /// </summary>
+    [Test]
+    public async Task RunExportLoop_TolerantDropsASourceThatFailsOnEveryRead()
+    {
+        FrameInterfaceRegistry registry = new();
+        using Stack stack = _BuildStack(registry);
+        using RandomFrameSource random = _CreateAndStartSource(count: 5, registry);
+        using FailingFrameSource broken = new(inner: null, failAtRead: 1, failCount: int.MaxValue);
+        CapturingExporter exporter = new();
+        StringWriter error = new();
+        int counter = 0;
+
+        int result = ExportCommand.RunExportLoop([broken, random], _ => exporter, new SplitOutputManager("c.json", 0, 0), stack,
+            filter: null, maxPackets: 0, progressInterval: 0, tolerant: true, error, ref counter, CancellationToken.None, out _, out _);
+
+        await Assert.That(result).IsEqualTo(5);
+        await Assert.That(broken.Reads).IsEqualTo(2);
+        await Assert.That(error.ToString()).Contains("Skipping frame from failing-source: read failed");
+        await Assert.That(error.ToString()).Contains("Giving up on failing-source: it failed again without delivering a frame: read failed");
+    }
+
+    /// <summary>A source that fails once and then reads again keeps its place in the rotation; only the failed read is lost.</summary>
+    [Test]
+    public async Task RunExportLoop_TolerantKeepsASourceThatFailsOnce()
+    {
+        FrameInterfaceRegistry registry = new();
+        using Stack stack = _BuildStack(registry);
+        using RandomFrameSource random = _CreateAndStartSource(count: 5, registry);
+        using FailingFrameSource source = new(random, failAtRead: 2, failCount: 1);
+        CapturingExporter exporter = new();
+        StringWriter error = new();
+        int counter = 0;
+
+        int result = ExportCommand.RunExportLoop([source], _ => exporter, new SplitOutputManager("c.json", 0, 0), stack,
+            filter: null, maxPackets: 0, progressInterval: 0, tolerant: true, error, ref counter, CancellationToken.None, out _, out _);
+
+        await Assert.That(result).IsEqualTo(5);
+        await Assert.That(error.ToString()).DoesNotContain("Giving up");
     }
 
     /// <summary>
@@ -344,6 +413,7 @@ internal sealed class ExportCommandRecycleTests
                 TextWriter.Null,
                 ref counter,
                 CancellationToken.None,
+                out _,
                 out _);
         }
         catch (InvalidOperationException exception)

@@ -11,7 +11,10 @@ namespace NetworkInspector.Sources.Pcapng.Format.Blocks;
 [BinaryParsable]
 internal readonly partial struct PcapGlobalHeader
 {
-    /// <summary>Magic number identifying format and byte order.</summary>
+    /// <summary>
+    /// Magic number identifying format, byte order, and timestamp resolution (microseconds or nanoseconds). Read as
+    /// little-endian first; a swapped variant (see <see cref="PcapConstants"/>) means every other field must be byte-swapped.
+    /// </summary>
     public U32LE Magic
     {
         get; init;

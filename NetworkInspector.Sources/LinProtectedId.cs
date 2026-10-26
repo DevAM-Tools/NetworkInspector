@@ -22,6 +22,9 @@ internal static class LinProtectedId
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static byte Compute(byte frameId)
     {
+        // Branch-free: shifts and XORs only (a few register operations, no lookup table, no allocation), and inlined into
+        // the per-frame LIN parse paths. Parity is taken over the 6 id bits only; P1 is the inverted XOR, and the final
+        // "& 1" after the complement keeps a single bit.
         int id = frameId & FrameIdMask;
         int p0 = (id ^ (id >> 1) ^ (id >> 2) ^ (id >> 4)) & 1;
         int p1 = ~((id >> 1) ^ (id >> 3) ^ (id >> 4) ^ (id >> 5)) & 1;

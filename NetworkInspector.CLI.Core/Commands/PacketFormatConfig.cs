@@ -56,7 +56,7 @@ internal sealed class PacketFormatConfig
             throw new ArgumentException(problem);
         }
 
-        // The old flag "nocompress" of the PBF format is the option compressed=false.
+        // The old flag "nocompress" of the PBF format is the option compressed=false (kept so existing scripts keep working).
         if (string.Equals(registration.Format, "PBF", StringComparison.OrdinalIgnoreCase))
         {
             pairs = [.. pairs.Select(static pair => string.Equals(pair.Key, "nocompress", StringComparison.OrdinalIgnoreCase)
@@ -67,7 +67,10 @@ internal sealed class PacketFormatConfig
         return new PacketFormatConfig(registration, pairs);
     }
 
-    /// <summary>Finds the format by the extension of the output path.</summary>
+    /// <summary>
+    /// Finds the format by the extension of the output path. There is no default format: an unknown extension (and a directory
+    /// format, which has no extension) is an error that lists the formats and asks for <c>-f</c> (frame formats differ: they fall back to PCAPNG).
+    /// </summary>
     /// <param name="extension">The extension with its dot, as <see cref="Path.GetExtension(string)"/> returns it.</param>
     /// <param name="registry">The registry that supplies the formats.</param>
     /// <returns>The format with default options.</returns>

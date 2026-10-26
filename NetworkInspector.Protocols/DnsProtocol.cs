@@ -60,11 +60,21 @@ public sealed partial class DnsProtocol : IProtocol
     /// <summary>Index group for always-present DNS fields.</summary>
     private const string _DnsIndexGroup = "dns";
 
-    // Resource-record TYPE codes and minimum RDLENGTHs for the index-group-bearing record types.
-    // These constants are shared between the eager index detector (_DetectRrGroups) and the lazy
+    // Record type numbers and fixed-size layouts below are IANA / RFC 4034 / RFC 6891 facts, hence constants.
+    // Resource-record TYPE codes (every type _ParseRData decodes) and minimum RDLENGTHs for the index-group-bearing types.
+    // The constants of the index-group-bearing types are shared between the eager index detector (_DetectRrGroups) and the lazy
     // populator (_ParseResourceRecords/_ParseRData) so that the emission guard for each group lives in
     // exactly one place — a change here updates both paths simultaneously and prevents the detector
     // from silently drifting away from what the populator actually emits.
+    private const ushort _RrTypeA = 1;          // A (RFC 1035): IPv4 address.
+    private const ushort _RrTypeNs = 2;         // NS (RFC 1035): name server.
+    private const ushort _RrTypeCname = 5;      // CNAME (RFC 1035): canonical name.
+    private const ushort _RrTypeSoa = 6;        // SOA (RFC 1035): start of authority.
+    private const ushort _RrTypePtr = 12;       // PTR (RFC 1035): domain name pointer.
+    private const ushort _RrTypeMx = 15;        // MX (RFC 1035): mail exchange.
+    private const ushort _RrTypeTxt = 16;       // TXT (RFC 1035): text strings.
+    private const ushort _RrTypeAaaa = 28;      // AAAA (RFC 3596): IPv6 address.
+    private const ushort _RrTypeSrv = 33;       // SRV (RFC 2782): service location.
     private const ushort _RrTypeOpt = 41;       // EDNS0 OPT (RFC 6891) — always emits dns.opt fields.
     private const ushort _RrTypeDs = 43;        // DS (RFC 4034).
     private const ushort _RrTypeRrsig = 46;     // RRSIG (RFC 4034).
@@ -73,6 +83,7 @@ public sealed partial class DnsProtocol : IProtocol
     private const int _DsMinRdLength = 4;       // Key Tag(2) + Algorithm(1) + Digest Type(1).
     private const int _RrsigMinRdLength = 18;   // Fixed RRSIG header before signer's name.
     private const int _NsecMinRdLength = 1;     // At least one byte of next-domain/bitmap data.
+    private const int _NsecMaxBitmapLength = 32; // Longest type bit map block (RFC 4034 §4.1.2): 32 bytes cover 256 types.
     private const int _DnskeyMinRdLength = 4;   // Flags(2) + Protocol(1) + Algorithm(1).
 
     #endregion
@@ -331,27 +342,40 @@ public sealed partial class DnsProtocol : IProtocol
     [BytesField("dns.dnskey.public_key", "Public Key", IndexGroup = "dns.dnskey")]
     private FieldId _DnskeyPublicKeyFieldId;
 
-    // Pre-allocated populator
-    private LazyPopulator _Populator = null!;
+    // Pre-allocated populator: converting the instance method group _PopulateDnsFields to a delegate allocates a new
+    // delegate on every conversion, so it is created once at stack start and every packet's container reuses it.
+    // The field is read-only after _OnStartCustom, so concurrent Parse calls share it safely.
+    private LazyPopulator _Populator = null!; // null-forgiving: always assigned in _OnStartCustom, which runs before the first Parse
 
+    /// <summary>Creates the shared lazy populator delegate once, after the stack is built.</summary>
     partial void _OnStartCustom(Stack stack) =>
         _Populator = _PopulateDnsFields;
 
     /// <summary>
-    /// Parses a Dns protocol unit from the supplied <paramref name="data"/> buffer,
-    /// appending decoded fields under <paramref name="parentField"/> and dispatching any
-    /// payload via the surrounding <paramref name="context"/>.
+    /// Parses a DNS message from the supplied <paramref name="data"/> buffer. Only the container, the packet info
+    /// and the index presence are produced eagerly; the field tree below the container is built lazily by
+    /// <see cref="_PopulateDnsFields"/> the first time its children are read. DNS is a leaf protocol: nothing is
+    /// dispatched further.
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
-    /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
-    /// <param name="context">Owning stack used to dispatch the next-protocol payload (when applicable).</param>
-    /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
+    /// <param name="data">Raw protocol bytes: a DNS message, optionally preceded by the 2-byte TCP length prefix.</param>
+    /// <param name="context">Parse context; used to record protocol and index-group presence.</param>
+    /// <returns>
+    /// The whole <paramref name="data"/> length (including a stripped length prefix), or a <see cref="ParseError"/>
+    /// when the message is shorter than the 12-byte header. Malformed sections after the header are not an error
+    /// here; they only truncate what the lazy populator shows.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         ReadOnlyMemory<byte> dnsData = data;
 
         // RFC 1035 §4.2.2: DNS over TCP uses a 2-byte big-endian length prefix
         // before each DNS message. Detect and strip it if present.
+        // This parser is registered for port 53 on both UDP and TCP and is not told which transport delivered the
+        // payload, so it uses a heuristic: the prefix is assumed when the first two bytes equal the number of bytes
+        // that follow. Known limits: a UDP message whose transaction ID happens to equal (length - 2) is misread as
+        // prefixed, and a TCP segment that holds a partial or several messages (prefix not matching the segment
+        // size) is parsed without stripping.
         if (data.Length >= 2)
         {
             ReadOnlySpan<byte> span = data.Span;
@@ -367,9 +391,11 @@ public sealed partial class DnsProtocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, DnsHeader.Size, (ulong)dnsData.Length);
         }
 
+        // Presence is recorded only once the 12-byte header is known to be present.
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_DnsGroupId);
 
+        // Cannot fail after the length check above; kept because TryParse is the single place that decodes the header.
         if (!DnsHeader.TryParse(dnsData.Span, out DnsHeader header))
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, DnsHeader.Size, (ulong)dnsData.Length);
@@ -378,7 +404,8 @@ public sealed partial class DnsProtocol : IProtocol
         ushort transactionId = header.TransactionId;
         bool isResponse = header.IsResponse;
 
-        // Record conditional index groups
+        // Record conditional index groups. These two are decided from the header counts alone (cheap), so a truncated
+        // message that declares records still marks them; the record-type dependent groups below are content based.
         if (header.QuestionCount > 0)
         {
             context.RecordGroupPresence(_DnsQryGroupId);
@@ -424,17 +451,21 @@ public sealed partial class DnsProtocol : IProtocol
             context.RecordGroupPresence(_DnsDnskeyGroupId);
         }
 
-        // Build summary text
+        // Build summary text (the transaction ID text comes from a precomputed table, so no formatting happens here).
+        // The table text already starts with "0x"; adding the prefix again here would show "0x0x1234".
         string hexId = DisplayTables.FormatHexU16(transactionId);
         string dnsKind = isResponse
-            ? "Domain Name System (response), Transaction ID: 0x"
-            : "Domain Name System (query), Transaction ID: 0x";
+            ? "Domain Name System (response), Transaction ID: "
+            : "Domain Name System (query), Transaction ID: ";
 
         // Set packet info for the info column
         parentField.SetPacketInfo(isResponse
-            ? ZA.Lazy("DNS Response 0x", hexId)
-            : ZA.Lazy("DNS Query 0x", hexId));
+            ? ZA.Lazy("DNS Response ", hexId)
+            : ZA.Lazy("DNS Query ", hexId));
 
+        // The container value is the DNS message without the TCP length prefix; the children are created by the shared
+        // populator on first access, which keeps the per-packet cost of an unexpanded DNS packet at this one node.
+        // The shared delegate carries no per-packet state: the populator re-reads everything from the container bytes.
         FieldValue containerValue = FieldValue.NewBytes(dnsData);
         parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, dnsKind, hexId, _Populator);
 
@@ -443,7 +474,12 @@ public sealed partial class DnsProtocol : IProtocol
 
     /// <summary>
     /// Populates all DNS fields from the stored packet bytes.
-    /// Called lazily on first access of the DNS container's children.
+    /// Called lazily on first access of the DNS container's children, possibly on another thread than the one
+    /// that parsed the packet and after <see cref="Parse"/> has returned: it therefore uses only the container's own
+    /// bytes and the read-only field IDs, never any state captured during <see cref="Parse"/>. A lazy populator also
+    /// cannot touch the packet index, which is why the index groups are decided eagerly in <see cref="Parse"/>.
+    /// The returned value is not a consumed-byte count (by convention 0 on success); errors become a child of the
+    /// container.
     /// </summary>
     private ParseResult _PopulateDnsFields(in MutField container)
     {
@@ -496,8 +532,18 @@ public sealed partial class DnsProtocol : IProtocol
         container.Append(_NsCountFieldId, FieldValue.NewU64(header.AuthorityCount));
         container.Append(_ArCountFieldId, FieldValue.NewU64(header.AdditionalCount));
 
-        // Parse sections
+        // Parse sections: one running offset is shared by all four sections, because they follow each other in the
+        // message and compressed names may point back anywhere in the whole message (hence the full span is passed).
+        // The counts come from the wire (untrusted, up to 65535 per section) but each loop below stops at the first
+        // record that does not fit, so the work is bounded by the message size, not by the declared counts.
+        // Authority and additional records reuse the answer field IDs (dns.resp.*); the three sections differ only by
+        // their container title.
+        // The first question or record that does not fit ends the whole walk, as in _DetectRrGroups: once a record is
+        // cut off, the offset points into bytes that its own (too large) RDLENGTH claims, and reading the next section
+        // from there would show records the eager index groups never saw. The section containers of the declared
+        // counts are still appended (they are what the header-count based index groups stand for); they stay empty.
         int offset = DnsHeader.Size;
+        bool intact = true;
 
         // Questions section
         if (header.QuestionCount > 0)
@@ -506,7 +552,7 @@ public sealed partial class DnsProtocol : IProtocol
                 _QueriesContainerFieldId, FieldValue.None,
                 "Queries (", header.QuestionCount, ")");
 
-            _ParseQuestions(in queriesContainer, span, ref offset, header.QuestionCount);
+            intact = _ParseQuestions(in queriesContainer, span, ref offset, header.QuestionCount);
         }
 
         // Answers section
@@ -516,7 +562,10 @@ public sealed partial class DnsProtocol : IProtocol
                 _AnswersContainerFieldId, FieldValue.None,
                 "Answers (", header.AnswerCount, ")");
 
-            _ParseResourceRecords(in answersContainer, span, dnsData, ref offset, header.AnswerCount);
+            if (intact)
+            {
+                intact = _ParseResourceRecords(in answersContainer, span, dnsData, ref offset, header.AnswerCount);
+            }
         }
 
         // Authority section
@@ -526,7 +575,10 @@ public sealed partial class DnsProtocol : IProtocol
                 _AnswersContainerFieldId, FieldValue.None,
                 "Authoritative nameservers (", header.AuthorityCount, ")");
 
-            _ParseResourceRecords(in authContainer, span, dnsData, ref offset, header.AuthorityCount);
+            if (intact)
+            {
+                intact = _ParseResourceRecords(in authContainer, span, dnsData, ref offset, header.AuthorityCount);
+            }
         }
 
         // Additional section
@@ -536,21 +588,29 @@ public sealed partial class DnsProtocol : IProtocol
                 _AnswersContainerFieldId, FieldValue.None,
                 "Additional records (", header.AdditionalCount, ")");
 
-            _ParseResourceRecords(in addContainer, span, dnsData, ref offset, header.AdditionalCount);
+            if (intact)
+            {
+                _ = _ParseResourceRecords(in addContainer, span, dnsData, ref offset, header.AdditionalCount);
+            }
         }
 
         return 0;
     }
 
-    /// <summary>Parses the question section of a DNS packet.</summary>
-    private void _ParseQuestions(
+    /// <summary>
+    /// Parses the question section of a DNS packet. Stops silently at the first question that does not fit in the
+    /// message; questions before it are kept. A malformed name is shown as an empty string (see
+    /// <see cref="DnsNameParser.ReadName"/>) and does not produce an error.
+    /// </summary>
+    /// <returns>True when all <paramref name="count"/> questions were read; false when a question did not fit.</returns>
+    private bool _ParseQuestions(
         in MutField container, ReadOnlySpan<byte> data, ref int offset, ushort count)
     {
         for (int i = 0; i < count; i++)
         {
             if (offset >= data.Length)
             {
-                break;
+                return false;
             }
 
             string name = DnsNameParser.ReadName(data, ref offset);
@@ -558,7 +618,7 @@ public sealed partial class DnsProtocol : IProtocol
             // After the name: QType (2 bytes) + QClass (2 bytes)
             if (offset + 4 > data.Length)
             {
-                break;
+                return false;
             }
 
             ushort qtype = BinaryPrimitives.ReadUInt16BigEndian(data[offset..]);
@@ -572,19 +632,26 @@ public sealed partial class DnsProtocol : IProtocol
                 _QryNameFieldId, FieldValue.NewString(name),
                 name, ": type ", typeName, ", class ", className);
 
+            // Length of the decoded dotted name in characters (without the trailing dot), not the wire length.
             qryField.Append(_QryNameLenFieldId, FieldValue.NewU64((ulong)name.Length));
             qryField.AppendWithCustomText(_QryTypeFieldId,
                 FieldValue.NewU64(qtype), DnsDisplayTables.GetTypeDisplayText(qtype));
             qryField.AppendWithCustomText(_QryClassFieldId,
                 FieldValue.NewU64(qclass), DnsDisplayTables.GetClassDisplayText(qclass));
         }
+
+        return true;
     }
 
     /// <summary>
     /// Parses resource records (Answer, Authority, or Additional sections).
     /// Each resource record: Name + Type(2) + Class(2) + TTL(4) + RDLENGTH(2) + RDATA(N).
+    /// Stops silently at the first record whose fixed part or RDATA does not fit in the message; records before it
+    /// are kept. The caller must not read any further section after a <c>false</c> result (the offset then points into
+    /// the cut-off record), which is also where <c>_DetectRrGroups</c> stops.
     /// </summary>
-    private void _ParseResourceRecords(
+    /// <returns>True when all <paramref name="count"/> records were read; false when a record did not fit.</returns>
+    private bool _ParseResourceRecords(
         in MutField container, ReadOnlySpan<byte> data, ReadOnlyMemory<byte> fullMemory,
         ref int offset, ushort count)
     {
@@ -592,7 +659,7 @@ public sealed partial class DnsProtocol : IProtocol
         {
             if (offset >= data.Length)
             {
-                break;
+                return false;
             }
 
             string name = DnsNameParser.ReadName(data, ref offset);
@@ -600,7 +667,7 @@ public sealed partial class DnsProtocol : IProtocol
             // Type(2) + Class(2) + TTL(4) + RDLENGTH(2) = 10 bytes minimum
             if (offset + 10 > data.Length)
             {
-                break;
+                return false;
             }
 
             ushort rrType = BinaryPrimitives.ReadUInt16BigEndian(data[offset..]);
@@ -611,12 +678,13 @@ public sealed partial class DnsProtocol : IProtocol
 
             if (offset + rdLength > data.Length)
             {
-                break;
+                return false;
             }
 
             ReadOnlySpan<byte> rdata = data[offset..(offset + rdLength)];
 
-            // OPT (type 41) uses CLASS/TTL fields with different semantics (RFC 6891)
+            // OPT (type 41) uses CLASS/TTL fields with different semantics (RFC 6891); its owner name is always the
+            // root, so the name read above is discarded and a fixed "<Root>" is shown instead.
             if (rrType == _RrTypeOpt)
             {
                 _ParseOptRecord(in container, rrClass, ttl, rdata, fullMemory, offset);
@@ -637,11 +705,14 @@ public sealed partial class DnsProtocol : IProtocol
             rrField.Append(_RespTtlFieldId, FieldValue.NewU64(ttl));
             rrField.Append(_RespLenFieldId, FieldValue.NewU64(rdLength));
 
-            // Parse type-specific RDATA
+            // Parse type-specific RDATA. The whole message and the RDATA start offset are passed along because names
+            // inside RDATA (CNAME, NS, MX, ...) may use compression pointers into any earlier part of the message.
             _ParseRData(in rrField, rrType, rdata, data, fullMemory, offset);
 
             offset += rdLength;
         }
+
+        return true;
     }
 
     /// <summary>
@@ -651,6 +722,14 @@ public sealed partial class DnsProtocol : IProtocol
     /// is used so the offset progression is identical to the populator's, guaranteeing the recorded
     /// groups match the fields that will be emitted. This duplicates the record walk; that is the
     /// accepted cost of keeping the field tree lazy while the presence index stays content-consistent.
+    /// The walk has to happen in <see cref="Parse"/> because a lazy populator is not allowed to touch the packet
+    /// index. Rejected alternative: deriving the groups from the header counts alone, which would mark OPT/DNSSEC
+    /// groups for records that are truncated or too short to emit those fields.
+    /// <para>
+    /// Work is bounded by the message size, not by the attacker-controlled section counts: every iteration either
+    /// returns or consumes at least the 10-byte fixed part of a record. Unlike the populator it gives up at the first
+    /// record that does not fit instead of continuing with the next section.
+    /// </para>
     /// </summary>
     private static void _DetectRrGroups(
         ReadOnlySpan<byte> span, in DnsHeader header,
@@ -761,12 +840,13 @@ public sealed partial class DnsProtocol : IProtocol
             "<Root>: type OPT");
 
         optField.AppendWithCustomText(_RespTypeFieldId,
-            FieldValue.NewU64(41), DnsDisplayTables.GetTypeDisplayText(41));
+            FieldValue.NewU64(_RrTypeOpt), DnsDisplayTables.GetTypeDisplayText(_RrTypeOpt));
 
         // CLASS = UDP payload size (not a DNS class)
         optField.Append(_OptUdpPayloadSizeFieldId, FieldValue.NewU64(udpPayloadSize));
 
-        // TTL bytes: [0]=extended RCODE, [1]=version, [2-3]=flags (bit 15=DO)
+        // TTL bytes (RFC 6891 §6.1.3): [0]=extended RCODE (upper 8 bits of the 12-bit RCODE), [1]=version,
+        // [2-3]=flags where bit 15 is DO (DNSSEC OK) and the remaining 15 bits are reserved (Z).
         byte extRcode = (byte)(ttlField >> 24);
         byte version = (byte)((ttlField >> 16) & 0xFF);
         ushort flags = (ushort)(ttlField & 0xFFFF);
@@ -781,7 +861,9 @@ public sealed partial class DnsProtocol : IProtocol
 
         optField.Append(_OptDataLengthFieldId, FieldValue.NewU64((ulong)rdata.Length));
 
-        // Parse EDNS0 options as TLV entries
+        // Parse EDNS0 options as TLV entries. The loop must keep the same bounds rules as _OptHasOption, which the
+        // eager index detector uses to decide whether dns.opt.option fields exist; an option whose declared length
+        // runs past the RDATA ends the walk (earlier options are kept).
         int pos = 0;
         while (pos + 4 <= rdata.Length)
         {
@@ -819,17 +901,17 @@ public sealed partial class DnsProtocol : IProtocol
     {
         switch (rrType)
         {
-            case 1 when rdata.Length >= 4: // A record
+            case _RrTypeA when rdata.Length >= 4: // A record
                 IPv4Address ipv4 = DnsNameParser.ParseARecord(rdata);
                 rrField.Append(_AFieldId, FieldValue.NewIPv4(ipv4));
                 break;
 
-            case 28 when rdata.Length >= 16: // AAAA record
+            case _RrTypeAaaa when rdata.Length >= 16: // AAAA record
                 IPv6Address ipv6 = DnsNameParser.ParseAAAARecord(rdata);
                 rrField.Append(_AAAAFieldId, FieldValue.NewIPv6(ipv6));
                 break;
 
-            case 5: // CNAME
+            case _RrTypeCname: // CNAME
                 {
                     int pos = rdataOffset;
                     string cname = DnsNameParser.ReadName(fullPacket, ref pos);
@@ -837,7 +919,7 @@ public sealed partial class DnsProtocol : IProtocol
                     break;
                 }
 
-            case 2: // NS
+            case _RrTypeNs: // NS
                 {
                     int pos = rdataOffset;
                     string ns = DnsNameParser.ReadName(fullPacket, ref pos);
@@ -845,7 +927,7 @@ public sealed partial class DnsProtocol : IProtocol
                     break;
                 }
 
-            case 12: // PTR
+            case _RrTypePtr: // PTR
                 {
                     int pos = rdataOffset;
                     string ptr = DnsNameParser.ReadName(fullPacket, ref pos);
@@ -853,7 +935,7 @@ public sealed partial class DnsProtocol : IProtocol
                     break;
                 }
 
-            case 15 when rdata.Length >= 2: // MX
+            case _RrTypeMx when rdata.Length >= 2: // MX
                 {
                     ushort preference = BinaryPrimitives.ReadUInt16BigEndian(rdata);
                     rrField.Append(_MxPreferenceFieldId, FieldValue.NewU64(preference));
@@ -863,9 +945,12 @@ public sealed partial class DnsProtocol : IProtocol
                     break;
                 }
 
-            case 16 when rdata.Length >= 1: // TXT
+            case _RrTypeTxt when rdata.Length >= 1: // TXT
                 {
-                    // TXT records contain one or more length-prefixed strings.
+                    // TXT records contain one or more length-prefixed strings; they are shown joined by single spaces
+                    // and each byte is mapped to the char with the same code (Latin-1), so no encoding is guessed.
+                    // A string whose length byte runs past the RDATA ends the list (strings before it are kept); both
+                    // passes below apply the same rule, which is what keeps the computed length exact.
                     // First pass: compute total output length to enable single-allocation string.Create.
                     int totalLen = 0;
                     int scan = 0;
@@ -884,18 +969,20 @@ public sealed partial class DnsProtocol : IProtocol
                         scan += strLen;
                     }
 
-                    // Second pass: fill the string directly via string.Create (zero-copy, no StringBuilder).
-                    ReadOnlySpan<byte> rdataCapture = rdata;
-                    string txtResult = string.Create(totalLen, (rdataCapture.Length, rdataCapture.ToArray()),
+                    // Second pass: fill the string directly via string.Create (no StringBuilder, exactly one string).
+                    // A span cannot be stored in the string.Create state, so the state is a ReadOnlyMemory slice of the
+                    // message that covers exactly the RDATA: it avoids copying the RDATA into a new array.
+                    ReadOnlyMemory<byte> rdataMemory = fullMemory.Slice(rdataOffset, rdata.Length);
+                    string txtResult = string.Create(totalLen, rdataMemory,
                         static (chars, state) =>
                         {
-                            ReadOnlySpan<byte> src = state.Item2;
+                            ReadOnlySpan<byte> src = state.Span;
                             int pos = 0;
                             int written = 0;
-                            while (pos < state.Item1)
+                            while (pos < src.Length)
                             {
                                 byte strLen = src[pos++];
-                                if (pos + strLen > state.Item1)
+                                if (pos + strLen > src.Length)
                                 {
                                     break;
                                 }
@@ -914,7 +1001,7 @@ public sealed partial class DnsProtocol : IProtocol
                     break;
                 }
 
-            case 6 when rdata.Length >= 20: // SOA
+            case _RrTypeSoa when rdata.Length >= 20: // SOA
                 {
                     int pos = rdataOffset;
                     string mname = DnsNameParser.ReadName(fullPacket, ref pos);
@@ -923,7 +1010,9 @@ public sealed partial class DnsProtocol : IProtocol
                     rrField.Append(_SoaRnameFieldId, FieldValue.NewString(rname));
 
                     // Skip to the 5 fixed-size fields (20 bytes: serial, refresh, retry, expire, minttl)
-                    // pos now points after rname within the full packet
+                    // pos now points after rname within the full packet. The bound is checked against the whole
+                    // message (not the RDATA end): it only protects the reads, a malformed record may still show
+                    // numbers taken from the bytes that follow it.
                     int fixedOffset = pos;
                     if (fixedOffset + 20 <= fullPacket.Length)
                     {
@@ -941,7 +1030,7 @@ public sealed partial class DnsProtocol : IProtocol
                     break;
                 }
 
-            case 33 when rdata.Length >= 6: // SRV
+            case _RrTypeSrv when rdata.Length >= 6: // SRV
                 {
                     ushort priority = BinaryPrimitives.ReadUInt16BigEndian(rdata);
                     ushort weight = BinaryPrimitives.ReadUInt16BigEndian(rdata[2..]);
@@ -1036,7 +1125,8 @@ public sealed partial class DnsProtocol : IProtocol
                     byte protocol = rdata[2];
                     byte algorithm = rdata[3];
 
-                    // Flag bit 7 (0x0100) = Zone Key, bit 15 (0x0001) = Secure Entry Point
+                    // RFC 4034 §2.1.1 numbers the flag bits from the most significant bit: bit 7 (mask 0x0100) is
+                    // Zone Key and bit 15 (mask 0x0001) is Secure Entry Point.
                     bool isZoneKey = (flags & 0x0100) != 0;
                     bool isSep = (flags & 0x0001) != 0;
                     string flagsText = (isZoneKey, isSep) switch
@@ -1063,8 +1153,11 @@ public sealed partial class DnsProtocol : IProtocol
     }
 
     /// <summary>
-    /// Parses NSEC/NSEC3 Type Bit Maps into a human-readable comma-separated list of RR type names.
+    /// Parses an NSEC Type Bit Maps field (RFC 4034 §4.1.2) into a human-readable comma-separated list of RR type
+    /// names. The NSEC3 bit map has the same format, but NSEC3 records are not decoded by <c>_ParseRData</c>.
     /// Format: {window(1)} {bitmap_length(1)} {bitmap(N)} repeated.
+    /// Stops at the first block that is empty, longer than 32 bytes or runs past the data; earlier blocks are kept. This runs only when the
+    /// tree is materialized and allocates a list plus one string, which is acceptable off the parse path.
     /// </summary>
     private static string _ParseNsecTypeBitMaps(ReadOnlySpan<byte> data)
     {
@@ -1077,12 +1170,15 @@ public sealed partial class DnsProtocol : IProtocol
             byte bitmapLen = data[pos + 1];
             pos += 2;
 
-            if (bitmapLen == 0 || pos + bitmapLen > data.Length)
+            // RFC 4034 §4.1.2: a bit map block holds 1 to 32 bytes. A longer block is malformed: its types would pass
+            // type 65535 and wrap in the ushort cast below, and a hostile record could list hundreds of thousands of
+            // types (one string each) within a 64 KiB message. The list ends at such a block; earlier blocks are kept.
+            if (bitmapLen == 0 || bitmapLen > _NsecMaxBitmapLength || pos + bitmapLen > data.Length)
             {
                 break;
             }
 
-            // Each bit in the bitmap represents a type number:
+            // Each bit in the bitmap represents a type number (the most significant bit of each byte is the lowest type):
             // type = windowBlock * 256 + byteIndex * 8 + bitIndex
             for (int i = 0; i < bitmapLen; i++)
             {

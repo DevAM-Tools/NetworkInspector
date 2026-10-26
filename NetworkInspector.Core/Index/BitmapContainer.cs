@@ -6,13 +6,37 @@ namespace NetworkInspector.Core.Index;
 /// Bitmap container using 1024 ulongs (8KB) for O(1) insert/contains.
 /// Uses hardware POPCNT via <see cref="BitOperations.PopCount(ulong)"/> and
 /// SIMD (Vector256/Vector128) for bulk AND/OR/XOR/ANDNOT operations.
+/// <para>
+/// <b>Why a fixed 8 KiB bit set:</b> one bit per possible low-16-bit value (65536 bits) makes membership and insertion a
+/// single word access, and it is the smaller representation once a chunk holds more than
+/// <see cref="ArrayContainer.MaxCapacity"/> values (the array would need more than 8 KiB). The size is fixed by the
+/// 16-bit chunk range, so it is a format constant and not a setting. 8 KiB is also far below the large-object-heap threshold (about 85 KB),
+/// so a bitmap, including the per-operation result bitmaps, is allocated on the normal generational heap and not in the LOH.
+/// </para>
+/// <para>
+/// <b>Cardinality bookkeeping:</b> <see cref="Cardinality"/> always equals the number of set bits. <see cref="Add"/> maintains
+/// it incrementally; every bulk operation recomputes it from the words it writes (the SIMD loops count bits in the same pass
+/// that produces them, so no second pass over the 8 KiB is needed).
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> not thread-safe; mutated in place by <see cref="Add"/> and the <c>...With</c> methods. Concurrent
+/// readers are made safe one level up by the sequence lock of the owning <see cref="RoaringBitmap"/>, which discards a read
+/// that overlapped a mutation.
+/// </para>
 /// </summary>
 internal sealed class BitmapContainer : IContainer
 {
-    internal const int BitmapSize = 1024; // 1024 * 64 = 65536 bits
+    /// <summary>Number of 64-bit words in the bit set: 1024 * 64 = 65536 bits, one per possible 16-bit value.</summary>
+    internal const int BitmapSize = 1024;
 
+    /// <summary>
+    /// The bit set: bit <c>v % 64</c> of word <c>v / 64</c> is set when the value <c>v</c> is present. Exposed internally so
+    /// the run container can apply range masks directly and the owning bitmap can run in-place word operations; anything
+    /// that writes it must keep <see cref="Cardinality"/> consistent afterwards.
+    /// </summary>
     internal readonly ulong[] Bitmap = new ulong[BitmapSize];
 
+    /// <summary>Number of set bits; see the class remarks for how it is kept in sync.</summary>
     public int Cardinality { get; private set; }
 
     /// <inheritdoc cref="IContainer.Min"/>
@@ -49,6 +73,7 @@ internal sealed class BitmapContainer : IContainer
         }
     }
 
+    /// <summary>Deep copy: a new 8 KiB word array with the same bits and cardinality.</summary>
     public IContainer Clone()
     {
         BitmapContainer copy = new();
@@ -57,6 +82,7 @@ internal sealed class BitmapContainer : IContainer
         return copy;
     }
 
+    /// <summary>O(1) membership test. Every <see cref="ushort"/> maps to a valid word (0..1023), so no range check is needed.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(ushort value)
     {
@@ -65,11 +91,14 @@ internal sealed class BitmapContainer : IContainer
         return (Bitmap[word] & bit) != 0;
     }
 
+    /// <summary>Sets the bit for <paramref name="value"/> and keeps <see cref="Cardinality"/> in sync. Always returns <see langword="this"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IContainer Add(ushort value)
     {
         int word = value >> 6;
         ulong bit = 1UL << (value & 63);
+
+        // Count only a newly set bit so adding a present value keeps Cardinality exact.
         if ((Bitmap[word] & bit) == 0)
         {
             Bitmap[word] |= bit;
@@ -78,6 +107,12 @@ internal sealed class BitmapContainer : IContainer
         return this;
     }
 
+    /// <summary>
+    /// Intersection into a new container. Bitmap with bitmap is a SIMD word AND whose result is converted to an
+    /// <see cref="ArrayContainer"/> when it has at most <see cref="ArrayContainer.MaxCapacity"/> values. Any other operand kind
+    /// is delegated to that kind's own intersection (AND is commutative; the array and run containers handle a bitmap operand
+    /// themselves without calling back, so this cannot recurse).
+    /// </summary>
     public IContainer And(IContainer other)
     {
         if (other is BitmapContainer bmp)
@@ -86,7 +121,7 @@ internal sealed class BitmapContainer : IContainer
             result.Cardinality = _SimdAnd(
                 Bitmap, bmp.Bitmap, result.Bitmap);
 
-            // Downgrade to array if sparse
+            // Downgrade to array if sparse: at most MaxCapacity values is the range where the array is the smaller form.
             if (result.Cardinality <= ArrayContainer.MaxCapacity)
             {
                 return BitmapToArray(result);
@@ -97,6 +132,11 @@ internal sealed class BitmapContainer : IContainer
         return other.And(this);
     }
 
+    /// <summary>
+    /// Union into a new bitmap, returned without a density check (a union cannot hold fewer values than this bitmap, so
+    /// converting it to an array is not attempted). Bitmap with bitmap is a SIMD word OR; a run operand is applied with
+    /// word masks; an array operand is added value by value to a clone.
+    /// </summary>
     public IContainer Or(IContainer other)
     {
         if (other is BitmapContainer bmp)
@@ -118,12 +158,15 @@ internal sealed class BitmapContainer : IContainer
             return cloneRun;
         }
 
-        // Clone this, add other's elements
+        // Clone this, add other's elements. The clone keeps the result detached from this container, which must not be
+        // mutated by a set operation.
         BitmapContainer clone = new();
         Array.Copy(Bitmap, clone.Bitmap, BitmapSize);
         clone.Cardinality = Cardinality;
 
-        // Add all values from the other container into this bitmap
+        // Add all values from the other container into this bitmap. Only ArrayContainer is handled here: the production
+        // containers are array, bitmap and run, and the run case returned above. An operand of any other IContainer
+        // implementation would be ignored by this branch (the clone is returned unchanged).
         if (other is ArrayContainer arr)
         {
             for (int i = 0; i < arr.Cardinality; i++)
@@ -138,7 +181,9 @@ internal sealed class BitmapContainer : IContainer
     /// <summary>
     /// Returns a new container with bits set in this and not in <paramref name="other"/>.
     /// Neither operand is mutated. For in-place AND-NOT against another
-    /// <see cref="BitmapContainer"/>, use <see cref="AndNotWith"/>.
+    /// <see cref="BitmapContainer"/>, use <see cref="AndNotWith"/>. The result is converted to an
+    /// <see cref="ArrayContainer"/> when it has at most <see cref="ArrayContainer.MaxCapacity"/> values (a difference can
+    /// be much sparser than this bitmap).
     /// </summary>
     public IContainer AndNot(IContainer other)
     {
@@ -197,7 +242,10 @@ internal sealed class BitmapContainer : IContainer
         return clone;
     }
 
-    /// <summary>XOR with another container.</summary>
+    /// <summary>
+    /// Symmetric difference into a new container. The result is converted to an <see cref="ArrayContainer"/> when it has at most
+    /// <see cref="ArrayContainer.MaxCapacity"/> values. Neither operand is mutated.
+    /// </summary>
     public IContainer Xor(IContainer other)
     {
         if (other is BitmapContainer bmp)
@@ -260,16 +308,21 @@ internal sealed class BitmapContainer : IContainer
 
     #region In-place mutation methods
 
-    /// <summary>In-place AND. Returns recomputed cardinality.</summary>
+    // The In-place variants write the result into this container's words instead of allocating a new 8 KiB result, which
+    // is what lets query accumulations (PresenceQuery, RoaringBitmap's *With operations) chain many operations without
+    // allocating. They never change the container kind: the caller decides whether a sparse result should become an array
+    // (RoaringBitmap does so afterwards via BitmapToArray). The operand is only read, so it may be a shared container.
+
+    /// <summary>In-place AND (this &amp;= other). Updates <see cref="Cardinality"/> from the written words.</summary>
     internal void AndWith(BitmapContainer other) => Cardinality = _SimdAndInPlace(Bitmap, other.Bitmap);
 
-    /// <summary>In-place OR. Returns recomputed cardinality.</summary>
+    /// <summary>In-place OR (this |= other). Updates <see cref="Cardinality"/> from the written words.</summary>
     internal void OrWith(BitmapContainer other) => Cardinality = _SimdOrInPlace(Bitmap, other.Bitmap);
 
-    /// <summary>In-place ANDNOT. Returns recomputed cardinality.</summary>
+    /// <summary>In-place ANDNOT (this &amp;= ~other). Updates <see cref="Cardinality"/> from the written words.</summary>
     internal void AndNotWith(BitmapContainer other) => Cardinality = _SimdAndNotInPlace(Bitmap, other.Bitmap);
 
-    /// <summary>In-place XOR. Returns recomputed cardinality.</summary>
+    /// <summary>In-place XOR (this ^= other). Updates <see cref="Cardinality"/> from the written words.</summary>
     internal void XorWith(BitmapContainer other) => Cardinality = _SimdXorInPlace(Bitmap, other.Bitmap);
 
     #endregion
@@ -308,6 +361,19 @@ internal sealed class BitmapContainer : IContainer
     /// Uses Vector256 (processes 4 ulongs = 256 bits per iteration).
     /// Falls back to scalar loop on platforms without hardware vectors.
     /// </summary>
+    /// <remarks>
+    /// This is the pattern shared by all the bulk operations below (and their in-place twins):
+    /// <list type="bullet">
+    /// <item>The 1024-word arrays are reinterpreted as vectors with <see cref="MemoryMarshal.Cast{TFrom, TTo}(ReadOnlySpan{TFrom})"/>
+    /// (no copy). 1024 is a multiple of both 4 (Vector256) and 2 (Vector128), so the vector loop covers every word and the
+    /// scalar tail only runs when no vector path is available.</item>
+    /// <item>The population count of the result is accumulated in the same loop that produces the words, one scalar POPCNT per
+    /// 64-bit lane, so <see cref="Cardinality"/> is known without a second pass over the 8 KiB.</item>
+    /// <item><c>Vector256.IsHardwareAccelerated</c> is a JIT-time constant, so the unused branches are removed at compile time.</item>
+    /// </list>
+    /// The sources and the destination must be distinct arrays of exactly <see cref="BitmapSize"/> words (the container always
+    /// allocates them that size). They may not partially overlap.
+    /// </remarks>
     private static int _SimdAnd(ulong[] a, ulong[] b, ulong[] dst)
     {
         int cardinality = 0;
@@ -710,9 +776,17 @@ internal sealed class BitmapContainer : IContainer
         return cardinality;
     }
 
-    /// <summary>Converts a bitmap container to an array container by extracting all set bits.</summary>
+    /// <summary>
+    /// Converts a bitmap container to an array container by extracting all set bits in ascending order.
+    /// <para>
+    /// <b>Precondition:</b> <see cref="Cardinality"/> equals the number of set bits (the array is allocated with exactly that
+    /// size) and is at most <see cref="ArrayContainer.MaxCapacity"/> in the normal use; callers invoke it right after a
+    /// bulk operation that recomputed the cardinality. A cardinality smaller than the real bit count would overrun the array.
+    /// </para>
+    /// </summary>
     internal static ArrayContainer BitmapToArray(BitmapContainer bmp)
     {
+        // Allocation is sized exactly from the maintained cardinality, so no counting pass or resize is needed.
         ushort[] values = new ushort[bmp.Cardinality];
         int idx = 0;
         for (int i = 0; i < BitmapSize; i++)

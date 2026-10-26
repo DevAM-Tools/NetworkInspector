@@ -3,7 +3,9 @@
 namespace NetworkInspector.Core.Errors;
 
 /// <summary>
-/// Describes a recoverable error during export.
+/// Describes a recoverable error during export. Raised to <see cref="IErrorTolerantExporter.ItemSkipped"/>
+/// subscribers, and only in <see cref="ErrorToleranceMode.Tolerant"/> mode (a strict export aborts instead). Instances
+/// are created per skipped item, which only happens on the error path, so the allocation is not a hot-path cost.
 /// </summary>
 public sealed class ExportErrorEventArgs : EventArgs
 {

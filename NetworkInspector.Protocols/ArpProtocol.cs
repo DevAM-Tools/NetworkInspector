@@ -23,8 +23,10 @@ namespace NetworkInspector.Protocols;
 /// </code>
 /// </summary>
 /// <remarks>
-/// <para><b>Thread safety:</b> Not thread-safe; designed for single-threaded use within a
-/// protocol stack. Each <see cref="Stack"/> instance is owned by exactly one parsing thread.</para>
+/// <para><b>Thread safety:</b> The instance holds no mutable state after <c>RegisterFields</c> (the field and
+/// group IDs are assigned once during the single-threaded stack build). <see cref="Parse"/> only reads them and
+/// writes into the per-packet <see cref="MutField"/>, so it may run concurrently on several threads, each with its own
+/// packet.</para>
 /// </remarks>
 [Protocol("arp", "Address Resolution Protocol", Description = "ARP (RFC 826)")]
 [RegisterAtTable(EthernetProtocol.EtherTypeTableName, EtherTypeKey)]
@@ -41,6 +43,10 @@ public sealed partial class ArpProtocol : IProtocol
     /// Total size = 8 + 2*hwSize + 2*protoSize.
     /// </summary>
     private const int _MinHeaderSize = 8;
+
+    // The two sizes below select the typed field path (MAC / IPv4 value, formatted display text, packet info
+    // summary). Any other HLEN/PLEN is still parsed correctly but exposed as raw bytes, because RFC 826 allows
+    // ARP on other link and network layers.
 
     /// <summary>Hardware address size for Ethernet (6 bytes = MAC address).</summary>
     private const byte _EthernetHwSize = 6;
@@ -124,8 +130,15 @@ public sealed partial class ArpProtocol : IProtocol
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
     /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
-    /// <param name="context">Owning stack used to dispatch the next-protocol payload (when applicable).</param>
-    /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
+    /// <param name="context">
+    /// Parse context; ARP never dispatches a payload and only uses it to record protocol and index-group presence
+    /// (a no-op when no packet index is attached).
+    /// </param>
+    /// <returns>
+    /// The size of the ARP message (<c>8 + 2 * HLEN + 2 * PLEN</c>) so that the caller can classify any following
+    /// bytes (for example Ethernet minimum-frame padding) as trailing data, or a <see cref="ParseError"/> describing
+    /// the failure when the data is shorter than the fixed header or than the size the header declares.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         if (data.Length < _MinHeaderSize)
@@ -142,7 +155,9 @@ public sealed partial class ArpProtocol : IProtocol
         byte protoSize = span[5];
         ushort opcode = BinaryPrimitives.ReadUInt16BigEndian(span[6..]);
 
-        // Compute and validate the total header size based on the declared address lengths.
+        // Compute and validate the total message size based on the declared address lengths. HLEN and PLEN come from
+        // the wire (untrusted), so the whole length is checked once here; every Slice below is then in range and
+        // cannot throw. Both sizes are single bytes (at most 255), so the total is at most 1028 and cannot overflow.
         // ARP variable-length layout: 8 + hwSize + protoSize + hwSize + protoSize
         int totalSize = _MinHeaderSize + 2 * hwSize + 2 * protoSize;
         if (data.Length < totalSize)
@@ -150,7 +165,8 @@ public sealed partial class ArpProtocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, (ulong)totalSize, (ulong)data.Length);
         }
 
-        // Read sender and target addresses at variable offsets
+        // Locate sender and target addresses; the wire order is sender hardware, sender protocol, target hardware,
+        // target protocol, and the offsets move with the declared sizes.
         int senderHwOffset = _MinHeaderSize;
         int senderProtoOffset = senderHwOffset + hwSize;
         int targetHwOffset = senderProtoOffset + protoSize;
@@ -161,7 +177,9 @@ public sealed partial class ArpProtocol : IProtocol
         ReadOnlySpan<byte> targetHwSpan = span.Slice(targetHwOffset, hwSize);
         ReadOnlySpan<byte> targetProtoSpan = span.Slice(targetProtoOffset, protoSize);
 
-        // Build typed address values (MAC/IPv4 for standard sizes, raw bytes otherwise)
+        // Build typed address values (MAC/IPv4 for standard sizes). For other sizes they stay default and are never
+        // read: the raw-bytes fields below are used instead and every use of these values is guarded by isStandardArp.
+        // IPv4Address is built from a big-endian read because ARP carries addresses in network byte order.
         MacAddress senderMac = hwSize == _EthernetHwSize ? MacAddress.FromBytes(senderHwSpan) : default;
         MacAddress targetMac = hwSize == _EthernetHwSize ? MacAddress.FromBytes(targetHwSpan) : default;
         IPv4Address senderIp = protoSize == _IPv4ProtoSize
@@ -171,7 +189,8 @@ public sealed partial class ArpProtocol : IProtocol
 
         bool isStandardArp = hwSize == _EthernetHwSize && protoSize == _IPv4ProtoSize;
 
-        // Set packet info for the info column (standard ARP only)
+        // Set packet info for the info column (standard ARP only; other opcodes leave the info unset). The
+        // arguments are formatted lazily, only when the summary text is actually read.
         if (isStandardArp)
         {
             if (opcode == _OpcodeRequest)
@@ -184,10 +203,14 @@ public sealed partial class ArpProtocol : IProtocol
             }
         }
 
+        // Record presence in the cross-packet index (no-op when no index is attached). Done after validation so a
+        // truncated message is not indexed as an ARP packet.
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_ArpGroupId);
 
-        // ARP is a leaf protocol with few fields — no lazy populator needed.
+        // ARP is a leaf protocol with few fields — no lazy populator needed. The container value covers exactly the
+        // ARP message (not trailing Ethernet padding); its representation shows the byte count instead of a hex dump.
+        // The title text takes its arguments unformatted so MutField builds it only when a field tree stores it.
         FieldValue containerValue = FieldValue.NewBytes(data[..totalSize])
             .WithCustomRepresentation(new LazyString(ZA.String(totalSize, " bytes")));
         MutField container;
@@ -210,7 +233,7 @@ public sealed partial class ArpProtocol : IProtocol
                 "Address Resolution Protocol (opcode ", DisplayTables.GetArpOpcodeDisplayText(opcode), ")");
         }
 
-        // Fixed header fields (always present)
+        // Fixed header fields (always present), appended in wire order
         container.AppendWithCustomText(_HwTypeFieldId, FieldValue.NewU64(hwType),
             DisplayTables.GetArpHwTypeDisplayText(hwType));
         container.AppendWithCustomText(_ProtoTypeFieldId, FieldValue.NewU64(protoType),
@@ -220,6 +243,8 @@ public sealed partial class ArpProtocol : IProtocol
         container.AppendWithCustomText(_OpcodeFieldId, FieldValue.NewU64(opcode),
             DisplayTables.GetArpOpcodeDisplayText(opcode));
 
+        // Address fields in wire order. A typed field (MAC / IPv4) is emitted for the standard sizes, otherwise
+        // the raw-bytes field; exactly one of the two is present per address.
         // Sender hardware address
         if (hwSize == _EthernetHwSize)
         {
@@ -260,6 +285,7 @@ public sealed partial class ArpProtocol : IProtocol
             container.Append(_DstProtoRawFieldId, FieldValue.NewBytes(data.Slice(targetProtoOffset, protoSize)));
         }
 
+        // Derived flags, always emitted (false for non-standard ARP) so every ARP packet carries both fields.
         // Gratuitous ARP: sender IP equals target IP (used for address announcement)
         // Only meaningful for standard IPv4 ARP
         bool isGratuitous = isStandardArp && senderIp == targetIp;

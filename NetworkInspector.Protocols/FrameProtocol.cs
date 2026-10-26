@@ -87,16 +87,21 @@ public sealed partial class FrameProtocol : IProtocol
 
     #region Pre-allocated populators (created once in _OnStartCustom, shared across all packets)
 
+    // Why pre-allocated: converting an instance method group to a delegate allocates on every conversion, and this
+    // protocol runs for every packet. All of the three members below are written once in _OnStartCustom (single-threaded
+    // build phase) and read-only afterwards, so concurrent Parse calls share them without synchronization.
+
     /// <summary>Pre-allocated delegate for frame field population — captures only 'this'.</summary>
-    private LazyPopulator _Populator = null!;
+    private LazyPopulator _Populator = null!; // null-forgiving: always assigned in _OnStartCustom, which runs before the first Parse
 
     /// <summary>Pre-allocated delegate for interface field population — captures only 'this'.</summary>
-    private LazyPopulator _InterfacePopulator = null!;
+    private LazyPopulator _InterfacePopulator = null!; // null-forgiving: always assigned in _OnStartCustom, before the first Parse
 
     // Sparse dispatch cache built from the link-type protocol table at stack start.
     // Linear scan over typically 1–3 entries; avoids dictionary hash computation per packet.
     private (ulong Key, ProtocolId Id)[] _LinkTypeSparseCache = [];
 
+    /// <summary>Creates the shared populator delegates and the link-type dispatch cache once, after the stack is built.</summary>
     partial void _OnStartCustom(Stack stack)
     {
         // Allocate once — each delegate captures only 'this' (a singleton per registered protocol).
@@ -215,24 +220,27 @@ public sealed partial class FrameProtocol : IProtocol
     };
 
     /// <summary>
-    /// Parses a Frame protocol unit from the supplied <paramref name="data"/> buffer,
-    /// appending decoded fields under <paramref name="parentField"/> and dispatching any
-    /// payload via the surrounding <paramref name="context"/>.
+    /// Parses the root of a packet: creates the lazy <c>frame</c> container (metadata is filled in on first access)
+    /// and dispatches the captured bytes to the link-layer protocol registered for the frame's link type.
     /// </summary>
-    /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
-    /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
-    /// <param name="context">Owning stack used to dispatch the next-protocol payload (when applicable).</param>
-    /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
+    /// <param name="parentField">Root field that receives the frame container and the dispatched link-layer protocol.</param>
+    /// <param name="data">The captured frame bytes (the link-layer frame; the frame metadata itself is not in this buffer).</param>
+    /// <param name="context">Parse context; records index presence and carries the stack used to dispatch the payload.</param>
+    /// <returns>
+    /// The whole <paramref name="data"/> length, or the <see cref="ParseError"/> returned by the link-layer protocol.
+    /// A link type without a registered protocol is not an error: the frame is shown with its raw bytes only.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         // Frame metadata comes from Packet.Frame, not from the data buffer
         Frame frame = parentField.Packet.Frame;
 
-        // Record presence in index
+        // Record presence in index (no-op when no index is attached). The frame protocol validates nothing, so presence
+        // is recorded unconditionally.
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_FrameGroupId);
 
-        // Extract frame metadata needed for: summary closure + dispatch + index recording.
+        // Extract frame metadata needed for: container title + dispatch + index recording.
         // (Other fields are re-read inside _PopulateFrameFields at materialisation time.)
         FrameId frameId = frame.Id;
         LinkType linkType = frame.LinkType;
@@ -240,26 +248,28 @@ public sealed partial class FrameProtocol : IProtocol
         string linkTypeName = GetLinkTypeName(linkType);
         ulong linkTypeValue = (ulong)linkType;
 
-        // Check for interface info and record optional index group
+        // Check for interface info and record optional index group. This lookup has to happen here and not only in the
+        // lazy interface populator: the index group must be decided eagerly, because a lazy populator is not allowed
+        // to record index presence. The populator repeats the lookup when the tree is materialized.
         bool hasInterface = frame.HasInterface;
         FrameInterfaceId interfaceId = frame.InterfaceId;
         FrameInterfaceInfo? interfaceInfo = null;
         if (hasInterface)
         {
-            context.Stack!.FrameInterfaceRegistry.TryGet(interfaceId, out interfaceInfo);
+            context.Stack!.FrameInterfaceRegistry.TryGet(interfaceId, out interfaceInfo); // null-forgiving: real parse calls always carry the stack
             if (interfaceInfo is not null)
             {
                 context.RecordGroupPresence(_FrameInterfaceGroupId);
             }
         }
 
-        // Summary captures only 3 small values (int, int, string-ref) from the eagerly-extracted locals.
-
-        // Store the full frame data in the field value so _PopulateFrameFields can access it
-        // without any captured state (reads from container.Value.Data.AsBytes()).
+        // The container title takes the plain values (id, length, link type name) and is formatted lazily, so no string
+        // is built here. Store the full frame data in the field value so _PopulateFrameFields can access it
+        // without any captured state (it reads the bytes back from the container value).
         parentField.AppendLazyWithCustomText(_ProtocolFieldId, data, "Frame ", frameId.Value, ": ", frameLength, " bytes (", linkTypeName, ")", _Populator);
 
-        // Dispatch to link-layer protocol on parentField (sibling dispatch — all protocols are direct children of root)
+        // Dispatch to link-layer protocol on parentField (sibling dispatch — all protocols are direct children of root).
+        // Only a real error is propagated; a miss (NotDispatched, unknown link type) leaves the frame with its raw bytes.
         ParseResult dispatchResult = _DispatchLinkType(in parentField, linkTypeValue, data, in context);
         if (dispatchResult.TryPropagateError(out ParseResult error))
         {

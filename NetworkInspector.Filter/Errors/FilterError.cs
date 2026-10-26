@@ -15,7 +15,11 @@ public sealed class FilterError
 {
     #region Construction
 
-    /// <summary>Creates a filter error with optional position information.</summary>
+    /// <summary>
+    /// Creates a filter error with optional position information. Arguments are not validated (omitted on purpose):
+    /// the constructor is private and only the factories below call it with their own message text; position and length
+    /// are -1 when no source span applies.
+    /// </summary>
     private FilterError(FilterErrorKind kind, string message, int position, int length, string? suggestion = null)
     {
         Kind = kind;

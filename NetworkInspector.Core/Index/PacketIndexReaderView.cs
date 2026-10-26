@@ -17,11 +17,22 @@ namespace NetworkInspector.Core.Index;
 /// struct as the generic type argument instead. <see cref="PacketIndex"/> is a class
 /// and can be used as the interface without boxing.
 /// </para>
+/// <para>
+/// A <c>default</c> view has no index: <see cref="Source"/> is <see langword="null"/> and every other member throws
+/// <see cref="NullReferenceException"/>. Obtain views through <see cref="PacketIndex.AsReadOnlyView"/>.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> Immutable wrapper; the thread-safety of every member is that of the wrapped
+/// <see cref="PacketIndex"/> (single writer, concurrent readers), because each member only forwards to it.
+/// </para>
 /// </summary>
 public readonly struct PacketIndexReaderView : IPacketIndexReader
 {
     #region Fields
 
+    // The only field, so the struct is one reference wide: passing it by value costs the same as passing the class, and a
+    // generic call site specialized for this struct type lets the JIT inline the forwarding bodies below.
+    // Not nullable-annotated because only default(PacketIndexReaderView) can hold null (see the type remarks).
     private readonly PacketIndex _Index;
 
     #endregion

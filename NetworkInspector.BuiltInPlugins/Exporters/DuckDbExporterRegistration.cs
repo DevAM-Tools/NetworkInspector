@@ -19,6 +19,10 @@ internal static class DuckDbExporterRegistration
     /// <summary>Option name: worker threads of the database engine.</summary>
     private const string _ThreadsOption = "threads";
 
+    // Limit: worker threads, 0 to 1024. Threat: a mistyped huge value asking the engine for an absurd number of threads.
+    // Constant, not configurable: it is not a host-derived protection, only a plausibility bound, and 0 (engine default)
+    // stays the default, so the posture is open by default. The memory limit has no upper bound here: the value is
+    // forwarded to the engine, which owns what it means; 0 leaves the engine default.
     /// <summary>Largest accepted thread count; far beyond any machine, it only stops typing mistakes.</summary>
     private const long _MaxThreads = 1024;
 
@@ -57,6 +61,8 @@ internal static class DuckDbExporterRegistration
 
         ReadOnlySettingsManagerView values = request.Options;
         long memoryLimit = OptionValues.GetI64(values, _MemoryLimitOption);
+
+        // The setting bounds (0 to 1024) make the narrowing cast safe.
         int threads = (int)OptionValues.GetI64(values, _ThreadsOption);
         return ExporterBuild.TryBuild<IPacketListener>(
             () =>

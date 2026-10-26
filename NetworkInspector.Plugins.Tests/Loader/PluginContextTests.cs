@@ -70,6 +70,40 @@ internal sealed class PluginContextTests
     }
 
     [Test]
+    public async Task AThrowingStoppingCallbackWithAThrowingLogNeverBreaksTheShutdown()
+    {
+        using TempFolder folder = new("context-stopping-log");
+        using SettingsManager application = new();
+        using SettingsManager profile = new();
+        using PluginContext context = new("Sample.Protocol", new ThrowingPluginLog(), folder.FilePath("data"), application, profile);
+        bool secondCallbackRan = false;
+        using CancellationTokenRegistration first = context.Stopping.Register(static () => throw new InvalidOperationException("callback boom"));
+        using CancellationTokenRegistration second = context.Stopping.Register(() => secondCallbackRan = true);
+
+        // The log is broken, so the failure of the callback cannot be reported; the signal must still end normally.
+        context.SignalStopping();
+
+        await Assert.That(context.Stopping.IsCancellationRequested).IsTrue();
+        await Assert.That(secondCallbackRan).IsTrue();
+    }
+
+    [Test]
+    public async Task AStoppingCallbackWithAHostileExceptionIsStillOneErrorEntry()
+    {
+        using TempFolder folder = new("context-stopping-hostile");
+        using SettingsManager application = new();
+        using SettingsManager profile = new();
+        CapturingPluginLog log = new();
+        using PluginContext context = new("Sample.Protocol", log, folder.FilePath("data"), application, profile);
+        using CancellationTokenRegistration registration = context.Stopping.Register(static () => throw new HostileException());
+
+        context.SignalStopping();
+
+        await Assert.That(log.Entries.Count).IsEqualTo(1);
+        await Assert.That(log.Entries[0].Text).IsEqualTo("A Stopping callback failed: HostileException: (the message could not be read)");
+    }
+
+    [Test]
     public async Task InvalidArgumentsAreRefused()
     {
         using TempFolder folder = new("context-args");
@@ -153,6 +187,25 @@ internal sealed class PluginContextTests
         await Assert.That(errors.Count).IsEqualTo(2);
         await Assert.That(errors[0].Text).IsEqualTo("SettingsApplied handler failed: InvalidOperationException: handler boom");
         await Assert.That(second).IsEquivalentTo(_ChangedNamesBoth, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task AThrowingHandlerWithAThrowingLogNeverBreaksTheCallerOrTheOtherHandlers()
+    {
+        using TempFolder folder = new("context-events-log");
+        using SettingsManager application = new();
+        using SettingsManager profile = new();
+        PluginTimeoutSettings.Register(application);
+        using PluginContext context = new("Sample.Protocol", new ThrowingPluginLog(), folder.FilePath("data"), application, profile);
+        int secondRan = 0;
+        context.SettingsApplied += (_, _) => throw new InvalidOperationException("handler boom");
+        context.SettingsApplied += (_, _) => secondRan++;
+
+        // The log is broken, so the failure of the first handler cannot be reported; the apply must still end normally.
+        Expect.NotNull(application.GetSetting("plugins.startTimeoutSeconds")).SetPendingValue(SettingValue.I64(5));
+        application.ApplyChanges();
+
+        await Assert.That(secondRan).IsEqualTo(1);
     }
 
     [Test]

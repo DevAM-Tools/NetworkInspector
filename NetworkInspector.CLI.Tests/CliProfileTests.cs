@@ -199,7 +199,7 @@ internal sealed class CliProfileTests
         CliResult get = await sandbox.RunAsync("settings", "get", "tcp.max_tracked_streams");
 
         await Assert.That(get.Exit).IsEqualTo(0);
-        await Assert.That(get.OutLines).IsEquivalentTo(["100000"], CollectionOrdering.Matching);
+        await Assert.That(get.OutLines).IsEquivalentTo(["10000"], CollectionOrdering.Matching);
     }
 
     #endregion
@@ -263,6 +263,25 @@ internal sealed class CliProfileTests
 
         await Assert.That(frob.Error).Contains("Usage: ni profile");
         await Assert.That(_Snapshot(sandbox.Base)).IsEquivalentTo(before, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task AFileSystemFailureOfAProfileCommandIsARuntimeErrorAndARuleRefusalStaysAUsageError()
+    {
+        using CliSandbox sandbox = new();
+        string blocker = sandbox.Combine("blocker");
+        File.WriteAllText(blocker, "a file where the settings base folder should be");
+
+        // The base cannot be created below a file: an I/O failure of the environment, exit code 3 like every other runtime failure.
+        CliResult failed = await CliSandbox.RunWithoutBaseAsync(["profile", "create", "Work", "--settings-path", blocker], CancellationToken.None);
+        CliResult first = await sandbox.RunAsync("profile", "create", "Work");
+        CliResult duplicate = await sandbox.RunAsync("profile", "create", "work");
+
+        await Assert.That(failed.Exit).IsEqualTo(3);
+        await Assert.That(failed.ErrorMessages.Length).IsEqualTo(1);
+        await Assert.That(failed.ErrorMessages[0]).Contains("cannot be created");
+        await Assert.That(first.Exit).IsEqualTo(0);
+        await Assert.That(duplicate.Exit).IsEqualTo(1);
     }
 
     [Test]

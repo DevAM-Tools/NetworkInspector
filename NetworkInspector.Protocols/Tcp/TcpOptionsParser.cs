@@ -18,9 +18,28 @@ namespace NetworkInspector.Protocols.Tcp;
 ///   <item>MPTCP (30) - Multipath TCP subtype (RFC 6824/8684)</item>
 ///   <item>MD5 Signature (19) - RFC 2385</item>
 ///   <item>TCP-AO (29) - Authentication Option (RFC 5925)</item>
+///   <item>Echo (6) / Echo Reply (7) - obsolete RFC 1072 options</item>
+///   <item>CC (11) / CC.NEW (12) / CC.ECHO (13) - RFC 1644</item>
+///   <item>SCPS (20), Quick-Start (27), Accurate ECN (0xAC / 0xAE), shared experimental (0xFD / 0xFE)</item>
 ///   <item>Unknown - catch-all for unrecognized options</item>
 /// </list>
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Trust boundary:</b> the option bytes come from the network. Parsing is confined to the span it is given (the
+/// caller passes only the header's option area, at most 40 bytes because the data offset is 4 bits), every option length
+/// is validated against the remaining bytes before it is used, and a malformed option ends the walk silently instead of
+/// raising an error: the fields appended so far stay visible. Because each option advances the offset by at least 2
+/// bytes (length below 2 stops the loop), the loop always terminates and its work is bounded by the area size.
+/// </para>
+/// <para>
+/// <b>Allocation:</b> options are parsed only when the TCP container is materialized (lazy populator), not per frame
+/// during ingest. Byte-valued fields (cookies, digests, MACs, unknown data) are copied with <c>ToArray()</c> because
+/// the parser only has a span, which cannot back a stored memory value; the display text of containers is composed
+/// eagerly with <c>ZA.String</c>. Both costs are therefore paid per displayed packet, not per captured packet.
+/// </para>
+/// <para><b>Thread safety:</b> stateless static class; safe to call concurrently.</para>
+/// </remarks>
 internal static class TcpOptionsParser
 {
     #region Option Kind Constants
@@ -58,7 +77,9 @@ internal static class TcpOptionsParser
     /// <param name="optionsData">The raw TCP options bytes (header[20..headerLen]).</param>
     /// <param name="container">The MutField to append option sub-fields to.</param>
     /// <param name="fieldIds">The registered field IDs for TCP options.</param>
-    /// <returns>Parsed option information for analysis.</returns>
+    /// <returns>
+    /// Parsed option information for analysis. Parsing never fails: truncated or malformed options simply stop the walk.
+    /// </returns>
     internal static TcpOptionsInfo Parse(
         ReadOnlySpan<byte> optionsData,
         in MutField container,
@@ -103,12 +124,15 @@ internal static class TcpOptionsParser
                 break; // Truncated - no length byte
             }
 
+            // The length byte counts the whole option (kind and length included). A value below 2 would not advance
+            // the offset (endless loop), and a value past the area would read out of range, so both end the walk.
             byte optLen = optionsData[offset + 1];
             if (optLen < 2 || offset + optLen > optionsData.Length)
             {
                 break; // Invalid or truncated option
             }
 
+            // Each handler gets exactly its own bytes (kind, length, data), so it cannot read into the next option.
             ReadOnlySpan<byte> optionBytes = optionsData.Slice(offset, optLen);
 
             switch (kind)
@@ -220,8 +244,10 @@ internal static class TcpOptionsParser
             return null;
         }
 
+        // The field shows the value as sent (shift); the multiplier and the returned value use the capped count.
+        // RFC 7323 -2.3: shift count MUST NOT exceed 14 (receivers treat larger values as 14). The cap also keeps
+        // the 1u << effectiveShift below valid for any wire byte.
         byte shift = data[2];
-        // RFC 7323 -2.3: shift count MUST NOT exceed 14
         byte effectiveShift = Math.Min(shift, _MaxWindowScale);
         uint multiplier = 1u << effectiveShift;
 
@@ -249,7 +275,9 @@ internal static class TcpOptionsParser
     private static void _ParseSack(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
-        // SACK data starts at offset 2, each block is 8 bytes (LE + RE)
+        // SACK data starts at offset 2, each block is 8 bytes (LE + RE). A trailing partial block is ignored (the
+        // count rounds down). The block count is bounded by the option length (at most 255 bytes, in practice
+        // by the 40-byte option area), so the loop below needs no separate limit.
         int sackDataLen = data.Length - 2;
         int blockCount = sackDataLen / 8;
 
@@ -414,7 +442,10 @@ internal static class TcpOptionsParser
         }
     }
 
-    /// <summary>Echo (kind 6) and Echo Reply (kind 7): length 6, big-endian uint at offset 2.</summary>
+    /// <summary>
+    /// Echo (kind 6): length 6, big-endian uint at offset 2. An option with any other length is shown as an unknown
+    /// option (same fallback in all fixed-length handlers below) instead of being decoded with a wrong layout.
+    /// </summary>
     private static void _ParseEcho(ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length != 6)
@@ -428,6 +459,7 @@ internal static class TcpOptionsParser
         echo.Append(ids.EchoValue, FieldValue.NewU64(value));
     }
 
+    /// <summary>Echo Reply (kind 7): length 6, big-endian uint at offset 2.</summary>
     private static void _ParseEchoReply(ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length != 6)
@@ -441,6 +473,10 @@ internal static class TcpOptionsParser
         echo.Append(ids.EchoReplyValue, FieldValue.NewU64(value));
     }
 
+    /// <summary>
+    /// Shared handler for the CC family (kinds 11, 12, 13): length 6 with one big-endian uint at offset 2, appended under
+    /// the given container and value fields.
+    /// </summary>
     private static void _ParseFixedU32(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids, FieldId containerField, FieldId valueField)
     {
@@ -455,6 +491,7 @@ internal static class TcpOptionsParser
         node.Append(valueField, FieldValue.NewU64(value));
     }
 
+    /// <summary>SCPS capabilities (kind 20): length 4; the first data byte holds the capability bits 0x80..0x08.</summary>
     private static void _ParseScps(ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length != 4)
@@ -472,6 +509,7 @@ internal static class TcpOptionsParser
         scps.Append(ids.ScpsNlts, FieldValue.NewBool((caps & 0x08) != 0));
     }
 
+    /// <summary>Quick-Start (kind 27): length 8; rate request in the low nibble of byte 2, TTL difference in byte 3.</summary>
     private static void _ParseQs(ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length != 8)
@@ -485,6 +523,11 @@ internal static class TcpOptionsParser
         qs.Append(ids.QsTtlDiff, FieldValue.NewU64(data[3]));
     }
 
+    /// <summary>
+    /// Accurate ECN (kinds 0xAC and 0xAE): zero to three 24-bit counters. The two kinds carry the same counters in a
+    /// different order (<paramref name="order0"/> = kind 0xAC: EE0B first and EE1B last; otherwise swapped), with ECEB
+    /// always in the middle. Any data length other than 0, 3, 6 or 9 bytes is shown as an unknown option.
+    /// </summary>
     private static void _ParseAccEcn(ReadOnlySpan<byte> data, bool order0, in MutField container, in TcpOptionsFieldIds ids)
     {
         int dataLen = data.Length - 2;
@@ -513,6 +556,10 @@ internal static class TcpOptionsParser
         }
     }
 
+    /// <summary>
+    /// Shared experimental options (kinds 0xFD and 0xFE): a 16-bit experiment id followed by opaque data. The ids
+    /// 0xACC0 and 0xACC1 are the experimental form of Accurate ECN and additionally get their counters decoded.
+    /// </summary>
     private static void _ParseExp(ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 4)
@@ -535,6 +582,7 @@ internal static class TcpOptionsParser
         }
     }
 
+    /// <summary>Decodes the Accurate ECN counters of an experimental option (same layout as <see cref="_ParseAccEcn"/>).</summary>
     private static void _ParseAccEcnCounters(ReadOnlySpan<byte> counters, bool order0, in MutField node, in TcpOptionsFieldIds ids)
     {
         if (counters.Length is not (0 or 3 or 6 or 9))
@@ -558,10 +606,14 @@ internal static class TcpOptionsParser
         }
     }
 
+    /// <summary>Reads a big-endian 24-bit value (the span must hold at least 3 bytes; callers check the length).</summary>
     private static uint _ReadU24(ReadOnlySpan<byte> data) =>
         (uint)((data[0] << 16) | (data[1] << 8) | data[2]);
 
-    /// <summary>Parses an unknown/unrecognized TCP option.</summary>
+    /// <summary>
+    /// Parses an unknown/unrecognized TCP option, and also serves as the fallback for known kinds whose length does not
+    /// match their definition. Shows the kind's display name and, if present, the raw data bytes (copied).
+    /// </summary>
     private static void _ParseUnknown(
         byte kind, ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
@@ -577,7 +629,7 @@ internal static class TcpOptionsParser
         }
     }
 
-    /// <summary>Returns the name of an MPTCP subtype.</summary>
+    /// <summary>Returns the name of an MPTCP subtype (the subtypes 0..8 defined by RFC 8684; others as <c>Unknown (n)</c>).</summary>
     private static string _GetMptcpSubtypeName(byte subtype)
     {
         return subtype switch

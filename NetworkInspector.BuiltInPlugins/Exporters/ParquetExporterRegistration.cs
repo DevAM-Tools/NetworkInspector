@@ -14,7 +14,7 @@ internal static class ParquetExporterRegistration
     /// <summary>Format name of the registration.</summary>
     internal const string Format = "Parquet";
 
-    /// <summary>Option name: sort packets by timestamp.</summary>
+    /// <summary>Option name: declares that the packets arrive in non-decreasing timestamp order (metadata only; nothing is sorted).</summary>
     private const string _SortedOption = "timestampSorted";
 
     #endregion
@@ -37,8 +37,9 @@ internal static class ParquetExporterRegistration
 
     /// <summary>Registers the options with the defaults of the Core exporter builder.</summary>
     private static void _RegisterOptions(SettingsRegistrar options) =>
-        options.RegisterBoolSetting(_SortedOption, "Sort by timestamp", "", false,
-            description: "Sort packets by timestamp before they are written; needs more memory.");
+        options.RegisterBoolSetting(_SortedOption, "Packets arrive sorted", "", false,
+            description: "Declares that the packets arrive in non-decreasing timestamp order. Metadata only: the exporter sorts nothing " +
+                "and writes the packets in the order they arrive.");
 
     /// <summary>Creates the Core Parquet exporter for a directory target.</summary>
     private static bool _TryCreate(ExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
@@ -46,6 +47,8 @@ internal static class ParquetExporterRegistration
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // The flag is passed through as the Core builder defines it: a declaration that the packets arrive in timestamp
+        // order (metadata for the shared columnar batch). It does not sort the packets.
         bool sorted = OptionValues.GetBool(request.Options, _SortedOption);
         return ExporterBuild.TryBuild<IPacketListener>(
             () => ParquetExporter.CreateBuilder()

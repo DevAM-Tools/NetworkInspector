@@ -80,9 +80,11 @@ Settings are read from the stack's `SettingsManager`. Preload or persist them be
 | `pdu_transport.config_file` | JSON file with PDU names (schema in `Schemas/`) |
 | `pdu_transport.udp_dispatch_ports` | UDP ports that carry PDU Transport (default: none) |
 | `signal_message.config_file` | JSON signal description for CAN or PDU payloads (schema in `Schemas/`) |
-| `signal_message.show_raw`, `.show_enum`, `.max_enum_values` | Signal display options |
-| `can.config_file` | JSON CAN message names |
-| `tcp.max_tracked_streams`, `tcp.stream_key_last_vlan`, `tcp.stream_key_frame` | TCP stream tracking |
+| `signal_message.show_raw`, `.show_enum`, `.max_enum_values` | Signal display options (`max_enum_values` is 1 or more) |
+| `can.config_file` | JSON CAN message names; an identifier that appears twice keeps its first entry and is reported by `CanProtocol.ConfigLoadWarning` |
+| `tcp.max_tracked_streams` (default 10000), `tcp.stream_key_last_vlan`, `tcp.stream_key_frame` | TCP stream tracking |
+| `udp.max_tracked_streams` (default 10000) | UDP stream tracking: a new conversation beyond the cap gets no `udp.stream` and `udp.error.stream_limit` |
+| `http.max_decompressed_bytes`, `ws.max_decompressed_bytes` (default 64 MiB each, range 1 KiB to 128 GiB) | Largest decompressed HTTP body or WebSocket payload; a larger one stays undecoded and is flagged by `http.error.decompress_limit` or `websocket.payload.decompressed.limit` |
 
 Example: dispatch UDP port 47290 to PDU Transport.
 
@@ -116,7 +118,7 @@ Step-by-step guide: [`PROTOCOL_GUIDE.md`](PROTOCOL_GUIDE.md). Generator referenc
 
 - Register protocols during stack construction only; the built stack is immutable.
 - Captures are untrusted input: dissectors bound lengths and counts, report malformed data as `packet.error`, and
-  cap tracked TCP streams (`tcp.max_tracked_streams`) and reassembly buffers.
+  cap tracked TCP and UDP streams (`tcp.max_tracked_streams`, `udp.max_tracked_streams`), decompressed HTTP bodies and WebSocket payloads (`http.max_decompressed_bytes`, `ws.max_decompressed_bytes`, secure by default at 64 MiB) and reassembly buffers.
 - Connection keys hash with a process-seeded hash, so crafted captures cannot force hash-table collisions.
 
 ## Learn More

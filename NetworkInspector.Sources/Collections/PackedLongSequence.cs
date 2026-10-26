@@ -24,7 +24,8 @@ namespace NetworkInspector.Sources.Collections;
 /// </para>
 /// <para>
 /// <b>Thread-safety:</b> single writer (<see cref="Append"/>, <see cref="Complete"/>), any number of readers
-/// (<see cref="TryGet"/>, <see cref="TryGetCached"/>, <see cref="Count"/>). Publish order: staging slot (volatile) → <c>_Count</c> (volatile);
+/// (<see cref="TryGet"/>, <see cref="TryGetCached"/>, <see cref="TryGetCachedWithNext"/>, <see cref="Count"/>).
+/// Publish order: staging slot (volatile) → <c>_Count</c> (volatile);
 /// group words → group info slot (plain writes; chunks are installed with a volatile write) → <c>_SealedGroups</c>
 /// (volatile write, the release that publishes both). A reader that reads a staging slot
 /// re-reads <c>_SealedGroups</c> afterwards; if the group was sealed meanwhile, the slot may already belong to the
@@ -42,10 +43,20 @@ internal sealed class PackedLongSequence
     /// <summary>Values per group: 64, one lane per bit of a plane word.</summary>
     internal const int GroupSize = 1 << GroupShift;
 
+    /// <summary>Mask of the lane (position inside a group) in an index.</summary>
     private const int _GroupMask = GroupSize - 1;
+
+    /// <summary>Words before the planes of a sealed group: the first value and the minimum delta.</summary>
     private const int _HeaderWords = 2;
+
+    /// <summary>Log₂ of group info words per chunk: 8 192 words = 64 KiB per chunk.</summary>
     private const int _InfoChunkShift = 13;
+
+    /// <summary>Mask of the slot inside an info chunk.</summary>
     private const int _InfoChunkMask = (1 << _InfoChunkShift) - 1;
+
+    // Bit layout of a group info word: bits 0-6 width (0..64 needs 7 bits), bits 7-12 shift (0..63 needs 6 bits), bits 13+
+    // the word offset of the group in the word store. The shift and mask constants below must stay in step with these.
     private const int _InfoOffsetShift = 13;
     private const int _InfoShiftShift = 7;
     private const long _InfoWidthMask = 0x7F;
@@ -55,6 +66,7 @@ internal sealed class PackedLongSequence
 
     #region Fields
 
+    /// <summary>Storage of the sealed groups' words (header words and planes); append-only, single writer.</summary>
     private readonly PackedWordStore _Words = new();
 
     /// <summary>
@@ -62,7 +74,15 @@ internal sealed class PackedLongSequence
     /// only reads groups below the count it acquired), so no per-slot volatile access or bounds re-check is needed.
     /// </summary>
     private readonly ChunkedOuterArray<long[]> _GroupInfo = new(_InfoChunkShift);
+
+    /// <summary>
+    /// Chunk factory as a cached static delegate: <see cref="_SealGroup"/> passes it to
+    /// <see cref="ChunkedOuterArray{TChunk}.GetOrAllocateChunk"/> on every sealed group, and a lambda created at the call
+    /// site would allocate a delegate each time.
+    /// </summary>
     private static readonly Func<long[]> _NewInfoChunk = static () => new long[1 << _InfoChunkShift];
+
+    /// <summary>Number of group info slots written. Writer thread only; readers use <see cref="_SealedGroups"/>.</summary>
     private int _GroupCount;
 
     /// <summary>Last issued sequence id; ids start at 1, so 0 marks an empty <see cref="DecodedGroupCache"/> way.</summary>
@@ -71,10 +91,26 @@ internal sealed class PackedLongSequence
     /// <summary>Process-unique key of this sequence in the per-thread <see cref="DecodedGroupCache"/>.</summary>
     private readonly long _Id = Interlocked.Increment(ref _LastId);
 
+    /// <summary>
+    /// The open group's raw values, one slot per lane. Written by the single writer with volatile writes, read by any
+    /// thread until the group is sealed; the slots are reused for the next group, which is why readers re-check
+    /// <see cref="_SealedGroups"/> after reading a slot.
+    /// </summary>
     private readonly long[] _Staging = new long[GroupSize];
+
+    /// <summary>Writer-only scratch for the residuals of the group being sealed (one reused buffer, no per-group allocation).</summary>
     private readonly ulong[] _Scratch = new ulong[GroupSize];
+
+    /// <summary>Number of published values; written after the staging slot, so a reader that sees the count sees the value.</summary>
     private volatile int _Count;
+
+    /// <summary>
+    /// Number of sealed groups; the release that publishes the group words and info slot. Groups below this count are
+    /// immutable.
+    /// </summary>
     private volatile int _SealedGroups;
+
+    /// <summary>True after <see cref="Complete"/>; writer thread only.</summary>
     private bool _Completed;
 
     #endregion

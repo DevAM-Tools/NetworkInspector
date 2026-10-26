@@ -5,15 +5,26 @@ namespace NetworkInspector.Protocols.SomeIp;
 /// <summary>
 /// Precomputed display text tables for SOME/IP protocol fields.
 /// </summary>
+/// <remarks>
+/// Every table has exactly 256 entries, one per possible byte value, and every slot is filled (unknown values get
+/// their plain hex form). A lookup is therefore a single array index that cannot go out of range for any
+/// <see cref="byte"/> argument and needs no hashing, no per-packet string formatting and no allocation. The strings are built
+/// once in the static initializer. Thread safety: tables are never modified after type initialization, so they are
+/// safe to read from any thread.
+/// </remarks>
 internal static class SomeIpDisplayTables
 {
     #region Message Type (byte field)
 
     private static readonly string[] _MsgTypeTable = _BuildMsgTypeTable();
 
-    /// <summary>Returns display text for a SOME/IP message type byte.</summary>
+    /// <summary>Returns display text for a SOME/IP message type byte (unknown values as <c>0xNN</c>).</summary>
     internal static string GetMsgTypeDisplayText(byte msgType) => _MsgTypeTable[msgType];
 
+    /// <summary>
+    /// Builds the message type table: the AUTOSAR message types, with the TP variants (bit 5 / 0x20 set) next to
+    /// their plain counterparts.
+    /// </summary>
     private static string[] _BuildMsgTypeTable()
     {
         string[] table = new string[256];
@@ -28,6 +39,7 @@ internal static class SomeIpDisplayTables
         table[0xA0] = "TP_RESPONSE (0xA0)";
         table[0xA1] = "TP_ERROR (0xA1)";
 
+        // Fill every unnamed slot so the lookup never returns null.
         for (int i = 0; i < 256; i++)
         {
             table[i] ??= $"0x{i:X2}";
@@ -41,9 +53,10 @@ internal static class SomeIpDisplayTables
 
     private static readonly string[] _ReturnCodeTable = _BuildReturnCodeTable();
 
-    /// <summary>Returns display text for a SOME/IP return code byte.</summary>
+    /// <summary>Returns display text for a SOME/IP return code byte (unknown values as <c>0xNN</c>).</summary>
     internal static string GetReturnCodeDisplayText(byte code) => _ReturnCodeTable[code];
 
+    /// <summary>Builds the return code table (0x00..0x0F are the return codes named by the SOME/IP specification).</summary>
     private static string[] _BuildReturnCodeTable()
     {
         string[] table = new string[256];
@@ -64,6 +77,7 @@ internal static class SomeIpDisplayTables
         table[0x0E] = "E_E2E_NOT_AVAILABLE (0x0E)";
         table[0x0F] = "E_E2E_NO_NEW_DATA (0x0F)";
 
+        // Fill every unnamed slot so the lookup never returns null.
         for (int i = 0; i < 256; i++)
         {
             table[i] ??= $"0x{i:X2}";

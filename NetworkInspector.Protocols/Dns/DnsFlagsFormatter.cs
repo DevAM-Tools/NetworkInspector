@@ -11,7 +11,10 @@ namespace NetworkInspector.Protocols.Dns;
 /// separately by the protocol parser.
 /// </para>
 /// <para>
-/// Synthetic 8-bit key encoding (bit 7 = highest):
+/// Synthetic 8-bit key encoding (bit 7 = highest). "Wire bit" is the bit position in the 16-bit flags value read
+/// as a big-endian integer (15 = most significant), not the bit number of the RFC 1035 diagram, which counts from the
+/// most significant bit. The key drops the multi-bit fields so that a 256-entry table is enough instead of a
+/// 65,536-entry one:
 /// <list type="table">
 ///   <listheader><term>Key bit</term><term>Wire bit</term><term>Name</term></listheader>
 ///   <item><term>7</term><term>15</term><term>Response (QR)</term></item>
@@ -39,6 +42,8 @@ internal static class DnsFlagsFormatter
     // 256-entry table indexed by the synthetic 8-bit key; stores bracket strings only.
     // Bits 14–11 (Opcode) and 3–0 (RCODE) are excluded; they are multi-bit
     // numeric values rendered separately by the protocol parser.
+    // Built once in the type initializer: every Format call is then a few shifts and one array read, with no
+    // allocation and no string building.
     private static readonly string[] _FlagsTable = _BuildFlagsTable();
 
     /// <summary>
@@ -65,6 +70,7 @@ internal static class DnsFlagsFormatter
             ((flags >> 5) & 1) << 1 |   // AD  → key bit 1
             ((flags >> 4) & 1) << 0);   // CD  → key bit 0
 
+    /// <summary>Builds the 256 bracket strings, one per combination of the eight boolean flags. Runs once.</summary>
     private static string[] _BuildFlagsTable()
     {
         string[] table = new string[256];
@@ -79,6 +85,11 @@ internal static class DnsFlagsFormatter
         return table;
     }
 
+    /// <summary>
+    /// Builds the bracket text for one key. <paramref name="names"/> is indexed by key bit (bit 0 first), as built
+    /// in <c>_BuildFlagsTable</c>; the output lists the set flags from the highest key bit down, so
+    /// Response, AA, TC, RD, RA, Z, AD, CD appear in header order.
+    /// </summary>
     private static string _BuildBracketString(byte key, string[] names)
     {
         if (key == 0)
@@ -102,7 +113,8 @@ internal static class DnsFlagsFormatter
             }
         }
 
-        // Second pass: fill the string via string.Create for zero-allocation construction.
+        // Second pass: fill the string via string.Create so the exact-length string is the only allocation
+        // (no StringBuilder, no intermediate buffer). The state tuple holds the key and the shared names array.
         // Names are emitted MSB first (7→0) so Response, AA, TC, RD, RA, Z, AD, CD is the natural order.
         return string.Create(totalLen, (key, names), static (chars, state) =>
         {

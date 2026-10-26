@@ -6,28 +6,33 @@ namespace NetworkInspector.Protocols.Tcp;
 /// Bitmask flags indicating which TCP analysis conditions were detected for a segment.
 /// Multiple flags can be set simultaneously.
 /// </summary>
+/// <remarks>
+/// The numeric values are mirrored one-to-one by <c>TcpProtocol.AnalysisEffectFlags</c> (the recorded form used for
+/// replay), and <c>TcpProtocol</c> converts between the two with a plain cast. The bit positions of both enums must
+/// therefore stay identical. Thread safety: enum value, immutable.
+/// </remarks>
 [Flags]
 internal enum TcpAnalysisFlags : uint
 {
     /// <summary>No analysis flags detected.</summary>
     None = 0,
 
-    /// <summary>Segment is a retransmission (end_seq <= next_seq).</summary>
+    /// <summary>Segment is a retransmission (end_seq &lt;= next_seq).</summary>
     Retransmission = 1 << 0,
 
-    /// <summary>Fast retransmission (retransmission after 3+ duplicate ACKs).</summary>
+    /// <summary>Fast retransmission (retransmission after 3+ duplicate ACKs from the other direction).</summary>
     FastRetransmission = 1 << 1,
 
-    /// <summary>Out-of-order segment (end_seq > next_seq AND seq != next_seq).</summary>
+    /// <summary>Out-of-order segment (end_seq &gt; next_seq AND seq != next_seq).</summary>
     OutOfOrder = 1 << 2,
 
-    /// <summary>Duplicate ACK (same ACK, no data, connection seen before).</summary>
+    /// <summary>Duplicate ACK (same ACK number and window as the previous ACK of this direction, no data).</summary>
     DuplicateAck = 1 << 3,
 
     /// <summary>Lost segment detected (gap in sequence numbers).</summary>
     LostSegment = 1 << 4,
 
-    /// <summary>Keep-alive probe (seq = next-1, len <= 1).</summary>
+    /// <summary>Keep-alive probe (seq = next-1, len &lt;= 1).</summary>
     KeepAlive = 1 << 5,
 
     /// <summary>Keep-alive acknowledgment.</summary>
@@ -45,10 +50,13 @@ internal enum TcpAnalysisFlags : uint
     /// <summary>Window update (pure ACK with changed window, no SYN/FIN/RST/PSH).</summary>
     WindowUpdate = 1 << 10,
 
-    /// <summary>Window is full (bytes in flight >= receiver window).</summary>
+    /// <summary>Window is full (bytes in flight &gt;= the scaled receiver window).</summary>
     WindowFull = 1 << 11,
 
-    /// <summary>Connection reuses previously seen port pair.</summary>
+    /// <summary>
+    /// Connection reuses previously seen port pair. Declared (and mirrored in the recorded effect flags), but nothing
+    /// in the connection tracker sets it at present.
+    /// </summary>
     ReusedPorts = 1 << 12,
 
     /// <summary>Spurious retransmission (data was already ACKed by the reverse flow).</summary>
@@ -59,6 +67,13 @@ internal enum TcpAnalysisFlags : uint
 /// Result of TCP segment analysis. Captures all detected conditions and metrics
 /// for a single segment, produced during Parse() and consumed during lazy population.
 /// </summary>
+/// <remarks>
+/// Produced by the connection tracker on the first parse of a packet only. On a replay the result is rebuilt from the
+/// recorded effect instead, which carries every value below except the live references
+/// (<see cref="ConnectionState"/>, <see cref="ConnectionKey"/>, <see cref="SrcAddr"/>); those are therefore only
+/// meaningful on the first-parse path (heuristic caching and reassembly). Thread safety: immutable value type, but
+/// <see cref="ConnectionState"/> points at mutable tracker state that must not be touched from replay threads.
+/// </remarks>
 internal readonly record struct TcpAnalysisResult
 {
     #region Properties
@@ -109,7 +124,7 @@ internal readonly record struct TcpAnalysisResult
     /// Reference to the connection state for this segment's TCP stream.
     /// Used for heuristic protocol caching — once a protocol is detected by payload inspection,
     /// subsequent segments on the same connection reuse the cached protocol ID.
-    /// Null when no IP layer is found (no connection tracking).
+    /// Null when no IP layer is found (no connection tracking), when the stream table is full, and on replay.
     /// </summary>
     internal TcpConnectionState? ConnectionState { get; init; }
 
@@ -150,7 +165,10 @@ internal readonly record struct TcpAnalysisResult
 
     #region Sentinels
 
-    /// <summary>Default result with no flags and NaN RTT values.</summary>
+    /// <summary>
+    /// Default result with no flags and NaN RTT values (NaN means "not measured", unlike 0 which is a valid measurement)
+    /// and a window scale of -1 ("none").
+    /// </summary>
     internal static TcpAnalysisResult Empty => new()
     {
         Flags = TcpAnalysisFlags.None,

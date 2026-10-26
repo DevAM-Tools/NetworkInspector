@@ -28,14 +28,20 @@ public sealed class Stack : IStack, IDisposable
 {
     #region Fields
 
-    // Frozen arrays — direct indexing by ID value
+    // Arrays built once by StackBuilder.Build and never modified afterwards. Every ID is the dense index of its entry, so a
+    // lookup is a bounds check plus an array load (no hashing). The matching Info arrays are the ReadOnlyMemory properties.
     private readonly IProtocol[] _ProtocolInstances;
     private readonly ParseDelegate[] _ParseDelegates;
     private readonly ProtocolTable[] _ProtocolTables;
     private readonly HeuristicProtocolTable[] _HeuristicTables;
+
+    // The same manager the StackBuilder used while protocols registered their settings. The stack takes over its lifetime:
+    // Dispose releases the manager's locks.
     private readonly SettingsManager _SettingsManager;
 
-    // Frozen name→ID maps (FrozenDictionary for O(1) string lookups)
+    // Name→ID maps, frozen at build time. They serve lookup by name in setup code; parsers are expected to resolve a name to
+    // an ID once (for example in OnStart) and use IDs afterwards. FrozenDictionary is read-only and therefore safe for
+    // concurrent readers without locking, and its lookups are faster than a Dictionary's.
     private readonly FrozenDictionary<string, ProtocolId> _ProtocolNameMap;
     private readonly FrozenDictionary<string, FieldId> _FieldNameMap;
     private readonly FrozenDictionary<string, ProtocolTableId> _ProtocolTableNameMap;
@@ -43,8 +49,7 @@ public sealed class Stack : IStack, IDisposable
     private readonly FrozenDictionary<string, IndexGroupId> _IndexGroupNameMap;
     private readonly FrozenDictionary<string, FieldAliasGroupId> _FieldAliasGroupNameMap;
 
-    // Built-in IDs
-    /// <summary>Frozen reassembly configs keyed by protocol ID.</summary>
+    /// <summary>Frozen stream reassembly configs keyed by protocol ID; a protocol without an entry has no reassembly config.</summary>
     private readonly FrozenDictionary<ProtocolId, StreamReassemblyConfig> _ReassemblyConfigs;
 
     /// <summary>
@@ -85,6 +90,15 @@ public sealed class Stack : IStack, IDisposable
     /// <see cref="PacketId.Value"/> is an <see cref="int"/>, so this stays <see langword="volatile"/>
     /// <see cref="int"/> (plain volatile read/write). First-parse of a given id is serialized by the
     /// caller; this field only publishes the completed watermark to re-parse threads.
+    /// <para>
+    /// Why a watermark: stateful protocols (connection trackers, reassembly, fragment buffers) mutate their state only
+    /// during the ordered first parse and record a compact effect per packet; a re-parse replays that effect and, on any
+    /// number of threads, must not mutate shared state again. The stack therefore has to tell a first parse from a replay.
+    /// Dense ids make one integer enough instead of a set of parsed ids. Because only one thread performs the next first
+    /// parse, the update is a plain volatile store (no compare-exchange, no maximum): the store is the release that makes the
+    /// completed first parse visible to replay threads that read the field. The cache and the index use the same verdict
+    /// (they record on a first parse only).
+    /// </para>
     /// </summary>
     private volatile int _ParseWatermark = -1;
 
@@ -92,7 +106,15 @@ public sealed class Stack : IStack, IDisposable
 
     #region Constructors
 
-    /// <summary>Creates a finalized, immutable protocol stack from builder-prepared data.</summary>
+    /// <summary>
+    /// Creates a finalized, immutable protocol stack from builder-prepared data. Called only by <see cref="StackBuilder.Build"/>.
+    /// All arrays and frozen maps are adopted as they are (no defensive copy, and the <c>ReadOnlyMemory</c> properties wrap
+    /// the arrays without copying): <see cref="StackBuilder.Build"/> creates them fresh for this stack and keeps no reference
+    /// to the arrays, so nothing mutates them afterwards. The elements are shared with the builder, though: the
+    /// <c>ProtocolTable</c> and <c>HeuristicProtocolTable</c> objects stay mutable, so the builder must not register anything
+    /// after <see cref="StackBuilder.Build"/>. The arguments are not validated; the builder guarantees that the arrays are
+    /// indexed by the IDs it handed out and that the maps cover the same entries.
+    /// </summary>
     internal Stack(
         ProtocolInfo[] protocols,
         IProtocol[] protocolInstances,
@@ -153,6 +175,11 @@ public sealed class Stack : IStack, IDisposable
 
     #region Index Validation
 
+    /// <summary>
+    /// Whether <paramref name="idValue"/> is a valid index into a collection of <paramref name="count"/> entries. The
+    /// unsigned comparison covers both bounds in one branch: a negative value (such as the <c>Invalid</c> sentinel, -1) becomes
+    /// a huge unsigned number and fails the same test as a value past the end. Inlined because every ID lookup uses it.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsValidIndex(int idValue, int count) => (uint)idValue < (uint)count;
 
@@ -213,6 +240,13 @@ public sealed class Stack : IStack, IDisposable
     /// (<c>id ≤ watermark</c>) and must replay; <see langword="false"/> when this is the next
     /// first parse (<c>id == watermark + 1</c>).
     /// </summary>
+    /// <remarks>
+    /// <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/> and its recycle
+    /// overload check <see cref="PacketId.IsValid"/> and <see cref="WouldJump"/> first and report
+    /// <see cref="ParseFailure.InvalidPacketId"/> / <see cref="ParseFailure.ParseIdGap"/> without throwing. The exceptions
+    /// below are the backstop for an internal caller that bypassed those checks. The read of the watermark and the later
+    /// <see cref="CompleteFirstParse"/> are not one atomic step: the caller serializes first parses.
+    /// </remarks>
     /// <exception cref="InvalidOperationException">
     /// Thrown when <paramref name="id"/> is <see cref="PacketId.Invalid"/> or otherwise not
     /// <see cref="PacketId.IsValid"/>, and when <paramref name="id"/> is greater than the next
@@ -221,24 +255,33 @@ public sealed class Stack : IStack, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool ObserveParse(PacketId id)
     {
+        // An invalid id (the -1 sentinel) is neither a first parse nor a replay; without this check it would satisfy the
+        // "value <= current" test below, because the watermark never drops below -1, and be classified as a replay.
         if (!id.IsValid)
         {
             throw new InvalidOperationException(
                 "Packet id is invalid. First-parse ids are 0, 1, 2, … PacketId.Invalid is not a replay.");
         }
 
+        // One volatile read of the watermark; all three outcomes derive from this single snapshot so a concurrent
+        // CompleteFirstParse cannot make the verdict inconsistent within one call.
         int value = id.Value;
         int current = _ParseWatermark;
+
+        // Already first-parsed: a replay, allowed from any thread.
         if (value <= current)
         {
             return true;
         }
 
+        // The next dense id: the one legal first parse.
         if (value == current + 1)
         {
             return false;
         }
 
+        // A jump. The throw sits in a separate non-inlined method so this inlined fast path stays small; the return after
+        // it is unreachable at run time and only satisfies the compiler, which cannot see that the helper never returns.
         _ThrowParseIdGap(value, current);
         return false;
     }
@@ -246,7 +289,9 @@ public sealed class Stack : IStack, IDisposable
     /// <summary>
     /// Returns whether <paramref name="id"/> would throw from <see cref="ObserveParse"/> as a
     /// first-parse gap. No watermark mutation. Used by <c>Packet.TryParse</c> so a recycle target
-    /// stays unchanged when the caller skipped an id.
+    /// stays unchanged when the caller skipped an id (the check runs before the packet is prepared for reuse), and so that a
+    /// gap is reported as <see cref="ParseFailure.ParseIdGap"/> instead of an exception. The caller checks
+    /// <see cref="PacketId.IsValid"/> first; this method does not.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool WouldJump(PacketId id)
@@ -259,13 +304,20 @@ public sealed class Stack : IStack, IDisposable
     /// <summary>
     /// Marks <paramref name="id"/> as having completed its first parse. Must be called from
     /// <see langword="finally"/> after a non-replay <see cref="ObserveParse"/> so even a failed
-    /// parse closes the id — a later call with the same id is then a replay.
+    /// parse closes the id — a later call with the same id is then a replay. This is a plain volatile store, not a
+    /// compare-exchange: the first parse of an id is serialized by the caller (see <c>_ParseWatermark</c>), so no second
+    /// writer can race with it, and because <see cref="ObserveParse"/> admitted exactly the id after the watermark, the store
+    /// only moves the watermark forward by one.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void CompleteFirstParse(PacketId id) =>
         _ParseWatermark = id.Value;
 
-    /// <summary>Cold-path helper: first-parse ids on a stack must be dense starting at 0.</summary>
+    /// <summary>
+    /// Cold-path helper: first-parse ids on a stack must be dense starting at 0. Kept out of line
+    /// (<see cref="MethodImplOptions.NoInlining"/>) so the message formatting and the throw do not bloat the inlined
+    /// <see cref="ObserveParse"/>.
+    /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void _ThrowParseIdGap(int actual, int current)
     {
@@ -283,6 +335,12 @@ public sealed class Stack : IStack, IDisposable
     #endregion
 
     #region Protocol Access
+
+    // The ID-based accessors in this class (protocol, field, alias group, index group, table, heuristic table) share one
+    // shape: an unsigned bounds check, then a direct array read, and null or Invalid for an unknown ID instead of an
+    // exception. They are AggressiveInlining because each is a few instructions that can be called per packet or per
+    // field, where a call would cost more than the body. The name-based accessors go through a FrozenDictionary and are
+    // meant for setup code.
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -517,6 +575,14 @@ public sealed class Stack : IStack, IDisposable
 
     #region Dispatch Helpers
 
+    // The protocol tables are the per-packet dispatch path (a key read from a parsed field selects the next protocol). Looking
+    // a table up by dense ID with an unsigned bounds check, and returning a span over the table's own list storage, avoids a
+    // dictionary lookup for the table and any allocation per dispatch; an unknown table ID yields "no match" instead of an
+    // exception. The spans stay valid only while nobody registers into the table: registration ends with
+    // StackBuilder.Build, and the stack exposes no way to register afterwards. The table objects themselves are shared with
+    // the builder (Build copies only the array of references), so the builder must not be used for registration after Build.
+
+    /// <summary>The dispatch table with the given ID, or <see langword="null"/> for an ID this stack did not issue.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ProtocolTable? GetProtocolTable(ProtocolTableId id)
     {
@@ -527,6 +593,7 @@ public sealed class Stack : IStack, IDisposable
         return null;
     }
 
+    /// <summary>The heuristic dispatch table with the given ID, or <see langword="null"/> for an ID this stack did not issue.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal HeuristicProtocolTable? GetHeuristicProtocolTable(HeuristicProtocolTableId id)
     {
@@ -656,6 +723,8 @@ public sealed class Stack : IStack, IDisposable
     internal ParseResult CallProtocol(
         ProtocolId protocolId, in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        // An unknown ID is an expected failure (a table can name a protocol that was never registered), so it becomes a
+        // ParseError result instead of an exception; the message allocation happens only on this failure path.
         if (!_IsValidIndex(protocolId.Value, _ParseDelegates.Length))
         {
             return ParseError.Custom(
@@ -663,6 +732,9 @@ public sealed class Stack : IStack, IDisposable
                 string.Create(CultureInfo.InvariantCulture, $"Invalid protocol ID: {protocolId.Value}"));
         }
 
+        // The context is passed by 'in' and copied only here, to tell the callee which protocol it is (<c>SelfProtocolId</c>). The
+        // delegate was bound to the concrete Parse method in Build, so this call is a delegate invocation on a directly
+        // indexed array element, not an interface dispatch.
         ParseContext contextWithSelf = context.WithSelfProtocol(protocolId);
         return _ParseDelegates[protocolId.Value](in parentField, data, in contextWithSelf);
     }
@@ -724,12 +796,17 @@ public sealed class Stack : IStack, IDisposable
     /// <exception cref="AggregateException">Thrown when one or more protocols threw during shutdown.</exception>
     public void Shutdown()
     {
-        // Once-gate: ensure OnShutdown runs at most once across concurrent Shutdown/Dispose calls.
+        // Once-gate: ensure OnShutdown runs at most once across concurrent Shutdown/Dispose calls. Interlocked.Exchange is a
+        // single atomic read-modify-write, so exactly one caller sees the previous value 0 and runs the loop below; any
+        // concurrent or later caller returns at once (it does not wait for the first one to finish).
         if (Interlocked.Exchange(ref _ShutdownFlag, 1) != 0)
         {
             return;
         }
 
+        // Protocols are shut down in registration order, the order OnStart ran in. A protocol may come from a plugin, so any
+        // exception is possible: it is caught per protocol (a top-level boundary for third-party code) so that one failing
+        // protocol cannot keep the others from releasing their resources. The list is allocated only on the first failure.
         List<Exception>? exceptions = null;
 
         for (int i = 0; i < _ProtocolInstances.Length; i++)
@@ -760,9 +837,10 @@ public sealed class Stack : IStack, IDisposable
     /// </summary>
     public void Dispose()
     {
-        // Atomic gate — two concurrent Dispose callers must not both run Shutdown
-        // and dispose _SettingsManager twice (ObjectDisposedException on the inner
-        // ReaderWriterLockSlim). Interlocked.Exchange returns the previous value.
+        // Atomic gate — makes Dispose single-shot: two concurrent Dispose callers must not both capture shutdown errors into
+        // _ShutdownDiagnostics or both release the settings manager. (Shutdown and SettingsManager.Dispose are idempotent on
+        // their own; this gate keeps the whole sequence below one-time and race-free.) Interlocked.Exchange returns the
+        // previous value, so exactly one caller proceeds.
         if (Interlocked.Exchange(ref _DisposedFlag, 1) != 0)
         {
             return;
@@ -776,7 +854,8 @@ public sealed class Stack : IStack, IDisposable
         catch (AggregateException aggregate)
         {
             // Republish protocol shutdown errors via ShutdownDiagnostics so a Dispose
-            // caller can inspect them without violating CA1065.
+            // caller can inspect them without violating CA1065. Copied into a plain array because the field is a volatile
+            // Exception[]: one reference store publishes the complete list to readers of ShutdownDiagnostics.
             Exception[] inner = new Exception[aggregate.InnerExceptions.Count];
             for (int i = 0; i < inner.Length; i++)
             {

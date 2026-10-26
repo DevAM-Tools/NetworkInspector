@@ -6,10 +6,32 @@ namespace NetworkInspector.Protocols.Http2;
 /// Lightweight HPACK header compression decoder (RFC 7541).
 /// Decodes HPACK-encoded header blocks into name/value pairs.
 /// This is a per-packet stateless decoder (does not maintain a dynamic table across packets).
+/// <para>
+/// Design: a real HPACK decoder needs the connection's dynamic table, which only exists if every header block of the
+/// connection is decoded in order. A packet dissector sees packets independently (and may start mid-connection), so
+/// this decoder is deliberately a best-effort display decoder: it resolves everything that does not depend on earlier
+/// blocks (the static table, literals, Huffman strings, and entries added earlier in the same block) and skips what
+/// does. The decoder is not meant for protocol enforcement.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> stateless; the static and Huffman tables are immutable, so all members are safe for
+/// concurrent use. The cost is a handful of allocations per header (strings, lists, a <see cref="StringBuilder"/>
+/// per Huffman string). The output size is bounded by the input size (every representation consumes at least one byte
+/// and a Huffman string expands at most 8/5 times); the decoder sets no limit of its own, so the size of a header
+/// block is limited by whoever hands it in (the HTTP/2 frame size).
+/// </para>
 /// </summary>
 internal static class HpackDecoder
 {
+    /// <summary>
+    /// The largest HPACK integer the decoder accepts: the maximum HTTP/2 frame payload, 2^24 - 1 octets (RFC 9113
+    /// section 4.2). Constant (protocol fact); see <c>_DecodeInteger</c> for the threat and posture.
+    /// </summary>
+    private const int _MaxInteger = 0xFFFFFF;
+
     /// <summary>Represents a decoded HPACK header (name + value).</summary>
+    /// <param name="Name">The header name (lower case on the wire for HTTP/2).</param>
+    /// <param name="Value">The header value.</param>
     internal readonly record struct Header(string Name, string Value);
 
     /// <summary>
@@ -18,7 +40,18 @@ internal static class HpackDecoder
     /// Dynamic table entries are tracked within this single header block only.
     /// </summary>
     /// <param name="data">The HPACK-encoded header block fragment.</param>
-    /// <returns>List of decoded headers, or empty list if decoding fails.</returns>
+    /// <returns>
+    /// The headers decoded before the first malformed representation, in wire order. Malformed or truncated input
+    /// ends decoding early and returns the headers found so far (possibly an empty list); it never throws for a
+    /// truncated block. An indexed header whose index refers to a dynamic table entry of an earlier block is skipped.
+    /// </returns>
+    /// <remarks>
+    /// Known differences from a connection-level decoder (RFC 7541 section 4): a Dynamic Table Size Update is consumed
+    /// but not applied, so the per-block table never evicts; the "never indexed" flag of a literal is not reported;
+    /// and the table is empty at the start of every block, so indexes of entries created by earlier blocks do not
+    /// resolve. After a block that relied on earlier entries, later block-local indexes (62 and up) can also point at a
+    /// different entry than the connection's real table would.
+    /// </remarks>
     internal static List<Header> Decode(ReadOnlySpan<byte> data)
     {
         List<Header> headers = [];
@@ -26,6 +59,8 @@ internal static class HpackDecoder
         // Per-block dynamic table to track headers added within this block
         List<Header> dynamicTable = [];
 
+        // One representation per iteration; the first bits of the first byte select the representation (RFC 7541
+        // section 6). Any malformed representation ends the loop and keeps what was decoded before it.
         int offset = 0;
         while (offset < data.Length)
         {
@@ -41,6 +76,8 @@ internal static class HpackDecoder
                     break; // Invalid index
                 }
 
+                // An index into the dynamic table of an earlier block does not resolve (stateless decoder): skip the
+                // header and continue, unlike a literal with such a name index, which ends the block.
                 Header? header = _LookupIndex(index, dynamicTable);
                 if (header is not null)
                 {
@@ -56,7 +93,11 @@ internal static class HpackDecoder
                 {
                     break;
                 }
-                dynamicTable.Insert(0, header.Value); // Prepend to dynamic table
+                // Index 62 is always the most recent entry (RFC 7541 section 2.3.3). Entries are appended at the end of the
+                // list and _LookupIndex counts from the end, so the insert is O(1); inserting at position 0 would shift
+                // the whole list for every literal (quadratic in the number of literals of one block, which a hostile
+                // block can make large). The table is never evicted (see the remarks).
+                dynamicTable.Add(header.Value);
                 headers.Add(header.Value);
             }
             else if ((b & 0xF0) == 0x00)
@@ -73,7 +114,8 @@ internal static class HpackDecoder
             else if ((b & 0xF0) == 0x10)
             {
                 // §6.2.3 Literal Header Field Never Indexed
-                // Bit pattern: 0001xxxx
+                // Bit pattern: 0001xxxx. Decoded like "without indexing"; the never-indexed marker only matters to
+                // re-encoders and is not kept.
                 Header? header = _DecodeLiteralHeader(data, ref offset, 4, dynamicTable);
                 if (header is null)
                 {
@@ -85,7 +127,9 @@ internal static class HpackDecoder
             {
                 // §6.3 Dynamic Table Size Update
                 // Bit pattern: 001xxxxx
-                _ = _DecodeInteger(data, ref offset, 5); // Consume the size update
+                // Consume the size update. The new size is not applied: the per-block table has no size accounting and
+                // no eviction (see the remarks).
+                _ = _DecodeInteger(data, ref offset, 5);
             }
             else
             {
@@ -99,6 +143,11 @@ internal static class HpackDecoder
     /// <summary>
     /// Decodes a literal header field from the HPACK data.
     /// </summary>
+    /// <param name="data">The header block.</param>
+    /// <param name="offset">Read position; advanced past the field on success, unspecified on failure.</param>
+    /// <param name="prefixBits">Width of the name index prefix: 6 with incremental indexing, 4 otherwise.</param>
+    /// <param name="dynamicTable">The per-block dynamic table used to resolve an indexed name.</param>
+    /// <returns>The header, or <see langword="null"/> when the field is truncated or its name index is unknown.</returns>
     private static Header? _DecodeLiteralHeader(
         ReadOnlySpan<byte> data, ref int offset, int prefixBits, List<Header> dynamicTable)
     {
@@ -143,6 +192,10 @@ internal static class HpackDecoder
     /// <summary>
     /// Decodes an HPACK integer using the prefix-coded encoding (RFC 7541 §5.1).
     /// </summary>
+    /// <param name="data">The header block.</param>
+    /// <param name="offset">Read position; advanced past the integer (also on failure, as far as it was read).</param>
+    /// <param name="prefixBits">Number of low bits of the first byte that hold the integer prefix (1 to 7).</param>
+    /// <returns>The value, or -1 when the integer is truncated, longer than five bytes, or larger than 2^24 - 1.</returns>
     private static int _DecodeInteger(ReadOnlySpan<byte> data, ref int offset, int prefixBits)
     {
         if (offset >= data.Length)
@@ -159,21 +212,32 @@ internal static class HpackDecoder
             return value;
         }
 
-        // Multi-byte encoding
+        // Multi-byte encoding: the prefix was saturated, so the value continues in 7-bit groups, least significant
+        // first, each with a continuation flag in bit 7. The fifth group (shift 28) is the last one accepted. The sum is
+        // kept in 64 bits: five groups plus the prefix need at most 35 bits, so it cannot overflow, whereas an int
+        // would wrap for a large fifth group and the callers would see a negative or a too small number.
+        long wide = value;
         int shift = 0;
         while (offset < data.Length)
         {
             byte b = data[offset];
             offset++;
-            value += (b & 0x7F) << shift;
+            wide += (long)(b & 0x7F) << shift;
             shift += 7;
 
             if ((b & 0x80) == 0)
             {
-                return value;
+                // Limit: a value above _MaxInteger is refused. Threat: a crafted length or index that overflows the
+                // bounds arithmetic of the callers. Constant (protocol fact): no string length, header index or
+                // table size that the decoder acts on can exceed one HTTP/2 frame, 2^24 - 1 octets (RFC 9113 section
+                // 4.2); a table size update is consumed and not applied, so a larger value is simply reported as invalid.
+                // Secure by default (fixed). Residual risk: none, the decoder is a display aid.
+                return wide <= _MaxInteger
+                    ? (int)wide
+                    : -1;
             }
 
-            // Guard against excessively large integers
+            // Guard against an endless continuation chain: five groups are the longest accepted encoding.
             if (shift > 28)
             {
                 return -1;
@@ -183,10 +247,18 @@ internal static class HpackDecoder
         return -1; // Incomplete integer
     }
 
+
     /// <summary>
     /// Decodes an HPACK string (RFC 7541 §5.2).
     /// Supports both plain and Huffman-encoded strings.
     /// </summary>
+    /// <param name="data">The header block.</param>
+    /// <param name="offset">Read position; advanced past the string on success.</param>
+    /// <returns>The decoded string, or <see langword="null"/> when the string is truncated.</returns>
+    /// <remarks>
+    /// Both the plain and the Huffman path map each octet to the Latin-1 char of the same value, so no octet is lost or
+    /// replaced and the two paths agree for non-ASCII octets.
+    /// </remarks>
     private static string? _DecodeString(ReadOnlySpan<byte> data, ref int offset)
     {
         if (offset >= data.Length)
@@ -194,9 +266,13 @@ internal static class HpackDecoder
             return null;
         }
 
+        // Bit 7 of the length octet is the Huffman flag; the remaining 7 bits start the length integer.
         bool huffmanEncoded = (data[offset] & 0x80) != 0;
         int length = _DecodeInteger(data, ref offset, 7);
-        if (length < 0 || offset + length > data.Length)
+
+        // The declared length must lie inside the block: it comes from the wire and is never trusted for allocation. The
+        // comparison is written as a subtraction (offset <= data.Length here), so a huge length cannot wrap the sum.
+        if (length < 0 || length > data.Length - offset)
         {
             return null;
         }
@@ -209,13 +285,15 @@ internal static class HpackDecoder
             return _HuffmanDecode(stringData);
         }
 
-        return Encoding.ASCII.GetString(stringData);
+        // Latin-1, like the Huffman path: ASCII would turn every octet above 0x7F into '?' and lose it.
+        return Encoding.Latin1.GetString(stringData);
     }
 
     /// <summary>
     /// Looks up a header by index in the combined static + dynamic table.
     /// Static table indices: 1-61, Dynamic table indices: 62+.
     /// </summary>
+    /// <returns>The entry, or <see langword="null"/> for index 0, a negative index, or an unknown dynamic index.</returns>
     private static Header? _LookupIndex(int index, List<Header> dynamicTable)
     {
         if (index >= 1 && index <= _StaticTable.Length)
@@ -223,11 +301,11 @@ internal static class HpackDecoder
             return _StaticTable[index - 1];
         }
 
-        // Dynamic table: index 62 = first entry (most recent)
+        // Dynamic table: index 62 = most recent entry. The list is in insertion order (oldest first), so count from the end.
         int dynamicIndex = index - _StaticTable.Length - 1;
         if (dynamicIndex >= 0 && dynamicIndex < dynamicTable.Count)
         {
-            return dynamicTable[dynamicIndex];
+            return dynamicTable[dynamicTable.Count - 1 - dynamicIndex];
         }
 
         return null;
@@ -235,14 +313,27 @@ internal static class HpackDecoder
 
     /// <summary>
     /// Decodes a Huffman-encoded string using the HPACK Huffman table (RFC 7541, Appendix B).
-    /// Uses a state machine approach for efficient bit-by-bit decoding.
+    /// A simple table-scan decoder: for every symbol it tries each possible code length against the whole code table.
     /// </summary>
+    /// <param name="data">The Huffman-coded octets of one string (without the length prefix).</param>
+    /// <returns>The decoded string. Never <see langword="null"/>; trailing bits that do not form a code are dropped.</returns>
+    /// <remarks>
+    /// Chosen for simplicity over speed: each symbol costs up to (code lengths tried) x 256 table comparisons. A
+    /// 256-entry decoding tree or byte-wise state table would be faster; header blocks are small and this decoder is
+    /// a display aid, not a throughput path. The trailing padding (the most significant bits of the EOS code, all
+    /// ones, RFC 7541 section 5.2) and truncated codes are not validated or reported.
+    /// </remarks>
     private static string? _HuffmanDecode(ReadOnlySpan<byte> data)
     {
-        // Use a simple bit-by-bit approach with the Huffman code table
-        StringBuilder sb = new(data.Length * 2); // Pre-size: Huffman usually expands
+        // Use a simple bit-by-bit approach with the Huffman code table.
+        // Capacity: the shortest code is 5 bits, so n input octets yield at most 8n/5 (< 2n) symbols and the
+        // builder never has to grow for valid input.
+        StringBuilder sb = new(data.Length * 2);
 
-        uint accumulator = 0;
+        // MSB-first bit buffer: the oldest unconsumed bit is the highest of the low `bits` bits. It is a ulong because
+        // codes may be up to 30 bits long and a byte is added at a time: a long code that is still incomplete (up to 29
+        // pending bits) plus the next octet is 37 bits, which a uint would silently cut at the top and decode wrongly.
+        ulong accumulator = 0;
         int bits = 0;
 
         foreach (byte b in data)
@@ -254,16 +345,18 @@ internal static class HpackDecoder
             while (bits >= 5) // Minimum Huffman code length is 5 bits
             {
                 bool found = false;
-                // Try to match from longest to shortest code
+
+                // The code is prefix-free, so at most one length matches the head of the buffer and the order of the
+                // tries does not change the result; longest-first is just the order used here.
                 for (int len = Math.Min(bits, 30); len >= 5; len--)
                 {
-                    uint code = (accumulator >> (bits - len)) & ((1u << len) - 1);
+                    uint code = (uint)((accumulator >> (bits - len)) & ((1UL << len) - 1));
 
                     if (_TryLookupHuffmanSymbol(code, len, out byte symbol))
                     {
                         sb.Append((char)symbol);
                         bits -= len;
-                        accumulator &= (1u << bits) - 1;
+                        accumulator &= (1UL << bits) - 1;
                         found = true;
                         break;
                     }
@@ -276,16 +369,20 @@ internal static class HpackDecoder
             }
         }
 
-        // Remaining bits should be padding (all 1s)
+        // Remaining bits should be padding (all 1s); they are not checked.
         return sb.ToString();
     }
 
     /// <summary>
     /// Attempts to find a symbol matching the given Huffman code and code length.
     /// </summary>
+    /// <param name="code">The candidate code bits, right-aligned.</param>
+    /// <param name="codeLen">The number of bits in <paramref name="code"/>.</param>
+    /// <param name="symbol">The decoded octet when found.</param>
     private static bool _TryLookupHuffmanSymbol(uint code, int codeLen, out byte symbol)
     {
-        // Search the Huffman table for a match
+        // Linear search of the 256 symbols; the symbol value is the table index. The EOS symbol (256) is not in the
+        // table, so it never matches.
         for (int i = 0; i < _HuffmanTable.Length; i++)
         {
             (uint hCode, int hLen) = _HuffmanTable[i];

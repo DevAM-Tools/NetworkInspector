@@ -4,7 +4,8 @@ namespace NetworkInspector.Core.Settings;
 
 /// <summary>
 /// Profile folders under a settings base, on <see cref="ProfileNames"/> and <see cref="StorageNames"/>. Profile names compare
-/// case-insensitively. Every member validates its arguments and leaves the base unchanged on failure. Thread safety: the
+/// case-insensitively. Every member validates its arguments and leaves the base unchanged on failure, except that a delete
+/// which fails midway can leave a partly emptied profile folder (see <see cref="TryDelete"/>). Thread safety: the
 /// members are file-system operations; concurrent creates of one name end with exactly one success, because each creator
 /// builds the profile in a hidden folder of its own and moves it into place, which only one mover can do. The host's profile
 /// service adds the active-profile and in-use refusals on top.
@@ -16,10 +17,18 @@ public static class SettingsProfiles
     /// <summary>Name of the profile that is created on first use.</summary>
     public const string DefaultProfile = "default";
 
-    /// <summary>Prefix of the hidden work folders of creates and renames; profile names cannot start with a dot.</summary>
+    /// <summary>
+    /// Prefix of the hidden work folders of creates and renames. Profile names cannot start with a dot
+    /// (<see cref="ProfileNames.TryValidateSyntax"/>) and the listing skips folders that start with a dot, so a work folder can
+    /// never clash with a profile and is never listed, not even while it exists.
+    /// </summary>
     private const string _WorkFolderPrefix = ".work-";
 
-    /// <summary>Name of the cross-process lock file, which a copy must not take along.</summary>
+    /// <summary>
+    /// Name of the cross-process lock file of a profile folder. A copy must not take it along: the owner of a profile holds the
+    /// file open with <see cref="FileShare.None"/>, so copying it would fail for a profile in use, and a copied lock file
+    /// would mean nothing in the new folder.
+    /// </summary>
     private const string _LockFileName = SettingsManager.LockFileName;
 
     #endregion
@@ -32,7 +41,7 @@ public static class SettingsProfiles
     /// </summary>
     /// <param name="settingsBase">The settings base folder.</param>
     /// <returns>The profile names, sorted ignoring case.</returns>
-    /// <exception cref="ArgumentException"><paramref name="settingsBase"/> is empty.</exception>
+    /// <exception cref="ArgumentException"><paramref name="settingsBase"/> is null, empty, or white space.</exception>
     public static IReadOnlyList<string> List(string settingsBase)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(settingsBase);
@@ -41,11 +50,11 @@ public static class SettingsProfiles
             .ThenBy(static name => name, StringComparer.Ordinal)];
     }
 
-    /// <summary>Whether a profile exists (names compare ignoring case; an invalid name does not exist).</summary>
+    /// <summary>Whether a profile exists (names compare ignoring case; an invalid or <see langword="null"/> name does not exist).</summary>
     /// <param name="settingsBase">The settings base folder.</param>
     /// <param name="name">The profile name.</param>
     /// <returns><see langword="true"/> when the profile exists.</returns>
-    /// <exception cref="ArgumentException"><paramref name="settingsBase"/> is empty.</exception>
+    /// <exception cref="ArgumentException"><paramref name="settingsBase"/> is null, empty, or white space.</exception>
     public static bool Exists(string settingsBase, string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(settingsBase);
@@ -88,10 +97,15 @@ public static class SettingsProfiles
             return false;
         }
 
+        // The profile is built in a hidden work folder with a unique name and only then moved into place. A reader or a
+        // concurrent creator therefore never sees a half-copied profile, and the move is the single point at which the name is
+        // claimed. The naive alternative, creating the final folder first and filling it, would let a crash or a competing
+        // create leave or mix a partly filled profile under the real name.
         string storageName = StorageNames.ToStorageName(name);
         string work = Path.Combine(settingsBase, _WorkFolderPrefix + Guid.NewGuid().ToString("N"));
         try
         {
+            // The base must exist before the sidecar below can be written into it.
             Directory.CreateDirectory(settingsBase);
             Directory.CreateDirectory(work);
             if (source is not null)
@@ -99,14 +113,16 @@ public static class SettingsProfiles
                 _CopyDirectory(Path.Combine(settingsBase, source.StorageName), work);
             }
 
-            // The sidecar goes first, so a listing never sees a mapped folder without its name.
+            // The sidecar goes first, so a listing never sees a mapped folder without its name. A failed write (including a
+            // hash collision with another name) returns here; the finally block removes the work folder.
             if (!StorageNames.TryWriteNameFile(settingsBase, name, out string? sidecarProblem))
             {
                 error = sidecarProblem;
                 return false;
             }
 
-            // Only one mover can win; a loser sees the folder of the winner and reports the profile as existing.
+            // Only one mover can win: Directory.Move refuses an existing target folder with an IOException. A loser sees the
+            // folder of the winner and reports the profile as existing (first catch block); the winner's sidecar stays.
             Directory.Move(work, Path.Combine(settingsBase, storageName));
             error = null;
             return true;
@@ -129,6 +145,8 @@ public static class SettingsProfiles
         }
         finally
         {
+            // After a successful move the work folder no longer exists and this is a no-op; on every failure path it removes
+            // the partly copied profile.
             _DeleteDirectoryQuietly(work);
         }
     }
@@ -166,6 +184,7 @@ public static class SettingsProfiles
             return false;
         }
 
+        // 'work' and 'moved' track the intermediate state of the two-step folder move, so that the catch block can undo it.
         string newStorage = StorageNames.ToStorageName(newName);
         string oldPath = Path.Combine(settingsBase, existing.StorageName);
         string newPath = Path.Combine(settingsBase, newStorage);
@@ -173,14 +192,18 @@ public static class SettingsProfiles
         bool moved = false;
         try
         {
+            // The new sidecar is written before the folder moves, so a listing never sees the new folder without its name. For
+            // a mapped case-only rename the storage name does not change (it is built from the lower-case prefix and the hash
+            // of the upper-case name), so this call only rewrites the sidecar with the new spelling and no folder moves.
             if (!StorageNames.TryWriteNameFile(settingsBase, newName, out string? sidecarProblem))
             {
                 error = sidecarProblem;
                 return false;
             }
 
-            // The folder moves in two steps through a hidden name, so that a case-only rename works on file systems that
-            // ignore case. A different storage name needs the same: the old folder must be free of the new name first.
+            // The folder moves in two steps through a hidden name, so that a case-only rename of a direct name works on file
+            // systems that ignore case (the old and the new path then name the same folder). The same path is taken for every
+            // different storage name, not only for case-only renames.
             if (!string.Equals(existing.StorageName, newStorage, StringComparison.Ordinal))
             {
                 work = Path.Combine(settingsBase, _WorkFolderPrefix + Guid.NewGuid().ToString("N"));
@@ -189,6 +212,8 @@ public static class SettingsProfiles
                 Directory.Move(work, newPath);
                 work = null;
                 moved = false;
+
+                // The old sidecar belongs to the old storage name; a leftover would be ignored but is removed to stay tidy.
                 StorageNames.DeleteNameFile(settingsBase, existing.StorageName);
             }
 
@@ -197,23 +222,35 @@ public static class SettingsProfiles
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            // Put the folder back where it was and drop the new sidecar; a failed rename leaves the base as it was.
-            if (moved && work is not null && Directory.Exists(work) && !Directory.Exists(oldPath))
+            // Put the folder back where it was and drop the new sidecar; a failed rename leaves the base as it was. 'moved' is
+            // true only between the two Directory.Move calls, i.e. while the profile sits in the hidden work folder. The
+            // guards keep the undo from touching a folder that another process has put at the old path in the meantime.
+            // The undo itself can fail (the folder is in use, the path was taken, access was lost); that failure must not escape
+            // from this Try member and replace the error that caused the rename to fail, so it is folded into the message.
+            string restoreNote = string.Empty;
+            if (moved && work is not null && Directory.Exists(work) && !Directory.Exists(oldPath)
+                && !TryRestoreFolder(work, oldPath))
             {
-                Directory.Move(work, oldPath);
+                restoreNote = string.Create(CultureInfo.InvariantCulture,
+                    $" The profile folder could not be put back; it is kept, hidden, as '{Path.GetFileName(work)}'.");
             }
 
+            // The new sidecar is dropped only when no folder carries the new storage name; otherwise it belongs to that folder.
             if (!string.Equals(existing.StorageName, newStorage, StringComparison.Ordinal) && !Directory.Exists(newPath))
             {
                 StorageNames.DeleteNameFile(settingsBase, newStorage);
             }
 
-            error = string.Create(CultureInfo.InvariantCulture, $"Profile '{oldName}' cannot be renamed: {exception.Message}");
+            error = string.Create(CultureInfo.InvariantCulture, $"Profile '{oldName}' cannot be renamed: {exception.Message}{restoreNote}");
             return false;
         }
     }
 
-    /// <summary>Deletes a profile; refuses the last one.</summary>
+    /// <summary>
+    /// Deletes a profile; refuses the last one, also when two callers delete the last two profiles at the same time (the
+    /// folder is moved out of the listing before the remaining profiles are counted). A profile that is in use is refused
+    /// without changes where the file system refuses to move its folder.
+    /// </summary>
     /// <param name="settingsBase">The settings base folder.</param>
     /// <param name="name">The profile to delete.</param>
     /// <param name="error">
@@ -234,22 +271,59 @@ public static class SettingsProfiles
             return false;
         }
 
+        // At least one listable profile must remain. This first count only refuses early; it is not atomic with the delete,
+        // because this class takes no lock across profiles: two concurrent deletes of the last two profiles could both pass
+        // it. The count after the claim below is the one that decides.
         if (_Entries(settingsBase).Count <= 1)
         {
             error = string.Create(CultureInfo.InvariantCulture, $"Profile '{existing.Name}' is the last profile and cannot be deleted.");
             return false;
         }
 
+        // Claim the profile first by moving its folder to a hidden work folder (one atomic rename: of two deleters of the same
+        // profile only one succeeds, and the listing no longer shows the profile), then count what is still listed. Each of two
+        // concurrent deleters counts only after its own folder has left the listing, so the later counter always misses the
+        // other's folder and cannot take away the last profile; at worst both refuse. The undo is a move back.
+        string profilePath = Path.Combine(settingsBase, existing.StorageName);
+        string work = Path.Combine(settingsBase, _WorkFolderPrefix + Guid.NewGuid().ToString("N"));
         try
         {
-            Directory.Delete(Path.Combine(settingsBase, existing.StorageName), recursive: true);
+            Directory.Move(profilePath, work);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Nothing was changed; a profile that is in use (a file inside is open) is refused here, before anything is deleted.
+            error = string.Create(CultureInfo.InvariantCulture, $"Profile '{existing.Name}' cannot be deleted: {exception.Message}");
+            return false;
+        }
+
+        if (_Entries(settingsBase).Count == 0)
+        {
+            string stuck = TryRestoreFolder(work, profilePath)
+                ? string.Empty
+                : string.Create(CultureInfo.InvariantCulture, $" The profile folder could not be put back; it is kept, hidden, as '{Path.GetFileName(work)}'.");
+            error = string.Create(CultureInfo.InvariantCulture, $"Profile '{existing.Name}' is the last profile and cannot be deleted.{stuck}");
+            return false;
+        }
+
+        try
+        {
+            // The folder goes first and the sidecar second: a failure in between leaves a harmless sidecar, never a mapped
+            // folder without its name.
+            Directory.Delete(work, recursive: true);
             StorageNames.DeleteNameFile(settingsBase, existing.StorageName);
             error = null;
             return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            error = string.Create(CultureInfo.InvariantCulture, $"Profile '{existing.Name}' cannot be deleted: {exception.Message}");
+            // A recursive delete is not atomic: a failure midway (for example a file in use) can leave a partly emptied folder.
+            // It is moved back so that it stays listed (its sidecar was not touched) and the delete can be retried; when even
+            // that fails, it stays in the hidden work folder and the message names it.
+            string stuck = TryRestoreFolder(work, profilePath)
+                ? string.Empty
+                : string.Create(CultureInfo.InvariantCulture, $" The remains are kept, hidden, as '{Path.GetFileName(work)}'.");
+            error = string.Create(CultureInfo.InvariantCulture, $"Profile '{existing.Name}' cannot be deleted: {exception.Message}{stuck}");
             return false;
         }
     }
@@ -278,7 +352,11 @@ public static class SettingsProfiles
     private static Entry? _Find(string settingsBase, string name) =>
         _Entries(settingsBase).FirstOrDefault(entry => string.Equals(entry.Name, name, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Reads the profile folders of the base.</summary>
+    /// <summary>
+    /// Reads the profile folders of the base on every call (no cache): the folders are the only source of truth, so other
+    /// processes and the other members of this class always see the current state. A mapped folder (long or device-like
+    /// name) is listed only when its sidecar yields the full name; any other folder only when its name is valid syntax.
+    /// </summary>
     private static List<Entry> _Entries(string settingsBase)
     {
         if (!Directory.Exists(settingsBase))
@@ -314,7 +392,8 @@ public static class SettingsProfiles
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            // An unreadable base has no listable profiles; the caller's create or delete reports the real problem.
+            // An unreadable base ends the listing; the entries read so far are returned. The caller's create or delete reports
+            // the real problem.
             return entries;
         }
 
@@ -335,9 +414,14 @@ public static class SettingsProfiles
         return false;
     }
 
-    /// <summary>Copies every file and folder of a profile; the lock file is not taken along.</summary>
+    /// <summary>
+    /// Copies every file and folder of a profile; the lock file is not taken along (see <see cref="_LockFileName"/>). The
+    /// source is the user's own profile, so the copy has no size or count limit; an I/O failure surfaces as an exception that
+    /// <see cref="TryCreate"/> turns into an error.
+    /// </summary>
     private static void _CopyDirectory(string source, string target)
     {
+        // Folders first, so that every file below finds its parent folder in the target.
         foreach (string directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
         {
             Directory.CreateDirectory(Path.Combine(target, Path.GetRelativePath(source, directory)));
@@ -351,6 +435,26 @@ public static class SettingsProfiles
             }
 
             File.Copy(file, Path.Combine(target, Path.GetRelativePath(source, file)));
+        }
+    }
+
+    /// <summary>
+    /// Moves a folder back to the path it was taken from (the undo of a rename or delete). Reports failure instead of throwing,
+    /// because it runs while another failure is being reported and must not replace it.
+    /// </summary>
+    /// <param name="work">The folder as it is now (a hidden work folder).</param>
+    /// <param name="originalPath">The path to put it back to; it must not exist.</param>
+    /// <returns><see langword="true"/> when the folder is back at <paramref name="originalPath"/>.</returns>
+    internal static bool TryRestoreFolder(string work, string originalPath)
+    {
+        try
+        {
+            Directory.Move(work, originalPath);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 

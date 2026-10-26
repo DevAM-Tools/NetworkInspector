@@ -143,6 +143,27 @@ internal sealed class CliExportFormatTests
     }
 
     [Test]
+    public async Task AnExistingFirstSplitFileIsTheOneNamedInTheOverwriteRefusal()
+    {
+        using CliSandbox sandbox = new();
+        string exportFirst = sandbox.Combine("part_00001.json");
+        string convertFirst = sandbox.Combine("part_00001.pcapng");
+        File.WriteAllText(exportFirst, "keep");
+        File.WriteAllText(convertFirst, "keep");
+
+        CliResult export = await sandbox.RunAsync("export", "random:count=5", "-o", sandbox.Combine("part.json"), "--split-count", "2");
+        CliResult convert = await sandbox.RunAsync("convert", "random:count=5", "-o", sandbox.Combine("part.pcapng"), "--split-count", "2");
+
+        // The file that exists is the first split file, not the base name the user typed (which is never written in a split run).
+        await Assert.That(export.Exit).IsEqualTo(1);
+        await Assert.That(export.ErrorMessages).IsEquivalentTo(
+            [$"Error: Output '{exportFirst}' exists; pass --overwrite to replace it."], CollectionOrdering.Matching);
+        await Assert.That(convert.Exit).IsEqualTo(1);
+        await Assert.That(convert.ErrorMessages).IsEquivalentTo(
+            [$"Error: Output '{convertFirst}' exists; pass --overwrite to replace it."], CollectionOrdering.Matching);
+    }
+
+    [Test]
     public async Task ARefusedOverwriteRunKeepsThePreviousOutput()
     {
         using CliSandbox sandbox = new();
@@ -243,7 +264,7 @@ internal sealed class CliExportFormatTests
 
         // The listener cancels from inside the first packet, after it wrote the output: the output is open at that moment.
         int count = ExportCommand.RunExportLoop(sources, _ => listener, new SplitOutputManager(output, maxSize: 0, maxCount: 0), stack,
-            filter: null, maxPackets: 0, progressInterval: 0, tolerant: false, TextWriter.Null, ref packetId, cts.Token, out int outputsWritten);
+            filter: null, maxPackets: 0, progressInterval: 0, tolerant: false, TextWriter.Null, ref packetId, cts.Token, out int outputsWritten, out _);
 
         await Assert.That(listener.WasOpenWhenCancelled).IsTrue();
         await Assert.That(outputsWritten).IsEqualTo(0);
@@ -287,6 +308,27 @@ internal sealed class CliExportFormatTests
         public void Dispose()
         {
         }
+    }
+
+    #endregion
+
+    #region CSV formula neutralization
+
+    [Test]
+    public async Task TheCsvFormulaNeutralizationOptionIsAcceptedOnTheCommandLineAndBadValuesAreRefused()
+    {
+        using CliSandbox sandbox = new();
+
+        CliResult off = await sandbox.RunAsync("export", "random:count=3", "-o", sandbox.Combine("off.csv"), "-f", "csv:neutralizeFormulas=false");
+        CliResult on = await sandbox.RunAsync("export", "random:count=3", "-o", sandbox.Combine("on.csv"), "-f", "csv:neutralizeFormulas=true");
+        CliResult bad = await sandbox.RunAsync("export", "random:count=3", "-o", sandbox.Combine("bad.csv"), "-f", "csv:neutralizeFormulas=maybe");
+
+        await Assert.That(off.Exit).IsEqualTo(0);
+        await Assert.That(on.Exit).IsEqualTo(0);
+        await Assert.That(bad.Exit).IsEqualTo(1);
+        await Assert.That(bad.ErrorMessages.Length).IsEqualTo(1);
+        await Assert.That(bad.ErrorMessages[0]).Contains("neutralizeFormulas");
+        await Assert.That(File.Exists(sandbox.Combine("bad.csv"))).IsFalse();
     }
 
     #endregion

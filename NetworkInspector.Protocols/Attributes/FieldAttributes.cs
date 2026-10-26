@@ -5,6 +5,9 @@ namespace NetworkInspector.Protocols.Attributes;
 /// <summary>
 /// Abstract base for all field registration attributes.
 /// Provides common properties for field name, display name, and index group.
+/// The attributes are consumed by the protocol source generator at compile time, which emits the
+/// <c>RegisterFields</c> call that assigns the annotated <see cref="FieldId"/> field. They are not read via
+/// reflection at run time; the annotated field is assigned by the generated code.
 /// </summary>
 /// <remarks>Initializes a new field attribute.</remarks>
 /// <param name="name">Machine-readable field name.</param>
@@ -18,8 +21,10 @@ public abstract class FieldRegistrationAttribute(string name, string uiName) : A
     public string UiName { get; } = uiName;
 
     /// <summary>
-    /// Name of the index group. Fields sharing a group name are tracked by a single
-    /// bitmap, reducing memory overhead in the packet index.
+    /// Name of the index group. Fields sharing a group name share one index group, and the packet index keeps one
+    /// presence bitmap per group instead of one per field, which reduces memory overhead in the packet index.
+    /// Registering a field in a group does not record anything by itself: the protocol must call
+    /// <c>ParseContext.RecordGroupPresence</c> with the group's ID while parsing a packet that contains such a field.
     /// </summary>
     public string? IndexGroup
     {

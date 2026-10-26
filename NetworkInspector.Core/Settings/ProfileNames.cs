@@ -44,12 +44,17 @@ public static class ProfileNames
             return false;
         }
 
+        // Length cap shared with every other storage name (StorageNames.MaxNameLength); longer names are not mapped to a folder.
         if (name.Length > StorageNames.MaxNameLength)
         {
             error = "at most 256 characters";
             return false;
         }
 
+        // Allow-list instead of a deny-list of dangerous characters: the name becomes a folder name, so separators, "..",
+        // control characters, and characters that some file systems treat specially must never get through. ASCII only,
+        // because the same name has to map to the same folder on Windows, Linux, and macOS (case folding and Unicode
+        // normalization differ between them).
         foreach (char c in name)
         {
             if (!char.IsAsciiLetterOrDigit(c) && c is not (' ' or '.' or '-' or '_'))
@@ -59,6 +64,9 @@ public static class ProfileNames
             }
         }
 
+        // Windows drops a trailing space or dot from a folder name, so "a" and "a." would be the same folder; a leading dot
+        // would also hide the folder on Linux and macOS. Rejecting both ends keeps name and folder one-to-one. The
+        // allow-list above guarantees the name is not empty here.
         if (name[0] is ' ' or '.' || name[^1] is ' ' or '.')
         {
             error = "must not start or end with a space or a dot";
@@ -89,6 +97,8 @@ public static class ProfileNames
             return false;
         }
 
+        // Compared ignoring case because the reserved names are folders next to the profiles, and Windows and default macOS
+        // volumes treat "Logs" and "logs" as the same folder. Linear scan: the list is tiny and this is not a hot path.
         foreach (string reserved in _Reserved)
         {
             if (string.Equals(name, reserved, StringComparison.OrdinalIgnoreCase))

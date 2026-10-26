@@ -11,6 +11,11 @@ namespace NetworkInspector.Core.Settings;
 /// Returned as <see cref="ReadOnlySettingView"/> by <see cref="IReadOnlySettingsManager"/>
 /// so consumers cannot modify settings through the read-only surface.
 /// </para>
+/// <para>
+/// Thread-safety: value reads are lock-free and safe from any thread (they read one immutable snapshot of the owning
+/// setting); the metadata properties never change after registration. Array and byte accessors return defensive copies,
+/// so a caller can neither mutate the stored value nor observe a later change through a returned array.
+/// </para>
 /// </summary>
 public interface IReadOnlySetting
 {
@@ -86,7 +91,11 @@ public interface IReadOnlySetting
         get;
     }
 
-    /// <summary>Gets the pending value (may differ from current before Apply). Lock-free.</summary>
+    /// <summary>
+    /// Gets the pending value (may differ from current before Apply). Lock-free. Each of <see cref="Value"/> and
+    /// this property reads the latest published snapshot on its own, so two separate reads can straddle an update;
+    /// use <see cref="IsDirty"/> when a consistent current-versus-pending comparison is needed.
+    /// </summary>
     SettingValue PendingValue
     {
         get;

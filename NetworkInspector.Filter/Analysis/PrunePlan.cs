@@ -16,7 +16,8 @@ namespace NetworkInspector.Filter.Analysis;
 /// <para>
 /// <b>Caching.</b> A packet index creates its bitmap objects once in its constructor and grows them in place, so a
 /// resolution stays valid and live for that index instance; packets indexed later are visible to the next
-/// <c>Contains</c>. Other reader types (test doubles, foreign implementations) are resolved on every call because
+/// <c>Contains</c>. The plan holds indexes and resolutions only weakly (the index owns its resolution), so a long-lived
+/// filter never keeps the index of an ended session in memory. Other reader types (test doubles, foreign implementations) are resolved on every call because
 /// their answers may change between calls.
 /// </para>
 /// <para><b>Thread-safety:</b> not thread-safe; owned by one single-threaded <see cref="Filter"/>.</para>
@@ -25,6 +26,7 @@ internal sealed class PrunePlan
 {
     #region Types
 
+    /// <summary>Node discriminant of the flattened tree; replaces a type switch over the class hierarchy per packet.</summary>
     private enum NodeKind : byte
     {
         Leaf = 0,
@@ -54,7 +56,10 @@ internal sealed class PrunePlan
         internal int Root { get; } = root;
     }
 
-    /// <summary>Growable buffers of one resolution run.</summary>
+    /// <summary>
+    /// Growable buffers of one resolution run. Resolution allocates freely because it runs once per index; the result is
+    /// copied into exact-size arrays (the <see cref="Resolution"/>) so the per-packet path touches only flat arrays.
+    /// </summary>
     private sealed class Builder
     {
         internal List<Node> Nodes { get; } = [];
@@ -70,11 +75,31 @@ internal sealed class PrunePlan
 
     private readonly DependencyNode _Root;
 
-    /// <summary>Index instance the cached resolution belongs to; null before the first resolution.</summary>
-    private PacketIndex? _ResolvedFor;
+    /// <summary>
+    /// Resolution of every index instance this plan has seen, owned by the index: an entry lives exactly as long as its
+    /// <see cref="PacketIndex"/>. The resolution holds the index's bitmap objects, so it must not outlive the index; a
+    /// plain field would keep the last index (and its bitmaps) in memory after the session that owned it ended, for as
+    /// long as the filter lives.
+    /// </summary>
+    private readonly ConditionalWeakTable<PacketIndex, Resolution> _Resolutions = new();
 
-    /// <summary>Cached resolution for <see cref="_ResolvedFor"/>; null while it is set means that index cannot prune.</summary>
-    private Resolution? _Resolution;
+    /// <summary>
+    /// Weak handle to the index of the last query; the fast path compares by reference without a table lookup. Weak so
+    /// the plan never keeps an index alive. Created once and re-targeted, so a switch of index allocates nothing.
+    /// </summary>
+    private WeakReference<PacketIndex>? _LastIndex;
+
+    /// <summary>
+    /// Weak handle to the resolution of <see cref="_LastIndex"/>. Weak because the table owns it for the index's
+    /// lifetime; a strong field would pin the bitmaps of an ended session.
+    /// </summary>
+    private WeakReference<Resolution>? _LastResolution;
+
+    /// <summary>
+    /// Stored for an index that cannot prune, so that outcome is cached too (the table holds no null values). Its root is
+    /// negative; no real resolution has one.
+    /// </summary>
+    private static readonly Resolution _Unresolvable = new([], [], [], -1);
 
     #endregion
 
@@ -103,7 +128,8 @@ internal sealed class PrunePlan
     internal bool TryIsCandidate<TIndex>(TIndex index, uint packetId, out bool isCandidate)
         where TIndex : IPacketIndexReader
     {
-        // Known index types resolve once per instance; the struct view unwraps to its source without boxing.
+        // Known index types resolve once per instance; the struct view unwraps to its source without boxing. The type
+        // tests on the generic parameter are resolved by the JIT per instantiation, so the struct case does not box.
         PacketIndex? concrete = null;
         if (index is PacketIndex packetIndex)
         {
@@ -114,22 +140,25 @@ internal sealed class PrunePlan
             concrete = view.Source;
         }
 
+        // Resolve (or reuse the cached resolution). The cache is written without synchronization, which is why the plan
+        // is single-threaded. An unresolvable result is cached too (null), so an index that cannot prune is probed once.
         Resolution? resolution;
         if (concrete is not null)
         {
-            if (!ReferenceEquals(concrete, _ResolvedFor))
+            resolution = _ResolutionFor(concrete);
+            if (resolution.Root < 0)
             {
-                _Resolution = _Resolve(concrete);
-                _ResolvedFor = concrete;
+                resolution = null;
             }
-
-            resolution = _Resolution;
         }
         else
         {
+            // Test doubles and foreign readers may answer differently between calls, so nothing is cached. This path
+            // allocates per call and is not a production path: production indexes are always PacketIndex or its view.
             resolution = _Resolve(index);
         }
 
+        // "Cannot prune": isCandidate stays true so a caller that ignores the return value still evaluates the packet.
         if (resolution is null)
         {
             isCandidate = true;
@@ -138,6 +167,49 @@ internal sealed class PrunePlan
 
         isCandidate = _Evaluate(resolution, resolution.Root, packetId);
         return true;
+    }
+
+    /// <summary>
+    /// The resolution of <paramref name="concrete"/>, resolving it on first sight. The common case (same index as the
+    /// previous call) costs two weak-handle reads and a reference comparison and allocates nothing; resolving allocates
+    /// and runs once per index instance. A real resolution never has a negative root; <see cref="_Unresolvable"/> does.
+    /// </summary>
+    private Resolution _ResolutionFor(PacketIndex concrete)
+    {
+        // Fast path: the index of the previous query. Both handles are weak, see the field comments for why.
+        WeakReference<PacketIndex>? lastIndex = _LastIndex;
+        WeakReference<Resolution>? lastResolution = _LastResolution;
+        if (lastIndex is not null
+            && lastResolution is not null
+            && lastIndex.TryGetTarget(out PacketIndex? last)
+            && ReferenceEquals(last, concrete)
+            && lastResolution.TryGetTarget(out Resolution? cached))
+        {
+            return cached;
+        }
+
+        // Slow path: a new index (or one whose handles were cleared). The table keeps the resolution alive for as long as
+        // the index lives, so switching back and forth between two live indexes resolves each only once.
+        if (!_Resolutions.TryGetValue(concrete, out Resolution? resolution))
+        {
+            resolution = _Resolve(concrete)
+                ?? _Unresolvable;
+            _Resolutions.Add(concrete, resolution);
+        }
+
+        // Re-target the handles instead of replacing them, so a switch allocates nothing after the first call.
+        if (lastIndex is null || lastResolution is null)
+        {
+            _LastIndex = new WeakReference<PacketIndex>(concrete);
+            _LastResolution = new WeakReference<Resolution>(resolution);
+        }
+        else
+        {
+            lastIndex.SetTarget(concrete);
+            lastResolution.SetTarget(resolution);
+        }
+
+        return resolution;
     }
 
     /// <summary>Short-circuit evaluation; recursion depth is the dependency depth (bounded by the parser's nesting limit).</summary>
@@ -209,6 +281,7 @@ internal sealed class PrunePlan
             return null;
         }
 
+        // Freeze into exact-size arrays; the lists are only construction scaffolding.
         return new Resolution([.. builder.Nodes], [.. builder.Children], [.. builder.Bitmaps], root);
     }
 
@@ -271,6 +344,11 @@ internal sealed class PrunePlan
         }
     }
 
+    /// <summary>
+    /// Resolves a symbol to a leaf holding one bitmap (protocol or field group) or one per member field (alias): the leaf
+    /// holds when any of them contains the packet id. Mirrors <see cref="CandidateBitmapBuilder"/>; a missing bitmap
+    /// means the index cannot tell, so the leaf is unresolved rather than empty.
+    /// </summary>
     private static int _ResolveLeaf<TIndex>(FilterSymbol symbol, TIndex index, Builder builder)
         where TIndex : IPacketIndexReader
     {
@@ -306,6 +384,7 @@ internal sealed class PrunePlan
         {
             if (!index.TryGetFieldBitmap(fieldId, out ReadOnlyRoaringBitmap field))
             {
+                // Roll back the members added so far; the leaf node is not created, so they would be unreachable garbage.
                 bitmaps.RemoveRange(start, bitmaps.Count - start);
                 return -1;
             }
@@ -316,6 +395,7 @@ internal sealed class PrunePlan
         return _AddNode(new Node(NodeKind.Leaf, start, symbol.Fields.Length), builder);
     }
 
+    /// <summary>Appends an All/Any node whose children are the first <paramref name="count"/> entries of <paramref name="children"/>.</summary>
     private static int _AddParent(NodeKind kind, int[] children, int count, Builder builder)
     {
         int start = builder.Children.Count;

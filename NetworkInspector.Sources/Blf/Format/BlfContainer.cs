@@ -44,7 +44,9 @@ internal static class BlfContainer
         uint uncompressedSize,
         long maxUncompressedSize = 0)
     {
-        // Guard against untrusted uncompressedSize before any allocation.
+        // Guard against untrusted uncompressedSize before any allocation (threat: a forged header forcing a multi-GiB
+        // buffer; mitigation: reject up front with a dedicated exception that carries the limit and the requested size;
+        // rejected alternative: trying the allocation and catching OutOfMemoryException, which still stresses the GC).
         // The check is skipped when maxUncompressedSize == 0 (limit inactive).
         if (maxUncompressedSize > 0 && uncompressedSize > (ulong)maxUncompressedSize)
         {
@@ -61,12 +63,23 @@ internal static class BlfContainer
 
         if (compressionMethod == BlfConstants.CompressionNone)
         {
+            // The copy is as large as the payload, so the limit is also applied to the payload length itself (the declared
+            // size is checked above, but a forged header can declare less than it carries).
             if (maxUncompressedSize > 0 && compressedData.Length > maxUncompressedSize)
             {
                 throw new BlfDecompressionLimitExceededException(maxUncompressedSize, compressedData.Length);
             }
 
-            // Uncompressed: just copy
+            // The zlib and LZ4 paths reject a container whose decoded size differs from the declared one; method 0 has to
+            // do the same. Otherwise a header that understates its payload would be accepted silently and the
+            // declared size (which the scanner and the size limit rely on) would no longer describe the container.
+            if ((uint)compressedData.Length != uncompressedSize)
+            {
+                throw new BlfException(
+                    $"BLF uncompressed container size mismatch: expected {uncompressedSize} bytes, got {compressedData.Length}.");
+            }
+
+            // Uncompressed: copy, because the source span may point into a memory-mapped view that is released later.
             return compressedData.ToArray();
         }
 
@@ -135,6 +148,9 @@ internal static class BlfContainer
             using UnmanagedMemoryStream compressedStream = new(p, compressedData.Length);
             using ZLibStream zlibStream = new(compressedStream, CompressionMode.Decompress);
 
+            // Read until the declared size is filled or the stream ends. Inflating stops once the buffer is full, so a
+            // stream that holds more data than declared is cut at uncompressedSize and not reported; a stream that holds
+            // less is caught by the size check after the loop.
             int totalRead = 0;
             try
             {

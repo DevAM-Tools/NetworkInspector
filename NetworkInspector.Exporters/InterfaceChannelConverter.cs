@@ -19,6 +19,9 @@ internal enum InterfaceChannelLookup
 /// Shared conversion helpers for opaque interface-property channel values.
 /// Used by frame exporters (ASC, BLF) so channel lookup stays exception-free and both Vector exporters resolve the
 /// same channel for the same interface. Exporters cache the result per interface, so this runs once per interface.
+/// <para>
+/// <b>Thread safety:</b> Stateless; safe to call from multiple threads.
+/// </para>
 /// </summary>
 internal static class InterfaceChannelConverter
 {
@@ -30,12 +33,21 @@ internal static class InterfaceChannelConverter
     /// <param name="info">Interface to inspect.</param>
     /// <param name="channel">Resolved channel when the result is <see cref="InterfaceChannelLookup.Found"/>; else 0.</param>
     /// <param name="invalidValue">The offending property value when the result is <see cref="InterfaceChannelLookup.Invalid"/>.</param>
+    /// <returns>
+    /// <see cref="InterfaceChannelLookup.Found"/>, <see cref="InterfaceChannelLookup.NotFound"/>, or
+    /// <see cref="InterfaceChannelLookup.Invalid"/>. A returned channel is not range-checked: it can be negative or larger
+    /// than any bus channel limit, and the calling exporter decides what it accepts.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="info"/> is <see langword="null"/>.</exception>
     internal static InterfaceChannelLookup TryGetChannel(FrameInterfaceInfo info, out int channel, out object? invalidValue)
     {
         ArgumentNullException.ThrowIfNull(info);
         invalidValue = null;
         channel = 0;
 
+        // Explicit properties win over the name, in priority order: BLF channel, then ASC channel. A property that is
+        // present but not convertible is reported as Invalid at once and does not fall through to the next source, so a
+        // broken explicit value is never silently replaced by a guess from the name.
         foreach (string key in (ReadOnlySpan<string>)[BlfInterfacePropertyKeys.Channel, AscInterfacePropertyKeys.Channel])
         {
             if (!info.Properties.TryGetValue(key, out object? value))
@@ -52,6 +64,7 @@ internal static class InterfaceChannelConverter
             return InterfaceChannelLookup.Invalid;
         }
 
+        // No channel property at all: the interface name may still carry the channel ("CAN 2").
         return _TryTrailingNumber(info.UiName, out channel)
             ? InterfaceChannelLookup.Found
             : InterfaceChannelLookup.NotFound;
@@ -73,8 +86,12 @@ internal static class InterfaceChannelConverter
 
     /// <summary>
     /// Attempts to convert <paramref name="value"/> to an <see cref="int"/> without exception-based control flow.
-    /// Accepts integral numeric types and parseable strings.
+    /// Accepts the signed and unsigned integral types up to 32 bits, a <see cref="long"/> or <see cref="uint"/> inside the
+    /// <see cref="int"/> range, and strings that parse as an invariant-culture integer (surrounding white space and a sign
+    /// are allowed). Other types (for example <see cref="ulong"/> or floating point) are rejected, not truncated.
     /// </summary>
+    /// <param name="value">Property value of unknown type.</param>
+    /// <param name="result">The converted value, or 0 when the conversion fails.</param>
     internal static bool TryConvertToInt32(object? value, out int result)
     {
         switch (value)

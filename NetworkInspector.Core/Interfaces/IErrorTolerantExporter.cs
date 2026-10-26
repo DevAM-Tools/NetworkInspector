@@ -32,6 +32,11 @@ public interface IErrorTolerantExporter : IExporterStatistics, IExportByteProgre
     /// <summary>
     /// Event raised when a frame/packet is skipped due to a recoverable error.
     /// Only raised in Tolerant mode.
+    /// <para>
+    /// Raised synchronously on the thread that drives the export, so a subscriber runs on the export path and
+    /// should return quickly. The exporters are single-threaded (see <see cref="IExporterStatistics"/>), so no
+    /// synchronization of the event itself is needed.
+    /// </para>
     /// </summary>
     event EventHandler<ExportErrorEventArgs>? ItemSkipped;
 

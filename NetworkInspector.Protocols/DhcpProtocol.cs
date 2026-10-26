@@ -5,7 +5,8 @@ namespace NetworkInspector.Protocols;
 /// <summary>
 /// Dynamic Host Configuration Protocol for IPv4 (RFC 2131 / RFC 2132).
 /// Parses the BOOTP fixed header (240 bytes incl. magic cookie) and a
-/// curated subset of common DHCP options.
+/// curated subset of common DHCP options. The BOOTP <c>sname</c> (64 bytes) and <c>file</c> (128 bytes) fields and the
+/// bytes of <c>chaddr</c> after the first six are not decoded; they remain visible in the container's raw bytes.
 /// <para>Field tree structure:</para>
 /// <code>
 /// dhcp: DHCP DISCOVER, Transaction ID 0x12345678
@@ -51,6 +52,9 @@ public sealed partial class DhcpProtocol : IProtocol
 
     /// <summary>Fixed BOOTP header size in bytes including the magic cookie.</summary>
     private const int _FixedHeaderSize = 240;
+
+    /// <summary>Hardware address length (hlen) of a MAC address: 6 bytes.</summary>
+    private const int _EthernetHardwareAddressLength = 6;
 
     /// <summary>BOOTP magic cookie (RFC 2131 §3) preceding the option block.</summary>
     private const uint _MagicCookie = 0x63825363u;
@@ -192,14 +196,16 @@ public sealed partial class DhcpProtocol : IProtocol
     private FieldId _OptionParamRequestListFieldId;
 
     /// <summary>
-    /// Parses a Dhcp protocol unit from the supplied <paramref name="data"/> buffer,
-    /// appending decoded fields under <paramref name="parentField"/> and dispatching any
-    /// payload via the surrounding <paramref name="context"/>.
+    /// Parses a DHCPv4 message from the supplied <paramref name="data"/> buffer and appends the decoded
+    /// fields under <paramref name="parentField"/>. DHCP is a leaf protocol: nothing is dispatched further.
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
-    /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
-    /// <param name="context">Owning stack used to dispatch the next-protocol payload (when applicable).</param>
-    /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
+    /// <param name="data">Raw protocol bytes starting at this protocol's first header byte (the UDP payload).</param>
+    /// <param name="context">Parse context; used to record protocol and index-group presence.</param>
+    /// <returns>
+    /// The whole <paramref name="data"/> length (including any bytes after the End option), or a
+    /// <see cref="ParseError"/> when the data is shorter than the 240-byte fixed header or the magic cookie is wrong.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         if (data.Length < _FixedHeaderSize)
@@ -207,6 +213,8 @@ public sealed partial class DhcpProtocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, _FixedHeaderSize, (ulong)data.Length);
         }
 
+        // The magic cookie (header bytes 236-239) is what separates DHCP from plain BOOTP, which shares the UDP ports
+        // 67/68 but has no cookie and a different option area; such messages are rejected rather than mis-decoded.
         ReadOnlySpan<byte> span = data.Span;
         uint cookie = BinaryPrimitives.ReadUInt32BigEndian(span[236..240]);
         if (cookie != _MagicCookie)
@@ -214,10 +222,12 @@ public sealed partial class DhcpProtocol : IProtocol
             return ParseError.InvalidData(ProtocolName, "Invalid BOOTP magic cookie");
         }
 
+        // Presence is recorded only after the length and cookie checks, so rejected messages are not indexed as DHCP.
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_DhcpGroupId);
 
-        // Fixed BOOTP header decoding (network byte order).
+        // Fixed BOOTP header decoding (network byte order). Offsets: op 0, htype 1, hlen 2, hops 3, xid 4, secs 8,
+        // flags 10, ciaddr 12, yiaddr 16, siaddr 20, giaddr 24, chaddr 28 (16 bytes), sname 44 (64), file 108 (128).
         byte op = span[0];
         byte htype = span[1];
         byte hlen = span[2];
@@ -229,10 +239,18 @@ public sealed partial class DhcpProtocol : IProtocol
         IPv4Address yiaddr = new(BinaryPrimitives.ReadUInt32BigEndian(span[16..20]));
         IPv4Address siaddr = new(BinaryPrimitives.ReadUInt32BigEndian(span[20..24]));
         IPv4Address giaddr = new(BinaryPrimitives.ReadUInt32BigEndian(span[24..28]));
-        // Only the first 6 bytes of chaddr are used for Ethernet (hlen == 6); the rest is padding.
-        MacAddress chaddr = MacAddress.FromBytes(span[28..34]);
+        // chaddr is shown as a MAC address only when the hardware address length says it is one (hlen == 6, Ethernet and
+        // other IEEE 802 networks; the rest of the 16-byte field is padding). For any other length the first 6 bytes are
+        // not a MAC address (a shorter address is followed by padding, a longer one is cut), so no MAC field is emitted
+        // instead of showing a made-up address. The raw bytes stay visible in the container value.
+        bool hasMacAddress = hlen == _EthernetHardwareAddressLength;
+        MacAddress chaddr = hasMacAddress
+            ? MacAddress.FromBytes(span[28..34])
+            : default;
 
-        // Walk option block once to locate the DHCP message type for the summary line.
+        // Walk the option block once up front to find the DHCP message type: the container title and the packet info
+        // are created before the options are decoded and both name the message type. The options are then walked a
+        // second time by _ParseOptions; the cheap pre-scan only reads, it allocates nothing.
         byte msgType = _ScanDhcpMessageType(span[_FixedHeaderSize..]);
         string opText = op switch
         {
@@ -241,12 +259,16 @@ public sealed partial class DhcpProtocol : IProtocol
             _ => "Unknown"
         };
         string msgTypeText = _GetDhcpMessageTypeText(msgType);
-        parentField.SetPacketInfo(ZA.Lazy("DHCP ", msgTypeText, " - Transaction ID 0x", xid.ToString("X8", CultureInfo.InvariantCulture)));
+        // The transaction ID is formatted by the Hex8 formatter straight into the text buffer, only when the text is
+        // built: formatting it into a string here would allocate for every message, including those parsed without a field tree.
+        parentField.SetPacketInfo(ZA.Lazy("DHCP ", msgTypeText, " - Transaction ID 0x", new Hex8(xid)));
 
+        // The container covers the whole message (header and options) so the raw bytes of the undecoded BOOTP fields
+        // stay selectable in the UI.
         FieldValue containerValue = FieldValue.NewBytes(data);
         MutField container = parentField.AppendWithCustomText(
             _ProtocolFieldId, containerValue,
-            "DHCP ", msgTypeText, " - Transaction ID 0x", xid.ToString("X8", CultureInfo.InvariantCulture));
+            "DHCP ", msgTypeText, " - Transaction ID 0x", new Hex8(xid));
 
         container.AppendWithCustomText(_OpFieldId, FieldValue.NewU64(op), opText);
         container.Append(_HwTypeFieldId, FieldValue.NewU64(htype));
@@ -264,21 +286,29 @@ public sealed partial class DhcpProtocol : IProtocol
         container.Append(_YiAddrFieldId, FieldValue.NewIPv4(yiaddr));
         container.Append(_SiAddrFieldId, FieldValue.NewIPv4(siaddr));
         container.Append(_GiAddrFieldId, FieldValue.NewIPv4(giaddr));
-        container.Append(_ChAddrFieldId, FieldValue.NewMacAddress(chaddr));
+        if (hasMacAddress)
+        {
+            container.Append(_ChAddrFieldId, FieldValue.NewMacAddress(chaddr));
+        }
+
         container.Append(_CookieFieldId, FieldValue.NewU64(cookie));
 
         // Walk options. Bytes after the cookie are TLV-encoded except the single-byte
-        // sentinels Pad (0x00) and End (0xFF).
+        // sentinels Pad (0x00) and End (0xFF). A malformed option block ends the walk without an error: the fixed
+        // header above has already been decoded, so the message is still reported.
         _ParseOptions(in container, data[_FixedHeaderSize..], in context);
         return data.Length;
     }
 
     /// <summary>
     /// Scans the option block once to find the DHCP message type (option 53).
-    /// Returns 0 when no message type option is found.
+    /// Returns 0 when no message type option is found, or when the block is truncated or malformed before it
+    /// (the same bounds rules as <see cref="_ParseOptions"/>, so both walks agree on where the options end).
     /// </summary>
     private static byte _ScanDhcpMessageType(ReadOnlySpan<byte> options)
     {
+        // Bounds: i + 2 + length is the end of the current option. Both operands are far below int.MaxValue
+        // (length is one byte, i is an index into a packet), so the sums cannot overflow.
         int i = 0;
         while (i < options.Length)
         {
@@ -313,10 +343,12 @@ public sealed partial class DhcpProtocol : IProtocol
     /// <summary>
     /// Walks the TLV option block and emits one container per option.
     /// Unknown options are emitted with type and length only so filters can still
-    /// match on the option code.
+    /// match on the option code. Stops silently at the End option, or at the first option whose length
+    /// byte or value would run past the block (truncated or malformed block); options before that point are kept.
     /// </summary>
     private void _ParseOptions(in MutField container, ReadOnlyMemory<byte> options, in ParseContext context)
     {
+        // The span is used for the bounds-checked walk; options.Slice produces the Memory views stored in the fields.
         ReadOnlySpan<byte> span = options.Span;
         int i = 0;
         while (i < span.Length)
@@ -356,13 +388,17 @@ public sealed partial class DhcpProtocol : IProtocol
             optContainer.AppendWithCustomText(_OptionTypeFieldId, FieldValue.NewU64(type), typeText);
             optContainer.Append(_OptionLengthFieldId, FieldValue.NewU64(length));
 
-            _EmitOptionPayload(in optContainer, type, optionData, in context);
+            _EmitOptionPayload(in optContainer, type, optionData);
             i += 2 + length;
         }
     }
 
-    /// <summary>Emits the option-specific child fields for a recognised option code.</summary>
-    private void _EmitOptionPayload(in MutField optContainer, byte type, ReadOnlyMemory<byte> data, in ParseContext context)
+    /// <summary>
+    /// Emits the option-specific child fields for a recognised option code. A recognised option whose length
+    /// does not match its fixed size (for example a subnet mask that is not 4 bytes) falls through to the default
+    /// branch and keeps only the generic type and length fields; the payload is never reinterpreted.
+    /// </summary>
+    private void _EmitOptionPayload(in MutField optContainer, byte type, ReadOnlyMemory<byte> data)
     {
         ReadOnlySpan<byte> span = data.Span;
         switch (type)
@@ -378,10 +414,10 @@ public sealed partial class DhcpProtocol : IProtocol
                     FieldValue.NewIPv4(new IPv4Address(BinaryPrimitives.ReadUInt32BigEndian(span))));
                 break;
             case _OptionRouter:
-                _EmitIpv4List(in optContainer, _OptionRouterFieldId, span, in context);
+                _EmitIpv4List(in optContainer, _OptionRouterFieldId, span);
                 break;
             case _OptionDns:
-                _EmitIpv4List(in optContainer, _OptionDnsFieldId, span, in context);
+                _EmitIpv4List(in optContainer, _OptionDnsFieldId, span);
                 break;
             case _OptionRequestedIp when span.Length == 4:
                 optContainer.Append(_OptionRequestedIpFieldId,
@@ -395,6 +431,9 @@ public sealed partial class DhcpProtocol : IProtocol
                 optContainer.Append(_OptionLeaseTimeFieldId,
                     FieldValue.NewU64(BinaryPrimitives.ReadUInt32BigEndian(span)));
                 break;
+            // Text options are decoded as ASCII (RFC 2132 §3.14 specifies the host name as ASCII text); any byte above
+            // 0x7F becomes '?' instead of failing, so malformed or legacy values still display. The string allocation
+            // is the cost of exposing these options as a StringField.
             case _OptionHostName:
                 optContainer.Append(_OptionHostNameFieldId,
                     FieldValue.NewString(System.Text.Encoding.ASCII.GetString(span)));
@@ -415,8 +454,11 @@ public sealed partial class DhcpProtocol : IProtocol
         }
     }
 
-    /// <summary>Emits each IPv4 address from a tightly packed 4-byte-aligned span.</summary>
-    private static void _EmitIpv4List(in MutField optContainer, FieldId fieldId, ReadOnlySpan<byte> span, in ParseContext context)
+    /// <summary>
+    /// Emits each IPv4 address from a tightly packed 4-byte-aligned span (router and DNS lists). Trailing bytes that do
+    /// not fill a whole address are ignored.
+    /// </summary>
+    private static void _EmitIpv4List(in MutField optContainer, FieldId fieldId, ReadOnlySpan<byte> span)
     {
         for (int i = 0; i + 4 <= span.Length; i += 4)
         {

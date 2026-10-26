@@ -42,9 +42,15 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
 {
     private readonly FrameId _Id;
     private readonly Timestamp _Timestamp;
+
+    // Zero-copy view of the captured bytes: the frame neither copies nor owns them. A source may hand out slices of a
+    // larger shared buffer (for example a frame slab), so keeping a Frame alive can keep that whole buffer alive.
     private readonly ReadOnlyMemory<byte> _Data;
     private readonly LinkType _LinkType;
     private readonly FrameInterfaceId _InterfaceId;
+
+    // The mandatory registry doubles as the validity marker: Create rejects null, so a non-null registry means "created
+    // through Create" and null means default(Frame). This avoids a separate flag field and lets IsValid be one null test.
     private readonly FrameInterfaceRegistry _Registry;
 
     /// <summary>Creates a new frame (private — use <see cref="Create"/> factory).</summary>
@@ -87,6 +93,12 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
     /// or a <see cref="ParseError"/> if <paramref name="interfaceId"/> is valid but not
     /// registered.
     /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="registry"/> is <see langword="null"/> (a caller bug).</exception>
+    /// <remarks>
+    /// <paramref name="id"/>, <paramref name="timestamp"/>, <paramref name="data"/> and <paramref name="linkType"/> are stored
+    /// as given and not validated here (<paramref name="id"/> may even be <see cref="FrameId.Invalid"/>). An unregistered
+    /// interface is an expected failure and is therefore returned as a <see cref="ParseError"/>, not thrown.
+    /// </remarks>
     public static ParseResult<Frame> Create(
         FrameId id,
         Timestamp timestamp,
@@ -97,7 +109,8 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
     {
         ArgumentNullException.ThrowIfNull(registry);
 
-        // Validate: a valid interface ID must exist in the registry
+        // Validate: a valid interface ID must exist in the registry. FrameInterfaceId.Invalid is accepted without a lookup
+        // (a frame may come from a source that has no interface concept).
         if (interfaceId.IsValid && registry.Get(interfaceId) is null)
         {
             return ParseError.Custom("frame",
@@ -148,7 +161,10 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         }
     }
 
-    /// <summary>Raw frame data (zero-copy view).</summary>
+    /// <summary>
+    /// Raw frame data (zero-copy view). The bytes are shared with the capture source and must not be mutated; the view may be
+    /// a slice of a larger buffer, so a held frame can keep that buffer alive.
+    /// </summary>
     /// <exception cref="InvalidOperationException">The frame is the default sentinel.</exception>
     public ReadOnlyMemory<byte> Data
     {
@@ -235,15 +251,19 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         }
     }
 
+    /// <summary>Guards every property read: a default frame has no meaningful data, so reading it fails loudly instead of returning zeros.</summary>
+    /// <exception cref="InvalidOperationException">The frame is the default sentinel.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _ThrowIfInvalid()
     {
+        // Only a null test is inlined into each getter; the throw itself lives in a NoInlining helper to keep getters small.
         if (_Registry is null)
         {
             _ThrowDefault();
         }
     }
 
+    /// <summary>Throw helper for <see cref="_ThrowIfInvalid"/>, kept out of line so the getters stay inlineable.</summary>
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void _ThrowDefault() =>
@@ -255,7 +275,8 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
 
     /// <summary>
     /// Compares frames by <see cref="IsValid"/> then <see cref="FrameId"/> (payload and metadata are ignored).
-    /// Sentinels sort before valid frames.
+    /// Sentinels sort before valid frames (<see langword="false"/> sorts before <see langword="true"/>).
+    /// Comparison reads the stored id directly, so it works on the sentinel without throwing.
     /// </summary>
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

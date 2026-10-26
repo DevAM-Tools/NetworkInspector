@@ -7,6 +7,10 @@ namespace NetworkInspector.Protocols.Tcp;
 /// Passed to <see cref="TcpOptionsParser.Parse"/> to avoid passing 30+ individual parameters.
 /// The actual registration (via attributes) happens on <see cref="TcpProtocol"/>.
 /// </summary>
+/// <remarks>
+/// A readonly struct passed by <see langword="in"/> reference, so the many ids are not copied per call. Thread safety:
+/// immutable after construction; safe for concurrent reads.
+/// </remarks>
 internal readonly struct TcpOptionsFieldIds
 {
     #region Single-byte options
@@ -245,31 +249,82 @@ internal readonly struct TcpOptionsFieldIds
 
     #region Echo, CC, SCPS, Quick-Start, AccECN, experimental
 
+    /// <summary>Echo option container (kind 6, obsolete RFC 1072, 6 bytes).</summary>
     internal FieldId Echo { get; init; }
+
+    /// <summary>Echo option 32-bit value.</summary>
     internal FieldId EchoValue { get; init; }
+
+    /// <summary>Echo Reply option container (kind 7, obsolete RFC 1072, 6 bytes).</summary>
     internal FieldId EchoReply { get; init; }
+
+    /// <summary>Echo Reply option 32-bit value.</summary>
     internal FieldId EchoReplyValue { get; init; }
+
+    /// <summary>CC (connection count) option container (kind 11, RFC 1644, 6 bytes).</summary>
     internal FieldId Cc { get; init; }
+
+    /// <summary>CC option 32-bit value.</summary>
     internal FieldId CcValue { get; init; }
+
+    /// <summary>CC.NEW option container (kind 12, RFC 1644, 6 bytes).</summary>
     internal FieldId CcNew { get; init; }
+
+    /// <summary>CC.NEW option 32-bit value.</summary>
     internal FieldId CcNewValue { get; init; }
+
+    /// <summary>CC.ECHO option container (kind 13, RFC 1644, 6 bytes).</summary>
     internal FieldId CcEcho { get; init; }
+
+    /// <summary>CC.ECHO option 32-bit value.</summary>
     internal FieldId CcEchoValue { get; init; }
+
+    /// <summary>SCPS capabilities option container (kind 20, 4 bytes).</summary>
     internal FieldId Scps { get; init; }
+
+    /// <summary>SCPS capability bit 0x80: BETS.</summary>
     internal FieldId ScpsBets { get; init; }
+
+    /// <summary>SCPS capability bit 0x40: SNACK1.</summary>
     internal FieldId ScpsSnack1 { get; init; }
+
+    /// <summary>SCPS capability bit 0x20: SNACK2.</summary>
     internal FieldId ScpsSnack2 { get; init; }
+
+    /// <summary>SCPS capability bit 0x10: header compression.</summary>
     internal FieldId ScpsCompress { get; init; }
+
+    /// <summary>SCPS capability bit 0x08: NLTS.</summary>
     internal FieldId ScpsNlts { get; init; }
+
+    /// <summary>Quick-Start option container (kind 27, 8 bytes).</summary>
     internal FieldId Qs { get; init; }
+
+    /// <summary>Quick-Start rate request (low nibble of the first data byte).</summary>
     internal FieldId QsRate { get; init; }
+
+    /// <summary>Quick-Start TTL difference.</summary>
     internal FieldId QsTtlDiff { get; init; }
+
+    /// <summary>Accurate ECN option container (kinds 0xAC and 0xAE, 0/3/6/9 bytes of 24-bit counters).</summary>
     internal FieldId AccEcn { get; init; }
+
+    /// <summary>AccECN EE0B counter (24 bit).</summary>
     internal FieldId AccEcnEe0b { get; init; }
+
+    /// <summary>AccECN ECEB counter (24 bit).</summary>
     internal FieldId AccEcnEceb { get; init; }
+
+    /// <summary>AccECN EE1B counter (24 bit).</summary>
     internal FieldId AccEcnEe1b { get; init; }
+
+    /// <summary>Experimental option container (kinds 0xFD and 0xFE, RFC 6994 shared experimental options).</summary>
     internal FieldId Exp { get; init; }
+
+    /// <summary>Experiment identifier (ExID, first 16 bits of the option data).</summary>
     internal FieldId ExpExId { get; init; }
+
+    /// <summary>Experimental option data after the ExID.</summary>
     internal FieldId ExpData { get; init; }
 
     #endregion

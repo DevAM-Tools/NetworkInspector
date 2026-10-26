@@ -169,6 +169,31 @@ internal sealed class FieldValueTests
     }
 
     [Test]
+    public async Task FieldValueData_Equality_BytesSlicesOfSameArrayWithEqualContent()
+    {
+        byte[] data = [1, 2, 3, 1, 2, 3];
+        FieldValueData first = FieldValueData.NewBytes(new ReadOnlyMemory<byte>(data, 0, 3));
+        FieldValueData second = FieldValueData.NewBytes(new ReadOnlyMemory<byte>(data, 3, 3));
+
+        await Assert.That(first.Equals(second)).IsTrue();
+        await Assert.That(first.GetHashCode()).IsEqualTo(second.GetHashCode());
+        await Assert.That(first.CompareTo(second)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FieldValueData_Inequality_BytesSlicesOfSameArrayWithDifferentContent()
+    {
+        byte[] data = [1, 2, 3, 4];
+        FieldValueData first = FieldValueData.NewBytes(new ReadOnlyMemory<byte>(data, 0, 3));
+        FieldValueData second = FieldValueData.NewBytes(new ReadOnlyMemory<byte>(data, 1, 3));
+        FieldValueData whole = FieldValueData.NewBytes(data);
+
+        await Assert.That(first.Equals(second)).IsFalse();
+        await Assert.That(first.Equals(whole)).IsFalse();
+        await Assert.That(whole.Equals(FieldValueData.NewBytes(data))).IsTrue();
+    }
+
+    [Test]
     public async Task FieldValueData_Inequality_Bytes()
     {
         byte[] d1 = [1, 2, 3];
@@ -942,6 +967,55 @@ internal sealed class FieldValueTests
     }
 
     // === ToTempString ===
+
+    [Test]
+    public async Task FieldValueData_ToTempString_String_DisposeReleasesTheThreadStaticBuffer()
+    {
+        // No await between acquire and check: the thread-static buffer belongs to this thread.
+        bool availableDuring;
+        bool availableAfter;
+        using (TempString temp = FieldValueData.NewString("abc").ToTempString())
+        {
+            availableDuring = ZeroAllocHelper.IsCharBufferAvailable();
+        }
+
+        availableAfter = ZeroAllocHelper.IsCharBufferAvailable();
+
+        await Assert.That(availableDuring).IsFalse();
+        await Assert.That(availableAfter).IsTrue();
+    }
+
+    [Test]
+    public async Task FieldValueData_ToTempString_LazyString_DisposeReleasesTheThreadStaticBuffer()
+    {
+        bool availableAfter;
+        string text;
+        using (TempString temp = FieldValueData.NewLazyString(LazyString.Lazy(static () => "lazy")).ToTempString())
+        {
+            text = temp.AsSpan().ToString();
+        }
+
+        availableAfter = ZeroAllocHelper.IsCharBufferAvailable();
+
+        await Assert.That(text).IsEqualTo("lazy");
+        await Assert.That(availableAfter).IsTrue();
+    }
+
+    [Test]
+    public async Task FieldValue_ToTempString_CustomRepresentation_DisposeReleasesTheThreadStaticBuffer()
+    {
+        bool availableAfter;
+        string text;
+        using (TempString temp = FieldValue.NewU64(1, new LazyString("custom")).ToTempString())
+        {
+            text = temp.AsSpan().ToString();
+        }
+
+        availableAfter = ZeroAllocHelper.IsCharBufferAvailable();
+
+        await Assert.That(text).IsEqualTo("custom");
+        await Assert.That(availableAfter).IsTrue();
+    }
 
     [Test]
     public async Task FieldValueData_ToTempString_None_ReturnsEmpty()

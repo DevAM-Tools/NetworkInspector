@@ -5,10 +5,14 @@ namespace NetworkInspector.Core.Settings;
 /// <summary>
 /// Event arguments for the <see cref="SettingsManager.SettingsApplied"/> event.
 /// <para>
-/// Carries the names of all settings that were changed during
-/// <see cref="SettingsManager.ApplyChanges()"/>.
+/// Carries the names of all settings whose current value changed in one operation: <see cref="SettingsManager.ApplyChanges()"/>,
+/// <see cref="SettingsManager.ApplyChanges(IEnumerable{string})"/>, or <see cref="SettingsManager.Unset"/>.
 /// </para>
-/// This type is not thread-safe. It is intended for single-threaded event consumption.
+/// <para>
+/// The list is not copied: the manager passes the same list it returns from <c>ApplyChanges</c> to the caller. Nothing
+/// modifies it after the event is raised, and a handler must not modify it either. This type is not thread-safe. It is
+/// intended for single-threaded event consumption (handlers run synchronously on the thread that applied the change).
+/// </para>
 /// </summary>
 /// <param name="changedSettings">The names of the settings that changed.</param>
 public sealed class SettingsAppliedEventArgs(IReadOnlyList<string> changedSettings) : EventArgs

@@ -17,7 +17,17 @@ namespace NetworkInspector.Sources.Blf.Format.Objects;
 /// </code>
 /// Sleep and wakeup objects reconstruct the 12-byte DLT_LIN event (message type 3).
 /// </summary>
-/// <remarks>Not thread-safe. Caller synchronisation required.</remarks>
+/// <remarks>
+/// <para>
+/// Stateless and thread-safe; the only mutable object is the optional <see cref="FrameSlabAllocator"/> argument, which is
+/// not thread-safe and must be confined to the calling reader thread.
+/// </para>
+/// <para>
+/// Every parser exists twice: the <c>out byte[]</c> overload (one array per frame; random access, tests) wraps the slab
+/// overload with a null allocator, so both build identical bytes. The LIN frame size is bounded by the format (8 header
+/// bytes plus at most 8 data bytes), and the DLC from the file is clamped to 8 before any copy.
+/// </para>
+/// </remarks>
 internal static class LinParser
 {
     #region Constants
@@ -41,12 +51,13 @@ internal static class LinParser
     private const int _LinMessageV2MinSize = 121;
 
     /// <summary>
-    /// Minimum LIN V1 error payload size: channel(2) + dlc(1) + id(1) + ... ≥ 4 bytes.
+    /// Minimum LIN V1 error payload size: channel(2) + id(1) + dlc(1) + ... ≥ 4 bytes.
     /// </summary>
     private const int _LinErrorV1MinSize = 4;
 
     /// <summary>
-    /// Minimum LIN V2 error payload size; same nested struct but only channel and id matter.
+    /// Minimum LIN V2 error payload size: same nested struct as Type 57, but only channel (offset 12) and id (offset 37)
+    /// are required; the dlc at offset 38 is used when present.
     /// </summary>
     private const int _LinErrorV2MinSize = 38;
 
@@ -75,6 +86,8 @@ internal static class LinParser
     /// <summary>Message type 3 (event) encoded in bits 3-2 of byte 4: <c>3 &lt;&lt; 2</c>.</summary>
     private const byte _DltLinEventTypeByte = 3 << 2;
 
+    // Reason codes of the Type 20 LIN_SLEEP object (and the wake-up reasons it can carry), as classified by
+    // _SleepEventByte into the three DLT_LIN event codes: go-to-sleep, inactivity, wake-up.
     private const byte _SleepReasonGoToSleepFrame = 1;
     private const byte _SleepReasonBusIdleTimeout = 2;
     private const byte _SleepReasonSilentSleepmodeCmd = 3;
@@ -103,6 +116,10 @@ internal static class LinParser
     ///
     /// When the payload is shorter than 18 bytes the DLT_LIN checksum byte is 0.
     /// </summary>
+    /// <param name="payload">BLF object payload; at least 12 bytes.</param>
+    /// <param name="frame">DLT_LIN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header (u16 LE at offset 0).</param>
+    /// <returns><see langword="false"/> when the payload is shorter than 12 bytes.</returns>
     internal static bool TryParseLinMessageV1(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
         => FrameSlabAllocator.ToArray(TryParseLinMessageV1(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
@@ -123,17 +140,21 @@ internal static class LinParser
             return false;
         }
 
+        // The id is masked to its 6 bits and the DLC to a nibble; the DLC is then clamped to the LIN maximum of 8 because a
+        // nibble can be up to 15 and the data area of the object holds only 8 bytes.
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         byte rawId = (byte)(payload[2] & 0x3F);
         byte dlc = (byte)(payload[3] & 0x0F);
         int dataLen = Math.Min((int)dlc, _MaxLinDataLength);
 
         // DLT_LIN byte 5 carries the protected identifier as the bus transmits it: 6-bit id plus parity bits.
+        // The CRC field is read only when the payload reaches it; a shorter payload yields checksum 0 instead of failing.
         byte pid = LinProtectedId.Compute(rawId);
         byte checksum = payload.Length >= _LinMessageV1CrcOffset + 2
             ? payload[_LinMessageV1CrcOffset]
             : (byte)0;
 
+        // Data is read from offset 4; the length check above (12 bytes) already guarantees the 8 data bytes are present.
         frame = _BuildDltLinFrame(
             slabs,
             pid,
@@ -164,7 +185,12 @@ internal static class LinParser
     ///   [120..122) CRC (u16 LE; checksum in the low byte)
     ///   [122..]    direction / ETF / FSM fields (unused by reconstruction)
     /// </code>
+    /// Checksum model 0 (classic) and 1 (enhanced) are written to bits 1-0 of DLT_LIN byte 4; any other model leaves them 0.
     /// </summary>
+    /// <param name="payload">BLF object payload; at least 121 bytes (through the checksum).</param>
+    /// <param name="frame">DLT_LIN bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header (u16 LE at offset 12).</param>
+    /// <returns><see langword="false"/> when the payload is shorter than 121 bytes.</returns>
     internal static bool TryParseLinMessageV2(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
         => FrameSlabAllocator.ToArray(TryParseLinMessageV2(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
@@ -185,6 +211,8 @@ internal static class LinParser
             return false;
         }
 
+        // Fields sit at fixed offsets inside the nested 132-byte struct; only the part up to the checksum (offset 120) is
+        // required, which is what the length check above covers. The DLC is clamped to 8 as for Type 11.
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload[12..]);
         byte rawId = (byte)(payload[37] & 0x3F);
         byte dlc = (byte)(payload[38] & 0x0F);
@@ -201,6 +229,7 @@ internal static class LinParser
                 ? (byte)1
                 : (byte)0;
 
+        // Data bytes are at 112..120; with the 121-byte minimum the slice always fits, the fallback is only defensive.
         ReadOnlySpan<byte> data = payload.Length >= 112 + dataLen
             ? payload.Slice(112, dataLen)
             : payload[112..];
@@ -292,6 +321,7 @@ internal static class LinParser
 
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload[12..]);
         byte rawId = (byte)(payload[37] & 0x3F);
+        // The minimum size covers the id at offset 37 but not the dlc at 38, so the dlc is optional and defaults to 0.
         byte dlc = payload.Length > 38
             ? (byte)(payload[38] & 0x0F)
             : (byte)0;
@@ -360,6 +390,7 @@ internal static class LinParser
             return false;
         }
 
+        // A wakeup object has no reason to classify: it is always the DLT_LIN wake-up event (code 4).
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         frame = _BuildDltLinEvent(slabs, 0x04);
         return true;
@@ -399,8 +430,14 @@ internal static class LinParser
     #region Public API — channel peek
 
     /// <summary>
-    /// Reads only the channel field for a LIN object, using the same minimum sizes as the parsers.
+    /// Reads only the channel field for a LIN object, using the same minimum sizes as the parsers. The index scan uses
+    /// this instead of a full parse so indexing builds no frame bytes; the sizes must match the parsers' checks, and the
+    /// channel sits at offset 0 for the V1 types but at offset 12 for the V2 types (nested bus-event prefix).
     /// </summary>
+    /// <param name="objectType">BLF object type.</param>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="channel">Channel on success; zero otherwise.</param>
+    /// <returns><see langword="false"/> for a non-LIN object type or a payload shorter than the parser's minimum.</returns>
     internal static bool TryGetChannel(uint objectType, ReadOnlySpan<byte> payload, out ushort channel)
     {
         channel = 0;
@@ -489,6 +526,8 @@ internal static class LinParser
     private static ReadOnlyMemory<byte> _BuildDltLinFrame(
         FrameSlabAllocator? slabs, byte pid, int dlc, ReadOnlySpan<byte> data, byte checksum, byte errors, byte checksumTypeBits = 0)
     {
+        // The data area is padded to 4 or 8 bytes, so a frame with 0-4 data bytes is 12 bytes and one with 5-8 is 16.
+        // RentZeroed supplies the zero padding and the reserved header bytes (1-3), which are never written.
         int clampedDlc = Math.Clamp(dlc, 0, _MaxLinDataLength);
         int dataPad = clampedDlc <= 4 ? 4 : 8;
         Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, _DltLinHeaderSize + dataPad);
@@ -510,7 +549,8 @@ internal static class LinParser
 
     /// <summary>
     /// Builds a 12-byte DLT_LIN error frame (8-byte header plus four reserved payload bytes;
-    /// DLC is still encoded in byte 4).
+    /// DLC is still encoded in byte 4). The error objects carry no data bytes, so the payload area stays zero and the
+    /// checksum byte (6) stays 0; the error flag goes to byte 7.
     /// </summary>
     private static ReadOnlyMemory<byte> _BuildDltLinErrorFrame(FrameSlabAllocator? slabs, byte pid, int dlc, byte errors)
     {
@@ -524,7 +564,11 @@ internal static class LinParser
         return buffer;
     }
 
-    /// <summary>Builds the 12-byte DLT_LIN event used for sleep and wakeup objects.</summary>
+    /// <summary>
+    /// Builds the 12-byte DLT_LIN event used for sleep and wakeup objects: message type 3 in byte 4 and, when
+    /// <paramref name="eventCode"/> is non-zero, an event id of the form <c>0xB0B000xx</c> in bytes 8-11 (big-endian, so
+    /// bytes 8 and 9 are <c>0xB0</c> and byte 11 is the code). A zero code produces an event without an id.
+    /// </summary>
     private static ReadOnlyMemory<byte> _BuildDltLinEvent(FrameSlabAllocator? slabs, byte eventCode)
     {
         Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, 12);
@@ -544,7 +588,9 @@ internal static class LinParser
     /// <summary>
     /// Maps LIN sleep/wakeup reason codes to DLT_LIN event bytes:
     /// 1 = go-to-sleep frame, 2 = inactivity, 4 = wakeup.
-    /// Reason 0 / 18 with flags bit 0x02 is treated as wakeup.
+    /// Reasons 2 and 3 (bus idle timeout, silent sleep-mode command) are inactivity; 9, 10, and 11 are wakeup.
+    /// Reason 0 / 18 with flags bit 0x02 is treated as wakeup, without that bit as inactivity.
+    /// Any other reason returns 0 (an event without an id).
     /// </summary>
     private static byte _SleepEventByte(byte reason, byte flags)
     {

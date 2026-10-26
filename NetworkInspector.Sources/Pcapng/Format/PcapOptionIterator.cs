@@ -33,6 +33,11 @@ internal readonly ref struct RawOption
 /// Iteration stops upon encountering opt_endofopt (code=0), truncated data, or data exhaustion.
 /// </summary>
 /// <remarks>
+/// A <c>ref struct</c> over the caller's span: it copies nothing, and every <see cref="RawOption.Value"/> aliases the
+/// caller's buffer, so it is valid only while that buffer is. Not thread-safe (mutable cursor); use one instance per
+/// iteration on one thread. Values are returned without padding and without interpretation: the caller decodes them
+/// (text, integers) with the section byte order.
+/// <para>
 /// Usage:
 /// <code>
 /// PcapOptionIterator iter = new(optionData, swap);
@@ -41,6 +46,7 @@ internal readonly ref struct RawOption
 ///     // process option.Code, option.Value
 /// }
 /// </code>
+/// </para>
 /// </remarks>
 internal ref struct PcapOptionIterator
 {
@@ -80,6 +86,11 @@ internal ref struct PcapOptionIterator
     /// </summary>
     internal bool TryGetNext(out RawOption option)
     {
+        // Trust boundary: the option bytes, codes and lengths come from the file. Every length is checked against the
+        // data actually present before it is used, so a hostile length cannot make a slice run past the block. The int
+        // arithmetic below cannot overflow because the option data is part of a block of at most
+        // PcapConstants.MaxBlockSize bytes and a length is a u16. A truncated entry ends the iteration (no exception:
+        // options are metadata, and the packets of the block stay readable).
         // Need at least 4 bytes for the option header (code + length)
         if (_Offset + 4 > _Data.Length)
         {

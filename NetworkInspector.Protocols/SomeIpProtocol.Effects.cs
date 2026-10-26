@@ -34,6 +34,11 @@ public sealed partial class SomeIpProtocol
     /// <summary>
     /// In-flight first-parse nesting for this protocol on the serialized ingest thread.
     /// Replay does not touch this field. The outermost finally raises the watermark.
+    /// <para>
+    /// Plain (non-volatile) <see cref="int"/>: only the ordered ingest thread reads and writes it, and readers on
+    /// other threads never look at it (they use <see cref="_IngestWatermark"/>). The watermark is raised only when
+    /// this counter returns to zero, so a nested parse of the same packet is not mistaken for a replay.
+    /// </para>
     /// </summary>
     private int _ParseNesting;
 
@@ -41,7 +46,11 @@ public sealed partial class SomeIpProtocol
 
     #region Effect store access
 
-    /// <summary>Records the TP reassembly result of one SOME/IP layer during its first parse.</summary>
+    /// <summary>
+    /// Records the TP reassembly result of one SOME/IP layer during its first parse. Must be called before the
+    /// watermark is raised for that packet (the outermost <c>Parse</c> does so in its finally block), so that a
+    /// reader that sees the new watermark also finds the effect.
+    /// </summary>
     private void _RecordTpEffect(PacketId id, int layerKey, in SomeIpTpReassemblyResult result) =>
         _Effects.Record(id.Value, layerKey, in result);
 
@@ -67,7 +76,9 @@ public sealed partial class SomeIpProtocol
 
     /// <summary>
     /// Whether the given packet id was already parsed once and must therefore replay its recorded
-    /// TP result instead of feeding the shared reassembly sessions again.
+    /// TP result instead of feeding the shared reassembly sessions again. One volatile read of the watermark, safe
+    /// from any thread. Packet ids are dense and ingested in ascending order, so "id &lt;= watermark" means "already
+    /// ingested".
     /// </summary>
     private bool _IsReplay(PacketId id) => id.Value <= _IngestWatermark;
 

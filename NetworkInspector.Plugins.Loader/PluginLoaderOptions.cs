@@ -9,6 +9,8 @@ namespace NetworkInspector.Plugins.Loader;
 /// </param>
 /// <param name="BuiltInPlugins">
 /// Plugin instances that are part of the application. They are loaded before any configured plugin, run through the same
-/// configure path, and win name conflicts against configured plugins.
+/// configure path, and win name conflicts against configured plugins. The list and its entries must not be
+/// <see langword="null"/> (the <see cref="PluginLoader"/> constructor checks). Their <c>Info</c>, <c>Configure</c>, and
+/// commit run inside the same failure boundary as an external plugin's.
 /// </param>
 public sealed record PluginLoaderOptions(string ScanCacheFile, IReadOnlyList<IPlugin> BuiltInPlugins);

@@ -3,12 +3,15 @@
 namespace NetworkInspector.Protocols.WebSocket;
 
 /// <summary>
-/// Precomputed display text table for WebSocket opcodes (RFC 6455 Section 5.2).
+/// Precomputed display text table for WebSocket opcodes (RFC 6455 Section 5.2) plus close status code names
+/// (Section 7.4.1). Read-only after type initialisation, so every member is safe to call from any thread.
 /// </summary>
 internal static class WebSocketDisplayTables
 {
     #region Opcodes — 16-entry table
 
+    // The opcode is a 4-bit value, so the whole domain (0..15) is tabulated and the lookup never allocates; reserved values
+    // show their hex number only.
     private static readonly string[] _OpcodeDisplayText =
     [
         "Continuation (0x0)",  // 0
@@ -29,12 +32,18 @@ internal static class WebSocketDisplayTables
         "0xF"                  // 15 reserved
     ];
 
-    /// <summary>Returns display text for a WebSocket opcode (4-bit value, 0-15).</summary>
+    /// <summary>
+    /// Returns display text for a WebSocket opcode (4-bit value, 0-15). The index is masked with 0x0F, so a byte with
+    /// upper bits set cannot read outside the 16-entry table.
+    /// </summary>
     public static string GetOpcodeDisplayText(byte opcode) =>
         _OpcodeDisplayText[opcode & 0x0F];
 
     /// <summary>
-    /// Returns display text for a WebSocket close status code (RFC 6455 Section 7.4.1).
+    /// Returns display text for a WebSocket close status code (RFC 6455 Section 7.4.1; 1012 to 1014 are IANA
+    /// registrations). Codes 1005, 1006 and 1015 are reserved for local use and must not be sent in a close frame, so seeing
+    /// one on the wire indicates a non-conforming peer. Unknown codes (including application codes in the
+    /// 3000-4999 ranges) print as their decimal number, which allocates one string.
     /// </summary>
     public static string GetCloseCodeDisplayText(ushort code) =>
         code switch

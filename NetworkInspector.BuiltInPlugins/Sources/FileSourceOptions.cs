@@ -26,12 +26,18 @@ internal static class FileSourceOptions
     /// <summary>Option name: size of the frame buffer slabs.</summary>
     internal const string FrameSlabOption = "frameSlabBytes";
 
-    /// <summary>Option name: time zone of file timestamps that carry no zone.</summary>
+    /// <summary>
+    /// Option name: time zone of timestamps. For sources it applies to file timestamps that carry no zone; the BLF exporter
+    /// reuses the name for the absolute timestamps it writes.
+    /// </summary>
     internal const string TimeZoneOption = "timestampTimeZone";
 
     /// <summary>Option name used in errors about the file list.</summary>
     internal const string PathsOption = "paths";
 
+    // Limit: frame slab size, 0 (off) or 1 KiB to 16 MiB. These are facts of the Core file sources (their option classes
+    // validate the same range), so they are constants and not configurable here; the Core classes stay the authority.
+    // Threat: a slab keeps all its frames alive while one consumer holds one frame, so the upper bound caps that retention.
     /// <summary>Smallest non-zero slab size of the Core file sources (see <c>FrameSlabSize</c> of their option classes).</summary>
     private const long _MinFrameSlabBytes = 1024;
 
@@ -65,6 +71,8 @@ internal static class FileSourceOptions
     /// <param name="options">The registrar over the fresh option manager of one request.</param>
     /// <param name="defaultBytes">Default of the kind's option class (256 MiB, 64 MiB in a 32-bit process).</param>
     internal static void RegisterPreloadBudget(SettingsRegistrar options, long defaultBytes) =>
+        // The budget is the resident memory a source may take for the file, not a trust limit: a larger file is memory-mapped,
+        // never rejected. So there is no upper bound; the default comes from the Core options class of each kind.
         options.RegisterI64Setting(PreloadBudgetOption, "Preload budget", "", defaultBytes, min: 0,
             description: "Largest file in bytes that is read into memory; larger files are memory-mapped. 0 always maps.");
 
@@ -260,8 +268,10 @@ internal static class FileSourceOptions
     {
         ArgumentNullException.ThrowIfNull(open);
 
-        // The order matters: FileNotFound and DirectoryNotFound derive from IOException, and the format exceptions are
-        // reported as an unsupported file, not as an unreadable one.
+        // Catch order matters for one pair: FileNotFoundException and DirectoryNotFoundException derive from IOException, so
+        // their clause must precede the IOException clause. The format exceptions (PcapException, BlfException,
+        // InvalidDataException) do not derive from IOException; they get their own clause so that a damaged or foreign
+        // file is reported as an unsupported format, not as an unreadable one. Anything else is a bug and propagates.
         try
         {
             source = open();

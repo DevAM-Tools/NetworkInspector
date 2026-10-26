@@ -19,8 +19,13 @@ namespace NetworkInspector.Core.Settings;
 /// </summary>
 public sealed class Setting : IReadOnlySetting
 {
-    /// <summary>Immutable snapshot holding both current and pending values.
-    /// Swapped atomically via <see cref="Volatile.Write{T}(ref T, T)"/>.</summary>
+    /// <summary>
+    /// Immutable snapshot holding both current and pending values.
+    /// Replaced as a whole by assigning the volatile <c>_Snapshot</c> field (a release write). One object instead of two fields:
+    /// <see cref="SettingValue"/> is larger than a machine word and cannot be written atomically, and a lock-free reader must
+    /// never see the current value of one update paired with the pending value of another. Each write allocates a new snapshot;
+    /// that is accepted because writes are rare (user edits, loads) while reads are frequent and take no lock.
+    /// </summary>
     private sealed class SettingSnapshot(SettingValue currentValue, SettingValue pendingValue)
     {
         /// <summary>The current (applied) value.</summary>
@@ -37,8 +42,12 @@ public sealed class Setting : IReadOnlySetting
     /// </summary>
     private volatile SettingsManager? _Owner;
 
-    // Lock-free reads: readers use Volatile.Read to get a consistent snapshot.
-    // Writers hold _WriteLock and atomically swap the snapshot via Volatile.Write.
+    // Lock-free reads: a reader copies the volatile _Snapshot reference once and reads both values from that one object.
+    // Writers hold _WriteLock, so read-modify-write sequences (compare pending, validate, store) cannot interleave, and publish
+    // the new snapshot by assigning the volatile field.
+    // Lock order: the manager lock is taken before this lock (the manager resets and loads settings while it holds its own
+    // lock). This lock is therefore never held while calling into the manager's locks; the PendingChanged event is raised
+    // after the lock is released for the same reason. _ThrowIfManagerIsLoading only reads a volatile flag.
     private readonly Lock _WriteLock = new();
     private volatile SettingSnapshot _Snapshot;
 
@@ -58,6 +67,8 @@ public sealed class Setting : IReadOnlySetting
         EnumSettingMetadata? enumMetadata,
         SettingActivation activation)
     {
+        // Names are validated here, at construction, so a Setting that exists always has a valid identity (the constructor is
+        // private; every factory below ends here). SettingsManager.RegisterSetting repeats the name checks.
         if (!NameValidation.IsValidName(name))
         {
             throw InvalidNameRegistrationException.For(name);
@@ -80,6 +91,9 @@ public sealed class Setting : IReadOnlySetting
         MaxValue = maxValue;
         EnumMetadata = enumMetadata;
         Activation = activation;
+
+        // A new setting is clean: current and pending both start at the default. The factories have already checked that the
+        // default satisfies the bounds, so no validation is needed here.
         _Snapshot = new SettingSnapshot(defaultValue, defaultValue);
     }
 
@@ -207,13 +221,17 @@ public sealed class Setting : IReadOnlySetting
     internal void BindToManager(SettingsManager owner) => _Owner = owner;
 
     /// <summary>
-    /// Validates and atomically applies a persisted value during <see cref="SettingsManager.Load"/>.
-    /// Bypasses the load-in-progress guard because the manager holds the write lock.
+    /// Validates and atomically applies a persisted value during <see cref="SettingsManager.Load"/> (and for preloaded or
+    /// orphaned values at registration). Sets current and pending to the value, so a pending edit is discarded, and does not
+    /// raise <see cref="SettingsManager.PendingChanged"/>: a persisted value is loaded state, not a user edit.
+    /// Bypasses the load-in-progress guard because the manager calls it itself, while it holds its write lock.
     /// </summary>
+    /// <exception cref="SettingsException">The value has the wrong type or violates the constraints (nothing is stored).</exception>
     internal void ApplyFromPersistence(SettingValue value)
     {
         lock (_WriteLock)
         {
+            // Persisted files are a trust boundary: validate before the value becomes visible, never store a refused value.
             SettingProblem? problem = _Validate(value);
             if (problem is not null)
             {
@@ -224,7 +242,12 @@ public sealed class Setting : IReadOnlySetting
         }
     }
 
-    /// <summary>Throws when the owning manager is applying persisted values via <see cref="SettingsManager.Load"/>.</summary>
+    /// <summary>
+    /// Throws when the owning manager is applying persisted values via <see cref="SettingsManager.Load"/>. This is a usage-error
+    /// guard, not a fence: a mutator that passed the check just before Load began still completes, serialized with Load by the
+    /// setting lock, so a snapshot is never torn either way. A setting that is not registered yet has no owner and never throws.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">A load is in progress.</exception>
     private void _ThrowIfManagerIsLoading()
     {
         if (_Owner is not null && _Owner.IsLoading)
@@ -237,10 +260,12 @@ public sealed class Setting : IReadOnlySetting
 
     /// <summary>
     /// Sets the pending value. Validates the value before storing.
-    /// Returns <c>true</c> if changed, <c>false</c> if same.
+    /// Returns <c>true</c> if changed, <c>false</c> if same (an unchanged value is not validated again and raises no event).
     /// Throws <see cref="TypeMismatchSettingsException"/> or
     /// <see cref="ValidationSettingsException"/> if validation fails (value is NOT stored).
     /// Throws <see cref="InvalidOperationException"/> when <see cref="SettingsManager.Load"/> is in progress.
+    /// Raises <see cref="SettingsManager.PendingChanged"/> after the setting lock is released when the value changed.
+    /// The throwing counterpart of <see cref="TrySetPendingValue"/>; thread-safe.
     /// </summary>
     public bool SetPendingValue(SettingValue value)
     {
@@ -248,6 +273,8 @@ public sealed class Setting : IReadOnlySetting
         {
             _ThrowIfManagerIsLoading();
 
+            // Equal to the pending value means nothing to do. Validation can be skipped for it: the pending value was either
+            // validated when it was stored or is the default, which the factories checked.
             SettingSnapshot snapshot = _Snapshot;
             if (snapshot.PendingValue == value)
             {
@@ -300,6 +327,8 @@ public sealed class Setting : IReadOnlySetting
         {
             _ThrowIfManagerIsLoading();
 
+            // Validate first, unlike SetPendingValue: this member reports "valid" (true) even for an unchanged value, so every
+            // call answers whether the value is acceptable. Expected failures return false with a problem, never an exception.
             problem = _Validate(value);
             if (problem is not null)
             {
@@ -327,6 +356,8 @@ public sealed class Setting : IReadOnlySetting
     /// Applies the pending value to the current value.
     /// Returns true if the value was changed.
     /// Throws <see cref="InvalidOperationException"/> when <see cref="SettingsManager.Load"/> is in progress.
+    /// Raises no event: <see cref="SettingsManager.SettingsApplied"/> is raised by the manager's bulk members, not by this one.
+    /// Thread-safe.
     /// </summary>
     public bool Apply()
     {
@@ -334,6 +365,7 @@ public sealed class Setting : IReadOnlySetting
         {
             _ThrowIfManagerIsLoading();
 
+            // The pending value was validated when it was stored, so applying needs no second validation.
             SettingSnapshot snapshot = _Snapshot;
             if (snapshot.CurrentValue == snapshot.PendingValue)
             {
@@ -344,7 +376,10 @@ public sealed class Setting : IReadOnlySetting
         }
     }
 
-    /// <summary>Resets the pending value to the current value.</summary>
+    /// <summary>
+    /// Resets the pending value to the current value and raises <see cref="SettingsManager.PendingChanged"/> when the pending
+    /// value changed.
+    /// </summary>
     /// <exception cref="InvalidOperationException">Thrown when <see cref="SettingsManager.Load"/> is in progress.</exception>
     public void Reset()
     {
@@ -354,7 +389,11 @@ public sealed class Setting : IReadOnlySetting
         }
     }
 
-    /// <summary>Resets both current and pending values to the default.</summary>
+    /// <summary>
+    /// Resets both current and pending values to the default. <see cref="SettingsManager.PendingChanged"/> is raised only when
+    /// the pending value changed; a change of the current value alone raises no event (and not
+    /// <see cref="SettingsManager.SettingsApplied"/> either).
+    /// </summary>
     /// <exception cref="InvalidOperationException">Thrown when <see cref="SettingsManager.Load"/> is in progress.</exception>
     public void ResetToDefault()
     {
@@ -445,6 +484,7 @@ public sealed class Setting : IReadOnlySetting
     /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
     /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="defaultValue"/> is <see langword="null"/>.</exception>
     public static Setting String(
         string name, string uiName, string groupName,
         string defaultValue, string? description = null,
@@ -466,6 +506,9 @@ public sealed class Setting : IReadOnlySetting
         string? description = null,
         SettingActivation activation = SettingActivation.Immediate)
     {
+        // A setting never holds NaN or infinity: JSON cannot represent them (the persistence form would be invalid) and the
+        // bounds comparisons would be meaningless. The default and both bounds are therefore checked here, and the mutators
+        // check every later value in the shared validation. The defaults of the integer factories need no finite check.
         if (!double.IsFinite(defaultValue))
         {
             throw ValidationSettingsException.For(string.Create(CultureInfo.InvariantCulture, $"default f64 value must be finite, got {defaultValue}"));
@@ -560,10 +603,11 @@ public sealed class Setting : IReadOnlySetting
             SettingType.I64, def, minVal, maxVal, null, activation);
     }
 
-    /// <summary>Creates a new byte array setting.</summary>
+    /// <summary>Creates a new byte array setting. The default array is copied, so later changes to it do not reach the setting.</summary>
     /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
     /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="defaultValue"/> is <see langword="null"/>.</exception>
     public static Setting Bytes(
         string name, string uiName, string groupName,
         byte[] defaultValue, string? description = null,
@@ -574,10 +618,11 @@ public sealed class Setting : IReadOnlySetting
             SettingType.Bytes, def, null, null, null, activation);
     }
 
-    /// <summary>Creates a new boolean array setting.</summary>
+    /// <summary>Creates a new boolean array setting. The default array is copied.</summary>
     /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
     /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="defaultValue"/> is <see langword="null"/>.</exception>
     public static Setting BoolArray(
         string name, string uiName, string groupName,
         bool[] defaultValue, string? description = null,
@@ -588,10 +633,11 @@ public sealed class Setting : IReadOnlySetting
             SettingType.BoolArray, def, null, null, null, activation);
     }
 
-    /// <summary>Creates a new string array setting.</summary>
+    /// <summary>Creates a new string array setting. The default array is copied.</summary>
     /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> or <paramref name="groupName"/>
     /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="defaultValue"/> or one of its elements is <see langword="null"/>.</exception>
     public static Setting StringArray(
         string name, string uiName, string groupName,
         string[] defaultValue, string? description = null,
@@ -607,12 +653,15 @@ public sealed class Setting : IReadOnlySetting
     /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid or a default element is out of range or non-finite.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="defaultValue"/> is <see langword="null"/>.</exception>
     public static Setting F64Array(
         string name, string uiName, string groupName,
         double[] defaultValue, double? min = null, double? max = null,
         string? description = null,
         SettingActivation activation = SettingActivation.Immediate)
     {
+        // For the array types min and max bound each element, not the length; they are stored as scalar values of the element
+        // type. The default is checked element by element in the loop below, with the same finite rule as the scalar.
         ArgumentNullException.ThrowIfNull(defaultValue);
         if (min.HasValue && !double.IsFinite(min.Value))
         {
@@ -656,6 +705,7 @@ public sealed class Setting : IReadOnlySetting
     /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid or a default element is out of range.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="defaultValue"/> is <see langword="null"/>.</exception>
     public static Setting U64Array(
         string name, string uiName, string groupName,
         ulong[] defaultValue, ulong? min = null, ulong? max = null,
@@ -693,6 +743,7 @@ public sealed class Setting : IReadOnlySetting
     /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid or a default element is out of range.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="defaultValue"/> is <see langword="null"/>.</exception>
     public static Setting I64Array(
         string name, string uiName, string groupName,
         long[] defaultValue, long? min = null, long? max = null,
@@ -730,6 +781,7 @@ public sealed class Setting : IReadOnlySetting
     /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="allowedValues"/> is <see langword="null"/>.</exception>
     public static Setting Enum(
         string name, string uiName, string groupName,
         ulong defaultValue, IEnumerable<(string Name, ulong Value)> allowedValues,
@@ -745,12 +797,15 @@ public sealed class Setting : IReadOnlySetting
     /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     /// <exception cref="ValidationSettingsException">Thrown when constraints are invalid.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="metadata"/> is <see langword="null"/>.</exception>
     public static Setting EnumWithMetadata(
         string name, string uiName, string groupName,
         ulong defaultValue, EnumSettingMetadata metadata,
         string? description = null,
         SettingActivation activation = SettingActivation.Immediate)
     {
+        ArgumentNullException.ThrowIfNull(metadata);
+
         if (metadata.AllowedValues.Count == 0)
         {
             throw ValidationSettingsException.For("Enum setting requires at least one allowed value");

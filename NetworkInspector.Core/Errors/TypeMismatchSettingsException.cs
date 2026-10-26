@@ -6,6 +6,8 @@ namespace NetworkInspector.Core.Errors;
 /// Thrown when a setting value's type does not match the expected setting type
 /// (e.g., assigning a string value to a boolean setting).
 /// </summary>
+/// <param name="expected">The type the setting is declared with.</param>
+/// <param name="actual">The type of the value that was supplied.</param>
 public sealed class TypeMismatchSettingsException(SettingType expected, SettingType actual)
     : SettingsException($"Type mismatch: expected {expected}, got {actual}")
 {
@@ -28,6 +30,8 @@ public sealed class TypeMismatchSettingsException(SettingType expected, SettingT
     #region Factory Methods
 
     /// <summary>Creates a type-mismatch exception for the given types.</summary>
+    /// <param name="expected">The declared setting type.</param>
+    /// <param name="actual">The supplied value type.</param>
     internal static TypeMismatchSettingsException For(SettingType expected, SettingType actual) =>
         new(expected, actual);
 

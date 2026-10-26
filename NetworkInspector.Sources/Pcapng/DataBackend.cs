@@ -6,6 +6,18 @@ namespace NetworkInspector.Sources.Pcapng;
 /// Abstraction over the data backing a capture file — either a pre-loaded
 /// in-memory byte array or a memory-mapped file pool.
 /// </summary>
+/// <remarks>
+/// <para>
+/// The two backends hand out frame bytes differently on purpose. In-memory: a frame is a slice of the loaded array
+/// (zero copy), so a held frame keeps the whole loaded file alive. Mapped: a frame is copied out of the mapping (into a
+/// slab region or a new array), because a view into the mapping must never outlive the mapping.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> the backend holds no mutable state besides the dispose latch; the mapped backend's lease
+/// protocol (<see cref="TryAcquireScanLease"/> / <see cref="ReleaseScanLease"/>) is what makes concurrent reads and
+/// <see cref="Dispose"/> safe. Reads of the in-memory array are safe from any thread (it is never written).
+/// </para>
+/// </remarks>
 internal sealed class DataBackend : IDisposable
 {
     #region Fields
@@ -54,9 +66,15 @@ internal sealed class DataBackend : IDisposable
     /// <summary>Creates an in-memory backend from pre-loaded data.</summary>
     internal static DataBackend FromMemory(byte[] data) => new(data);
 
-    /// <summary>Creates a memory-mapped backend from a file path (one read-only view for all readers).</summary>
+    /// <summary>
+    /// Creates a memory-mapped backend from a file path (one read-only view for all readers). A zero-length file cannot be
+    /// mapped, so it gets an empty in-memory backend: the format check then reports it exactly like a preloaded empty file
+    /// (an unrecognized or truncated capture), not as an unrelated mapping error.
+    /// </summary>
     internal static DataBackend FromMmap(string path) =>
-        new(new MmapPool(path));
+        MmapPool.IsEmptyFile(path)
+            ? FromMemory([])
+            : new(new MmapPool(path));
 
     #endregion
 
@@ -152,6 +170,8 @@ internal sealed class DataBackend : IDisposable
             return;
         }
 
+        // PrefetchLength returned a non-zero length, so fileOffset lies inside the file and the indexed element exists.
+        // Pinning is cheap for a short hint and the prefetch instruction needs a raw address.
         if (_InMemoryData is not null)
         {
             fixed (byte* start = &_InMemoryData[(int)fileOffset])
@@ -174,7 +194,10 @@ internal sealed class DataBackend : IDisposable
     /// </summary>
     /// <param name="fileOffset">File offset of the first frame byte.</param>
     /// <param name="capturedLength">Number of frame bytes; the index guarantees they lie inside the file.</param>
-    /// <param name="slabs">Frame slab allocator of the sequential reader, or null (per-frame array).</param>
+    /// <param name="slabs">
+    /// Frame slab allocator of the sequential reader, or null (per-frame array). Ignored for in-memory data: the frame
+    /// aliases the loaded array, so there is nothing to copy into a slab.
+    /// </param>
     internal ReadOnlyMemory<byte> CopyFrameDataSequential(long fileOffset, int capturedLength, FrameSlabAllocator? slabs)
     {
         if (_InMemoryData != null)

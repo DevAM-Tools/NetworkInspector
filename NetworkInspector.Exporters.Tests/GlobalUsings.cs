@@ -37,6 +37,7 @@ global using NetworkInspector.Exporters.Pbf;
 global using NetworkInspector.Exporters.Pcapng;
 global using NetworkInspector.Exporters.Tests;
 global using NetworkInspector.Exporters.Tests.Generators;
+global using NetworkInspector.Exporters.Tests.Helpers;
 global using NetworkInspector.Exporters.Tests.Verification;
 global using NetworkInspector.Testing.Tshark;
 global using NetworkInspector.Exporters.Text;

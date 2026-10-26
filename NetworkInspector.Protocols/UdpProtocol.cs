@@ -78,7 +78,7 @@ public sealed partial class UdpProtocol : IProtocol
     [U64Field("udp.checksum", "Checksum", IndexGroup = _UdpIndexGroup)]
     private FieldId _ChecksumFieldId;
 
-    // UDP-02: Checksum validation status (optional, only when verification enabled)
+    // Checksum validation status (optional, only when verification is enabled and the datagram carries a checksum)
     [StringField("udp.checksum.status", "Checksum Status", IndexGroup = "udp.checksum.status")]
     private FieldId _ChecksumStatusFieldId;
 
@@ -104,19 +104,42 @@ public sealed partial class UdpProtocol : IProtocol
     [StringField("udp.error.no_ip", "No enclosing IP layer", IndexGroup = "udp.error")]
     private FieldId _NoIpLayerFieldId;
 
+    // Reported when the UDP length field is below the 8-byte header size.
+    [StringField("udp.error.bad_length", "Bad UDP length", IndexGroup = "udp.error")]
+    private FieldId _BadLengthFieldId;
+
+    // Reported when the stream table is full (see udp.max_tracked_streams): no udp.stream is assigned for a new tuple.
+    [StringField("udp.error.stream_limit", "UDP stream limit reached", IndexGroup = "udp.error")]
+    private FieldId _StreamLimitFieldId;
+
     // Port dispatch table
     [ProtocolTableU64(PortTableName, "UDP Port")]
     private ProtocolTableId _PortTableId;
 
-    // UDP-02: Runtime setting for checksum verification
+    // Runtime setting for checksum verification. Off by default: verification costs one pass over the datagram per packet
+    // and needs the enclosing IP addresses for the pseudo-header.
     [BoolSetting("udp.verify_checksum", "Verify Checksum", "udp", Default = false)]
     private bool _VerifyChecksum;
+
+    // Limit: number of UDP conversations (4-tuples) the tracker keeps. Value: default 10000; values at or above int.MaxValue are
+    // clamped to int.MaxValue in _TryAppendUdpStream. Threat: every distinct tuple adds a dictionary entry that lives as long as
+    // this protocol instance (the stack), so a scan or flood of distinct tuples would otherwise grow memory without bound.
+    // Configurable (setting, changed by the operator/user), not a constant, because the right size depends on the host and the
+    // capture. Posture: secure by default (tight default, raising it is opt-in), because the input comes from untrusted
+    // networks. Exceeding it is an expected failure, reported per packet as udp.error.stream_limit, never a silent drop; the
+    // datagram itself is still parsed and dispatched, only the stream index is not assigned. Same rules as
+    // tcp.max_tracked_streams.
+    [U64Setting("udp.max_tracked_streams", "Maximum tracked UDP streams", "udp", Default = 10000,
+        Description = "Upper bound for the number of tracked UDP conversations. A new conversation beyond it gets no stream index "
+            + "and is flagged; raising the value lets a flood of distinct address/port pairs use more memory.")]
+    private ulong _MaxTrackedStreams;
 
     #endregion
 
     #region Cross-Protocol Field References
     // Resolved during OnStart via stack.GetFieldId() for reading IP addresses
-    // from the field tree via sibling navigation (not flat-array scan).
+    // from the field tree via sibling navigation (not flat-array scan). This is only the fallback: the normal path reads the
+    // per-thread address caches of the IP protocols, which also work when no field tree is built.
 
     /// <summary>FieldId of the IPv4 container field ("ip"), used to identify the IP
     /// container when walking backwards through siblings.</summary>
@@ -152,7 +175,10 @@ public sealed partial class UdpProtocol : IProtocol
 
     #region Stream tracking
 
-    /// <summary>Tracks UDP conversations and assigns monotonic stream indices.</summary>
+    /// <summary>
+    /// Tracks UDP conversations and assigns monotonic stream indices. Mutable cross-packet state: only the ordered
+    /// first-parse path may call it (see the class remarks); replays use the recorded <see cref="StreamEffect"/>.
+    /// </summary>
     private readonly UdpStreamTracker _StreamTracker = new();
 
     /// <summary>Resolves cross-protocol field IDs for checksum computation and stream tracking.</summary>
@@ -203,10 +229,16 @@ public sealed partial class UdpProtocol : IProtocol
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Packet packet = parentField.Packet;
+
+        // The effect store is keyed by (packet id, buffer location of this layer's data); a slice outside the packet's
+        // buffers cannot be keyed, so ingest and replay would disagree: reject it.
         if (!parentField.TryGetEffectLayerKey(data, out int layerKey))
         {
             return ParseError.Custom(ProtocolName, "Parse data is not a slice of this packet's buffers.");
         }
+
+        // First parse or replay is decided only by the watermark (no caller-supplied mode flag). Only the outermost
+        // first-parse call raises the watermark (see _ParseNesting), so nested UDP layers of one packet are all first parses.
         bool isReplay = _IsReplay(packet.Id);
         bool raiseWatermark = !isReplay && _ParseNesting == 0;
         if (!isReplay)
@@ -214,6 +246,8 @@ public sealed partial class UdpProtocol : IProtocol
             _ParseNesting++;
         }
 
+        // The watermark is raised in finally, also after errors and exceptions, so a later parse of this id can never
+        // re-enter the first-parse path and draw a second stream index from the tracker.
         try
         {
             return _ParseBody(in parentField, data, in context, layerKey, isReplay);
@@ -263,18 +297,11 @@ public sealed partial class UdpProtocol : IProtocol
         ushort length = header.Length.Value;
         ushort checksum = header.Checksum.Value;
 
-        // Compute payload bounds (guard against negative)
+        // Compute payload bounds (guard against negative). The payload ends at the smaller of the UDP length field and the
+        // available data: the length field is attacker-controlled and may claim more than was captured, or (invalid) less
+        // than the header, and trailing bytes beyond it are not payload.
         int payloadLen = Math.Max(0, Math.Min(length - UdpHeader.HeaderSize, data.Length - UdpHeader.HeaderSize));
         ReadOnlyMemory<byte> payloadData = data.Slice(UdpHeader.HeaderSize, payloadLen);
-
-        // Validate checksum at parse time (needed for index group recording).
-        // The checksum status field itself is appended eagerly further below once the
-        // UDP container exists, so the validation result is computed exactly once.
-        bool checksumVerified = _VerifyChecksum && checksum != 0; // UDP checksum 0 means "not computed"
-        if (checksumVerified)
-        {
-            context.RecordGroupPresence(_UdpChecksumStatusGroupId);
-        }
 
         // Record optional payload group if payload exists
         if (payloadLen > 0)
@@ -284,8 +311,9 @@ public sealed partial class UdpProtocol : IProtocol
 
         // ── Stream tracking and checksum pre-computation ──────────────────────────────────────────
         // Read IP addresses from the per-protocol thread-local caches (populated by
-        // IPv4Protocol/IPv6Protocol during Parse). Falls back to sibling-walk navigation
-        // for edge cases (custom stacks, non-standard encapsulations).
+        // IPv4Protocol/IPv6Protocol during their eager Parse, which a replay runs again on its own thread). Falls back to sibling-walk navigation
+        // for edge cases (custom stacks, non-standard encapsulations). The caches avoid the field-tree walk and are the
+        // only source when no field tree is built.
         //
         // CallerProtocolId selects which cache to check first. In tunnel scenarios
         // (e.g., IPv6-over-IPv4 / 6in4), both caches may hold valid entries for the same
@@ -296,6 +324,9 @@ public sealed partial class UdpProtocol : IProtocol
         PacketId packetId = parentField.Packet.Id;
         bool callerIsIpv4 = context.Dispatch.HasDispatch && context.Dispatch.CallerProtocolId == _Ipv4ProtocolId;
         bool callerIsIpv6 = context.Dispatch.HasDispatch && context.Dispatch.CallerProtocolId == _Ipv6ProtocolId;
+
+        // Whether the enclosing layer is IPv6, set by the branches below. It decides how a zero checksum is read.
+        bool enclosedByIpv6 = false;
 
         if (!callerIsIpv6 && IPv4Protocol.TryGetCachedAddresses(packetId, out IPv4Address src4, out IPv4Address dst4))
         {
@@ -309,6 +340,7 @@ public sealed partial class UdpProtocol : IProtocol
         else if (!callerIsIpv4 && IPv6Protocol.TryGetCachedAddresses(packetId, out IPv6Address src6, out IPv6Address dst6))
         {
             // IPv6: build connection key
+            enclosedByIpv6 = true;
             UdpConnectionKey connKey = new(new UInt128(src6.High, src6.Low), new UInt128(dst6.High, dst6.Low), srcPort, dstPort);
             if (!_TryAppendUdpStream(in parentField, in context, in connKey, layerKey, isReplay))
             {
@@ -329,6 +361,7 @@ public sealed partial class UdpProtocol : IProtocol
             && _TryFindPreviousIpv6AddressesFallback(parentField, out IPv6Address fbSrc6, out IPv6Address fbDst6, in context))
         {
             // Fallback: IPv6 via sibling walk (edge case — cache miss)
+            enclosedByIpv6 = true;
             UdpConnectionKey connKey = new(new UInt128(fbSrc6.High, fbSrc6.Low), new UInt128(fbDst6.High, fbDst6.Low), srcPort, dstPort);
             if (!_TryAppendUdpStream(in parentField, in context, in connKey, layerKey, isReplay))
             {
@@ -344,14 +377,33 @@ public sealed partial class UdpProtocol : IProtocol
             context.RecordGroupPresence(_UdpErrorGroupId);
         }
 
-        // Summary and packetInfo use ZA.Lazy to defer string formatting.
+        // Checksum verification is decided here, after the enclosing layer is known (needed for index group recording; the
+        // status field itself is appended further below once the UDP container exists, so the result is computed once).
+        // A zero checksum means "not computed" over IPv4 (RFC 768), so there is nothing to verify and no status field. Over
+        // IPv6 the checksum is mandatory (RFC 8200 section 8.1) and a zero is invalid, so it is verified and reported as bad
+        // instead of being silently treated as "not computed".
+        bool checksumVerified = _VerifyChecksum && (checksum != 0 || enclosedByIpv6);
+        if (checksumVerified)
+        {
+            context.RecordGroupPresence(_UdpChecksumStatusGroupId);
+        }
 
+        // A length below the 8-byte header cannot be right (RFC 768). It is reported by name instead of being accepted as
+        // "no payload" without a sign.
+        bool lengthBelowHeader = length < UdpHeader.HeaderSize;
+        if (lengthBelowHeader)
+        {
+            context.RecordGroupPresence(_UdpErrorGroupId);
+        }
+
+        // Packet info uses ZA.Lazy: only the value-typed ports are captured and the text is built if the info column is read.
         // Set packet info so the info column reflects the transport layer ports.
         // Higher-level protocols (DNS, HTTP, etc.) can overwrite this later.
         parentField.SetPacketInfo(ZA.Lazy("Src Port: ", srcPort, ", Dst Port: ", dstPort));
 
-        // Store the full UDP datagram (header + payload) in the field value.
-        // The CustomRepresentation still shows "8 bytes" (the header size) to the user.
+        // Store the full UDP datagram (header + payload) in the field value (a slice, no copy).
+        // The CustomRepresentation still shows "8 bytes" (the header size) to the user; it is a constant string, so
+        // creating the LazyString allocates nothing.
         FieldValue containerValue = FieldValue.NewBytes(data)
             .WithCustomRepresentation(new LazyString("8 bytes"));
         MutField udpContainer = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, "User Datagram Protocol, Src Port: ", srcPort, ", Dst Port: ", dstPort);
@@ -380,12 +432,21 @@ public sealed partial class UdpProtocol : IProtocol
 
         udpContainer.Append(_LengthFieldId, FieldValue.NewU64(length));
 
+        if (lengthBelowHeader)
+        {
+            parentField.Append(_BadLengthFieldId,
+                FieldValue.NewString("UDP length is smaller than the 8-byte UDP header"));
+        }
+
         if (payloadLen > 0)
         {
             udpContainer.Append(_PayloadFieldId, FieldValue.NewBytes(payloadData));
         }
 
-        // Dispatch by port on parentField (sibling dispatch — reuse payloadData)
+        // Dispatch by port on parentField (sibling dispatch — reuse payloadData, no copy). The lower port is tried first
+        // (the server side is usually the well-known, lower port); the higher port is only tried if the lower one consumed
+        // nothing. Unlike TCP there is no connection state, hence no learned server port, no reassembly and no heuristic
+        // table, and the dispatch is stateless, so replays need no recorded dispatch decision.
         if (payloadLen > 0)
         {
             ushort lowPort = Math.Min(srcPort, dstPort);
@@ -407,19 +468,35 @@ public sealed partial class UdpProtocol : IProtocol
             }
         }
 
-        return Math.Min(length, data.Length);
+        // Consumed bytes: the declared UDP length, capped to what was captured, but never less than the header that was read:
+        // a bogus length below 8 must not be reported as fewer consumed bytes than the header itself occupies.
+        return Math.Min(Math.Max((int)length, UdpHeader.HeaderSize), data.Length);
     }
 
     /// <summary>
-    /// Validates the UDP checksum from cached IP addresses first, then sibling walk on Build.
+    /// Validates the UDP checksum (RFC 768: ones' complement sum over the pseudo-header, header and data, which is zero
+    /// for a valid datagram). The IP addresses come from the per-thread address caches first, choosing the cache that
+    /// matches the calling IP layer (tunnels can leave both filled for one packet); only when no cache matches is the
+    /// field tree walked backwards.
     /// Returns <see langword="true"/> if valid, <see langword="false"/> if invalid,
     /// or <see langword="null"/> if no IP layer was found.
     /// </summary>
+    /// <param name="container">The UDP container, used for the packet id and the sibling walk.</param>
+    /// <param name="udpSpan">The datagram bytes starting at the UDP header.</param>
+    /// <param name="udpLength">The UDP length field; used for the pseudo-header and to bound the summed bytes.</param>
+    /// <param name="context">Parse context carrying the calling IP protocol.</param>
+    /// <returns>The validation result, or <see langword="null"/> when the IP addresses cannot be determined.</returns>
+    /// <remarks>
+    /// Summing stops at the declared length (capped to the captured bytes). A datagram truncated by the capture
+    /// therefore sums fewer bytes than the pseudo-header announces and is reported as bad, not as unverified.
+    /// </remarks>
     private bool? _ValidateChecksum(
         in MutField container, ReadOnlySpan<byte> udpSpan, ushort udpLength, in ParseContext context)
     {
         int segmentLen = Math.Min(udpLength, udpSpan.Length);
 
+        // Same cache selection rule as in _ParseBody: the calling IP layer decides which cache is consulted first, so the
+        // inner addresses of a tunnel are used instead of the outer ones.
         PacketId packetId = container.Packet.Id;
         bool callerIsIpv4 = context.Dispatch.HasDispatch && context.Dispatch.CallerProtocolId == _Ipv4ProtocolId;
         bool callerIsIpv6 = context.Dispatch.HasDispatch && context.Dispatch.CallerProtocolId == _Ipv6ProtocolId;
@@ -445,6 +522,14 @@ public sealed partial class UdpProtocol : IProtocol
             return null;
         }
 
+        // Over IPv6 a zero checksum is invalid (RFC 8200 section 8.1; only IPv4 allows "not computed"), so it is bad without
+        // summing: a coincidental sum of zero must not turn it into [Good].
+        if (ipv6.HasValue && BinaryPrimitives.ReadUInt16BigEndian(udpSpan[6..]) == 0)
+        {
+            return false;
+        }
+
+        // Pseudo-header sum with the UDP length field (not the captured length), then fold in the captured datagram.
         ulong pseudoSum;
         if (ipv4.HasValue)
         {
@@ -487,16 +572,45 @@ public sealed partial class UdpProtocol : IProtocol
                 return false;
             }
 
+            if (recorded.IsLimitReached)
+            {
+                _AppendStreamLimit(in parentField, in context);
+                return true;
+            }
+
             parentField.Append(_StreamFieldId, FieldValue.NewU64(recorded.StreamIndex));
             context.RecordGroupPresence(_UdpStreamGroupId);
             return true;
         }
 
-        StreamEffect effect = new(_StreamTracker.GetOrCreateStreamIndex(in connKey));
+        // The setting is a ulong while the tracker compares against a Dictionary count (int), so values from int.MaxValue up
+        // are clamped instead of overflowing the cast.
+        int maxStreams = _MaxTrackedStreams >= int.MaxValue
+            ? int.MaxValue
+            : (int)_MaxTrackedStreams;
+
+        // A full table is an expected failure: the datagram is still parsed, but it gets no stream index. The outcome is
+        // recorded like an index, so a replay reproduces it even if the table had room later.
+        if (!_StreamTracker.TryGetOrCreateStreamIndex(in connKey, maxStreams, out uint streamIndex))
+        {
+            _AppendStreamLimit(in parentField, in context);
+            _RecordStreamEffect(parentField.Packet.Id, layerKey, StreamEffect.LimitReached);
+            return true;
+        }
+
+        StreamEffect effect = new(streamIndex);
         parentField.Append(_StreamFieldId, FieldValue.NewU64(effect.StreamIndex));
         context.RecordGroupPresence(_UdpStreamGroupId);
         _RecordStreamEffect(parentField.Packet.Id, layerKey, effect);
         return true;
+    }
+
+    /// <summary>Reports that the stream table is full: names the setting, so the user knows which limit was hit.</summary>
+    private void _AppendStreamLimit(in MutField parentField, in ParseContext context)
+    {
+        parentField.Append(_StreamLimitFieldId, FieldValue.NewString(
+            "UDP stream table is full (setting udp.max_tracked_streams); no stream index assigned"));
+        context.RecordGroupPresence(_UdpErrorGroupId);
     }
 
     #endregion
@@ -505,7 +619,8 @@ public sealed partial class UdpProtocol : IProtocol
 
     /// <summary>
     /// Fallback: walks previous siblings to find IPv4 addresses when the
-    /// per-protocol thread-local caches do not contain cached data.
+    /// per-protocol thread-local caches do not contain cached data. Walking from the last sibling finds the
+    /// immediately enclosing IP layer, which is the correct one in tunnels. Requires a field tree.
     /// </summary>
     private bool _TryFindPreviousIpAddressesFallback(
         in MutField parentField, out IPv4Address src, out IPv4Address dst, in ParseContext context)

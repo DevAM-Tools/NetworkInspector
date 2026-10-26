@@ -23,6 +23,14 @@ namespace NetworkInspector.Sources.Pcapng;
 /// A stream that is neither a <see cref="MemoryStream"/> nor a <see cref="BufferedStream"/> is read through a
 /// <see cref="BufferedStream"/> of <see cref="StreamBufferSize"/> bytes, so the small header reads do not become one
 /// system call each. With <c>leaveOpen = true</c> the buffer may have read ahead of the last parsed block.
+/// <para>
+/// A stream has no stable file position and cannot be re-read, so every <see cref="FrameReadErrorEventArgs"/> of this
+/// source carries <c>FileOffset = -1</c>, and a framing error (a block length that cannot be trusted, a truncated block)
+/// ends the stream: the start of the next block cannot be found without trusting the length. A well-framed packet block
+/// that is unusable is skipped and reading continues. <b>Thread-safety:</b> <see cref="NextFrame"/> is single-threaded
+/// and all parser state is unsynchronised; there is no random access, so unlike <see cref="PcapngSource"/> the sections
+/// and the interface table need no lock-free publication.
+/// </para>
 /// </remarks>
 public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
 {
@@ -48,10 +56,9 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     private bool _Initialized;
 
     /// <summary>
-    /// Whether the stream is exhausted or stopped. Accessed from multiple threads
-    /// (the consumer's <c>NextFrame</c> caller and any thread invoking <c>Stop</c>/<c>Dispose</c>);
-    /// every read uses <see cref="System.Threading.Volatile"/> Read and every write uses
-    /// <see cref="System.Threading.Volatile"/> Write.
+    /// Whether the stream is exhausted: end of data, a fatal format error, a failed initialization, or a skip in strict
+    /// mode. Set on the <c>NextFrame</c> thread only; once set, <see cref="NextFrame"/> returns <c>null</c>. Declared
+    /// <c>volatile</c> like the other lifecycle flags (SOURCE_GUIDE §13.2), so plain reads and writes are acquire/release.
     /// </summary>
     private volatile bool _Exhausted;
 
@@ -71,7 +78,10 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <summary>True if the file is legacy PCAP, false for PCAPNG.</summary>
     private bool _IsLegacy;
 
-    /// <summary>PCAPNG sections (one per SHB encountered).</summary>
+    /// <summary>
+    /// PCAPNG sections (one per SHB encountered); the last one is current. A plain list: only the <c>NextFrame</c> thread
+    /// touches it (the file source needs lock-free stores because <c>FrameById</c> reads its sections concurrently).
+    /// </summary>
     private readonly List<SectionInfo> _Sections = [];
 
     /// <summary>Legacy PCAP file info (null for PCAPNG).</summary>
@@ -84,15 +94,20 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <summary>Source ID assigned during Start().</summary>
     private FrameSourceId _SourceId;
 
-    /// <summary>Registry for interface registration.</summary>
-    private FrameInterfaceRegistry? _Registry;
+    /// <summary>
+    /// Registry for interface registration. Cleared by <see cref="Dispose"/> from any thread, hence volatile (the same
+    /// publication rule as <see cref="PcapngSource"/>); every operation reads it once into a local and uses that snapshot.
+    /// </summary>
+    private volatile FrameInterfaceRegistry? _Registry;
 
     /// <summary>Registered interfaces by (section index, interface index); same table as <see cref="PcapngSource"/>.</summary>
     private readonly PcapInterfaceTable _Interfaces = new();
 
     /// <summary>
-    /// Reusable buffer for block reads. Grown as needed.
-    /// Avoids repeated allocations for small blocks.
+    /// Reusable buffer for block reads: one block body is read into it, parsed in place, and its packet bytes are
+    /// copied out into the frame, so the steady state allocates only the frame data. Starts at 4 KiB and grows (never
+    /// shrinks) in <see cref="_EnsureBuffer"/>, up to <see cref="PcapConstants.MaxBlockSize"/>. Safe to reuse because the
+    /// source is single-threaded and no span into it outlives one loop iteration.
     /// </summary>
     private byte[] _BlockBuffer = new byte[4096];
 
@@ -100,7 +115,8 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     private readonly byte[] _MagicBuf = new byte[4];
 
     /// <summary>
-    /// Reusable 8-byte buffer for PCAPNG block header reads (avoids stackalloc in loop).
+    /// Reusable 8-byte buffer for PCAPNG block header reads: a field instead of a <c>stackalloc</c> inside the
+    /// read loop (a <c>stackalloc</c> in a loop grows the stack frame on every iteration).
     /// </summary>
     private readonly byte[] _PcapNgHeaderBuf = new byte[8];
 
@@ -110,14 +126,24 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     #endregion
 
     #region Error tolerance statistics
+
+    /// <summary>Frames returned by <see cref="NextFrame"/>; volatile so statistics readers on any thread see it.</summary>
     private volatile int _ReadFrameCount;
+
+    /// <summary>Skipped frames and blocks; saturates at <see cref="int.MaxValue"/> instead of wrapping.</summary>
     private readonly SaturatingVolatileCounter _SkippedFrameCount = new();
+
+    /// <summary>Reported errors; saturates at <see cref="int.MaxValue"/> instead of wrapping.</summary>
     private readonly SaturatingVolatileCounter _ErrorCount = new();
 
     #endregion
 
     #region Construction
 
+    /// <summary>
+    /// Creates the source. A stream that is neither a <see cref="MemoryStream"/> nor a <see cref="BufferedStream"/> is
+    /// wrapped, so the many 4 to 16 byte header reads are served from a buffer.
+    /// </summary>
     private PcapngStreamSource(Stream stream, string uiName, bool leaveOpen, PcapngSourceOptions options)
     {
         // Header reads are 4 to 16 bytes; on an unbuffered stream each would be a system call.
@@ -134,7 +160,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <see cref="NextFrame"/> (after <see cref="Start"/>).
     /// </summary>
     /// <param name="stream">A readable stream containing PCAPNG or legacy PCAP data.</param>
-    /// <param name="uiName">Display name shown in the UI.</param>
+    /// <param name="uiName">Display name shown in the UI. Must not be null (as for <see cref="PcapngSource.FromData"/>).</param>
     /// <param name="leaveOpen">
     /// If <c>true</c>, the stream is not disposed when this source is disposed.
     /// </param>
@@ -144,12 +170,16 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// are ignored.
     /// </param>
     /// <returns>A new PcapngStreamSource ready for <see cref="Start"/>.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> or <paramref name="uiName"/> is null.</exception>
     /// <exception cref="ArgumentException"><paramref name="stream"/> is not readable.</exception>
     public static PcapngStreamSource FromStream(
         Stream stream, string uiName = "Stream", bool leaveOpen = false, PcapngSourceOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(stream);
+
+        // A null name used to be stored and surface later (UiName is a non-nullable property); PcapngSource.FromData
+        // rejects it at the factory, and so does this one.
+        ArgumentNullException.ThrowIfNull(uiName);
         if (!stream.CanRead)
         {
             throw new ArgumentException("Stream must be readable.", nameof(stream));
@@ -210,7 +240,12 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <remarks>
     /// This method is <b>not</b> thread-safe. It must be called from a single thread only.
     /// All mutable state (stream position, section list, frame index) is accessed without synchronization.
+    /// A <see cref="FrameSkipped"/> handler runs on this thread inside the call.
     /// </remarks>
+    /// <exception cref="ObjectDisposedException">The source was disposed.</exception>
+    /// <exception cref="InvalidOperationException"><see cref="Start"/> has not been called, or the frame ids are used up.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was canceled.</exception>
+    /// <exception cref="PcapException">The first bytes of the stream are not a recognised capture format.</exception>
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_Disposed != 0, this);
@@ -275,8 +310,9 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
         _Registry = null;
         if (!_LeaveOpen)
         {
-            // Wrapped so that a stream disposal failure does not prevent GC.SuppressFinalize from running.
-            // Disposing the BufferedStream wrapper also disposes the caller's stream.
+            // Only an ObjectDisposedException (the caller's stream was already disposed) is swallowed, so Dispose stays
+            // idempotent; any other failure of the stream propagates. Disposing the BufferedStream wrapper also
+            // disposes the caller's stream.
             try
             {
                 _Stream.Dispose();
@@ -357,7 +393,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private bool _InitializeLegacyPcap(ReadOnlySpan<byte> detectionBytes, FormatDetectionResult detection)
     {
-        // Need 24 bytes total; we have 12
+        // Need 24 bytes total; we have 12. The shared block buffer holds the whole header (never null for 24 bytes).
         byte[]? headerBuffer = _EnsureBuffer(PcapConstants.PcapGlobalHeaderSize);
         if (headerBuffer is null)
         {
@@ -374,6 +410,8 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
         bool swap = detection.ByteSwapped;
         EndianReader reader = new(swap);
 
+        // Global header layout: magic(4) version(2+2) thiszone(4) sigfigs(4) snaplen(4 at offset 16) network(4 at offset 20).
+        // The snaplen stays as declared (0 = not declared): TryValidateLegacyInclLen caps incl_len with it per record.
         uint rawNetwork = reader.ReadU32(headerBuffer.AsSpan(20));
         uint rawSnapLen = reader.ReadU32(headerBuffer.AsSpan(16));
 
@@ -454,11 +492,14 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
                 continue;
             }
 
-            // Non-SHB blocks: use current section's byte order
+            // Non-SHB blocks: use current section's byte order. Every check below that fails ends the stream instead of
+            // skipping the block: the length field decides where the next block starts, and a stream cannot seek back to
+            // resynchronise. The same checks guard the file scanner (it, too, stops at an untrustworthy length).
             if (_Sections.Count == 0)
             {
                 // A data block arrived before any Section Header Block, which means
-                // the stream is corrupt.  Report the skip so ErrorCount is accurate.
+                // the stream is corrupt.  Report the skip so ErrorCount is accurate. (Defensive: unreachable after a
+                // successful initialization, which always adds the first section.)
                 _HandleSkip(new FrameReadErrorEventArgs
                 {
                     FrameIndex = _FrameIndex,
@@ -502,11 +543,11 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
                 return null;
             }
 
-            // Guard: uint → int cast is undefined for blockLength > int.MaxValue and produces
-            // a negative bodySize that bypasses _EnsureBuffer's cap check, causing
-            // blockBuffer.AsSpan(0, bodySize) to throw ArgumentOutOfRangeException.
-            // Use an unsigned comparison to cover both the int-overflow range and valid-but-
-            // oversized values that _EnsureBuffer would otherwise handle via its null return.
+            // Guard: an unchecked uint → int cast of blockLength > int.MaxValue wraps to a negative bodySize, which
+            // would make blockBuffer.AsSpan(0, bodySize) throw ArgumentOutOfRangeException. The cap is checked on the
+            // unsigned value first, so the cast below is exact; _EnsureBuffer repeats the check on the int as a second
+            // line of defence. MaxBlockSize is the shared limit of the file scanner and this reader (constant, see its
+            // definition): a block one reader accepts must not be fatal for the other.
             if (blockLength > PcapConstants.MaxBlockSize)
             {
                 _HandleSkip(new FrameReadErrorEventArgs
@@ -521,7 +562,8 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
             }
 
             // Read the remaining block body: blockLength - 8 (header) bytes
-            // (body includes the trailing 4-byte block_total_length copy)
+            // (body includes the trailing 4-byte block_total_length copy). The declared length sizes the buffer before
+            // any body byte arrives, so the cap above bounds what a hostile 8-byte header can make this source allocate.
             int bodySize = (int)blockLength - 8;
             byte[]? blockBuffer = _EnsureBuffer(bodySize);
             if (blockBuffer is null)
@@ -565,6 +607,11 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
                 return null;
             }
 
+            // The block is complete and its framing is valid, so unusable content is skipped (reported) and reading
+            // continues with the next block. The three packet cases share one shape: a parsed packet whose Frame could
+            // not be created was already reported by _CreateTrackedFrame (frame == null, and in strict mode the stream is
+            // exhausted); a packet the parser rejected is reported here. Skips never end the loop: a null result of
+            // NextFrame means end of stream.
             switch (blockType)
             {
                 case PcapConstants.BlockTypeIDB:
@@ -692,8 +739,8 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
             return false;
         }
 
-        // Guard: uint → int cast is undefined for blockLength > int.MaxValue and produces
-        // a negative remaining that bypasses _EnsureBuffer's cap check.
+        // Guard: an unchecked uint → int cast of blockLength > int.MaxValue wraps to a negative size. The cap is checked
+        // on the unsigned value first (same limit and reason as for every other block), so the casts below are exact.
         if (blockLength > PcapConstants.MaxBlockSize)
         {
             return false;
@@ -708,6 +755,8 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
             return false;
         }
 
+        // The 12 bytes already consumed from the stream are put back in front of the body so the shared parser sees
+        // the complete block, exactly as the file scanner does.
         headerBytes.CopyTo(shbBuffer);
         magicBytes.CopyTo(shbBuffer.AsSpan(8));
 
@@ -737,12 +786,16 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
             return false;
         }
 
+        // Informational only: just the file source searches sections by start offset. 0 when the stream cannot report
+        // a position.
         long startOffset = 0;
         if (_Stream.CanSeek)
         {
             startOffset = _Stream.Position - blockLength;
         }
 
+        // optionData aliases the reused block buffer; ParseShbOptions decodes the strings (copies) before the buffer
+        // is reused by the next block.
         SectionInfo section = new(swap, sectionLength, startOffset);
         if (!optionData.IsEmpty)
         {
@@ -772,6 +825,24 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
                 blockLength,
                 out IdbFields idb))
         {
+            // Same rule as the file scanner (IncrementalScanner): a malformed IDB keeps its interface index and is reported,
+            // otherwise every later interface of the section would shift by one and its packets would be attributed to the
+            // wrong interface.
+            InterfaceInfo placeholder = InterfaceInfo.CreateMalformed();
+            int placeholderIndex = section.AddInterface(placeholder);
+            if (placeholderIndex >= 0)
+            {
+                _RegisterPcapNgInterface(section, (ushort)(_Sections.Count - 1), (ushort)placeholderIndex, placeholder);
+                _HandleSkip(new FrameReadErrorEventArgs
+                {
+                    FrameIndex = _FrameIndex,
+                    FileOffset = -1,
+                    Kind = FrameReadErrorKind.MalformedHeader,
+                    Message = Invariant(
+                        $"Interface Description Block {placeholderIndex} is malformed; its packets are skipped."),
+                });
+            }
+
             return;
         }
 
@@ -948,7 +1019,9 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
         }
 
         // Validated: inclLen <= MaxBlockSize, so the cast is exact and the allocation bounded. The bytes go straight
-        // into the frame buffer (a slab region when slabs are on); _TryReadExact fills every byte or reports EOF.
+        // into the frame buffer (a slab region when slabs are on), saving the copy out of the shared block buffer that the
+        // PCAPNG path needs. The array is uninitialized (no zeroing pass): _TryReadExact fills every byte or reports EOF,
+        // and on EOF the buffer is dropped without being exposed.
         Memory<byte> frameData = _Slabs is null ? GC.AllocateUninitializedArray<byte>((int)inclLen) : _Slabs.Allocate((int)inclLen);
         if (!_TryReadExact(frameData.Span))
         {
@@ -977,13 +1050,22 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private void _RegisterPcapNgInterface(SectionInfo section, ushort sectionIndex, ushort localInterfaceId, InterfaceInfo info)
     {
-        if (_Registry is null || _Interfaces.Contains(sectionIndex, localInterfaceId))
+        // One read: a concurrent Dispose nulls the field, and the check and the Register call must see the same value.
+        FrameInterfaceRegistry? registry = _Registry;
+        if (registry is null || _Interfaces.Contains(sectionIndex, localInterfaceId))
         {
             return;
         }
 
+        // A malformed IDB takes its position in the table and registers nothing (its packets are skipped by the parser).
+        if (info.IsMalformed)
+        {
+            _ = _Interfaces.TryAddGap(sectionIndex, localInterfaceId);
+            return;
+        }
+
         string name = info.Name is { } ifName && NameValidation.IsValidUiName(ifName) ? ifName : $"Interface {localInterfaceId}";
-        FrameInterfaceId id = _Registry.Register(
+        FrameInterfaceId id = registry.Register(
             _SourceId, name, info.Description, info.LinkType, PcapInterfaceProperties.ForPcapng(info, section));
         _ = _Interfaces.TryAdd(sectionIndex, localInterfaceId, new PcapInterfaceEntry(id, info.LinkType));
     }
@@ -993,12 +1075,14 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// </summary>
     private void _RegisterLegacyInterface()
     {
-        if (_Registry is null || _LegacyInfo is null || _Interfaces.Contains(0, 0))
+        // One read, as in _RegisterPcapNgInterface.
+        FrameInterfaceRegistry? registry = _Registry;
+        if (registry is null || _LegacyInfo is null || _Interfaces.Contains(0, 0))
         {
             return;
         }
 
-        FrameInterfaceId id = _Registry.Register(
+        FrameInterfaceId id = registry.Register(
             _SourceId, "Default Interface", null, _LegacyInfo.LinkType, PcapInterfaceProperties.ForLegacy(_LegacyInfo));
         _ = _Interfaces.TryAdd(0, 0, new PcapInterfaceEntry(id, _LegacyInfo.LinkType));
     }
@@ -1032,12 +1116,23 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     /// <summary>
     /// Creates a frame from resolved data, tracking statistics.
-    /// Returns null if interface resolution or frame creation fails.
+    /// Returns null if interface resolution or frame creation fails. A frame that fails here still consumes its frame
+    /// id, as in the file source (where the scanner has already indexed the frame before its interface is resolved).
     /// </summary>
+    /// <exception cref="InvalidOperationException">The next frame id would exceed the valid id range.</exception>
     private Frame? _CreateTrackedFrame(ushort sectionIndex, ushort interfaceId, long timestampNanos, ReadOnlyMemory<byte> frameData)
     {
         // Enforce maximum frame count — FrameId is array-index-based
         ArrayIndexIdRange.ThrowIfInvalidNextIndex(_FrameIndex, "frame");
+
+        // One read of the registry: Dispose can null it on another thread at any time, and Frame.Create below must get the
+        // value this check saw. A null snapshot means the source was disposed meanwhile; the read ends quietly.
+        FrameInterfaceRegistry? registry = _Registry;
+        if (registry is null)
+        {
+            _Exhausted = true;
+            return null;
+        }
 
         if (!_Interfaces.TryGet(sectionIndex, interfaceId, out PcapInterfaceEntry? iface))
         {
@@ -1059,7 +1154,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
             frameData,
             iface.LinkType,
             iface.Id,
-            _Registry!);
+            registry);
 
         if (result.IsSuccess)
         {
@@ -1088,6 +1183,8 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool _TryReadExact(Span<byte> buffer)
     {
+        // A single Stream.Read may return fewer bytes than requested (pipes, sockets, a BufferedStream refill), so loop
+        // until the buffer is full; only a read of 0 means the end of the stream.
         int totalRead = 0;
         while (totalRead < buffer.Length)
         {
@@ -1108,9 +1205,17 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// When <c>null</c> is returned the caller must skip the oversized block
     /// via <see cref="_HandleSkip"/> and mark the stream exhausted.
     /// </summary>
+    /// <remarks>
+    /// Limit: <see cref="PcapConstants.MaxBlockSize"/> (a constant shared with the file scanner). Threat: the block length
+    /// is read from an untrusted stream and sizes this allocation before any body byte is read, so an 8-byte header
+    /// could otherwise demand gigabytes. Mitigation: refuse above the cap (null, the caller reports and exhausts).
+    /// Residual: a stream can still make the source allocate, and keep for its lifetime, one buffer of up to the cap
+    /// (about 128 MiB), because the buffer only grows.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private byte[]? _EnsureBuffer(int minSize)
     {
+        // The unsigned comparison also rejects a negative size (a wrapped cast) as "above the cap".
         if ((uint)minSize > PcapConstants.MaxBlockSize)
         {
             // Above the shared block cap. The caller exhausts the stream
@@ -1120,7 +1225,8 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         if (_BlockBuffer.Length < minSize)
         {
-            // Grow to the next power of two or the requested size, whichever is larger.
+            // Grow geometrically (double the current size) or to the requested size, whichever is larger, so a run of
+            // slowly growing blocks does not reallocate for each one; never beyond the cap.
             int cap = (int)PcapConstants.MaxBlockSize;
             int newSize = Math.Min(Math.Max(minSize, _BlockBuffer.Length * 2), cap);
             _BlockBuffer = new byte[newSize];

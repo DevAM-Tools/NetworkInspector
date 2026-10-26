@@ -323,6 +323,11 @@ session.Restart(registry =>
 - The new ingest value cache and packet index are built before anything changes. A field the new stack lacks
   throws `ValueCacheUnknownField` and leaves the session as it was.
 - A frame that cannot be re-read throws `FrameUnavailable` and leaves queries disabled (fail closed).
+- The replaced stack is disposed as soon as it can safely be: right after the swap when no read is parsing on it,
+  otherwise by the last read that ends (a lease counter, no lock; `Restart` does not wait for those reads). A stack
+  the session created is never kept until `Shutdown`. A `Packet` handed out before the restart keeps its
+  materialised fields; its still unmaterialised lazy containers may report a failed population (error child) after
+  the old stack was disposed, so call `MaterializeAll` first or re-read after `OnStackChanged`.
 - The factory must not call `Shutdown`, `Restart`, `Dispose`, or `TryStart`.
 
 ## TryUnsubscribe vs Shutdown
@@ -333,11 +338,14 @@ session.Restart(registry =>
 - **Listener job:** cancels the slot, calls `OnUnsubscribed`, and removes it.
 - **User job:** cancels its `CancellationToken`.
 
-`Shutdown()` cancels all sources, listeners, and jobs, waits for them, and disposes everything.
+`Shutdown()` cancels all sources, listeners, and jobs (user jobs from `TryAddJob` included), waits for them, and
+disposes everything. With a timeout, the sources and the user jobs share one time budget; a registration that
+races with `Shutdown` is either completed before it (and cancelled with the rest) or refused with `InvalidPhase`.
 
 `FrameSourceInfo.Stop()` and `ListenerInfo.Unsubscribe()` delegate to `TryUnsubscribe`. It returns `false` with a
 `SessionFailure` for foreign jobs, terminal jobs, or during shutdown; a source that has not started can be removed
-in `Idle`. `TryRemoveJob` removes a terminal job (Completed, Cancelled, Failed) and throws for a running one.
+in `Idle`. `TryRemoveJob` removes a terminal job (Completed, Cancelled, Failed) and returns `false` with
+`JobStillRunning` for a pending or running one.
 
 ## Error Handling
 
@@ -355,10 +363,22 @@ All public `Session` methods are thread-safe. First parses are serialized under 
 and get dense ids; re-parsing an announced id takes no lock. Counters use `Interlocked`, phase and flags use
 `Volatile`. Listeners and value caches may be added in `Idle`, `Running`, or `Stopped`; user jobs until `Shutdown`
 starts; frame sources only in `Idle`. `Shutdown` waits for a running restart, and later `Shutdown` callers wait for
-the first one.
+the first one. The registries (sources, listeners, value caches, user jobs) are copy-on-write snapshots that the
+per-frame paths read without a lock; their writers, `TryStart`, and the shutdown flag serialise on one short internal
+lock, so concurrent adds lose no entry, exactly one `TryStart` caller wins, and a source is either started or refused.
+`GetJobs()`, `GetListeners()`, `GetFrameSources()`, and `GetValueCaches()` return read-only views of such a snapshot
+(not the snapshot array); a view never changes, a later change gives a new one.
+
+A user job (`TryAddJob`) must observe its token and must not call `Shutdown`, `Restart`, or `WaitForCompletion` once
+shutdown has begun: `Shutdown` waits for the job while it holds the lifecycle lock those calls need.
 
 Each listener filter is single-threaded: `Matching` reads and restart re-binding share that listener's filter gate,
 `All` reads do not take it.
+
+Stack lifetime: every read that parses outside the parse lock holds a lease on the stack it parses with (one
+interlocked increment and decrement, no lock, no allocation). `Shutdown` waits for outstanding leases within its time
+budget and then disposes the stack anyway. Errors reported while a replaced stack was disposed are thrown by `Shutdown`
+(once) with the other cleanup errors.
 
 ## Learn More
 

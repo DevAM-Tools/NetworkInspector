@@ -106,7 +106,13 @@ default (`"CAN 2"`, `"Ethernet 1"`) is written as an AppText channel name.
 - Not thread-safe; call `OnFrame()` and `OnFinish()` from one thread.
 - Link types without a BLF mapping (for example raw IP or loopback) are skipped and counted in `SkippedCount`.
 - On a non-seekable target (stdout, a pipe) the header statistics (object count, end date) cannot be patched.
-- The file is created lazily on the first frame.
+- On a seekable stream that already holds data, the BLF file starts at the stream position when the first frame
+  arrives, and the header patch goes back to that position (bytes before it stay untouched).
+- The file is created lazily on the first frame. A file that cannot be created is reported through `ItemSkipped` and
+  counted as an error; `OnFrame()` returns `false` and does not throw.
+- LIN data frames: the DLC is written as the number of data bytes (at most 8, and at most the bytes present in a
+  truncated capture). A frame that states no checksum model is written as model 0 (classic), whereas the ASC exporter
+  writes `enhanced` for it.
 
 ## Links
 

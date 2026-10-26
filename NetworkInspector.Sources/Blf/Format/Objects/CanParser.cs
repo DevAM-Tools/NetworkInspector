@@ -6,9 +6,10 @@ namespace NetworkInspector.Sources.Blf.Format.Objects;
 /// Parses BLF CAN, CAN FD, and CAN XL object payloads into SocketCAN frame bytes.
 ///
 /// Output format is SocketCAN for classic CAN (8 bytes plus the captured data length, 0–8).
-/// DLC 8 is 16 bytes. An RTR frame is 8 bytes: byte 4 still holds the DLC and there is no data tail.
+/// DLC 8 is 16 bytes. An RTR frame is 8 bytes: byte 4 still holds the requested length and there is no data tail.
+/// The frame is deliberately not padded to the 16-byte <c>can_frame</c> size: the data tail is stored at its captured length.
 /// <code>
-///   id(4 BE) + dlc(1) + fd_flags(1=0) + reserved(2) + data(0–8)
+///   id(4 BE) + len(1, payload byte count 0–8) + zero(2) + len8_dlc(1, bus DLC 9–15, otherwise 0) + data(0–8)
 /// </code>
 /// SocketCAN FD for CAN FD (8 + actual data length, not padded to 64):
 /// <code>
@@ -32,7 +33,20 @@ namespace NetworkInspector.Sources.Blf.Format.Objects;
 ///   <item>Type 139 (<c>CAN_XL_CHANNEL_FRAME</c>) — CAN XL, 104-byte header + payload</item>
 /// </list>
 /// </summary>
-/// <remarks>Not thread-safe. Caller synchronisation required.</remarks>
+/// <remarks>
+/// <para>
+/// Stateless and thread-safe; the only mutable object is the optional <see cref="FrameSlabAllocator"/> argument, which is
+/// not thread-safe and must be confined to the calling reader thread.
+/// </para>
+/// <para>
+/// Every parser exists twice. The overload with a <see cref="FrameSlabAllocator"/> carves the frame bytes out of a shared
+/// slab (one array per slab instead of one per frame; sequential reads). The <c>out byte[]</c> overload is the same code
+/// path with no allocator, so it allocates exactly one array per frame (random access, tests); the two cannot diverge.
+/// Fixed header fields are read with sequential little-endian reads, never by overlaying a C# struct, so the result does
+/// not depend on host endianness or struct padding. All lengths and counts come from the file and are bounded by the
+/// payload that was actually read before any buffer is sized from them.
+/// </para>
+/// </remarks>
 internal static class CanParser
 {
     #region Constants
@@ -71,7 +85,10 @@ internal static class CanParser
     /// </summary>
     private const int _CanFdError64HeaderSize = 44;
 
-    /// <summary>SocketCAN error-frame size. Classic data frames are 8 plus the captured length, not this constant.</summary>
+    /// <summary>
+    /// SocketCAN error-frame size (the full 16-byte <c>can_frame</c> layout, zero-filled). Classic data frames are 8 plus
+    /// the captured length, not this constant.
+    /// </summary>
     private const int _SocketCanClassicSize = 16;
 
     /// <summary>SocketCAN FD frame header size (before data).</summary>
@@ -80,7 +97,10 @@ internal static class CanParser
     /// <summary>Classic CAN maximum data length.</summary>
     private const int _CanMaxDataLength = 8;
 
-    /// <summary>CAN FD maximum data length.</summary>
+    /// <summary>
+    /// CAN FD maximum data length (a fact of the CAN FD format). Also the cap on a CAN FD data copy, so a corrupt length field
+    /// cannot produce an FD frame larger than the format allows.
+    /// </summary>
     private const int _CanFdMaxDataLength = 64;
 
     #endregion
@@ -99,8 +119,13 @@ internal static class CanParser
     ///   [8..16) data (8 bytes on the object; the SocketCAN buffer keeps only the captured length)
     /// </code>
     /// The returned frame is 8 bytes plus the data length for that DLC. RTR keeps the DLC in byte 4
-    /// and omits the data tail, so the frame is 8 bytes.
+    /// and omits the data tail, so the frame is 8 bytes. A bus DLC of 9–15 (data length 8) is kept in byte 7 so
+    /// writers can restore it.
     /// </summary>
+    /// <param name="payload">BLF object payload; at least 16 bytes.</param>
+    /// <param name="frame">SocketCAN classic bytes on success; empty on failure.</param>
+    /// <param name="channel">Channel from the header (u16 LE at offset 0).</param>
+    /// <returns><see langword="true"/> when the payload held the full 16-byte message; otherwise <see langword="false"/>.</returns>
     internal static bool TryParseCanMessage(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
         => FrameSlabAllocator.ToArray(TryParseCanMessage(payload, null, out ReadOnlyMemory<byte> memory, out channel), memory, out frame);
@@ -140,6 +165,8 @@ internal static class CanParser
     ///   [2..4) length  (u16 LE, always 0)
     ///   [4..8) reserved (u32 LE)
     /// </code>
+    /// The object carries no error class, so the result is a generic error marker: a 16-byte zero frame whose id has only
+    /// the SocketCAN error flag set.
     /// </summary>
     internal static bool TryParseCanError(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
@@ -218,7 +245,8 @@ internal static class CanParser
     ///   [20..22) errorCodeExt (u16 LE)
     ///   [22..24) reserved2
     /// </code>
-    /// The reconstructed SocketCAN frame is an error marker; id/dlc from this object are not mapped.
+    /// The reconstructed SocketCAN frame is the same generic error marker as for Type 2; the ecc, position, id, and dlc
+    /// fields of this object are not mapped, only the size is validated and the channel read.
     /// </summary>
     internal static bool TryParseCanErrorExt(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
@@ -287,9 +315,14 @@ internal static class CanParser
         byte vcid = payload[26];
         uint acceptanceField = BinaryPrimitives.ReadUInt32LittleEndian(payload[28..]);
         uint flags = BinaryPrimitives.ReadUInt32LittleEndian(payload[48..]);
+
+        // The declared data length is a u16 from the file. The copy is clamped to the bytes really present after the header,
+        // so the buffer below is never larger than the object that was already read (no allocation amplification from a
+        // crafted length) and the slice cannot run past the payload. A truncated XL frame is kept at its captured length.
         int available = payload.Length - BlfConstants.CanXlChannelFrameHeaderSize;
         int actualDataLen = Math.Min((int)declaredDataLength, available);
 
+        // A Type 139 object whose XLF flag is clear is a classic or CAN FD frame recorded on a CAN XL channel.
         if ((flags & BlfConstants.BlfCanXlFlagXlf) == 0)
         {
             // Pass the declared length. Classic rejects a payload that does not contain
@@ -298,6 +331,7 @@ internal static class CanParser
                 payload, slabs, flags, frameIdentifier, declaredDataLength, out frame);
         }
 
+        // True CAN XL frame: translate the BLF flag bits into the SocketCAN XL flag byte (header byte 4).
         byte socketFlags = BlfConstants.SocketCanXlXlf;
         if ((flags & BlfConstants.BlfCanXlFlagSec) != 0)
         {
@@ -309,6 +343,9 @@ internal static class CanParser
             socketFlags |= BlfConstants.SocketCanXlRrs;
         }
 
+        // 12-byte SocketCAN XL header + data. RentZeroed (not a plain slab allocation) because header byte 0 is never
+        // written and must be zero for slab and non-slab callers alike (slab memory is otherwise uninitialised).
+        // Only the 11-bit priority part of the identifier is stored, big-endian at bytes 2-3.
         Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, 12 + actualDataLen);
         Span<byte> xl = buffer.Span;
         xl[1] = vcid;
@@ -379,6 +416,10 @@ internal static class CanParser
         byte canFdFlags = payload[13];
         byte validDataBytes = payload[14];
 
+        // The DLC means a different length depending on EDL: 9-15 is 8 bytes for classic CAN but 12-64 for CAN FD.
+        // The copied length is the smallest of four independent bounds, so no single corrupt field can over-read or
+        // oversize the frame: the DLC's nominal length, the bytes the logger says are valid, the bytes physically present
+        // after the header, and the CAN FD maximum.
         bool isCanFd = (canFdFlags & BlfConstants.BlfCanFdEdl) != 0;
         ReadOnlySpan<byte> dlcTable = isCanFd
             ? BlfConstants.CanFdDlcToLength
@@ -387,27 +428,37 @@ internal static class CanParser
         int available = payload.Length - _CanFdMessageHeaderSize;
         int actualDataLen = Math.Min(tableLen, Math.Min(validDataBytes, Math.Min(available, _CanFdMaxDataLength)));
 
+        // The BLF id keeps the extended-frame marker in bit 31; SocketCAN keeps the same bit as CAN_EFF_FLAG, so the
+        // 29 identifier bits are masked out first and the flag is re-applied explicitly.
         uint socketCanId = rawId & 0x1FFF_FFFF;
         if ((rawId & 0x8000_0000u) != 0)
         {
             socketCanId |= BlfConstants.SocketCanEff;
         }
 
-        byte socketFdFlags = 0;
-        if (isCanFd)
+        // A classic object (EDL clear) is stored exactly like a Type 1 frame: a remote frame has no data bytes but keeps the
+        // requested DLC in byte 4, and a DLC of 9-15 is kept in byte 7 (len8_dlc). Problem avoided: building it as an FD
+        // frame lost both, so the same bus frame read from Type 100 and from Type 1 gave different SocketCAN bytes and a
+        // writer restoring the DLC wrote 0 for a remote frame.
+        if (!isCanFd)
         {
-            // Map BLF FD flags onto SocketCAN fd_flags: EDL<<2 | ESI>>1 | BRS>>1.
-            socketFdFlags = (byte)(
-                ((canFdFlags & BlfConstants.BlfCanFdEdl) << 2)
-                | ((canFdFlags & BlfConstants.BlfCanFdEsi) >> 1)
-                | ((canFdFlags & BlfConstants.BlfCanFdBrs) >> 1));
-        }
-        else if ((flags & BlfConstants.BlfCanMessageFlagRtr) != 0)
-        {
-            socketCanId |= BlfConstants.SocketCanRtr;
-            actualDataLen = 0;
+            bool remote = (flags & BlfConstants.BlfCanMessageFlagRtr) != 0;
+            if (remote)
+            {
+                socketCanId |= BlfConstants.SocketCanRtr;
+                actualDataLen = 0;
+            }
+
+            frame = _BuildSocketCanClassicFrame(
+                slabs, socketCanId, dlc, remote, payload.Slice(_CanFdMessageHeaderSize, actualDataLen));
+            return true;
         }
 
+        // Map BLF FD flags onto SocketCAN fd_flags: EDL<<2 | ESI>>1 | BRS>>1.
+        byte socketFdFlags = (byte)(
+            ((canFdFlags & BlfConstants.BlfCanFdEdl) << 2)
+            | ((canFdFlags & BlfConstants.BlfCanFdEsi) >> 1)
+            | ((canFdFlags & BlfConstants.BlfCanFdBrs) >> 1));
         frame = _BuildSocketCanFdFrame(
             slabs, socketCanId, socketFdFlags, payload.Slice(_CanFdMessageHeaderSize, actualDataLen));
         return true;
@@ -457,6 +508,8 @@ internal static class CanParser
         uint rawId = BinaryPrimitives.ReadUInt32LittleEndian(payload[4..]);
         uint flags = BinaryPrimitives.ReadUInt32LittleEndian(payload[12..]);
 
+        // Same four-way length bound as Type 100 (DLC table, valid byte count, bytes present, FD maximum); here the EDL bit
+        // lives in the u32 flags word instead of a separate FD flags byte.
         bool isCanFd = (flags & BlfConstants.CanFd64FlagEdl) != 0;
         ReadOnlySpan<byte> dlcTable = isCanFd
             ? BlfConstants.CanFdDlcToLength
@@ -465,34 +518,44 @@ internal static class CanParser
         int available = payload.Length - _CanFdMessage64HeaderSize;
         int actualDataLen = Math.Min(tableLen, Math.Min(validDataBytes, Math.Min(available, _CanFdMaxDataLength)));
 
+        // Identifier: bit 31 is the extended-frame marker in BLF and CAN_EFF_FLAG in SocketCAN (same as Type 100).
         uint socketCanId = rawId & 0x1FFF_FFFF;
         if ((rawId & 0x8000_0000u) != 0)
         {
             socketCanId |= BlfConstants.SocketCanEff;
         }
 
-        byte socketFdFlags = 0;
-        if (isCanFd)
+        // A classic object (EDL clear) is stored like a Type 1 frame: a remote frame keeps the requested DLC in byte 4 and a
+        // DLC of 9-15 is kept in byte 7 (the same rule as Type 100 above).
+        if (!isCanFd)
         {
-            if ((flags & BlfConstants.CanFd64FlagEdl) != 0)
+            bool remote = (flags & BlfConstants.CanFd64FlagRemoteFrame) != 0;
+            if (remote)
             {
-                socketFdFlags |= BlfConstants.SocketCanFdFdf;
+                socketCanId |= BlfConstants.SocketCanRtr;
+                actualDataLen = 0;
             }
 
-            if ((flags & BlfConstants.CanFd64FlagBrs) != 0)
-            {
-                socketFdFlags |= BlfConstants.SocketCanFdBrs;
-            }
-
-            if ((flags & BlfConstants.CanFd64FlagEsi) != 0)
-            {
-                socketFdFlags |= BlfConstants.SocketCanFdEsi;
-            }
+            frame = _BuildSocketCanClassicFrame(
+                slabs, socketCanId, dlc, remote, payload.Slice(_CanFdMessage64HeaderSize, actualDataLen));
+            return true;
         }
-        else if ((flags & BlfConstants.CanFd64FlagRemoteFrame) != 0)
+
+        // Flags: translate each BLF bit into its SocketCAN fd_flags counterpart (the bit positions differ between the two).
+        byte socketFdFlags = 0;
+        if ((flags & BlfConstants.CanFd64FlagEdl) != 0)
         {
-            socketCanId |= BlfConstants.SocketCanRtr;
-            actualDataLen = 0;
+            socketFdFlags |= BlfConstants.SocketCanFdFdf;
+        }
+
+        if ((flags & BlfConstants.CanFd64FlagBrs) != 0)
+        {
+            socketFdFlags |= BlfConstants.SocketCanFdBrs;
+        }
+
+        if ((flags & BlfConstants.CanFd64FlagEsi) != 0)
+        {
+            socketFdFlags |= BlfConstants.SocketCanFdEsi;
         }
 
         frame = _BuildSocketCanFdFrame(
@@ -535,8 +598,14 @@ internal static class CanParser
 
     /// <summary>
     /// Reads only the channel field for a CAN / CAN FD / CAN XL object, using the same
-    /// minimum sizes as the corresponding parser.
+    /// minimum sizes as the corresponding parser. The index scan uses this instead of a full parse so that indexing a
+    /// capture builds no frame bytes; it must accept exactly the objects whose parser size check passes, otherwise the
+    /// scanner and the later re-read would disagree about which objects are frames.
     /// </summary>
+    /// <param name="objectType">BLF object type.</param>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="channel">Channel on success; zero otherwise. Types 101, 104, and 139 store it as one byte, the rest as u16 LE.</param>
+    /// <returns><see langword="false"/> when the type is not a CAN object type or the payload is shorter than the parser's minimum.</returns>
     internal static bool TryGetChannel(uint objectType, ReadOnlySpan<byte> payload, out ushort channel)
     {
         channel = 0;
@@ -639,11 +708,13 @@ internal static class CanParser
             return false;
         }
 
+        // The classic header is fixed at 16 bytes (checked above), so the 8 data bytes are always present when read.
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         byte flags = payload[2];
         byte dlc = (byte)(payload[3] & 0x0F);
         uint rawId = BinaryPrimitives.ReadUInt32LittleEndian(payload[4..]);
 
+        // DLC 9-15 are valid on the bus and all mean 8 data bytes in classic CAN; the table maps them to 8.
         byte dataLen = BlfConstants.CanDlcToLength[dlc];
 
         // Reconstruct SocketCAN ID. EFF lives in BLF id bit 31, not in the flags byte.
@@ -661,8 +732,9 @@ internal static class CanParser
         }
 
         // Captured length is the header plus the DLC's data bytes. Do not keep a zero tail
-        // out to 16. DLC 8 is still 16 bytes. RTR has copyLen 0, so the frame stays 8 bytes.
-        // copyLen is at most 8, and _CanMessageMinSize is 16, so the object already contains
+        // out to 16: a frame with fewer data bytes is stored at its real length, so it holds less memory than a fixed
+        // 16-byte buffer would. DLC 8 is still 16 bytes. RTR has copyLen 0, so the frame
+        // stays 8 bytes. copyLen is at most 8, and _CanMessageMinSize is 16, so the object already contains
         // those data bytes. A shorter object returned false above.
         int copyLen = Math.Min((int)dataLen, _CanMaxDataLength);
         Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, 8 + copyLen);
@@ -684,11 +756,38 @@ internal static class CanParser
     }
 
     /// <summary>
+    /// Builds a classic SocketCAN frame from a CAN FD object whose EDL bit is clear (Type 100 / 101): id BE, byte 4 the data
+    /// byte count (for a remote frame the requested DLC, capped at 8), byte 7 the bus DLC when it is 9-15, then the data. The
+    /// same layout as <see cref="_TryParseCanMessageCore"/> produces for Type 1, with the frame stored at its real length.
+    /// </summary>
+    private static ReadOnlyMemory<byte> _BuildSocketCanClassicFrame(
+        FrameSlabAllocator? slabs, uint socketCanId, byte dlc, bool remote, ReadOnlySpan<byte> data)
+    {
+        // RentZeroed: bytes 5-6 (flags, reserved) are never written and must read as zero in slab-backed memory.
+        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, 8 + data.Length);
+        Span<byte> frame = buffer.Span;
+        BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
+        frame[BlfConstants.SocketCanLenOffset] = remote
+            ? (byte)Math.Min((int)dlc, _CanMaxDataLength)
+            : (byte)data.Length;
+        frame[BlfConstants.SocketCanLen8DlcOffset] = dlc > _CanMaxDataLength ? dlc : (byte)0;
+        if (data.Length > 0)
+        {
+            data.CopyTo(frame[8..]);
+        }
+
+        return buffer;
+    }
+
+    /// <summary>
     /// Builds a SocketCAN FD frame: id BE, len as byte count, flags at byte 5, data of <paramref name="data"/>.Length.
+    /// The frame is 8 plus the actual data length, not padded to 64 bytes. Callers bound <paramref name="data"/> to 64 bytes
+    /// (the length byte is a single byte).
     /// </summary>
     private static ReadOnlyMemory<byte> _BuildSocketCanFdFrame(
         FrameSlabAllocator? slabs, uint socketCanId, byte socketFdFlags, ReadOnlySpan<byte> data)
     {
+        // RentZeroed: bytes 6-7 (reserved) are never written and must read as zero in slab-backed memory.
         Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, _SocketCanFdHeaderSize + data.Length);
         Span<byte> frame = buffer.Span;
         BinaryPrimitives.WriteUInt32BigEndian(frame, socketCanId);
@@ -703,7 +802,8 @@ internal static class CanParser
     }
 
     /// <summary>
-    /// Builds a minimal 16-byte SocketCAN error frame with the given error flag.
+    /// Builds a minimal 16-byte SocketCAN error frame with the given error flag. Zero-filled apart from the id, so the
+    /// error class and data bytes read as "unspecified".
     /// </summary>
     private static ReadOnlyMemory<byte> _BuildSocketCanErrorFrame(FrameSlabAllocator? slabs, uint socketCanErrId)
     {
@@ -714,8 +814,18 @@ internal static class CanParser
 
     /// <summary>
     /// Reconstructs classic or CAN FD SocketCAN bytes from a Type 139 object whose XLF flag is clear.
-    /// EFF is set when the 29-bit identifier exceeds 11 bits. RTR applies only to classic frames.
+    /// EFF is derived from the identifier value, not from a flag: it is set when the 29-bit identifier exceeds 11 bits,
+    /// so an extended frame with an identifier below 0x800 comes back as a standard frame. RTR applies only to classic frames.
     /// </summary>
+    /// <param name="payload">Type 139 payload including the 104-byte header.</param>
+    /// <param name="slabs">Frame slab allocator, or null for a new array.</param>
+    /// <param name="flags">The u32 flags word at offset 48.</param>
+    /// <param name="frameIdentifier">The identifier at offset 12.</param>
+    /// <param name="actualDataLen">
+    /// The data length <em>declared</em> in the header; this method bounds it against the bytes present and the
+    /// format maximum (the parameter is reassigned with the bounded value).
+    /// </param>
+    /// <param name="frame">SocketCAN classic or FD bytes on success; empty on failure.</param>
     private static bool _TryParseNestedClassicOrFdFromCanXl(
         ReadOnlySpan<byte> payload,
         FrameSlabAllocator? slabs,
@@ -733,7 +843,8 @@ internal static class CanParser
 
         if (isCanFd)
         {
-            // Same captured length as before: only the bytes present after the header, capped at 64.
+            // CAN FD: keep only the bytes actually present after the header (a truncated frame is kept at its captured
+            // length rather than rejected), capped at the CAN FD maximum of 64.
             int availableFd = payload.Length - BlfConstants.CanXlChannelFrameHeaderSize;
             actualDataLen = Math.Min(actualDataLen, availableFd);
             actualDataLen = Math.Min(actualDataLen, _CanFdMaxDataLength);

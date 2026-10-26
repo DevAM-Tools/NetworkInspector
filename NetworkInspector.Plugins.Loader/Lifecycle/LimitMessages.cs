@@ -30,10 +30,20 @@ internal static class LimitMessages
 
     #region Private helpers
 
+    /// <summary>Builds the one-line text in the fixed form of the class summary.</summary>
+    /// <param name="pluginName">Name of the plugin.</param>
+    /// <param name="verb">What did not finish: <c>start</c> or <c>stop</c>.</param>
+    /// <param name="timeout">The limit that was exceeded.</param>
+    /// <param name="key">Name of the setting that holds the limit.</param>
+    /// <param name="settingName">UI name of that setting, as registered by <see cref="PluginTimeoutSettings"/>.</param>
+    /// <returns>The text.</returns>
     private static string _Message(string pluginName, string verb, TimeSpan timeout, string key, string settingName)
     {
         // Seconds print invariant with up to three decimals ("30", "0.2"), the same way in every language and on every machine.
         string seconds = timeout.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture);
+
+        // The UI names and the group name "Plugins" in the text repeat what PluginTimeoutSettings.Register and
+        // PluginSettingsGroup register; the text tells the user where to click, so change them together.
         return Invariant(
             $"Plugin '{pluginName}' did not {verb} within {seconds} s. Limit: {seconds} (setting {key}). Change it in Settings ▸ Plugins ▸ {settingName} or with ni settings set {key} <value>.");
     }

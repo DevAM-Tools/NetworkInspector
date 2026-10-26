@@ -45,6 +45,66 @@ internal sealed class RoundRobinAndArgumentTests
     }
 
     [Test]
+    public async Task RoundRobin_FirstReadFailure_KeepsTheSourceAndMovesOn()
+    {
+        using EmptyFrameSource a = new("a");
+        using EmptyFrameSource b = new("b");
+        RoundRobinSourceIterator iterator = new([a, b]);
+
+        bool dropped = iterator.RecordReadFailureAndAdvance();
+
+        await Assert.That(dropped).IsFalse();
+        await Assert.That(iterator.Current.UiName).IsEqualTo("b");
+        iterator.Advance();
+        await Assert.That(iterator.Current.UiName).IsEqualTo("a");
+    }
+
+    [Test]
+    public async Task RoundRobin_SecondReadFailureWithoutAFrame_DropsTheSource()
+    {
+        using EmptyFrameSource a = new("a");
+        using EmptyFrameSource b = new("b");
+        RoundRobinSourceIterator iterator = new([a, b]);
+
+        _ = iterator.RecordReadFailureAndAdvance();
+        iterator.Advance();
+        bool dropped = iterator.RecordReadFailureAndAdvance();
+
+        await Assert.That(dropped).IsTrue();
+        await Assert.That(iterator.HasActive).IsTrue();
+        await Assert.That(iterator.Current.UiName).IsEqualTo("b");
+        iterator.Advance();
+        await Assert.That(iterator.Current.UiName).IsEqualTo("b");
+    }
+
+    [Test]
+    public async Task RoundRobin_AFrameBetweenTwoFailures_ClearsTheFailure()
+    {
+        using EmptyFrameSource a = new("a");
+        RoundRobinSourceIterator iterator = new([a]);
+
+        _ = iterator.RecordReadFailureAndAdvance();
+        iterator.RecordFrameRead();
+        bool dropped = iterator.RecordReadFailureAndAdvance();
+
+        await Assert.That(dropped).IsFalse();
+        await Assert.That(iterator.HasActive).IsTrue();
+    }
+
+    [Test]
+    public async Task RoundRobin_DroppingTheLastSource_LeavesNoActiveSource()
+    {
+        using EmptyFrameSource a = new("a");
+        RoundRobinSourceIterator iterator = new([a]);
+
+        _ = iterator.RecordReadFailureAndAdvance();
+        bool dropped = iterator.RecordReadFailureAndAdvance();
+
+        await Assert.That(dropped).IsTrue();
+        await Assert.That(iterator.HasActive).IsFalse();
+    }
+
+    [Test]
     public async Task CliArgumentParsing_ParseNonNegativeLong_RejectsNegative()
     {
         await Assert.That(() => CliArgumentParsing.ParseNonNegativeLong("-1"))

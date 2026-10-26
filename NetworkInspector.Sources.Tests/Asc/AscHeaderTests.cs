@@ -202,6 +202,23 @@ internal sealed class AscHeaderTests
     }
 
     [Test]
+    public async Task TriggerblockDateWithGermanMonthIsDecodedLikeTheDateLine()
+    {
+        // The month is written with the Latin-1 byte 0xE4, as German Vector tools do.
+        const string germanDate = "Mit Mär 11 10:00:00 2020";
+        AscHeader header = new();
+        _ = header.TryParseLine(Encoding.Latin1.GetBytes("date " + germanDate));
+        long fromDateLine = header.StartUnixNanos;
+        AscHeader viaTrigger = new();
+
+        bool consumed = viaTrigger.TryParseLine(Encoding.Latin1.GetBytes("Begin Triggerblock " + germanDate));
+
+        await Assert.That(consumed).IsFalse();
+        await Assert.That(fromDateLine).IsNotEqualTo(0L);
+        await Assert.That(viaTrigger.StartUnixNanos).IsEqualTo(fromDateLine);
+    }
+
+    [Test]
     public async Task GermanWeekdayParsesToNonZero()
     {
         long nanos = AscDateParser.TryParseToUnixNanos("Die Dez 21 11:29:01 2004", TimeZoneInfo.Utc);

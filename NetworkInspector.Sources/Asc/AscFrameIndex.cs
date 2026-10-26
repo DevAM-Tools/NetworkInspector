@@ -140,6 +140,8 @@ internal sealed class AscFrameIndex
         uint span = (uint)Math.Clamp(bytes, 1L, 1L << MaxWindowShift);
         int shift = Math.Max(MinWindowShift, 32 - BitOperations.LeadingZeroCount(span - 1));
 
+        // The shifts array grows by doubling while the scan adds frames (amortised O(1) per group); Complete trims it. The
+        // window of a group only ever rises: it must cover the largest record in the group.
         int group = frameIndex >> PackedLongSequence.GroupShift;
         if (group >= _WindowShifts.Length)
         {
@@ -160,6 +162,8 @@ internal sealed class AscFrameIndex
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int ReadWindow(int frameIndex)
     {
+        // A single read of the field and an unsigned bounds test; an untracked or unknown group falls back to the largest
+        // window, which is always large enough.
         byte[]? shifts = _WindowShifts;
         int group = frameIndex >> PackedLongSequence.GroupShift;
         return shifts is null || (uint)group >= (uint)shifts.Length
@@ -252,6 +256,9 @@ internal sealed class AscFrameIndex
     private static bool _TryToNanos(AscTimestamp clock, out long nanos)
     {
         nanos = 0;
+
+        // One second of margin on each side: the multiply is then in range and adding the fraction (< 1e9) cannot overflow,
+        // so no checked arithmetic is needed. A clock outside the range (about ±292 years) is stored as an override instead.
         if (clock.WholeSeconds > (long.MaxValue / 1_000_000_000L) - 1 || clock.WholeSeconds < (long.MinValue / 1_000_000_000L) + 1)
         {
             return false;

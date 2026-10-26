@@ -5,6 +5,12 @@ namespace NetworkInspector.Protocols.SignalMessage;
 /// <summary>
 /// Builds a <see cref="SignalEnumTable"/> from raw value→name pairs, choosing dense-low,
 /// dense-high, or sparse storage under a hard size cap.
+/// <para>
+/// Runs at registration time only (once per signal), never while parsing, so it favours clear validation over speed.
+/// The input comes from an operator-supplied JSON config (a trust boundary), which is why every key, name and count is
+/// validated and why a failure is reported through <c>error</c> instead of an exception.
+/// </para>
+/// <para>Thread safety: static and stateless; safe to call concurrently.</para>
 /// </summary>
 internal static class SignalEnumTableBuilder
 {
@@ -13,8 +19,15 @@ internal static class SignalEnumTableBuilder
     /// <summary>
     /// Classifies and builds an enum table. Returns <see langword="false"/> when the number of
     /// unique keys exceeds <paramref name="maxEnumValues"/> or a key is outside the raw range.
+    /// <para>
+    /// Limit record for <paramref name="maxEnumValues"/>: the threat is a hostile or broken config whose
+    /// <c>value_names</c> map would make registration allocate without bound. The value is the
+    /// <c>signal_message.max_enum_values</c> setting (configurable by the operator, default 4096, see
+    /// <c>SignalMessageRegistration</c>); exceeding it fails the signal with a message that names the limit, nothing is
+    /// truncated.
+    /// </para>
     /// </summary>
-    /// <param name="valueNames">Raw→name map (may be null or empty).</param>
+    /// <param name="valueNames">Raw→name map (may be null or empty; empty yields the empty table and is checked first).</param>
     /// <param name="bitLength">Signal bit length (1–64).</param>
     /// <param name="maxEnumValues">Hard cap on unique enum entries.</param>
     /// <param name="table">Built table on success.</param>
@@ -26,6 +39,7 @@ internal static class SignalEnumTableBuilder
         out SignalEnumTable table,
         [NotNullWhen(false)] out string? error)
     {
+        // No names is the common case and always valid, so it is answered before the arguments are validated.
         table = SignalEnumTable.None;
         error = null;
 
@@ -34,6 +48,8 @@ internal static class SignalEnumTableBuilder
             return true;
         }
 
+        // Validate the arguments and the size of the map before touching any entry, so the cost of a rejected
+        // config is bounded by the cheap checks and not by the number of entries.
         if (maxEnumValues <= 0)
         {
             error = "max_enum_values must be greater than zero.";
@@ -52,6 +68,8 @@ internal static class SignalEnumTableBuilder
             return false;
         }
 
+        // Check every key against the raw range of the signal (a key above it could never match and indicates a
+        // config mistake) and every name for emptiness, collecting the keys for classification.
         ulong maxRaw = SignalMessageBits.MaxRawForBitLength(bitLength);
         ulong[] keys = new ulong[valueNames.Count];
         int i = 0;
@@ -72,6 +90,9 @@ internal static class SignalEnumTableBuilder
             keys[i++] = kvp.Key;
         }
 
+        // Sorting makes both the duplicate check and the dense classification a single linear pass. A standard
+        // dictionary cannot hold duplicate keys, so the duplicate check is defensive (the parameter is only an
+        // IReadOnlyDictionary).
         Array.Sort(keys);
 
         // Deduplicate check (sorted).
@@ -84,6 +105,8 @@ internal static class SignalEnumTableBuilder
             }
         }
 
+        // Classify, cheapest layout first. Dense-low is tested before dense-high, so a map that covers the whole raw
+        // range (which satisfies both) becomes dense-low. Anything else, including a run with a gap, is sparse.
         if (IsDenseLow(keys))
         {
             string[] dense = new string[keys.Length];
@@ -112,6 +135,7 @@ internal static class SignalEnumTableBuilder
             return true;
         }
 
+        // Sparse fallback: a frozen dictionary is built once here and then read concurrently without locking.
         Dictionary<ulong, string> sparse = new(valueNames.Count);
         foreach (KeyValuePair<ulong, string> kvp in valueNames)
         {
@@ -127,6 +151,7 @@ internal static class SignalEnumTableBuilder
     #region Classification
 
     /// <summary>True when keys are exactly 0,1,...,n-1.</summary>
+    /// <param name="sortedKeys">Distinct keys in ascending order.</param>
     internal static bool IsDenseLow(ulong[] sortedKeys)
     {
         for (int i = 0; i < sortedKeys.Length; i++)
@@ -144,6 +169,8 @@ internal static class SignalEnumTableBuilder
     /// True when keys are exactly (maxRaw-n+1)..maxRaw contiguous.
     /// Example: 4-bit, n=2 → keys {14,15}.
     /// </summary>
+    /// <param name="sortedKeys">Distinct keys in ascending order, each at most <paramref name="maxRaw"/>.</param>
+    /// <param name="maxRaw">Largest raw value of the signal (<c>(1 &lt;&lt; bitLength) - 1</c>).</param>
     internal static bool IsDenseHigh(ulong[] sortedKeys, ulong maxRaw)
     {
         int n = sortedKeys.Length;
@@ -152,10 +179,11 @@ internal static class SignalEnumTableBuilder
             return false;
         }
 
-        // Smallest expected key = maxRaw - n + 1 (checked arithmetic for n relative to maxRaw).
+        // Smallest expected key = maxRaw - n + 1. The guard keeps the unsigned subtraction below from wrapping. For
+        // distinct keys that are all at most maxRaw it cannot trigger (n is then at most maxRaw + 1), so it only
+        // protects direct callers that pass inconsistent arguments.
         if ((ulong)n - 1UL > maxRaw)
         {
-            // Range cannot fit; only possible if keys cover entire domain which is dense-low.
             return false;
         }
 

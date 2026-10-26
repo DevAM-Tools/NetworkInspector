@@ -13,6 +13,20 @@ namespace NetworkInspector.Protocols;
 /// <item>ESP Header (next header 50) — RFC 4303 (header only, payload encrypted)</item>
 /// <item>Destination Options (next header 60) — RFC 8200</item>
 /// </list>
+/// <para>
+/// Design: the parser only builds the display fields; it does not decide where the transport payload starts (the
+/// IPv6 protocol walks the chain itself). It is tolerant of malformed data because every length comes from the wire:
+/// a header that does not fit the remaining bytes stops the walk, and the headers decoded so far stay. Nothing is
+/// reported as an error in that case. Every read is checked against the slice that was handed in, so a hostile length
+/// can neither read out of range nor cause a large allocation. The walk is limited to
+/// <see cref="IPv6Protocol.MaxExtensionHeaders"/> headers.
+/// </para>
+/// <para><b>Thread-safety:</b> stateless; safe for concurrent use. It appends fields only to the container it is given.</para>
+/// <para>
+/// Raw byte fields (unknown routing data, unknown options, reserved bytes, the AH ICV) are copied with
+/// <c>ToArray</c>: the parser receives a <see cref="ReadOnlySpan{T}"/>, which cannot be stored in a field value that
+/// holds memory.
+/// </para>
 /// </summary>
 internal static class IPv6ExtensionHeaderParser
 {
@@ -24,12 +38,13 @@ internal static class IPv6ExtensionHeaderParser
     private const byte _TunnelEncapsulationLimit = 0x04;
     private const byte _HomeAddress = 0xC9;
 
-    // Extension header constants
+    // Extension header constants (format facts of RFC 8200 and RFC 4302/4303, hence constants)
     private const int _FragmentHeaderSize = 8;
-    private const int _AhMinSize = 12;
-    private const int _EspHeaderSize = 8;
+    private const int _AhMinSize = 12; // next header, length, reserved, SPI, sequence number (3 x 4 bytes fixed part)
+    private const int _EspHeaderSize = 8; // SPI + sequence number
 
-    // Fragment header bitmasks
+    // Fragment header bitmasks over the 16-bit word at byte 2: fragment offset (13 bits, in 8-byte units),
+    // 2 reserved bits, and the M flag in the lowest bit.
     private const ushort _FragOffsetMask = 0xFFF8;
     private const ushort _FragReservedMask = 0x0006;
     private const ushort _FragMoreMask = 0x0001;
@@ -42,12 +57,19 @@ internal static class IPv6ExtensionHeaderParser
     /// <param name="data">Extension header data (starting after the 40-byte fixed header).</param>
     /// <param name="firstNextHeader">The next-header value from the IPv6 fixed header.</param>
     /// <param name="fields">Field IDs for extension header sub-fields.</param>
+    /// <remarks>
+    /// Ends silently when a header is truncated, when the next-header value is not an extension header, after an ESP
+    /// header (the rest is encrypted), or after <see cref="IPv6Protocol.MaxExtensionHeaders"/> headers.
+    /// </remarks>
     internal static void Parse(
         MutField protoField,
         ReadOnlySpan<byte> data,
         byte firstNextHeader,
         in IPv6Protocol.ExtHeaderFieldIds fields)
     {
+        // One extension header per iteration. Each helper returns (next header, bytes consumed); consumed == 0 is the
+        // failure sentinel (a valid header always consumes at least 8 bytes), so the loop makes progress or ends.
+        // The depth cap bounds the work for a crafted chain of tiny headers (DoS protection, see MaxExtensionHeaders).
         int offset = 0;
         byte currentNh = firstNextHeader;
         int depth = 0;
@@ -102,6 +124,18 @@ internal static class IPv6ExtensionHeaderParser
                         {
                             return;
                         }
+
+                        // A real fragment ends the chain: the bytes after its header are a slice of the fragmentable
+                        // part of the original datagram, not a header chain. A non-first fragment starts in the middle
+                        // of that part, so a payload byte that happens to equal an extension header number must not be
+                        // read as a header. The same rule is applied by IPv6Protocol when it finds the payload start.
+                        // consumed != 0 guarantees the 8 header bytes are present, so the flags word can be read.
+                        ushort flagsWord = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(offset + 2, 2));
+                        if (IsRealFragment(flagsWord))
+                        {
+                            return;
+                        }
+
                         currentNh = nextHdr;
                         offset += consumed;
                         break;
@@ -119,9 +153,10 @@ internal static class IPv6ExtensionHeaderParser
                     }
                 case IPv6Protocol.NhEsp:
                     {
-                        // ESP terminates the chain — payload is encrypted
-                        int consumed = _ParseEspHeader(protoField, data, offset, remaining, in fields);
-                        return; // ESP terminates extension header chain
+                        // ESP terminates the chain — payload is encrypted. Whether the header fitted is not needed
+                        // afterwards: either way the walk ends here.
+                        _ParseEspHeader(protoField, data, offset, remaining, in fields);
+                        return;
                     }
                 default:
                     return; // Unknown ext header — stop
@@ -134,6 +169,11 @@ internal static class IPv6ExtensionHeaderParser
     #region Hop-by-Hop Options
 
     /// <summary>Parses a Hop-by-Hop Options Header. Returns (nextHeader, consumed) or (0, 0) on failure.</summary>
+    /// <remarks>
+    /// Generic length encoding (RFC 8200 section 4.3): the Hdr Ext Len byte counts 8-octet units not including the
+    /// first 8, so the total is (len + 1) * 8, at most 2048 bytes. It must fit the remaining data, otherwise the
+    /// header is rejected.
+    /// </remarks>
     private static (byte NextHeader, int Consumed) _ParseHopByHopOptions(
         MutField protoField, ReadOnlySpan<byte> data, int offset, int remaining,
         in IPv6Protocol.ExtHeaderFieldIds fields)
@@ -171,7 +211,10 @@ internal static class IPv6ExtensionHeaderParser
 
     #region Destination Options
 
-    /// <summary>Parses a Destination Options Header. Returns (nextHeader, consumed) or (0, 0) on failure.</summary>
+    /// <summary>
+    /// Parses a Destination Options Header. Returns (nextHeader, consumed) or (0, 0) on failure.
+    /// Same layout and length encoding as the Hop-by-Hop Options header.
+    /// </summary>
     private static (byte NextHeader, int Consumed) _ParseDestinationOptions(
         MutField protoField, ReadOnlySpan<byte> data, int offset, int remaining,
         in IPv6Protocol.ExtHeaderFieldIds fields)
@@ -209,7 +252,11 @@ internal static class IPv6ExtensionHeaderParser
 
     #region Routing Header
 
-    /// <summary>Parses a Routing Header. Returns (nextHeader, consumed) or (0, 0) on failure.</summary>
+    /// <summary>
+    /// Parses a Routing Header. Returns (nextHeader, consumed) or (0, 0) on failure.
+    /// Common part: next header, Hdr Ext Len, routing type, segments left (4 bytes), then type-specific data. Types 2
+    /// (Mobile IPv6) and 4 (Segment Routing) are decoded; any other type keeps its data as raw bytes.
+    /// </summary>
     private static (byte NextHeader, int Consumed) _ParseRoutingHeader(
         MutField protoField, ReadOnlySpan<byte> data, int offset, int remaining,
         in IPv6Protocol.ExtHeaderFieldIds fields)
@@ -246,7 +293,8 @@ internal static class IPv6ExtensionHeaderParser
         routingField.AppendWithCustomText(fields.RoutingTypeFieldId, FieldValue.NewU64(routingType), rtDisplayText);
         routingField.Append(fields.RoutingSegleftFieldId, FieldValue.NewU64(segmentsLeft));
 
-        // Parse type-specific data (bytes 4..totalLen relative to offset)
+        // Parse type-specific data (bytes 4..totalLen relative to offset). totalLen was checked against the remaining
+        // bytes above, so every slice below that stays within totalLen is in range.
         switch (routingType)
         {
             case 2:
@@ -314,7 +362,10 @@ internal static class IPv6ExtensionHeaderParser
             fields.RoutingSrhTagFieldId, FieldValue.NewBytes(tag),
             Helpers.DisplayTables.FormatHexU16(tagValue));
 
-        // Parse segment list addresses (each 16 bytes, starting at offset+8)
+        // Parse segment list addresses (each 16 bytes, starting at offset+8). Last Entry is the zero-based index of
+        // the last segment (RFC 8754), so there are lastEntry + 1 of them (at most 256). The count comes from the wire
+        // and is not trusted: the loop stops at the end of this header, so a count that is too large only yields
+        // the addresses that are actually present. SRH TLVs after the segment list are not decoded.
         int addrStart = offset + 8;
         int numAddrs = lastEntry + 1;
         for (int i = 0; i < numAddrs; i++)
@@ -333,7 +384,21 @@ internal static class IPv6ExtensionHeaderParser
 
     #region Fragment Header
 
-    /// <summary>Parses a Fragment Header (fixed 8 bytes). Returns (nextHeader, 8) or (0, 0) on failure.</summary>
+    /// <summary>
+    /// Tells whether a fragment header describes a real fragment: a fragment offset other than 0 or the More Fragments
+    /// flag set. A header with offset 0 and no More flag is an "atomic fragment" (RFC 8200 section 4.5) that carries the
+    /// whole datagram and needs no reassembly. The single definition used by the chain walks of this parser and of
+    /// <see cref="IPv6Protocol"/>.
+    /// </summary>
+    /// <param name="offsetFlagsWord">The 16-bit word at byte 2 of the fragment header (offset, reserved bits, M flag).</param>
+    internal static bool IsRealFragment(ushort offsetFlagsWord) =>
+        (offsetFlagsWord & (_FragOffsetMask | _FragMoreMask)) != 0;
+
+    /// <summary>
+    /// Parses a Fragment Header (fixed 8 bytes). Returns (nextHeader, 8) or (0, 0) on failure.
+    /// Layout (RFC 8200 section 4.5): next header, reserved octet, fragment offset (13 bits) + 2 reserved bits + M flag,
+    /// 32-bit identification. The fragment offset is reported in 8-octet units, as on the wire.
+    /// </summary>
     private static (byte NextHeader, int Consumed) _ParseFragmentHeader(
         MutField protoField, ReadOnlySpan<byte> data, int offset, int remaining,
         in IPv6Protocol.ExtHeaderFieldIds fields)
@@ -375,7 +440,10 @@ internal static class IPv6ExtensionHeaderParser
 
     #region Authentication Header (AH)
 
-    /// <summary>Parses an AH. Returns (nextHeader, consumed) or (0, 0) on failure.</summary>
+    /// <summary>
+    /// Parses an AH. Returns (nextHeader, consumed) or (0, 0) on failure.
+    /// Unlike the other extension headers, the length byte counts 4-octet units minus 2 (RFC 4302 section 2.2).
+    /// </summary>
     private static (byte NextHeader, int Consumed) _ParseAhHeader(
         MutField protoField, ReadOnlySpan<byte> data, int offset, int remaining,
         in IPv6Protocol.ExtHeaderFieldIds fields)
@@ -428,14 +496,18 @@ internal static class IPv6ExtensionHeaderParser
 
     #region ESP Header
 
-    /// <summary>Parses an ESP header (SPI + Seq only). Returns consumed bytes (all remaining, since ESP is encrypted).</summary>
-    private static int _ParseEspHeader(
+    /// <summary>
+    /// Parses an ESP header (SPI + Seq only). Appends nothing when fewer than 8 bytes remain. The bytes after the
+    /// first 8 are ciphertext (and trailer/ICV) that cannot be split without the security association, so the chain walk
+    /// ends here whether or not the header was present.
+    /// </summary>
+    private static void _ParseEspHeader(
         MutField protoField, ReadOnlySpan<byte> data, int offset, int remaining,
         in IPv6Protocol.ExtHeaderFieldIds fields)
     {
         if (remaining < _EspHeaderSize)
         {
-            return 0;
+            return;
         }
 
         uint spi = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(offset, 4));
@@ -450,9 +522,6 @@ internal static class IPv6ExtensionHeaderParser
             fields.EspSpiFieldId, FieldValue.NewU64(spi),
             (string)ZA.String("0x", new Hex8(spi)));
         espField.Append(fields.EspSeqFieldId, FieldValue.NewU64(seq));
-
-        // ESP payload is opaque/encrypted — return all remaining bytes as consumed
-        return remaining;
     }
 
     #endregion
@@ -467,6 +536,11 @@ internal static class IPv6ExtensionHeaderParser
     /// <param name="start">Start offset of TLV options data.</param>
     /// <param name="end">End offset of TLV options data.</param>
     /// <param name="fields">Field IDs for option sub-fields.</param>
+    /// <remarks>
+    /// Options are walked only inside [start, end): an option whose length runs past <paramref name="end"/> ends the
+    /// walk, so the length byte of one option can never make the parser read the next header's bytes. The loop always
+    /// advances by at least one byte per option, so it terminates.
+    /// </remarks>
     private static void _ParseTlvOptions(
         MutField parentField, ReadOnlySpan<byte> data, int start, int end,
         in IPv6Protocol.ExtHeaderFieldIds fields)
@@ -514,7 +588,11 @@ internal static class IPv6ExtensionHeaderParser
         }
     }
 
-    /// <summary>Parses a typed TLV option (not _Pad1/_PadN) and appends its fields.</summary>
+    /// <summary>
+    /// Parses a typed TLV option (not _Pad1/_PadN) and appends its fields. The caller has verified that
+    /// <paramref name="optLen"/> bytes of option data exist after the two header bytes; the <c>when</c> guards below
+    /// additionally require the length the option type defines before the data is read.
+    /// </summary>
     private static void _ParseTypedOption(
         MutField parentField, ReadOnlySpan<byte> data, int pos, byte optType, byte optLen,
         in IPv6Protocol.ExtHeaderFieldIds fields)
@@ -527,6 +605,8 @@ internal static class IPv6ExtensionHeaderParser
         // Option type byte with display text
         optField.AppendWithCustomText(fields.OptTypeFieldId, FieldValue.NewU64(optType), optDisplay);
 
+        // The option type byte encodes how a node must treat the option (RFC 8200 section 4.2): the two highest bits
+        // are the action for an unrecognized option, bit 5 says whether the data may change en route.
         // Action (high 2 bits)
         byte action = (byte)((optType >> 6) & 0x03);
         string actionText = DisplayTables.GetIpv6OptActionDisplayText(action);
@@ -552,7 +632,7 @@ internal static class IPv6ExtensionHeaderParser
                 {
                     ushort value = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(dataStart, 2));
                     string? alertText = DisplayTables.GetIpv6RouterAlertDisplayText(value);
-                    string display = alertText ?? $"Unknown ({value})";
+                    string display = alertText ?? string.Create(CultureInfo.InvariantCulture, $"Unknown ({value})");
                     optField.AppendWithCustomText(
                         fields.OptRouterAlertFieldId, FieldValue.NewU64(value), display);
                     break;

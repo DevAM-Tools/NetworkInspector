@@ -62,18 +62,35 @@ internal sealed class CaptureFileGuard : IDisposable
     /// </summary>
     private volatile bool _ChecksChanges = !OperatingSystem.IsWindows();
 
+    /// <summary>Last write time at open (UTC); a later difference means the file was modified.</summary>
     private readonly DateTime _LastWriteUtc;
+
+    /// <summary>
+    /// Completed once on the first detected change; null where no monitor runs. Created with
+    /// <see cref="TaskCreationOptions.RunContinuationsAsynchronously"/> so a waiter's continuation never runs inline on the
+    /// monitor or source thread that detected the change.
+    /// </summary>
     private readonly TaskCompletionSource? _ChangeSignal;
 
     /// <summary>The background check; null where none runs (Windows, or after <see cref="StopMonitoring"/>).</summary>
     private volatile Timer? _Monitor;
+
+    /// <summary>Change latch: written only from false to true, read by every random-access call without a system call.</summary>
     private volatile bool _Changed;
+
+    /// <summary>Dispose latch (0 = live, 1 = disposed), set with <c>Interlocked.Exchange</c> so exactly one caller disposes.</summary>
     private volatile int _Disposed;
 
     #endregion
 
     #region Constructors
 
+    /// <summary>
+    /// Records the length and last write time at open and, on Linux and macOS, starts the background monitor. The monitor is
+    /// started last, after the length, write time, and signal are set, because a tick reads all three.
+    /// </summary>
+    /// <param name="handle">Open read handle; owned by the guard from here on.</param>
+    /// <param name="monitorInterval">Period of the background check (positive; validated by <see cref="Open(string, TimeSpan)"/>).</param>
     private CaptureFileGuard(SafeFileHandle handle, TimeSpan monitorInterval)
     {
         Handle = handle;
@@ -202,8 +219,13 @@ internal sealed class CaptureFileGuard : IDisposable
     /// <summary>Reads the whole file through the guarded handle (preload backends).</summary>
     /// <remarks>Caller bounds the size (<see cref="PreloadDecision.ShouldPreload"/> limits it to an array).</remarks>
     /// <exception cref="IOException">The file is shorter than at open.</exception>
+    /// <exception cref="OverflowException">The length at open does not fit an array (caller did not bound it).</exception>
     internal byte[] ReadAll()
     {
+        // Uninitialised array: every byte is overwritten by the read loop, or the method throws and the array is dropped,
+        // so the zero-fill of a plain new byte[] (one extra pass over a possibly large file) is skipped.
+        // The length is the one captured at open; a file that grew since is not read past that length, and a file that
+        // shrank is reported by the zero-length read below instead of returning a partly filled array.
         byte[] data = GC.AllocateUninitializedArray<byte>(checked((int)Length));
         int total = 0;
         while (total < data.Length)

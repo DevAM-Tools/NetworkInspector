@@ -10,6 +10,11 @@ public sealed partial class TcpProtocol
     /// Bitmask flags indicating which TCP analysis conditions were detected for a segment.
     /// Mirrors the live tracker flags without connection references.
     /// </summary>
+    /// <remarks>
+    /// The bit values must stay identical to the internal <c>TcpAnalysisFlags</c> enum: the two are converted with a plain
+    /// cast when an effect is recorded and when a result is rebuilt from it. This copy exists because the effect is a
+    /// public, self-contained type, while the tracker's enum is internal.
+    /// </remarks>
     [Flags]
     public enum AnalysisEffectFlags : uint
     {
@@ -82,6 +87,12 @@ public sealed partial class TcpProtocol
     /// Immutable TCP analysis facts recorded during ingest for redissect replay.
     /// Contains no live connection references.
     /// </summary>
+    /// <remarks>
+    /// Why a copy of the analysis instead of reading the tracker again: the tracker state moves on with every later
+    /// packet, so a re-parse (UI, filter, export) must see the values as they were when this packet was ingested.
+    /// Timing values are <see cref="double"/> seconds with NaN meaning "not measured"; the sequence numbers are the
+    /// precomputed relative values, so replay does not need the ISNs. Thread safety: immutable value type.
+    /// </remarks>
     public readonly record struct AnalysisEffect(
         uint StreamIndex,
         AnalysisEffectFlags Flags,
@@ -130,10 +141,23 @@ public sealed partial class TcpProtocol
         }
     }
 
-    /// <summary>A single reassembled PDU emitted during ingest, in dispatch order.</summary>
+    /// <summary>
+    /// A single reassembled PDU emitted during ingest, in dispatch order. <paramref name="PduBytes"/> is the caller-owned
+    /// array the segment buffer copied out; it is kept so a replay can re-dispatch the identical bytes (the stream buffer
+    /// has long since moved on). The bytes therefore live as long as the effect store.
+    /// </summary>
+    /// <param name="ProtocolId">Application protocol the PDU was dispatched to.</param>
+    /// <param name="PduBytes">The PDU bytes.</param>
     public readonly record struct PduEffect(ProtocolId ProtocolId, ReadOnlyMemory<byte> PduBytes);
 
     /// <summary>TCP payload dispatch metadata for redissect replay.</summary>
+    /// <param name="Mode">How the payload was dispatched during ingest.</param>
+    /// <param name="Pdus">Reassembled PDUs in dispatch order; null unless <paramref name="Mode"/> is a reassembly mode.</param>
+    /// <param name="HeuristicProtocolId">Protocol chosen by the heuristic table (valid only for the heuristic mode).</param>
+    /// <param name="PreferredPort">
+    /// Server port learned by the connection tracker, tried first on replay (valid when <paramref name="HasPreferredPort"/>).
+    /// </param>
+    /// <param name="HasPreferredPort">Whether <paramref name="PreferredPort"/> carries a value.</param>
     public readonly record struct PayloadDispatchEffect(
         PayloadDispatchMode Mode,
         PduEffect[]? Pdus,
@@ -200,6 +224,8 @@ public sealed partial class TcpProtocol
         ushort preferredPort = 0,
         bool hasPreferredPort = false)
     {
+        // Snapshot the working list into an exact-size array: the list is a per-parse scratch object, while the
+        // stored effect must be immutable and as small as possible (it lives as long as the store).
         PduEffect[]? pduArray = null;
         if (pdus is not null)
         {

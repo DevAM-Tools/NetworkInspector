@@ -16,10 +16,15 @@ namespace NetworkInspector.Protocols.Tcp;
 /// insert into a long probe (denial of service). Every field is added as 32-bit words, so no folding step creates
 /// collisions of its own. Hash values are not persisted or shown.
 /// </para>
+/// <para>
+/// <b>Thread safety:</b> immutable value type; safe to share and copy. The key is large (two 128-bit addresses plus
+/// ports and discriminators), so hot paths pass it by <see langword="in"/> reference.
+/// </para>
 /// </summary>
 internal readonly struct TcpConnectionKey : IEquatable<TcpConnectionKey>
 {
-    // Normalized: lower (addr, port) pair is always stored first
+    // Normalized: lower (addr, port) pair is always stored first. VLAN id and frame identity are part of the
+    // identity (two captures or VLANs may reuse the same address pair) but are not endpoints, so they are never swapped.
     private readonly UInt128 _Addr1;
     private readonly UInt128 _Addr2;
     private readonly ushort _Port1;
@@ -62,12 +67,22 @@ internal readonly struct TcpConnectionKey : IEquatable<TcpConnectionKey>
     /// <summary>
     /// Determines the direction of a packet relative to the normalized key.
     /// Returns <see langword="true"/> when the source matches the first (lower) endpoint.
+    /// "Forward" therefore only means "from the numerically lower endpoint": it is not the client or SYN sender.
     /// </summary>
+    /// <param name="srcAddr">Source address of the packet (IPv4 as IPv4-mapped IPv6).</param>
+    /// <param name="srcPort">Source TCP port of the packet.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool IsForward(UInt128 srcAddr, ushort srcPort) =>
         _Addr1 == srcAddr && _Port1 == srcPort;
 
-    /// <summary>Creates a connection key from raw IPv4 addresses (as 32-bit values).</summary>
+    /// <summary>Creates a connection key from raw IPv4 addresses (as 32-bit values in host order, first octet in the high byte).</summary>
+    /// <param name="srcIp">Source IPv4 address.</param>
+    /// <param name="dstIp">Destination IPv4 address.</param>
+    /// <param name="srcPort">Source TCP port.</param>
+    /// <param name="dstPort">Destination TCP port.</param>
+    /// <param name="lastVlanId">Innermost VLAN id, or 0 when the stream key does not include VLAN.</param>
+    /// <param name="frameIdentity">Capture-interface identity, or 0 when the stream key does not include it.</param>
+    /// <returns>The normalized key.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static TcpConnectionKey FromIPv4(
         uint srcIp, uint dstIp, ushort srcPort, ushort dstPort, ushort lastVlanId = 0, int frameIdentity = 0)

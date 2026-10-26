@@ -74,6 +74,8 @@ internal static class PcapInterfaceProperties
     internal static (FrameReadErrorKind Kind, string Message) DescribeSkip(ScanPacketResult result) => result switch
     {
         ScanPacketResult.SkipNoInterface => (FrameReadErrorKind.UnresolvedInterface, "Packet block references an interface that was not declared."),
+        ScanPacketResult.SkipMalformedInterface => (
+            FrameReadErrorKind.UnresolvedInterface, "Packet block references an interface whose description block was malformed."),
         ScanPacketResult.SkipUnsupportedTimestampResolution => (FrameReadErrorKind.Other, "unsupported if_tsresol"),
         _ => (FrameReadErrorKind.CorruptedBlock, "Malformed packet block."),
     };

@@ -10,7 +10,11 @@ internal static class PcapConstants
 {
     #region Block type constants (PCAPNG)
 
-    /// <summary>Section Header Block — marks the start of a new section.</summary>
+    /// <summary>
+    /// Section Header Block — marks the start of a new section. The value is a byte palindrome (0A 0D 0D 0A), so it reads
+    /// the same in either byte order; that is why the block can be recognised before the section's byte order is known
+    /// (the byte-order magic inside the block then tells it).
+    /// </summary>
     internal const uint BlockTypeSHB = 0x0A0D_0D0A;
 
     /// <summary>Interface Description Block — describes a capture interface.</summary>
@@ -71,6 +75,10 @@ internal static class PcapConstants
     #endregion
 
     #region Option codes
+
+    // Option codes are numbered per block type, so the same number appears several times below (for example 2 is
+    // shb_hardware in an SHB, if_name in an IDB, and epb_flags in an EPB). Only 0 (end of options) and 1 (comment) are
+    // shared by every block type. Always pair a code with the block type whose options are being read.
 
     /// <summary>End of options (terminator).</summary>
     internal const ushort OptEndOfOpt = 0;
@@ -160,7 +168,12 @@ internal static class PcapConstants
 
     #region Default values
 
-    /// <summary>Default snap length (262144 bytes).</summary>
+    /// <summary>
+    /// Default snap length (262144 bytes), the implicit cap on a legacy PCAP record when the global header declares a
+    /// snaplen of 0. Constant. Threat: a hostile record header demanding a huge allocation in a file that declares no
+    /// limit; a capture with larger packets must declare its snaplen. Applied by the legacy record validation of the
+    /// readers (<c>PcapngBlockLayout.TryValidateLegacyInclLen</c>).
+    /// </summary>
     internal const uint DefaultSnapLength = 262_144;
 
     /// <summary>Timestamp resolution for microseconds (10^6 divisions per second).</summary>
@@ -178,6 +191,14 @@ internal static class PcapConstants
     /// 131072 bytes cover option and header slack past that packet. Both readers must use this
     /// constant so a block that one reader accepts is not fatal for the other.
     /// </summary>
+    /// <remarks>
+    /// Value: 134 348 832 bytes (about 128 MiB). Threat: the block length (and the legacy PCAP <c>incl_len</c>) is read from
+    /// an untrusted file or stream before the body, and sizes a read buffer or span; without a cap an 8-byte header could
+    /// demand gigabytes. Mitigation: a larger value is rejected as a malformed block (reported with this limit named), never
+    /// truncated. Constant, not configurable. Because the value stays below <see cref="int.MaxValue"/>, a block length that
+    /// passed this check converts to <see cref="int"/> without wrapping. Residual: a valid-looking block of up to the cap can
+    /// still make a stream reader allocate and keep one buffer of that size.
+    /// </remarks>
     internal const uint MaxBlockSize = 32u + (128u * 1024u * 1024u) + 131072u;
 
     /// <summary>SHB fixed size before options: type(4) + len(4) + magic(4) + ver(4) + section_len(8) + trailing_len(4) = 28 bytes.</summary>

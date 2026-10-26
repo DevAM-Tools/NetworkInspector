@@ -413,6 +413,47 @@ internal sealed class StackBuilderTests
             () => builder.RegisterStreamReassemblyConfig(protoId, new()));
     }
 
+    // === Argument validation and single Build ===
+
+    [Test]
+    public async Task Builder_Constructor_NullDependencies_Throw()
+    {
+        using SettingsManager settingsManager = new();
+        FrameInterfaceRegistry registry = new();
+
+        await Assert.That(() => new StackBuilder(null!, registry)).Throws<ArgumentNullException>(); // null! is the input under test
+        await Assert.That(() => new StackBuilder(settingsManager, null!)).Throws<ArgumentNullException>(); // null! is the input under test
+    }
+
+    [Test]
+    [Arguments(500)]
+    [Arguments(10_000)]
+    public async Task Builder_RegisterField_UnknownProtocolId_Throws(int protocolValue)
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        int fieldsBefore = builder.Fields.Length;
+
+        await Assert.That(() => builder.RegisterField(new ProtocolId(protocolValue), "x.field", "Field", FieldType.U64))
+            .Throws<NotFoundRegistrationException>();
+        await Assert.That(builder.Fields.Length).IsEqualTo(fieldsBefore);
+        await Assert.That(builder.GetFieldId("x.field")).IsNull();
+    }
+
+    [Test]
+    public async Task Builder_Build_CalledTwice_Throws()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        List<string> started = [];
+        LifecycleProtocol proto = new("once", "Once", started, []);
+        builder.RegisterProtocol(proto);
+        using Stack stack = builder.Build();
+
+        await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
+        await Assert.That(started).IsEquivalentTo(["once"], CollectionOrdering.Matching);
+    }
+
     // === Deferred Callbacks ===
 
     [Test]

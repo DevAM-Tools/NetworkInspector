@@ -10,6 +10,11 @@ namespace NetworkInspector.Core.Fields;
 /// Ref struct — duck-typed <c>foreach</c> only; does not implement <see cref="IEnumerable{T}"/>.
 /// </para>
 /// When <c>materialize</c> is <see langword="true"/>, lazy parents are materialized before iteration.
+/// <para>
+/// The ref struct and the duck-typed <c>GetEnumerator</c> let <c>foreach</c> run without allocating an enumerator object or
+/// boxing; being a ref struct also means it cannot outlive the parse (it holds a packet reference but no ownership).
+/// </para>
+/// <para><b>Thread-safety:</b> stack-only value for the thread that iterates; no synchronization of its own.</para>
 /// </summary>
 public ref struct MutFieldChildEnumerable
 {
@@ -36,11 +41,23 @@ public ref struct MutFieldChildEnumerable
 /// <summary>
 /// Struct-based enumerator for direct children of a <see cref="MutField"/>.
 /// Walks the sibling linked list — zero allocation, O(1) per step.
+/// <para>
+/// The next index is read from the current field when <see cref="MoveNext"/> is called, so a sibling inserted after the
+/// current field before the next <see cref="MoveNext"/> is visited. <see cref="Current"/> is valid only after
+/// <see cref="MoveNext"/> returned <see langword="true"/>. On a skip packet (no tree) the sequence is empty.
+/// </para>
+/// <para><b>Thread-safety:</b> stack-only value for the thread that iterates; no synchronization of its own.</para>
 /// </summary>
 public ref struct MutFieldChildEnumerator
 {
     private readonly Packet _Packet;
+
+    // Storage index of the child the cursor is on. Before the first MoveNext it is the parent's first child; NullIndex when
+    // the parent has no children, on a skip packet, and once the last child has been passed.
     private ushort _CurrentIndex;
+
+    // Distinguishes the first MoveNext (which must yield the first child that the constructor already positioned on)
+    // from later ones (which advance along NextIndex).
     private bool _Started;
 
     /// <summary>Creates a mutable child enumerator.</summary>
@@ -52,6 +69,7 @@ public ref struct MutFieldChildEnumerator
     {
         _Packet = packet;
 
+        // A skip packet keeps no tree: yield nothing instead of reading field storage that does not exist.
         if (!packet.HasFieldTree)
         {
             _CurrentIndex = FieldBody.NullIndex;
@@ -59,7 +77,7 @@ public ref struct MutFieldChildEnumerator
             return;
         }
 
-        // Optionally materialize lazy parent before reading its child list.
+        // Optionally materialize lazy parent before reading its child list; otherwise a lazy container would look empty.
         // Fast outer guard: if no lazy fields are pending at all, skip the per-field check.
         if (materialize && packet.HasUnpopulatedLazyFields)
         {
@@ -81,10 +99,11 @@ public ref struct MutFieldChildEnumerator
         get => new(_Packet, _CurrentIndex, _Packet.GetFieldRef(_CurrentIndex).FieldId);
     }
 
-    /// <summary>Advances to the next child.</summary>
+    /// <summary>Advances to the next child. Returns <see langword="false"/> after the last child.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
+        // First call: the constructor already positioned the cursor on the first child (or on NullIndex when empty).
         if (!_Started)
         {
             _Started = true;
@@ -110,6 +129,7 @@ public ref struct MutFieldChildEnumerator
 /// Ref struct — duck-typed <c>foreach</c> only; does not implement <see cref="IEnumerable{T}"/>.
 /// </para>
 /// When <c>materialize</c> is <see langword="true"/>, lazy fields are materialized during traversal.
+/// <para><b>Thread-safety:</b> stack-only value for the thread that iterates; no synchronization of its own.</para>
 /// </summary>
 public ref struct MutFieldDescendantEnumerable
 {
@@ -135,14 +155,30 @@ public ref struct MutFieldDescendantEnumerable
 
 /// <summary>
 /// Struct-based DFS pre-order enumerator over descendants of a <see cref="MutField"/>.
-/// Uses an inline stack (no heap allocation for trees with depth ≤ 16).
+/// Uses an inline stack (no heap allocation while the stack holds at most 16 entries).
 /// Falls back to a heap-allocated <c>ushort[]</c> for deeper trees.
+/// <para>
+/// <b>Why a stack of indexes:</b> the tree links are child, next and parent indexes, so a pre-order walk needs no recursion
+/// and no parent pointer. The stack holds the pending next sibling of every ancestor plus the child just pushed, so its
+/// size is bounded by the tree depth (plus one), not by the number of fields; shallow protocol trees therefore never
+/// leave the inline buffer.
+/// </para>
+/// <para>
+/// The next sibling of a field is captured when the field is popped. A sibling inserted after the field later in the same
+/// walk is therefore not visited (unlike the direct-child enumerator, which reads the link on every step).
+/// <see cref="Current"/> is valid only after <see cref="MoveNext"/> returned <see langword="true"/>.
+/// </para>
+/// <para><b>Thread-safety:</b> stack-only value for the thread that iterates; no synchronization of its own.</para>
 /// </summary>
 public ref struct MutFieldDescendantEnumerator
 {
     private readonly Packet _Packet;
     private readonly bool _Materialize;
+
+    // Pending storage indexes in visit order (top = next to visit). Inline up to 16 entries, then spills to the heap.
     private InlineStack16 _Stack;
+
+    // Storage index of the field returned by the last successful MoveNext.
     private ushort _Current;
 
     /// <summary>Creates a DFS pre-order mutable descendant enumerator.</summary>

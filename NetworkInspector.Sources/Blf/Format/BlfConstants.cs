@@ -6,6 +6,10 @@ namespace NetworkInspector.Sources.Blf.Format;
 /// Constants for the BLF (Binary Logging Format) file format.
 /// Includes magic numbers, object type IDs, compression methods, and bus types.
 /// </summary>
+/// <remarks>
+/// Link-compiled into the Exporters assembly (shared wire-format constants, the BLF writer uses them too), so this file
+/// may depend on Core types only and must not reference other types of the Sources assembly. Stateless; thread-safe.
+/// </remarks>
 internal static class BlfConstants
 {
     #region Magic numbers (as little-endian u32)
@@ -258,6 +262,8 @@ internal static class BlfConstants
     /// <summary>Lookup: SocketCAN FD payload byte length (index 0..64) → 4‑bit DLC code for BLF CAN FD payloads.</summary>
     internal static ReadOnlySpan<byte> CanFdPayloadLengthToDlc => _CanFdPayloadLengthToDlc;
 
+    // Built once: a lookup is a single array access instead of the comparison chain of _PayloadLengthToCanFdDlcImpl.
+    // Exposed as a span (above) so callers cannot modify the shared table.
     private static readonly byte[] _CanFdPayloadLengthToDlc = _CreateCanFdPayloadLengthToDlcTable();
 
     /// <summary>Returns the DLC code for a SocketCAN FD <paramref name="payloadByteCount"/> (0–64).</summary>
@@ -280,7 +286,9 @@ internal static class BlfConstants
     }
 
     /// <summary>
-    /// Maps actual FD payload byte count (0–64) → DLC per CiA 1301 / Vector BLF (same logic as exporters).
+    /// Maps actual FD payload byte count (0–64) → DLC (same logic as exporters). DLC 0–8 equal the length; DLC 9–15 stand
+    /// for 12, 16, 20, 24, 32, 48, 64 bytes, so a length between two of those sizes maps to the DLC of the next larger
+    /// size (the frame is padded to that size on the bus).
     /// </summary>
     private static byte _PayloadLengthToCanFdDlcImpl(byte length)
     {

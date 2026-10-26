@@ -9,6 +9,12 @@ namespace NetworkInspector.Core;
 /// and <see cref="Packet.TryParse(Packet, PacketId, Stack, Frame, in ParseOptions, out ParseFailure)"/>
 /// maps that code to <see cref="ParseFailure"/> without throwing.
 /// </para>
+/// <para>
+/// Only <see cref="NotFinalized"/>, <see cref="MaterializerActive"/>, and <see cref="RegistryMismatch"/> are produced by
+/// <see cref="Packet.PrepareForReuse"/> itself. The other members mirror conditions that
+/// <c>Packet.TryParse</c> checks before it calls <see cref="Packet.PrepareForReuse"/>; they exist so the mapping to
+/// <see cref="ParseFailure"/> stays total if an internal caller skips those checks.
+/// </para>
 /// </summary>
 public enum RecycleError
 {

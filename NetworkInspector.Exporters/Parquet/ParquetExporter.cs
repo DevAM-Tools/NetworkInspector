@@ -14,6 +14,13 @@ namespace NetworkInspector.Exporters.Parquet;
 /// (<see cref="int"/> / Parquet INT32).
 /// </para>
 /// <para>
+/// <b>Memory model:</b> packets are accumulated column-wise in one <see cref="ColumnarPacketBatch"/> and handed to the
+/// <see cref="ParquetBatchSink"/> as one row group per table whenever the packet count or the estimated batch size
+/// reaches its limit (see <see cref="Builder.WithMaxPacketsPerBlock"/> and <see cref="Builder.WithMaxBlockSize"/>).
+/// Memory therefore stays bounded by one batch regardless of capture size, and Parquet's columnar encoding gets
+/// row groups large enough to compress well.
+/// </para>
+/// <para>
 /// <b>Thread safety:</b> Not thread-safe. <see cref="OnPacket"/> and <see cref="OnFinish"/>
 /// must be called sequentially from a single thread. Statistics are valid to read after
 /// <see cref="OnFinish"/> returns. Parquet.Net exposes only async writers, so the exporter blocks on them;
@@ -44,6 +51,9 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
 
     private ColumnarPacketBatch? _Batch;
     private ParquetBatchSink? _Sink;
+
+    // Sum of the in-memory size estimates of all flushed batches. Used for EstimatedOutputBytes so that reading the
+    // property never touches the file system.
     private long _FlushedOutputBytes;
 
     private bool _HasError;
@@ -96,7 +106,10 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
         get;
     }
 
-    /// <summary>Number of packets written so far.</summary>
+    /// <summary>
+    /// Number of packets accepted so far. A packet counts as soon as it is added to the current batch, which may
+    /// still be buffered in memory and not yet written to a file.
+    /// </summary>
     public int PacketCount
     {
         get; private set;
@@ -106,6 +119,10 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     public int WrittenCount => PacketCount;
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// An in-memory estimate (flushed batches plus the open batch), not the on-disk size: Parquet compresses and
+    /// encodes the columns, so the files are usually smaller.
+    /// </remarks>
     public long EstimatedOutputBytes =>
         _FlushedOutputBytes + (_Batch?.EstimatedSizeBytes ?? 0);
 
@@ -138,6 +155,8 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     /// <inheritdoc/>
     public bool OnPacket(Packet packet)
     {
+        // Stop signals first: cancellation, an earlier fatal error, or a finished exporter all end the export. After
+        // OnFinish the sink and batch are released, so a late packet must never reach them.
         if (_CancellationToken.IsCancellationRequested)
         {
             return false;
@@ -148,6 +167,7 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
             return false;
         }
 
+        // Lazy start: nothing is created on disk until the first packet arrives (see "Empty export" above).
         if (!_Started)
         {
             _Start(packet);
@@ -161,6 +181,8 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     }
 
     /// <inheritdoc/>
+    /// <remarks>Idempotent: only the first call finalizes the files. Also invoked by <see cref="Dispose"/>.</remarks>
+    /// <exception cref="AggregateException">One or more resource release steps (sink or batch disposal) failed.</exception>
     public void OnFinish()
     {
         if (_Finished)
@@ -214,6 +236,8 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     /// <summary>Error channel of the finish sequence: marks the error, counts it, and raises <see cref="ItemSkipped"/>.</summary>
     private void _ReportFinishError(ExportErrorKind kind, string message)
     {
+        // A failure while finalizing the files is fatal for the dataset (the footer or catalog may be missing), so
+        // it always sets the error flag regardless of ErrorTolerance. Counters saturate instead of wrapping.
         _HasError = true;
         if (ErrorCount < int.MaxValue)
         {
@@ -242,6 +266,9 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     /// <param name="firstPacket">The first packet of the export.</param>
     private void _Start(Packet firstPacket)
     {
+        // _Started is set before the work so a failed start is not retried with the next packet; the error flag
+        // below then stops the export. The sink constructor already deletes the previous dataset and writes
+        // protocols.parquet, so this step is the first (and only) place where existing files are removed.
         _Started = true;
         try
         {
@@ -266,11 +293,13 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     /// <summary>Adds one packet to the current batch, flushing to the sink if the batch is full.</summary>
     private bool _HandlePacket(Packet packet)
     {
+        // Target reached: refuse further packets so the caller stops feeding the exporter.
         if (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount)
         {
             return false;
         }
 
+        // Skip packets carry no field tree, so there is nothing to put into the columns; counted as a skipped item.
         if (!packet.HasFieldTree)
         {
             return _HandleSkip(new ExportErrorEventArgs
@@ -281,13 +310,12 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
             });
         }
 
+        // The packet is added first and the (possibly large) flush happens only when a limit is reached.
+        // AddPacket is all-or-nothing: when it throws, the batch is exactly as it was, so only this packet is skipped.
+        bool shouldFlush;
         try
         {
-            bool shouldFlush = _Batch!.AddPacket(packet);
-            if (shouldFlush)
-            {
-                _FlushBatch();
-            }
+            shouldFlush = _Batch!.AddPacket(packet);
         }
         catch (Exception ex)
         {
@@ -299,6 +327,35 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
             });
         }
 
+        if (shouldFlush)
+        {
+            // The batch includes this packet, and the packets before it in the batch were already counted as written.
+            int packetsInBatch = _Batch.PacketCount;
+            try
+            {
+                _FlushBatch();
+            }
+            catch (Exception ex)
+            {
+                // _FlushBatch discarded the batch (see there), so none of its packets reached the dataset completely. The
+                // earlier ones were counted as written when they were accepted; take them back and count them as
+                // skipped, so WrittenCount and SkippedCount describe what is in the files. This packet is counted by
+                // _HandleSkip below.
+                int lostEarlier = packetsInBatch - 1;
+                int itemIndex = PacketCount - lostEarlier;
+                PacketCount -= lostEarlier;
+                SkippedCount = SkippedCount > int.MaxValue - lostEarlier
+                    ? int.MaxValue
+                    : SkippedCount + lostEarlier;
+                return _HandleSkip(new ExportErrorEventArgs
+                {
+                    ItemIndex = itemIndex,
+                    Kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
+                    Message = $"Parquet batch write failed, {packetsInBatch.ToString(CultureInfo.InvariantCulture)} packets lost: {ex.Message}",
+                });
+            }
+        }
+
         PacketCount++;
         return true;
     }
@@ -307,10 +364,27 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     /// Flushes the current batch to the sink and accounts its estimated size toward
     /// <see cref="EstimatedOutputBytes"/> (in-memory only — no filesystem probe).
     /// </summary>
+    /// <remarks>
+    /// The batch is emptied whether the flush succeeds or not. The sink appends the batch table by table and cannot undo a
+    /// partial write, so keeping the rows after a failure would write the tables that did succeed a second time on the
+    /// next flush (duplicate packet rows). It would also let the batch grow without bound while the output keeps failing.
+    /// </remarks>
     private void _FlushBatch()
     {
+        // Read the estimate before WriteBatch/Reset: Reset clears it.
         long batchBytes = _Batch!.EstimatedSizeBytes;
-        _Sink!.WriteBatch(_Batch);
+        try
+        {
+            _Sink!.WriteBatch(_Batch);
+        }
+        catch
+        {
+            _Batch.Reset();
+            throw;
+        }
+
+        // Saturating add: the sum is only a progress estimate, and wrapping to a negative value would be worse
+        // than pinning it at the maximum.
         if (_FlushedOutputBytes > long.MaxValue - batchBytes)
         {
             _FlushedOutputBytes = long.MaxValue;
@@ -360,6 +434,10 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
         private string _UiName = "Parquet Exporter";
         private string? _Description;
         private CancellationToken _CancellationToken;
+        // Flush thresholds for the in-memory batch: value 1..int.MaxValue packets / 1..long.MaxValue estimated bytes;
+        // threat: unbounded memory growth, since the whole batch is held until flushed; configurable by the
+        // caller through WithMaxPacketsPerBlock / WithMaxBlockSize (the library user, not an end user);
+        // whichever limit is hit first triggers the flush. Defaults 50 000 packets / 16 MiB.
         private int _MaxPacketsPerBlock = 50000;
         private long _MaxBlockSize = 16 * 1024 * 1024;
         private int _TargetPacketCount;
@@ -369,8 +447,11 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
         /// <summary>
         /// Sets the output directory. Required — Parquet output is always a directory of files
         /// (see <see cref="ParquetBatchSink"/> for the layout), never a single stream.
-        /// The directory is created lazily on the first <see cref="OnPacket"/> call.
+        /// The directory is created lazily on the first <see cref="OnPacket"/> call. Existing dataset files in it
+        /// (the four table files and <c>fields/*.parquet</c>) are deleted at that point.
         /// </summary>
+        /// <param name="path">Output directory; resolved to a full path immediately so later working-directory changes do not move it.</param>
+        /// <exception cref="ArgumentException"><paramref name="path"/> is <see langword="null"/> or empty.</exception>
         public Builder ToDirectory(string path)
         {
             ArgumentException.ThrowIfNullOrEmpty(path);
@@ -404,9 +485,16 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
         /// When the target is reached, <see cref="OnPacket"/> returns <c>false</c> and
         /// <see cref="IsFinished"/> becomes <c>true</c>.
         /// </summary>
+        /// <param name="count">Packet limit; 0 means unlimited.</param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="count"/> is negative or exceeds <see cref="ArrayIndexIdRange.MaxCount"/>.
+        /// </exception>
         public Builder WithTargetPacketCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+            // The upper limit is the number of items an array-index ID can address (ArrayIndexIdRange.MaxCount);
+            // packet IDs are non-negative int32 values (INT32 columns).
             if (count > ArrayIndexIdRange.MaxCount)
             {
                 throw new ArgumentOutOfRangeException(
@@ -421,6 +509,8 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
         }
 
         /// <summary>Sets the maximum number of packets accumulated per batch before an automatic flush.</summary>
+        /// <param name="count">Packets per row group; must be positive.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is zero or negative.</exception>
         public Builder WithMaxPacketsPerBlock(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
@@ -428,7 +518,12 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
             return this;
         }
 
-        /// <summary>Sets the maximum estimated batch size (bytes) before an automatic flush.</summary>
+        /// <summary>
+        /// Sets the maximum estimated batch size (bytes) before an automatic flush. The size is the batch's in-memory
+        /// estimate, so the real peak memory can be higher.
+        /// </summary>
+        /// <param name="bytes">Estimated bytes per row group; must be positive.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bytes"/> is zero or negative.</exception>
         public Builder WithMaxBlockSize(long bytes)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bytes);

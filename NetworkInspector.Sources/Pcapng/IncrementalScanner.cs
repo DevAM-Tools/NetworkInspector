@@ -47,7 +47,11 @@ internal readonly ref struct ScannedFrame
         get; init;
     }
 
-    /// <summary>Direct reference to the packet data (only valid during scan).</summary>
+    /// <summary>
+    /// Direct reference to the packet data in the backing buffer (the in-memory array or the primary mmap view). It is a
+    /// <see cref="ReadOnlySpan{T}"/> so it cannot be stored; copy the bytes before the scan step that produced it ends,
+    /// because a mapped view is only valid while the caller holds its scan lease (<see cref="DataBackend.TryAcquireScanLease"/>).
+    /// </summary>
     internal ReadOnlySpan<byte> Data
     {
         get; init;
@@ -65,6 +69,9 @@ internal enum ScanPacketResult
 
     /// <summary>The packet names an interface that was not declared in this section.</summary>
     SkipNoInterface,
+
+    /// <summary>The packet names an interface whose Interface Description Block was malformed (see <see cref="InterfaceInfo.IsMalformed"/>).</summary>
+    SkipMalformedInterface,
 
     /// <summary>The interface timestamp resolution cannot be represented.</summary>
     SkipUnsupportedTimestampResolution,
@@ -197,7 +204,16 @@ internal sealed class LegacyPcapFormat : ScannerFormat
 /// available virtual address space for mmap.
 /// </para>
 /// <para><b>Thread-safety:</b> This class is <b>not</b> thread-safe.
-/// All scanning must occur from a single thread.</para>
+/// All scanning (<see cref="NextFrame"/>, <see cref="OnSkip"/> and <see cref="OnInterfaceAdded"/> callbacks) occurs on a
+/// single thread, the only writer of the index and the sections. Other threads may read what the scanner has published
+/// through <see cref="Index"/> and <see cref="Format"/> because both publish their entries lock-free.</para>
+/// <para>
+/// Error policy: a corrupt file header throws <see cref="PcapException"/> from the constructor (nothing has been indexed
+/// yet). A corrupt block later in the file keeps every frame found before it: the scanner reports the problem through
+/// <see cref="OnSkip"/> and ends the scan, because a bad length field makes the position of the next block unknowable.
+/// A packet block that is well framed but unusable (unknown interface, unsupported timestamp resolution) is skipped
+/// and scanning continues.
+/// </para>
 /// </remarks>
 internal sealed class IncrementalScanner
 {
@@ -264,7 +280,8 @@ internal sealed class IncrementalScanner
         _Backend = backend;
         _Index = new();
 
-        // Read the minimum number of bytes needed for format detection.
+        // Read the minimum number of bytes needed for format detection. A shorter span (tiny file) fails detection
+        // below instead of reading past the end: the backend clamps to the file size.
         ReadOnlySpan<byte> peek = backend.GetScanSpan(0, PcapFormatDetection.MinDetectionBytes);
 
         if (!PcapFormatDetection.TryDetect(peek, out FormatDetectionResult detection))
@@ -289,8 +306,9 @@ internal sealed class IncrementalScanner
     /// <summary>
     /// Reads the initial SHB via the backend and creates the first section.
     /// </summary>
-    /// <param name="byteSwapped">Whether the file uses swapped byte order.</param>
+    /// <param name="byteSwapped">Whether the file uses swapped byte order (from the byte-order magic of the first SHB).</param>
     /// <param name="fileSize">Total file size in bytes.</param>
+    /// <exception cref="PcapException">The first SHB is truncated, oversized, unparsable, or its trailing length disagrees.</exception>
     private PcapNgFormat _InitializePcapNg(bool byteSwapped, long fileSize)
     {
         // Read just the 8-byte block prefix to obtain blockLength before fetching
@@ -304,6 +322,9 @@ internal sealed class IncrementalScanner
         EndianReader reader = new(byteSwapped);
         uint blockLength = reader.ReadU32(prefix[4..]);
 
+        // The length is attacker-controlled: round it without wrap, then bound it from below (smallest valid SHB)
+        // and above (safety cap) before it sizes any read. The same rules protect every later block in the scan loop;
+        // here a violation throws because a file whose first block is unusable has no frames to keep.
         if (!PcapPadding.TryRoundBlockLength(blockLength, out uint roundedLength))
         {
             throw new PcapException($"SHB block length {blockLength} cannot be rounded to a multiple of 4.");
@@ -344,9 +365,10 @@ internal sealed class IncrementalScanner
         // First SHB starts at file offset 0.
         SectionInfo section = new(byteSwapped, sectionLength, 0);
 
-        // Parse SHB options if present (after the 24-byte struct, before the trailing length)
+        // Parse SHB options if present (after the fixed fields, before the trailing length). The section is fully built here,
+        // before AddSection publishes it, so readers on other threads never see a section without its options.
         // Options area: offset 24 .. blockLength - 4
-        int optionsStart = 24; // SHB struct size
+        int optionsStart = 24; // type(4) + length(4) + byte-order magic(4) + version(4) + section length(8)
         int optionsEnd = (int)blockLength - 4; // before trailing block_total_length
         if (optionsEnd > optionsStart && optionsEnd <= shbData.Length)
         {
@@ -356,7 +378,8 @@ internal sealed class IncrementalScanner
         PcapNgFormat format = new();
         format.AddSection(section);
 
-        // Advance past the SHB (4-byte aligned)
+        // Advance past the SHB (blockLength is already a multiple of 4; the cast is safe because of the safety cap above).
+        // A file that consists of the SHB alone is exhausted immediately, with an empty index.
         _Offset = PcapPadding.PaddedLength((int)blockLength);
         if (_Offset >= fileSize)
         {
@@ -388,6 +411,8 @@ internal sealed class IncrementalScanner
         uint rawNetwork = reader.Swap(hdr.Network.Value);
         uint rawSnapLen = reader.Swap(hdr.SnapLen.Value);
 
+        // The link type is the low 16 bits of the 32-bit network field. The snaplen is kept exactly as declared
+        // (0 means not declared) because TryValidateLegacyInclLen applies the default cap only for an undeclared value.
         LegacyPcapInfo info = new(
             detection.ByteSwapped,
             detection.NanosecondTimestamps,
@@ -406,7 +431,10 @@ internal sealed class IncrementalScanner
     /// files larger than 2 GiB are handled correctly.
     /// </summary>
     /// <param name="frame">The scanned frame (only valid when the method returns true).</param>
-    /// <returns>True if a frame was discovered; false if scanning is complete.</returns>
+    /// <returns>
+    /// True if a frame was discovered. False if scanning is complete (<see cref="IsExhausted"/> is then true) or if a
+    /// well-framed packet block was skipped (<see cref="IsExhausted"/> stays false: the caller must call again).
+    /// </returns>
     internal bool NextFrame(out ScannedFrame frame)
     {
         if (_Exhausted)
@@ -429,11 +457,16 @@ internal sealed class IncrementalScanner
     /// and IDBs, and returning when a packet block is found.
     /// The <c>_Offset</c> field is always a <c>long</c>; no int cast is
     /// performed so files beyond 2 GiB are handled correctly.
+    /// A block whose framing is corrupt ends the scan through <see cref="_ExhaustCorrupt"/> (the position of the next
+    /// block cannot be trusted); a well-framed but unusable packet block is skipped through <see cref="_ReportPacketSkip"/>
+    /// and the scan can continue with the next call.
     /// </summary>
     private bool _NextFramePcapNg(PcapNgFormat format, out ScannedFrame frame)
     {
         long fileSize = _Backend.FileSize;
 
+        // Loops only over blocks that are not packets (SHB, IDB, unknown): a packet block returns to the caller, so
+        // one call yields at most one frame and a lazy scan can stop after any frame.
         while (true)
         {
             // Need at least 8 bytes: block type (4) + block length (4).
@@ -489,7 +522,10 @@ internal sealed class IncrementalScanner
                 blockLength = reader.ReadU32(headerPeek[4..]);
             }
 
-            // Validate block length, 4-byte alignment, and trailing length copy.
+            // Validate block length, 4-byte alignment, and trailing length copy. The length field comes from the file,
+            // so every check below runs before the length sizes a read (GetScanSpan) or is cast to int. Corruption here
+            // ends the scan: without a trustworthy length the next block cannot be located.
+            // The trailing copy of an SHB is in the byte order of the new section, any other block in the current one.
             bool trailingSwap = blockType == PcapConstants.BlockTypeSHB
                 ? shbSwap
                 : format.CurrentSection.ByteSwapped;
@@ -524,6 +560,8 @@ internal sealed class IncrementalScanner
                     out frame);
             }
 
+            // The cast is safe: blockLength <= MaxBlockSize < int.MaxValue. The span is a zero-copy view of the backing
+            // buffer; the whole block is requested once so the parsers below never read past it.
             int readSize = (int)blockLength;
             ReadOnlySpan<byte> blockData = _Backend.GetScanSpan(_Offset, readSize);
             if (blockData.Length < readSize)
@@ -541,7 +579,10 @@ internal sealed class IncrementalScanner
                     out frame);
             }
 
-            // Advance offset past this block (4-byte aligned)
+            // Advance offset past this block (4-byte aligned; blockLength is already a multiple of 4, so this is
+            // a defensive round-up that keeps the offset aligned even if that validation is ever relaxed).
+            // For the packet cases below _Offset is advanced before the result is evaluated, so a skipped
+            // packet block never makes the next call read the same block again.
             long nextOffset = (_Offset + blockLength + 3) & ~3L;
 
             switch (blockType)
@@ -560,6 +601,9 @@ internal sealed class IncrementalScanner
                     _Offset = nextOffset;
                     continue;
 
+                // The three packet cases share one shape: the scan runs first because _CommitScannedPacket records
+                // _Offset (still the block start) in the index; only then is _Offset moved past the block. The skip
+                // report gets the saved start offset because _Offset has already advanced.
                 case PcapConstants.BlockTypeEPB:
                     {
                         ScanPacketResult epbResult = _TryScanEnhancedPacket(blockData, format, blockLength, out frame);
@@ -606,7 +650,8 @@ internal sealed class IncrementalScanner
                     }
 
                 default:
-                    // Unknown block type — not a frame; do not raise FrameSkipped.
+                    // Unknown or irrelevant block type (name resolution, statistics, custom, ...) — not a frame; do not
+                    // raise FrameSkipped. The validated length lets the scan step over it without interpreting it.
                     _Offset = nextOffset;
                     continue;
             }
@@ -641,11 +686,15 @@ internal sealed class IncrementalScanner
 
         EndianReader reader = new(format.Info.ByteSwapped);
 
+        // The record header fields are stored in the file's byte order (swapped below via EndianReader, since the
+        // parsed struct reads them little-endian). The span has the full header
+        // size (checked above), so a parse failure is not expected; the branch is defensive, and it reports the failure like
+        // every other record-boundary error instead of ending the scan unseen (a scan that stops silently looks like a
+        // file that simply ended).
         if (!PcapPacketHeader.TryParse(packetHeader, out PcapPacketHeader rec, out _))
         {
-            _MarkExhausted();
-            frame = default;
-            return false;
+            return _ExhaustCorrupt(
+                "Legacy PCAP record header could not be parsed.", FrameReadErrorKind.MalformedHeader, out frame);
         }
 
         uint tsSec = reader.Swap(rec.TsSec.Value);
@@ -707,9 +756,10 @@ internal sealed class IncrementalScanner
         uint blockLength,
         long fileOffset)
     {
-        // CurrentSectionIndex is a ushort (0–65535); adding another section when
-        // there are already 65536 sections would silently wrap the section index to 0,
-        // aliasing new interfaces onto the first section. Hard-fail instead.
+        // CurrentSectionIndex is a ushort (0–65535); a section index beyond that would silently wrap
+        // to 0, aliasing new interfaces onto the first section. Hard-fail instead (the corrupt-block
+        // path ends the scan). The guard allows at most ushort.MaxValue sections (indexes 0 to 65534), one fewer
+        // than a ushort could address.
         if (format.SectionCount >= ushort.MaxValue)
         {
             return false;
@@ -750,6 +800,27 @@ internal sealed class IncrementalScanner
                 blockLength,
                 out IdbFields idb))
         {
+            // A malformed IDB still occupies its interface index, and it is reported. Problem avoided: packets name their
+            // interface by the position of its IDB in the section, so dropping the block silently shifted every later
+            // interface by one and decoded their packets with the wrong link type and clock. The placeholder makes the packets
+            // of the broken interface skip (with a message) and keeps the following interfaces where the file puts them.
+            // _Offset is still the start of this block here; the caller advances it afterwards.
+            InterfaceInfo placeholder = InterfaceInfo.CreateMalformed();
+            int placeholderIndex = section.AddInterface(placeholder);
+            if (placeholderIndex >= 0)
+            {
+                // The owner reserves the position in its interface table (it registers nothing for a malformed interface).
+                OnInterfaceAdded?.Invoke(format.CurrentSectionIndex, (ushort)placeholderIndex, section, placeholder);
+                OnSkip?.Invoke(new FrameReadErrorEventArgs
+                {
+                    FrameIndex = _Index.Count,
+                    FileOffset = _Offset,
+                    Kind = FrameReadErrorKind.MalformedHeader,
+                    Message = Invariant(
+                        $"Interface Description Block {placeholderIndex} is malformed; its packets are skipped."),
+                });
+            }
+
             return;
         }
 
@@ -851,6 +922,8 @@ internal sealed class IncrementalScanner
         EpbFields fields,
         out ScannedFrame frame)
     {
+        // _Offset is still the start of the block here (the caller advances it afterwards). The interface id was
+        // validated against the section's interface list by the block parser, so the ushort cast cannot truncate.
         long dataFileOffset = _Offset + bytesBeforePacketData;
         ushort interfaceId = (ushort)fields.InterfaceId;
 

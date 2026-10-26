@@ -37,7 +37,8 @@ internal sealed class RootProtocol : IProtocol
 
     /// <summary>
     /// <see cref="RootProtocol"/> is never called directly — <see cref="PacketProtocol"/>
-    /// is the parse entry point. Returns 0 as a safety fallback.
+    /// is the parse entry point (<see cref="Packet"/> dispatches to the stack's packet protocol, not to the root).
+    /// Returns 0 (Ok, nothing consumed) as a safety fallback.
     /// </summary>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context) => 0;
 

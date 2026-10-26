@@ -8,7 +8,8 @@ namespace NetworkInspector.CLI.Commands;
 /// directory-oriented exporters (e.g. Parquet datasets).
 /// <para>
 /// Size splits use live <see cref="IExportByteProgress.EstimatedOutputBytes"/> from the
-/// active exporter — never filesystem probes.
+/// active exporter — never filesystem probes. The size limit is therefore approximate: it is tested before the next item is
+/// written, so an output can end up larger than the limit by one item plus what the exporter had not counted yet.
 /// </para>
 /// <para>This type is <b>not thread-safe</b>; all members must be called from a single thread.
 /// The internal file-index counter is not synchronized.</para>
@@ -54,9 +55,16 @@ internal sealed class SplitOutputManager
     /// <summary>
     /// Creates a new split output manager.
     /// </summary>
-    /// <param name="outputPath">Output file or directory path (must be a real path, not stdout).</param>
-    /// <param name="maxSize">Maximum bytes per output (0 = unlimited). Callers should pass MiB * 1024 * 1024.</param>
-    /// <param name="maxCount">Maximum items per output (0 = unlimited).</param>
+    /// <param name="outputPath">
+    /// Output file or directory path (must be a real path, not stdout). Not validated here: the commands refuse an empty path and
+    /// <c>-</c> while parsing their arguments, so a non-empty path is guaranteed.
+    /// </param>
+    /// <param name="maxSize">
+    /// Maximum bytes per output (0 = unlimited). Callers should pass MiB * 1024 * 1024 (see
+    /// <see cref="CliArgumentParsing.MiBToSplitSizeBytes"/>). Not validated here: the argument parsers guarantee a value of zero or
+    /// more.
+    /// </param>
+    /// <param name="maxCount">Maximum items per output (0 = unlimited). Not validated here: the argument parsers guarantee zero or more.</param>
     /// <param name="isDirectoryOutput">
     /// When <see langword="true"/>, treat <paramref name="outputPath"/> as a dataset directory base
     /// (no extension stripping).
@@ -71,6 +79,8 @@ internal sealed class SplitOutputManager
         _MaxCount = maxCount;
         _IsDirectoryOutput = isDirectoryOutput;
 
+        // A trailing separator would hide the final name ("out/" has no file name), so it is dropped before the name is split into
+        // base and extension.
         string normalized = outputPath.TrimEnd(
             Path.DirectorySeparatorChar,
             Path.AltDirectorySeparatorChar);
@@ -91,8 +101,11 @@ internal sealed class SplitOutputManager
     /// <summary>
     /// Returns the path for the next output file or dataset directory.
     /// For single-output mode, always returns the base path (+ extension for files).
-    /// For split mode, appends a sequential number.
+    /// For split mode, appends a sequential number: <c>{base}_{index:D5}{extension}</c> with the index starting at 1 (five
+    /// digits at least, more after 99999 splits, invariant culture). In split mode every call consumes an index, so call it
+    /// exactly once per output that is opened; the callers use a manager of their own for a read-only look at the first path.
     /// </summary>
+    /// <returns>The path of the next output.</returns>
     internal string NextPath()
     {
         if (!IsSplitting)
@@ -113,9 +126,16 @@ internal sealed class SplitOutputManager
     /// <see cref="IExportByteProgress.EstimatedOutputBytes"/> from the active exporter
     /// (committed + pending buffers). Ignored when size-splitting is disabled.
     /// </param>
-    /// <param name="itemCount">Number of frames or packets written to the current output.</param>
-    internal bool NeedsSplit(long estimatedOutputBytes, int itemCount)
+    /// <param name="itemCount">
+    /// Number of frames or packets written to the current output. A <see langword="long"/>: an output without a count limit can
+    /// hold more than <see cref="int.MaxValue"/> frames (the size limit may be the only one set).
+    /// </param>
+    /// <returns><see langword="true"/> when the current output has reached a limit and the next item belongs in a new output.</returns>
+    internal bool NeedsSplit(long estimatedOutputBytes, long itemCount)
     {
+        // The limit is the size or count at which an output is full (greater-or-equal). The loops ask before an item is written
+        // and write that item into the output they open at once, so every output holds at least one item and a limit below the
+        // size of one item cannot produce empty outputs.
         if (_MaxSize > 0 && estimatedOutputBytes >= _MaxSize)
         {
             return true;

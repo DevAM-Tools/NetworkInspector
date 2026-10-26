@@ -6,8 +6,16 @@ namespace NetworkInspector.CLI;
 /// Plugins, application settings, and profile settings for one command. <see cref="OpenAsync"/> resolves the settings base and
 /// the profile, loads the settings, loads the built-in plugins and those of <c>plugins.paths</c>, builds the profile settings
 /// (stack contributions and plugin settings), and starts the plugins; <see cref="DisposeAsync"/> stops them in reverse order
-/// and releases everything. The same order runs in the host and the app. Single-threaded use by the command, except that
-/// plugins may log from any thread.
+/// and releases everything. Starting and stopping is done by <see cref="PluginLifecycle"/>, which the host and the app use as
+/// well, so the three applications cannot drift apart; the isolation of plugin code (every call on a thread-pool thread, bounded
+/// by a timeout, a throwing plugin fails only itself) lives there. Single-threaded use by the command, except that plugins may
+/// log from any thread (their lines go through <see cref="CliPluginLog"/>, which locks the error writer).
+/// <para>
+/// Order of <see cref="OpenAsync"/>, and why: the application settings load first because they hold <c>plugins.paths</c>, which
+/// decides which plugins are found; the plugins are loaded and their application settings registered; only then the profile
+/// settings are built, because the stack contributions and the profile settings of the plugins are known only after the load;
+/// the plugins start last, when both settings managers are complete, because the context a plugin receives needs both.
+/// </para>
 /// </summary>
 internal sealed class CliPluginSession : IAsyncDisposable
 {
@@ -22,10 +30,14 @@ internal sealed class CliPluginSession : IAsyncDisposable
     /// <summary>File name of the plugin scan cache under the settings base.</summary>
     private const string _ScanCacheFile = "plugin-scan-cache.json";
 
-    /// <summary>Largest size of the log file before it rotates: 10 MiB.</summary>
+    /// <summary>
+    /// Largest size of the log file before it rotates: 10 MiB. Limit record: value 10 MiB · threat: unbounded growth of the log
+    /// file filling the disk of the user (together with <see cref="_LogMaxFiles"/> the log occupies at most about 50 MiB) · constant,
+    /// not configurable by operator or user · posture: secure by default (a tight bound that needs no tuning).
+    /// </summary>
     private const long _LogMaxBytes = 10_485_760;
 
-    /// <summary>Number of log files kept, the current one included.</summary>
+    /// <summary>Number of log files kept, the current one included (rotation shifts <c>ni.log</c> to <c>ni.1.log</c> and so on).</summary>
     private const int _LogMaxFiles = 5;
 
     #endregion
@@ -34,10 +46,20 @@ internal sealed class CliPluginSession : IAsyncDisposable
 
     private readonly CliIo _Io;
 
+    // Null when the log file could not be opened; the error writer still gets every line then.
     private readonly CliLogFile? _LogFile;
 
+    // One context per plugin name, created on first use and shared by start and stop. Names compare ignoring case. Not
+    // thread-safe: only the lifecycle calls (sequential) and the command thread touch it.
     private readonly Dictionary<string, PluginContext> _Contexts = new(StringComparer.OrdinalIgnoreCase);
 
+    // Lines of the profile settings that were reported already (level, source, and text). The profile files are loaded and the
+    // plugin contributions applied twice per command, once for the profile manager of the session and once for the stack that
+    // export and convert build; a problem found by both would otherwise be printed twice. Not thread-safe: only the command
+    // thread reports profile problems.
+    private readonly HashSet<string> _ReportedProfileLines = new(StringComparer.Ordinal);
+
+    // Makes DisposeAsync idempotent; a plain field because the session is used by one thread at a time.
     private bool _Disposed;
 
     #endregion
@@ -56,11 +78,18 @@ internal sealed class CliPluginSession : IAsyncDisposable
         _Io = io;
         _LogFile = logFile;
 
-        // Placeholder until OpenAsync builds the real one; PluginContext needs both managers.
+        // Placeholder until OpenAsync builds the real one: the real manager is built by an instance method (it needs the
+        // settings base, the profile, the registry, and the writers of this session), so the session has to exist first. A
+        // manager without a storage path owns no files; OpenAsync disposes it when it replaces it.
         ProfileSettings = new();
     }
 
-    /// <summary>Stops the plugins in reverse load order and releases the registry, the settings, and the log file.</summary>
+    /// <summary>
+    /// Stops the plugins in reverse load order and releases the registry, the settings, and the log file. Safe to call twice.
+    /// The stop runs first because a stopping plugin may still log and read its settings; everything it can reach is released
+    /// only afterwards (contexts first, since they are subscribed to the settings managers).
+    /// </summary>
+    /// <returns>A task that completes when the plugins are stopped and the resources are released.</returns>
     public async ValueTask DisposeAsync()
     {
         if (_Disposed)
@@ -77,6 +106,8 @@ internal sealed class CliPluginSession : IAsyncDisposable
         }
         finally
         {
+            // Release even when the stop throws: contexts, then the registry, the settings managers, and the log file that the
+            // plugin lines went to.
             foreach (PluginContext context in _Contexts.Values)
             {
                 context.Dispose();
@@ -136,13 +167,15 @@ internal sealed class CliPluginSession : IAsyncDisposable
             return (null, resolveExit);
         }
 
-        // 2. Log: stderr always, the file when it can be opened.
+        // 2. Log: stderr always, the file when it can be opened. The folder "logs" under the base is a reserved name, so no
+        //    profile can collide with it. A log that cannot be used is a warning, never a reason to fail the command; once
+        //    open, a failing append reports once through the problem sink and switches the file off.
         CliLogFile? logFile = null;
         if (CliLogFile.TryOpen(Path.Combine(settingsBase, "logs", "ni.log"), _LogMaxBytes, _LogMaxFiles, TimeProvider.System,
             out CliLogFile? opened, out string? logProblem))
         {
             logFile = opened;
-            logFile.ProblemSink = text => _WriteLine(io, "Warning " + text);
+            logFile.ProblemSink = text => WriteLogProblem(io, text);
         }
         else
         {
@@ -150,12 +183,15 @@ internal sealed class CliPluginSession : IAsyncDisposable
         }
 
         // 3. Application settings, plugins, profile settings; then the application is composed and the plugins start.
+        //    Everything created before the session object exists is released by the catch blocks below (_AbandonAsync).
         SettingsManager application = SettingsManagerFactory.Create(settingsBase, ApplicationFolder, options.MaxConfigFileBytes,
             options.MaxJsonDepth);
         PluginRegistry registry = new();
         CliPluginSession? session = null;
         try
         {
+            // 3a. Application settings first: they hold plugins.paths (which plugins exist) and the start and stop timeouts.
+            //     A file that cannot be loaded (too large, too deep, malformed) is a warning; the setting keeps its default.
             foreach (SettingsLoadWarning warning in application.Load())
             {
                 _LogSession(io, logFile, "Warning", "settings", warning.Message);
@@ -163,23 +199,36 @@ internal sealed class CliPluginSession : IAsyncDisposable
 
             PluginPathsSetting.Register(application);
             PluginTimeoutSettings.Register(application);
+
+            // 3b. Load the built-in plugins and those found in the configured folders into the registry. The application tier
+            //     is Core: a plugin of a higher tier (it needs a host or the app) is recorded as skipped and its assembly is
+            //     not loaded.
             IReadOnlyList<string> paths = PluginPathsSetting.Read(application.ReadOnly,
                 text => _LogSession(io, logFile, "Warning", "settings", text));
             PluginLoader loader = new(new PluginLoaderOptions(Path.Combine(settingsBase, _ScanCacheFile),
                 NetworkInspectorBuiltIns.CreateAll()));
             PluginLoadReport report = loader.Load(PluginTier.Core, paths, registry, cancellationToken);
+
+            // 3c. Settings that plugins contribute to the application scope; a plugin whose contribution fails is reported
+            //     and the others carry on.
             _LogFailures(io, logFile, registry.ApplySettings(SettingScope.Application, application));
 
+            // 3d. The session object, then the real profile settings (they need the session's registry and writers), then the
+            //     load problems, then the start. The start comes last so that a plugin sees complete settings in its context.
             session = new CliPluginSession(options, settingsBase, profile, application, registry, report, io, logFile);
             session.ProfileSettings.Dispose();
             session.ProfileSettings = session._OpenProfileManager();
             session._LogLoadProblems();
             session.Report = await PluginLifecycle.StartAsync(report, registry.Disable, session._ContextFor,
                 PluginTimeoutSettings.ReadStart(application.ReadOnly), cancellationToken).ConfigureAwait(false);
+
+            // 0 is ExitCode.Success; the exit code is unused when the session opened.
             return (session, 0);
         }
         catch (PersistenceSettingsException ex)
         {
+            // A settings folder that cannot be read or written is an expected failure of the environment: one error line, exit
+            // code 3, and the half-built session is released.
             io.Error.WriteLine("Error: " + ex.Message);
             await _AbandonAsync(session, registry, application, logFile).ConfigureAwait(false);
             return (null, (int)ExitCode.RuntimeError);
@@ -205,9 +254,13 @@ internal sealed class CliPluginSession : IAsyncDisposable
     internal static bool TryResolveProfile(CliSettingsOptions options, CliIo io, out string settingsBase, out string profile,
         out int exitCode)
     {
+        // Defaults for the failure paths: a bad base or profile is a usage error (exit 1); only a failed creation of "default"
+        // changes the code to 3 below.
         settingsBase = string.Empty;
         profile = SettingsProfiles.DefaultProfile;
         exitCode = (int)ExitCode.ArgumentError;
+
+        // The base is made absolute once; an unusable path (invalid characters, too long) is refused with the runtime's message.
         try
         {
             settingsBase = Path.GetFullPath(SettingsManagerFactory.ResolvePath(options.SettingsPath, null));
@@ -218,6 +271,8 @@ internal sealed class CliPluginSession : IAsyncDisposable
             return false;
         }
 
+        // The profile name is a folder name under the base, so it is validated before it is used for any path (the rules refuse
+        // separators, traversal, reserved folder names, and device names).
         string requested = string.IsNullOrEmpty(options.Profile)
             ? SettingsProfiles.DefaultProfile
             : options.Profile;
@@ -227,7 +282,9 @@ internal sealed class CliPluginSession : IAsyncDisposable
             return false;
         }
 
-        // An existing profile is used with the spelling it has on disk; a missing one is an error unless it is "default".
+        // An existing profile is used with the spelling it has on disk (names are unique ignoring case, so the match is exact);
+        // a missing one is an error unless it is "default". An unknown profile is never created implicitly; the error
+        // names the command that creates it.
         string? existing = SettingsProfiles.List(settingsBase)
             .FirstOrDefault(name => string.Equals(name, requested, StringComparison.OrdinalIgnoreCase));
         if (existing is not null)
@@ -258,7 +315,11 @@ internal sealed class CliPluginSession : IAsyncDisposable
 
     /// <summary>
     /// Builds a stack for the profile: the profile files are loaded before the protocols register their settings, so the
-    /// persisted values apply. The stack owns its own settings manager.
+    /// persisted values apply. The stack owns its own settings manager: a second manager over the same profile folder, separate
+    /// from <see cref="ProfileSettings"/> (which serves the plugins and the settings command), so a value changed through one of
+    /// them is not seen by the other within a run. Both managers load the same profile files and apply the same plugin
+    /// contributions, so a load warning or a contribution failure is reported once per session, by whichever manager meets it
+    /// first.
     /// </summary>
     /// <param name="frames">The frame interface registry the stack and its sources share.</param>
     /// <param name="stack">The stack; <see langword="null"/> on failure.</param>
@@ -272,14 +333,22 @@ internal sealed class CliPluginSession : IAsyncDisposable
         SettingsManager? manager = null;
         try
         {
+            // Order matters: the persisted values are loaded first, so that every setting registered afterwards (by the
+            // protocols of the builder and by the plugins) starts with its stored value instead of its default. The stack
+            // traces of exceptions stay out of the error text that a packet records for a failing protocol (explicitly off
+            // here; off is also the default of the flag).
             manager = SettingsManagerFactory.Create(SettingsBase, Profile, Options.MaxConfigFileBytes, Options.MaxJsonDepth);
             _LogLoadWarnings(manager);
             StackBuilder builder = new(manager, frames) { IncludeExceptionStackTrace = false };
-            _LogFailures(_Io, _LogFile, Registry.ApplyStackContributions(builder));
-            _LogFailures(_Io, _LogFile, Registry.ApplySettings(SettingScope.Profile, manager));
+
+            // Plugin contributions (protocols, fields) are plugin code; a contribution that fails is returned as a failure, reported
+            // by plugin name, and does not stop the build. The profile manager of the session reported the same problems already.
+            _LogProfileFailures(Registry.ApplyStackContributions(builder));
+            _LogProfileFailures(Registry.ApplySettings(SettingScope.Profile, manager));
             Stack built = builder.Build();
 
-            // The stack owns the manager now; its diagnostics are reported once.
+            // The stack owns the manager now (so the finally block must not dispose it); build diagnostics of severity Error are
+            // reported once, here.
             manager = null;
             foreach (BuildDiagnostic diagnostic in built.BuildDiagnostics.Span)
             {
@@ -305,6 +374,20 @@ internal sealed class CliPluginSession : IAsyncDisposable
     }
 
 
+    /// <summary>
+    /// Reports a problem of the log file itself (it stopped working after it was opened) on the error writer, in the same form
+    /// as the warning for a log file that could not be opened: <c>Warning: &lt;text&gt;</c>. The line is written under the lock of
+    /// the error writer, because the log file reports from whatever thread logged.
+    /// </summary>
+    /// <param name="io">The writers of the command.</param>
+    /// <param name="text">The problem text of the log file.</param>
+    internal static void WriteLogProblem(CliIo io, string text)
+    {
+        ArgumentNullException.ThrowIfNull(io);
+        ArgumentNullException.ThrowIfNull(text);
+        _WriteLine(io, "Warning: " + text);
+    }
+
     /// <summary>Keeps the records of plugins whose start was attempted (a context was made for them), in load order.</summary>
     /// <param name="report">The report to filter.</param>
     /// <param name="attempted">Names of the plugins with a context; compared ignoring case.</param>
@@ -321,7 +404,11 @@ internal sealed class CliPluginSession : IAsyncDisposable
 
     #region Private Helpers
 
-    /// <summary>Opens the profile manager that the settings command and the plugins read: files loaded, settings registered.</summary>
+    /// <summary>
+    /// Opens the profile manager that the settings command and the plugins read: files loaded, settings registered (the
+    /// protocol settings through a stack builder that is never built, then the plugin settings of scope profile).
+    /// </summary>
+    /// <returns>The manager; the caller owns it.</returns>
     private SettingsManager _OpenProfileManager()
     {
         SettingsManager manager = SettingsManagerFactory.Create(SettingsBase, Profile, Options.MaxConfigFileBytes, Options.MaxJsonDepth);
@@ -330,24 +417,50 @@ internal sealed class CliPluginSession : IAsyncDisposable
             _LogLoadWarnings(manager);
 
             // The stack builder registers the protocol settings into the manager; it is never built, it only fills the manager.
+            // It gets a registry of its own that no source uses. Running the contributions again here (and once more for the
+            // real stack in TryBuildStack) is what makes the protocol settings listable without building a stack.
             StackBuilder builder = new(manager, new FrameInterfaceRegistry());
-            _LogFailures(_Io, _LogFile, Registry.ApplyStackContributions(builder));
-            _LogFailures(_Io, _LogFile, Registry.ApplySettings(SettingScope.Profile, manager));
+            _LogProfileFailures(Registry.ApplyStackContributions(builder));
+            _LogProfileFailures(Registry.ApplySettings(SettingScope.Profile, manager));
             return manager;
         }
         catch
         {
+            // A manager that was not handed out is released before the failure propagates.
             manager.Dispose();
             throw;
         }
     }
 
-    /// <summary>Loads the persisted values of a manager and reports what was skipped.</summary>
+    /// <summary>
+    /// Loads the persisted values of a manager and reports what was skipped (a file too large, too deep, or malformed). A
+    /// warning that an earlier load of the same profile reported is not reported again (see <c>_ReportedProfileLines</c>).
+    /// </summary>
+    /// <param name="manager">The manager whose folder is loaded.</param>
     private void _LogLoadWarnings(SettingsManager manager)
     {
         foreach (SettingsLoadWarning warning in manager.Load())
         {
-            _LogSession(_Io, _LogFile, "Warning", "settings", warning.Message);
+            if (_ReportedProfileLines.Add("Warning\nsettings\n" + warning.Message))
+            {
+                _LogSession(_Io, _LogFile, "Warning", "settings", warning.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reports contribution failures found while the profile settings or a stack are built, one error line each, but only the
+    /// first time: both builds apply the same contributions to the same profile, so a failure shows up in both.
+    /// </summary>
+    /// <param name="failures">The failures returned by the registry.</param>
+    private void _LogProfileFailures(IReadOnlyList<PluginContributionFailure> failures)
+    {
+        foreach (PluginContributionFailure failure in failures)
+        {
+            if (_ReportedProfileLines.Add("Error\n" + failure.PluginName + "\n" + failure.Message))
+            {
+                _LogSession(_Io, _LogFile, "Error", failure.PluginName, "contribution failed: " + failure.Message);
+            }
         }
     }
 
@@ -367,7 +480,13 @@ internal sealed class CliPluginSession : IAsyncDisposable
         }
     }
 
-    /// <summary>The context of a plugin, created once per name.</summary>
+    /// <summary>
+    /// The context of a plugin, created once per name and reused for the stop. It carries the plugin's log, its own data folder
+    /// (<c>plugins-data/&lt;storage name&gt;</c> under the base, so a long or device-like plugin name stays a valid folder name),
+    /// and read-only views of both settings managers.
+    /// </summary>
+    /// <param name="record">The plugin record.</param>
+    /// <returns>The context.</returns>
     private IPluginContext _ContextFor(PluginRecord record)
     {
         if (!_Contexts.TryGetValue(record.Name, out PluginContext? context))
@@ -382,6 +501,9 @@ internal sealed class CliPluginSession : IAsyncDisposable
     }
 
     /// <summary>Reports contribution failures of plugins, one error line each.</summary>
+    /// <param name="io">The writers of the command.</param>
+    /// <param name="logFile">The log file, or <see langword="null"/>.</param>
+    /// <param name="failures">The failures returned by the registry.</param>
     private static void _LogFailures(CliIo io, CliLogFile? logFile, IReadOnlyList<PluginContributionFailure> failures)
     {
         foreach (PluginContributionFailure failure in failures)
@@ -401,7 +523,12 @@ internal sealed class CliPluginSession : IAsyncDisposable
         logFile?.Append(level, source, clean);
     }
 
-    /// <summary>Writes one line to the error writer (the writer is not thread-safe, and plugins log from other threads).</summary>
+    /// <summary>
+    /// Writes one line to the error writer. A text writer is not thread-safe and plugins log from other threads, so the writer
+    /// itself is the lock; <see cref="CliPluginLog"/> locks the same object, which keeps lines from both paths whole.
+    /// </summary>
+    /// <param name="io">The writers of the command.</param>
+    /// <param name="line">The line without line break.</param>
     private static void _WriteLine(CliIo io, string line)
     {
         lock (io.Error)
@@ -410,7 +537,15 @@ internal sealed class CliPluginSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Releases what a failed open already created.</summary>
+    /// <summary>
+    /// Releases what a failed open already created: a complete session disposes everything itself (and stops the plugins that
+    /// were started); before the session object exists only the registry, the application settings, and the log file are there.
+    /// </summary>
+    /// <param name="session">The session, or <see langword="null"/> when it was not created yet.</param>
+    /// <param name="registry">The plugin registry.</param>
+    /// <param name="application">The application settings.</param>
+    /// <param name="logFile">The log file, or <see langword="null"/>.</param>
+    /// <returns>A task that completes when everything is released.</returns>
     private static async Task _AbandonAsync(CliPluginSession? session, PluginRegistry registry, SettingsManager application,
         CliLogFile? logFile)
     {

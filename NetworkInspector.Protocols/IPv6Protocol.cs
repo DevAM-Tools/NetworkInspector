@@ -14,7 +14,7 @@ namespace NetworkInspector.Protocols;
 /// ├── ipv6.tclass.ecn: 0 (Not-ECT)
 /// ├── ipv6.flow: 0x00000
 /// ├── ipv6.plen: 40
-/// ├── ipv6.nxt: 0 (Hop-by-Hop Options)
+/// ├── ipv6.nxt: 0 (Hop-by-Hop Options)       [eager]
 /// ├── ipv6.hlim: 64
 /// ├── ipv6.src: 2001:db8::1                  [eager]
 /// ├── ipv6.dst: 2001:db8::2                  [eager]
@@ -77,18 +77,51 @@ public sealed partial class IPv6Protocol : IProtocol
     /// <summary>Index group for always-present IPv6 fields.</summary>
     private const string _Ipv6IndexGroup = "ipv6";
 
-    /// <summary>Maximum number of extension headers to walk before giving up (DoS protection).</summary>
+    /// <summary>
+    /// Error text for a reassembled datagram that cannot be handed on because the packet's table of bound buffers is full.
+    /// Limit: 255 additional buffers per packet (a constant of the packet's effect keys, not configurable); secure by
+    /// default. Exceeding it is an expected failure that is named, not a silent drop.
+    /// </summary>
+    private const string _BoundBufferLimitMessage =
+        "Reassembled IPv6 datagram cannot be parsed further: a packet can hold at most 255 additional buffers";
+
+    /// <summary>
+    /// Maximum number of extension headers to walk before giving up (DoS protection).
+    /// </summary>
+    /// <remarks>
+    /// Threat: a crafted packet can chain many tiny extension headers (each at least 8 bytes), so the walk in
+    /// <see cref="IPv6Protocol"/> and <see cref="IPv6ExtensionHeaderParser"/> would cost CPU linear in the packet
+    /// size. Constant, not configurable: RFC 8200 section 4.1 says each extension header should occur at most once
+    /// (Destination Options at most twice), so 16 is far above any legitimate chain and costs a legitimate packet
+    /// nothing. Posture: secure by default, because the input is untrusted wire data. Exceeding the limit is not a
+    /// parse error: the walk just stops, and the bytes after the last header that was read are dispatched under the
+    /// extension-header number that was reached last.
+    /// </remarks>
     internal const int MaxExtensionHeaders = 16;
 
     #endregion
 
     #region Known extension header next-header values (RFC 8200, §4)
+
+    /// <summary>Next-header value of the Hop-by-Hop Options header.</summary>
     internal const byte NhHopByHop = 0;
+
+    /// <summary>Next-header value of the Routing header.</summary>
     internal const byte NhRouting = 43;
+
+    /// <summary>Next-header value of the Fragment header (fixed 8 bytes, unlike the generic length encoding).</summary>
     internal const byte NhFragment = 44;
+
+    /// <summary>Next-header value of Encapsulating Security Payload; it ends the walkable extension header chain.</summary>
     internal const byte NhEsp = 50;
+
+    /// <summary>Next-header value of the Authentication Header (length counted in 4-octet units, unlike the generic encoding).</summary>
     internal const byte NhAh = 51;
+
+    /// <summary>Next-header value meaning that no header follows.</summary>
     internal const byte NhNoNextHeader = 59;
+
+    /// <summary>Next-header value of the Destination Options header.</summary>
     internal const byte NhDestination = 60;
 
     #endregion
@@ -322,14 +355,20 @@ public sealed partial class IPv6Protocol : IProtocol
 
     // Dense dispatch cache for the IPv6 next-header byte (256 entries).
     // Built once in OnStart from the ip.proto table (shared with IPv4); avoids a dictionary
-    // lookup per packet. CallProtocol returns ParseError for invalid ids.
+    // lookup per packet. An entry is null when the table has zero or several protocols for that key; the caller
+    // then falls back to full table dispatch. The array is empty until OnStart ran (see _DispatchNextHeader).
+    // The array is written once at start and only read afterwards, so concurrent re-parses need no synchronization.
+    // CallProtocol returns ParseError for invalid ids.
     private ProtocolId?[] _IpProtoIdCache = [];
 
-    // Pre-allocated extension header field IDs struct, built once in _OnStartCustom.
+    // Pre-allocated extension header field IDs struct, built once in _OnStartCustom. The lazy populator receives
+    // it by reference, which avoids a per-packet closure or copy of the roughly fifty field ids.
     private ExtHeaderFieldIds _ExtHeaderFieldIds;
 
     // IPv6 fragment reassembly engine — keyed by (src, dst, identification).
     // RFC 5722: overlapping fragments MUST cause the entire datagram to be silently discarded.
+    // Only the ordered first-parse path may call into it (it is not thread-safe); replays read the outcome from
+    // the effect store in IPv6Protocol.Effects.cs instead.
     private readonly DatagramDefragmenter<IPv6DatagramFragmentKey> _Defragmenter = new(dropOnOverlap: true);
 
     /// <summary>
@@ -359,15 +398,22 @@ public sealed partial class IPv6Protocol : IProtocol
 
     /// <summary>
     /// Lazy populator: version, traffic class, DSCP, ECN, flow label, payload length,
-    /// next header, hop limit, and extension headers. The identifying ipv6.src and
-    /// ipv6.dst fields are appended eagerly by <see cref="IProtocol.Parse"/> so downstream
+    /// hop limit, and extension headers. The identifying ipv6.src, ipv6.dst and ipv6.nxt
+    /// fields are appended eagerly by <see cref="IProtocol.Parse"/> so downstream
     /// transport protocols (UDP/TCP) can read them without triggering materialisation.
     /// Re-parses the fixed 40-byte header and walks extension headers from the stored
-    /// bytes to avoid per-packet closure allocations. Called on first access of the
-    /// IPv6 container's children.
+    /// bytes (the container value) instead of capturing parse state in a per-packet closure,
+    /// which would allocate for every packet although most packets are never expanded.
+    /// Called on first access of the IPv6 container's children.
+    /// <para>
+    /// Thread safety: runs from the lazy materialization of one packet; it reads only the immutable container
+    /// bytes and the field ids fixed at start, and shares no mutable protocol state.
+    /// </para>
     /// </summary>
     private ParseResult _PopulateIPv6(in MutField container)
     {
+        // The container value is the header slice stored by _ParseBody (fixed header plus the walked extension
+        // headers). Both checks only guard against a foreign or corrupt container; _ParseBody already validated it.
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> data))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -378,6 +424,7 @@ public sealed partial class IPv6Protocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, IPv6Header.HeaderSize, (ulong)data.Length);
         }
 
+        // Split the 8-bit traffic class into its DSCP (upper 6 bits) and ECN (lower 2 bits) parts (RFC 2474 / RFC 3168).
         byte trafficClass = header.TrafficClass;
         byte dscp = (byte)(trafficClass >> 2);
         byte ecn = (byte)(trafficClass & 0x03);
@@ -386,6 +433,7 @@ public sealed partial class IPv6Protocol : IProtocol
         byte nextHeader = header.NextHeader;
         byte hopLimit = header.HopLimit;
 
+        // Append the fixed header fields in wire order. The display texts of DSCP and ECN come from DisplayTables.
         container.Append(_VersionFieldId, FieldValue.NewU64(header.Version));
         container.Append(_TclassFieldId, FieldValue.NewU64(trafficClass));
 
@@ -401,9 +449,10 @@ public sealed partial class IPv6Protocol : IProtocol
         // ipv6.nxt (fixed-header Next Header) is appended eagerly in Parse(); not here.
         container.Append(_HopLimitFieldId, FieldValue.NewU64(hopLimit));
 
-        // Parse extension headers into individual sub-fields if present.
-        // The stored data includes the full fixed header + extension header region so
-        // the parser can re-walk extension headers with field decomposition.
+        // Parse extension headers into individual sub-fields if present. The stored data includes the full fixed
+        // header + extension header region (_ParseBody stores exactly the walked chain), so the parser can re-walk
+        // the extension headers with field decomposition. This second walk is the price of keeping the eager parse
+        // path free of field creation; it is only paid for packets whose children are actually expanded.
         if (data.Length > IPv6Header.HeaderSize && IsExtensionHeader(nextHeader))
         {
             ReadOnlySpan<byte> extData = span[IPv6Header.HeaderSize..];
@@ -425,6 +474,10 @@ public sealed partial class IPv6Protocol : IProtocol
     /// defragmenter and records the outcome, every later parse of that packet id replays the recorded
     /// outcome and leaves the fragment buffers untouched. See <see cref="_IsReplay"/>.
     /// </para>
+    /// <para>
+    /// Thread safety: a first parse must be serialized by the caller (ordered ingest); replays may run on any
+    /// number of threads concurrently. See the class remarks.
+    /// </para>
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
     /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
@@ -432,11 +485,19 @@ public sealed partial class IPv6Protocol : IProtocol
     /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        // The layer key (location of 'data' inside the packet buffers) distinguishes several IPv6 layers of one
+        // packet in the effect store, because the packet id alone would let a tunnelled inner layer overwrite the
+        // outer layer's recorded defragmentation outcome. Data that is not a slice of the packet's buffers cannot be
+        // keyed, so it is rejected up front.
         Packet packet = parentField.Packet;
         if (!parentField.TryGetEffectLayerKey(data, out int layerKey))
         {
             return ParseError.Custom(ProtocolName, "Parse data is not a slice of this packet's buffers.");
         }
+
+        // Decide between first parse and replay once, before any nested layer runs. Nesting is counted on first
+        // parses only (replays never write protocol state), and only the outermost first parse raises the watermark:
+        // raising it earlier would make a later layer of the same packet look like a replay and skip the defragmenter.
         bool isReplay = _IsReplay(packet.Id);
         bool raiseWatermark = !isReplay && _ParseNesting == 0;
         if (!isReplay)
@@ -444,12 +505,21 @@ public sealed partial class IPv6Protocol : IProtocol
             _ParseNesting++;
         }
 
+        // The finally block runs on every exit (error results and exceptions included), so the nesting counter
+        // cannot leak and the packet is always marked as parsed once, even when its first parse failed.
         try
         {
             return _ParseBody(in parentField, data, in context, layerKey, isReplay);
         }
         finally
         {
+            // The address cache is keyed by packet id only and is meant for the protocols dispatched from inside this
+            // parse. Left behind, its entry could be taken for the addresses of a different packet with the same id
+            // on this thread (for example one of another session, or a later expansion of an earlier packet), which
+            // would give a wrong pseudo header or stream key. Clearing it here makes such a stale read impossible; a
+            // reader that finds no entry falls back to the field tree.
+            _ThreadCache = null;
+
             if (!isReplay)
             {
                 _ParseNesting--;
@@ -559,6 +629,19 @@ public sealed partial class IPv6Protocol : IProtocol
                 finalNextHeader = fragInnerNextHeader;
                 extOffset += 8;
                 extTotalLen += 8;
+
+                // A real fragment ends the walk. The bytes after its header are a slice of the fragmentable part of
+                // the original datagram: for a non-first fragment they start in the middle of it, so a payload byte
+                // that looks like an extension header number must not be read as a header (that would cut bytes out
+                // of the fragment data and corrupt the reassembly). For the first fragment, extension headers that
+                // follow belong to the fragmentable part and are part of the data handed to the reassembly, so that
+                // all fragments share the same offsets. The next-header value of the fragment header is what names
+                // the first header of the reassembled data. An atomic fragment (offset 0, no More flag) carries the
+                // whole datagram, so its chain continues as usual.
+                if (IPv6ExtensionHeaderParser.IsRealFragment(offsetFlagsWord))
+                {
+                    break;
+                }
             }
             else if (finalNextHeader == NhEsp)
             {
@@ -633,18 +716,22 @@ public sealed partial class IPv6Protocol : IProtocol
             context.RecordGroupPresence(_Ipv6EspGroupId);
         }
 
-        // Summary closure captures only src + dst (2 × 16-byte structs) — smaller than the full header.
-
         // Store the full IPv6 data (fixed header + extension headers) so the lazy populator
-        // can reconstruct all fields including extension header sub-fields.
+        // can reconstruct all fields including extension header sub-fields. The slice references the packet
+        // buffer; nothing is copied. The Math.Min is defensive: the walk only accepts headers that fit into 'data'.
         int storedLen = hasExtHeaders
             ? Math.Min(IPv6Header.HeaderSize + extTotalLen, data.Length)
             : IPv6Header.HeaderSize;
         ReadOnlyMemory<byte> headerBytes = data[..storedLen];
+
         // The stored value holds the extension-header chain too; its representation names the stored length. The
         // common case without extension headers keeps the static text (no per-packet formatting).
         FieldValue headerValue = FieldValue.NewBytes(headerBytes)
             .WithCustomRepresentation(hasExtHeaders ? new LazyString(ZA.String(storedLen, " bytes")) : new LazyString("40 bytes"));
+
+        // The container text "Internet Protocol Version 6, Src: ..., Dst: ..." is formatted lazily from src and
+        // dst only (two 16-byte structs), which is smaller than capturing the whole header, and only when
+        // custom text is wanted for this field at all. The populator delegate is the pre-allocated instance.
         MutField protoField = parentField.AppendLazyWithCustomText(
             _ProtocolFieldId, headerValue, "Internet Protocol Version 6, Src: ", src, ", Dst: ", dst, _Populator);
 
@@ -667,6 +754,10 @@ public sealed partial class IPv6Protocol : IProtocol
 
         // Dispatch to next protocol using the final next-header value (after walking extension chain)
         int payloadStart = extOffset; // after fixed header + all extension headers
+        // The payload ends at the shorter of the length announced by the header and the bytes actually present:
+        // the announced length trims link-layer padding (for example short Ethernet frames), the present bytes trim
+        // truncated captures. The Plen field counts the extension headers, hence the subtraction. A jumbogram
+        // (Plen 0, RFC 2675) therefore yields an empty payload and is not dispatched.
         int payloadLen = Math.Max(0, Math.Min(payloadLength - extTotalLen, data.Length - payloadStart));
 
         if (payloadLen > 0 && _IpProtoTableId.IsValid)
@@ -674,9 +765,13 @@ public sealed partial class IPv6Protocol : IProtocol
             // IPv6 fragment reassembly: if fragment header was detected, route through defragmenter
             if (hasFragment)
             {
+                // RFC 8200 section 4.5: a packet is a real fragment unless offset and More flag are both zero
+                // ("atomic fragment"), which carries the whole datagram and needs no reassembly.
                 bool isFragment = moreFragments || fragOffset != 0;
                 if (isFragment)
                 {
+                    // Only the fragment that completes a datagram yields a non-null result and dispatches the
+                    // reassembled payload; every other fragment only parses its own headers.
                     byte[]? reassembled;
                     if (isReplay)
                     {
@@ -687,6 +782,9 @@ public sealed partial class IPv6Protocol : IProtocol
                     }
                     else
                     {
+                        // First parse: the defragmenter is single-threaded state, fed in packet order. The outcome
+                        // is recorded in the effect store so replays reproduce it. The key uses the source and
+                        // destination addresses plus the identification (RFC 8200 section 4.5).
                         IPv6DatagramFragmentKey key = new(src.High, src.Low, dst.High, dst.Low, fragIdentification);
                         int byteOffset = fragOffset * 8; // convert to byte offset
 
@@ -699,6 +797,13 @@ public sealed partial class IPv6Protocol : IProtocol
                     {
                         // Bind the datagram so nested Parse can key effects on this packet's buffers.
                         ReadOnlyMemory<byte> reassembledPayload = parentField.BindParseBuffer(reassembled);
+                        if (reassembledPayload.IsEmpty && reassembled.Length > 0)
+                        {
+                            // The packet holds at most 255 bound buffers. An empty slice would reach the next protocol
+                            // as "no data" without any sign of why, so the limit is named here.
+                            return ParseError.Custom(ProtocolName, _BoundBufferLimitMessage);
+                        }
+
                         ParseResult dispatchResult = _DispatchNextHeader(
                             in parentField, finalNextHeader, reassembledPayload, in context);
                         if (dispatchResult.TryPropagateError(out ParseResult error))
@@ -760,7 +865,11 @@ public sealed partial class IPv6Protocol : IProtocol
 
     /// <summary>
     /// Bundles all extension header field IDs into a single struct for efficient passing
-    /// to <see cref="IPv6ExtensionHeaderParser"/>.
+    /// to <see cref="IPv6ExtensionHeaderParser"/>. A readonly struct passed by <see langword="in"/> avoids both
+    /// a long parameter list and a heap allocation. Every property carries the id of the private field with the
+    /// same name plus <c>FieldId</c> in <see cref="IPv6Protocol"/> (see <c>_BuildExtHeaderFieldIds</c>); the
+    /// properties are therefore not documented one by one.
+    /// <para>Thread safety: immutable after construction.</para>
     /// </summary>
     internal readonly struct ExtHeaderFieldIds
     {
@@ -1045,6 +1154,16 @@ public sealed partial class IPv6Protocol : IProtocol
     /// Per-thread cache for the current packet's IPv6 src/dst addresses.
     /// Written by <see cref="IProtocol.Parse"/> before dispatching; consumed by downstream
     /// protocols (TCP, UDP). Null means no data cached yet on this thread.
+    /// <para>
+    /// Why thread-static: transport protocols need the addresses for every segment (checksum pseudo header,
+    /// stream key). Reading them from this per-thread slot avoids a field-tree walk to the sibling ipv6 node, and
+    /// because every thread owns its slot, concurrent replays of different packets need no synchronization. The
+    /// stored packet id makes a stale entry (left over from an earlier packet on the same thread) detectable, so
+    /// readers must fall back to the field tree when <see cref="TryGetCachedAddresses"/> returns
+    /// <see langword="false"/>. The value is a struct, so a write allocates nothing. The write happens before the
+    /// payload is dispatched, so in a tunnel the innermost IPv6 layer overwrites the outer one, which is the layer
+    /// the transport protocol above it belongs to.
+    /// </para>
     /// </summary>
     [ThreadStatic]
     private static (int PacketId, IPv6Address Src, IPv6Address Dst)? _ThreadCache;
@@ -1129,7 +1248,9 @@ internal readonly partial struct IPv6Header
         get; init;
     }
 
-    /// <summary>Payload length in bytes (excluding the 40-byte fixed header).</summary>
+    /// <summary>
+    /// Payload length in bytes (excluding the 40-byte fixed header, including extension headers; 0 when a Jumbo Payload option carries the length).
+    /// </summary>
     public U16BE PayloadLength
     {
         get; init;

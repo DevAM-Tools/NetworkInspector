@@ -32,12 +32,27 @@ namespace NetworkInspector.Filter.Lexer;
 /// raises <see cref="FilterErrorKind.UnsupportedFeature"/> when one of them appears in its
 /// removed syntactic position.
 /// </para>
+/// <para>
+/// Cost model: a lexer runs once per expression compilation or completion request and never on the per-packet
+/// evaluation path, so it allocates freely (one <see cref="string"/> per token, a <see cref="StringBuilder"/> per
+/// string literal) and favours simple probes over a table-driven scanner.
+/// </para>
+/// <para>
+/// Thread safety: not thread-safe. An instance holds the scan position and token list and is single-use; create one
+/// per expression. The lexer enforces no limit on expression length or token count; the caller owns that trust
+/// boundary.
+/// </para>
 /// </summary>
 internal sealed class FilterLexer
 {
     #region Fields
 
-    /// <summary>Keyword lookup for undotted identifiers.</summary>
+    /// <summary>
+    /// Keyword lookup for undotted identifiers. Case-insensitive so <c>AND</c> and <c>and</c> are the same operator.
+    /// Field paths never reach this table (a dotted path such as <c>flank.x</c> is always an identifier), and the
+    /// removed v1 words are deliberately absent (see the class remarks). Written once at type initialization and only
+    /// read afterwards, so concurrent lexers share it safely.
+    /// </summary>
     private static readonly Dictionary<string, TokenKind> _Keywords = new(StringComparer.OrdinalIgnoreCase)
     {
         ["and"] = TokenKind.And,
@@ -72,6 +87,10 @@ internal sealed class FilterLexer
     #region Construction
 
     /// <summary>Creates a lexer over <paramref name="source"/>.</summary>
+    /// <param name="source">
+    /// The filter expression. Not validated for <see langword="null"/> (internal type; the only callers pass the
+    /// expression they were already given and validated).
+    /// </param>
     public FilterLexer(string source)
     {
         _Source = source;
@@ -83,9 +102,16 @@ internal sealed class FilterLexer
 
     #region Entry point
 
-    /// <summary>Tokenizes the whole source, always terminating with <see cref="TokenKind.Eof"/>.</summary>
+    /// <summary>
+    /// Tokenizes the whole source. On success the list always ends with <see cref="TokenKind.Eof"/> (the parser
+    /// relies on that sentinel instead of bounds checks). Lexical errors are returned, not thrown; the first error
+    /// wins and no further tokens are produced. Call at most once per instance.
+    /// </summary>
+    /// <returns>The token list (owned by the caller afterwards) or the first lexical error.</returns>
     public FilterResult<List<Token>> Tokenize()
     {
+        // Scan until the input is exhausted. _Append (not _Tokens.Add) must be used: it tracks the bracket state
+        // that decides how the following digits are classified.
         while (true)
         {
             _SkipWhitespace();
@@ -109,7 +135,9 @@ internal sealed class FilterLexer
 
     /// <summary>
     /// Tokenizes as far as the source is lexically valid and stops silently at the first error. Used by
-    /// completion, which must read the context of a half-typed expression such as <c>udp.port =</c>.
+    /// completion, which must read the context of a half-typed expression such as <c>udp.port =</c>. Unlike
+    /// <see cref="Tokenize"/> it appends no <see cref="TokenKind.Eof"/>, so the caller can tell where valid input ended.
+    /// Call at most once per instance.
     /// </summary>
     /// <param name="unterminatedString">
     /// Receives <see langword="true"/> when lexing stopped inside an open string literal, so the caret is inside
@@ -131,6 +159,8 @@ internal sealed class FilterLexer
             FilterResult<Token> next = _NextToken();
             if (!next.TryGetValue(out Token token))
             {
+                // A failure that began at a quote can only be the unterminated-string or unterminated-escape error
+                // (_LexString is the only scanner that starts on '"'), so the caret is inside a string literal.
                 unterminatedString = _Source[start] == '"';
                 return _Tokens;
             }
@@ -143,6 +173,11 @@ internal sealed class FilterLexer
 
     #region Token dispatch
 
+    /// <summary>
+    /// Scans one token starting at <see cref="_Position"/>, which must be inside the source and not on whitespace.
+    /// Single-character and operator tokens are decided here; anything that can share a prefix with another literal
+    /// form is delegated to the scanner that applies the disambiguation order from the class remarks.
+    /// </summary>
     private FilterResult<Token> _NextToken()
     {
         char c = _Source[_Position];
@@ -175,6 +210,8 @@ internal sealed class FilterLexer
                 return _Make(TokenKind.Colon, 1);
 
             case '=':
+                // A lone '=' is rejected instead of being accepted as '==': it is a common typo for assignment and
+                // silently treating it as a comparison would hide that mistake.
                 if (_Peek(1) == '=')
                 {
                     return _Make(TokenKind.Equal, 2);
@@ -203,6 +240,7 @@ internal sealed class FilterLexer
                 return _Make(TokenKind.GreaterThan, 1);
 
             case '&':
+                // The single and doubled forms are synonyms (like the words "and" / "or"); the parser sees one kind.
                 return _Make(TokenKind.And, _Peek(1) == '&' ? 2 : 1);
 
             case '|':
@@ -219,6 +257,7 @@ internal sealed class FilterLexer
                 return _LexString();
 
             case '-':
+                // '-' exists only as the sign of a decimal integer; there is no subtraction operator.
                 if (char.IsAsciiDigit(_Peek(1)))
                 {
                     return _LexSignedInteger();
@@ -227,6 +266,8 @@ internal sealed class FilterLexer
                 return FilterError.Lexer("Unexpected character '-'", _Position, 1);
 
             default:
+                // Digits start numbers and all digit-led addresses; letters and '_' start identifiers, which may
+                // still turn out to be hex-led MAC or IPv6 literals such as "ab:cd:ef:01:02:03" or "fe80::1".
                 if (char.IsAsciiDigit(c))
                 {
                     return _LexNumberOrAddress();
@@ -243,17 +284,27 @@ internal sealed class FilterLexer
 
     #region Strings
 
+    /// <summary>
+    /// Lexes a double-quoted string literal. The token text is the unescaped content (see <see cref="Token"/>), while
+    /// the span covers the quotes and the raw escapes. Supported escapes are <c>\n</c>, <c>\r</c>, <c>\t</c> and
+    /// <c>\0</c>; any other escaped character stands for itself, which is how <c>\"</c> and <c>\\</c> work. There is
+    /// no single-quote form, no raw-string form and no <c>\x</c> / <c>\u</c> escape. Unterminated input is an error
+    /// whose span runs to the end of the source so the caller can highlight the open string.
+    /// </summary>
     private FilterResult<Token> _LexString()
     {
         int start = _Position;
         _Position++;
 
+        // Copy characters one by one so escapes can be resolved; a slice of the source cannot be used because the
+        // text differs from the source as soon as one escape appears.
         StringBuilder content = new();
         while (_Position < _Source.Length)
         {
             char c = _Source[_Position];
             if (c == '\\')
             {
+                // A backslash as the very last character leaves nothing to escape: report it instead of dropping it.
                 _Position++;
                 if (_Position >= _Source.Length)
                 {
@@ -289,10 +340,17 @@ internal sealed class FilterLexer
 
     #region Numbers and addresses
 
+    /// <summary>
+    /// Scans a token that starts with a decimal digit and decides between an integer, float, duration, IPv4, MAC,
+    /// hex-byte or IPv6 literal. The probes run in the order documented on the class, most specific first, because
+    /// <c>10</c>, <c>10:11</c>, <c>10:11:12:13:14:15</c> and <c>10::1</c> all begin with the same characters.
+    /// </summary>
     private FilterResult<Token> _LexNumberOrAddress()
     {
         int start = _Position;
 
+        // Radix prefixes are checked first: "0b1" and "0xAB" would otherwise be read as a decimal "0" followed by an
+        // identifier. Digits are validated by the literal parser, which also rejects a prefix without digits.
         if (_Source[_Position] == '0' && _Position + 1 < _Source.Length)
         {
             char prefix = _Source[_Position + 1];
@@ -351,6 +409,8 @@ internal sealed class FilterLexer
     {
         token = default;
 
+        // Scan the maximal run of hex digits and colons while counting colons. Only _Position is committed on
+        // success; on failure the lexer state is untouched so the caller can fall back to the decimal scanner.
         int probe = start;
         int colons = 0;
         while (probe < _Source.Length && (_Source[probe] == ':' || char.IsAsciiHexDigit(_Source[probe])))
@@ -362,6 +422,8 @@ internal sealed class FilterLexer
             probe++;
         }
 
+        // Two colons is the smallest shape of an IPv6 literal ("1::"); a single colon as in "1:2" is a slice bound or
+        // hex pair. Full validation is delegated to the address parser so the lexer never duplicates the grammar.
         if (colons < 2)
         {
             return false;
@@ -378,6 +440,15 @@ internal sealed class FilterLexer
         return true;
     }
 
+    /// <summary>
+    /// Consumes the digits of a radix-prefixed integer. <paramref name="isDigit"/> also accepts <c>_</c> as a digit
+    /// separator; the callers pass non-capturing <c>static</c> lambdas, so no delegate or closure is allocated per call.
+    /// The scan is permissive (it may produce <c>0x</c> or <c>0b_</c> with no real digit); the literal parser rejects
+    /// those so the error is reported once, with the value's context.
+    /// </summary>
+    /// <param name="start">Offset of the leading <c>0</c>.</param>
+    /// <param name="prefixLength">Length of the prefix (<c>0x</c>, <c>0b</c> or <c>0o</c>), which is skipped.</param>
+    /// <param name="isDigit">Predicate for characters that belong to the literal.</param>
     private FilterResult<Token> _LexRadix(int start, int prefixLength, Func<char, bool> isDigit)
     {
         _Position += prefixLength;
@@ -397,6 +468,8 @@ internal sealed class FilterLexer
     {
         token = default;
 
+        // Walk "HH:HH:HH…" group by group. Nothing is committed to _Position until the whole run is accepted, so a
+        // rejected probe costs only the scan and the caller can try IPv6 or decimal next.
         int probe = start;
         int groups = 0;
         while (true)
@@ -417,6 +490,8 @@ internal sealed class FilterLexer
             probe += 2;
             groups++;
 
+            // Continue only when a colon is followed by another hex digit; a trailing ':' ends the run and is
+            // rejected below, so "00:11:" is not silently shortened.
             if (probe < _Source.Length && _Source[probe] == ':' && _Peek2(probe + 1) is char n && char.IsAsciiHexDigit(n))
             {
                 probe++;
@@ -425,6 +500,7 @@ internal sealed class FilterLexer
             break;
         }
 
+        // A single pair ("12") is a plain number, not a byte sequence.
         if (groups < 2)
         {
             return false;
@@ -442,6 +518,13 @@ internal sealed class FilterLexer
         return true;
     }
 
+    /// <summary>
+    /// Commits to an IPv6 literal that starts at <paramref name="start"/> (a <c>::</c> prefix, or a hex-led
+    /// identifier segment already confirmed to be followed by a colon). Unlike <see cref="_TryLexIpv6"/> this does not
+    /// fall back: an unparsable run is a lexical error, because no other token form can start this way. The scan
+    /// stops at the first character that is neither a hex digit nor a colon, so dotted IPv4-suffix notation such as
+    /// <c>::ffff:1.2.3.4</c> is not one token.
+    /// </summary>
     private FilterResult<Token> _LexIpv6From(int start)
     {
         int probe = start;
@@ -459,6 +542,11 @@ internal sealed class FilterLexer
         return new Token(TokenKind.Ipv6Address, new FilterSpan(start, text.Length), text);
     }
 
+    /// <summary>
+    /// Lexes a digit run that is not hex-pair or IPv6 shaped: a plain integer, a float (<c>3.14</c>), a duration, or a
+    /// dotted-quad IPv4 address. The dot decides: <c>..</c> ends the integer (range operator), a dot followed by a
+    /// digit starts either more octets or a fraction, any other dot belongs to the next token.
+    /// </summary>
     private FilterResult<Token> _LexDecimalOrIpv4(int start)
     {
         _ConsumeDigitsWithSeparators();
@@ -473,7 +561,8 @@ internal sealed class FilterLexer
 
             if (char.IsAsciiDigit(_Peek(1)))
             {
-                // IPv4 octets never use digit separators — keep a plain digit probe.
+                // Count dot-separated digit groups (at most four) to tell an address from a fraction. IPv4 octets
+                // never use digit separators — keep a plain digit probe.
                 int probe = _Position;
                 int groups = 1;
                 while (probe < _Source.Length && _Source[probe] == '.' && groups < 4)
@@ -491,6 +580,8 @@ internal sealed class FilterLexer
                     groups++;
                 }
 
+                // Exactly four groups: commit and let the address parser enforce the 0..255 octet range, so an
+                // invalid address like 300.1.1.1 is reported as such instead of being read as a number.
                 if (groups == 4)
                 {
                     _Position = probe;
@@ -512,6 +603,11 @@ internal sealed class FilterLexer
         return _FinishNumber(start);
     }
 
+    /// <summary>
+    /// Classifies a finished digit run as <see cref="TokenKind.Duration"/> when an identifier suffix directly follows
+    /// and is a known unit, otherwise as Float (contains a dot) or Integer. An unknown suffix is not consumed, so
+    /// <c>5abc</c> lexes as <c>5</c> then an identifier and the parser reports the problem at the right token.
+    /// </summary>
     private FilterResult<Token> _FinishNumber(int start)
     {
         if (_Position < _Source.Length && _IsIdentStart(_Source[_Position]))
@@ -536,6 +632,11 @@ internal sealed class FilterLexer
         return new Token(kind, new FilterSpan(start, text.Length), text);
     }
 
+    /// <summary>
+    /// Whether <paramref name="suffix"/> is a window unit: nanoseconds, microseconds, milliseconds, seconds, minutes,
+    /// hours, or a packet count. Case-sensitive, so <c>5S</c> is not a duration. The whole suffix is compared, which is
+    /// what separates minutes (<c>m</c>) from milliseconds (<c>ms</c>).
+    /// </summary>
     private static bool _IsDurationSuffix(string suffix) =>
         suffix is "ns" or "us" or "ms" or "s" or "m" or "h" or "packet" or "packets";
 
@@ -543,6 +644,11 @@ internal sealed class FilterLexer
 
     #region Identifiers
 
+    /// <summary>
+    /// Lexes a letter- or underscore-led word: a keyword, a dotted field path, or (when it is all hex digits and
+    /// followed by a colon) the start of a MAC, hex-byte or IPv6 literal such as <c>ab:cd:ef:01:02:03</c> or
+    /// <c>fe80::1</c>. Keywords are recognised only for undotted words.
+    /// </summary>
     private FilterResult<Token> _LexIdentifierOrAddress()
     {
         int start = _Position;
@@ -557,21 +663,21 @@ internal sealed class FilterLexer
         // "[ab:cd]" stays identifier ':' identifier so the parser reports the bad bound at the right span.
         if (!_InBrackets && _Position < _Source.Length && _Source[_Position] == ':' && _IsAllHex(firstSegment))
         {
-            int savedPosition = _Position;
-            _Position = start;
+            // _TryLexHexGroups works from the absolute start offset and moves _Position only when it succeeds, so
+            // _Position still points at the ':' for the lookahead below when the probe is rejected.
             if (_TryLexHexGroups(start, out Token hexToken))
             {
                 return hexToken;
             }
 
-            _Position = savedPosition;
             if (char.IsAsciiHexDigit(_Peek(1)) || _Peek(1) == ':')
             {
                 return _LexIpv6From(start);
             }
-            _Position = savedPosition;
         }
 
+        // Extend over ".segment" parts to form a dotted field path. A dot that is not followed by an identifier start
+        // (for example the first dot of "name..") is left for the next token, so ".." still lexes as the range operator.
         while (_Position < _Source.Length && _Source[_Position] == '.')
         {
             int dotPosition = _Position;
@@ -587,6 +693,7 @@ internal sealed class FilterLexer
             }
         }
 
+        // Keyword lookup is skipped for dotted paths so a field such as "tcp.flank" can never be misread as a keyword.
         string text = _Slice(start);
         if (!text.Contains('.', StringComparison.Ordinal) && _Keywords.TryGetValue(text, out TokenKind keyword))
         {
@@ -600,6 +707,7 @@ internal sealed class FilterLexer
 
     #region Helpers
 
+    /// <summary>Advances over Unicode whitespace; whitespace separates tokens but is otherwise not significant.</summary>
     private void _SkipWhitespace()
     {
         while (_Position < _Source.Length && char.IsWhiteSpace(_Source[_Position]))
@@ -653,8 +761,14 @@ internal sealed class FilterLexer
         }
     }
 
+    /// <summary>Returns the source text from <paramref name="start"/> up to (excluding) the current position.</summary>
     private string _Slice(int start) => _Source[start.._Position];
 
+    /// <summary>
+    /// Returns the character <paramref name="offset"/> positions after the current one, or <c>'\0'</c> past the end.
+    /// The NUL sentinel avoids a bounds check at every call site; it cannot be confused with input because every
+    /// predicate applied to it (digit, hex digit, <c>':'</c>, <c>'='</c>, ...) is false for NUL.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private char _Peek(int offset)
     {
@@ -664,12 +778,14 @@ internal sealed class FilterLexer
             : '\0';
     }
 
+    /// <summary>Like <see cref="_Peek"/> but takes an absolute index into the source instead of an offset.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private char _Peek2(int absoluteIndex) =>
         absoluteIndex < _Source.Length
             ? _Source[absoluteIndex]
             : '\0';
 
+    /// <summary>Creates a fixed-length operator or punctuation token at the current position and advances past it.</summary>
     private FilterResult<Token> _Make(TokenKind kind, int length)
     {
         Token token = new(kind, new FilterSpan(_Position, length), _Source.Substring(_Position, length));
@@ -677,9 +793,11 @@ internal sealed class FilterLexer
         return token;
     }
 
+    /// <summary>Whether <paramref name="c"/> can start an identifier: any Unicode letter or underscore.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsIdentStart(char c) => char.IsLetter(c) || c == '_';
 
+    /// <summary>Whether <paramref name="c"/> can continue an identifier: any Unicode letter or digit, or underscore.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsIdentChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 

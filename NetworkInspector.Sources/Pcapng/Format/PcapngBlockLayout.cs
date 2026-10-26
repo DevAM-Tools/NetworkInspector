@@ -89,6 +89,10 @@ internal static class PcapngBlockLayout
     /// <returns>True when the record may be read; false when it is a malformed header.</returns>
     internal static bool TryValidateLegacyInclLen(uint inclLen, uint declaredSnapLength, out string? reason)
     {
+        // Two independent caps. The absolute size cap (a constant, PcapConstants.MaxBlockSize) stops a file that declares
+        // a huge snaplen; the snaplen cap below (the file's own declaration, or the constant default when it declares
+        // none) stops a record larger than the file claims packets can be. A record over either is a malformed header,
+        // reported with the limit named, never truncated.
         reason = null;
         if (inclLen > PcapConstants.MaxBlockSize)
         {
@@ -134,6 +138,8 @@ internal static class PcapngBlockLayout
             return false;
         }
 
+        // capturedLength is untrusted. It was range-checked against int above, and the sum is formed in long so that
+        // header + data + pad + trailing length cannot wrap around and make a huge length look like it fits.
         int capturedInt = (int)capturedLength;
         pad = PcapPadding.PaddingFor(capturedInt);
         long need = (long)headerBytesBeforeData + capturedInt + pad + 4;

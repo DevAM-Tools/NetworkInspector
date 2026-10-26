@@ -6,6 +6,13 @@ namespace NetworkInspector.Sessions;
 /// Skip-parse pre-check of one listener filter: the equivalent observer, its parse options, a recycled skip-mode
 /// packet, and an adaptive switch.
 /// <para>
+/// <b>Why it exists.</b> A matching read must otherwise build the full field tree of every candidate packet just to
+/// reject it. A skip-mode parse builds no tree and feeds only the watched fields to a tree-free
+/// <see cref="FilterObserver"/>, which is much cheaper per packet. The observer can only rule a packet <b>out</b>;
+/// every packet that is returned to the caller is still confirmed by the field-tree filter, so the pre-check never
+/// changes a verdict, only the cost of reaching it.
+/// </para>
+/// <para>
 /// <b>Adaptive switch.</b> A pre-check costs a skip parse; it pays off only when most packets are rejected. After each
 /// window of <see cref="Window"/> pre-checks, a window in which more than half of the packets could match turns the
 /// pre-check off for a backoff, then it probes again. The backoff starts at <see cref="InitialBackoff"/> ids, doubles
@@ -41,10 +48,18 @@ internal sealed class MatchingPrecheck
 
     #region Fields
 
+    // Parse options built once in the constructor and handed out by reference (see Options): ParseOptions is a struct
+    // and a copy per pre-checked id would be pure overhead on the matching-read loop.
     private readonly ParseOptions _Options;
+
+    // Pre-checks and "could match" results counted in the current decision window; both reset when the window closes.
     private int _Checked;
     private int _MaybeMatches;
+
+    // Ids still to read without a pre-check; zero means the pre-check is active.
     private int _SkipRemaining;
+
+    // Length of the next backoff, doubled after each consecutive dense window and reset after a sparse one.
     private int _NextBackoff = InitialBackoff;
 
     #endregion
@@ -52,6 +67,9 @@ internal sealed class MatchingPrecheck
     #region Construction
 
     /// <summary>Creates the pre-check of <paramref name="owner"/> with its equivalent <paramref name="observer"/>.</summary>
+    /// <param name="owner">The field-tree filter whose verdicts the observer reproduces.</param>
+    /// <param name="observer">The tree-free observer compiled from <paramref name="owner"/>'s program.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="owner"/> or <paramref name="observer"/> is null.</exception>
     internal MatchingPrecheck(PacketFilter owner, FilterObserver observer)
     {
         ArgumentNullException.ThrowIfNull(owner);
@@ -88,6 +106,10 @@ internal sealed class MatchingPrecheck
     #region Adaptive switch
 
     /// <summary>Counts one pre-check result and closes the window when it is full.</summary>
+    /// <param name="maybeMatch">
+    /// False when the observer ruled the packet out (the pre-check paid off); true when the packet still needs the
+    /// authoritative evaluation (the pre-check was extra work).
+    /// </param>
     internal void Record(bool maybeMatch)
     {
         _Checked++;

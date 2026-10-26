@@ -26,6 +26,15 @@ namespace NetworkInspector.Exporters.DuckDb;
 /// <b>Empty export:</b> If no packets are ever added, no database file is created — matching the
 /// lazy-initialisation behaviour of the other exporters (see <c>EXPORTER_GUIDE.md</c> §7.2/§7.5).
 /// </para>
+/// <para>
+/// <b>Memory model:</b> packets are accumulated column-wise in one <see cref="ColumnarPacketBatch"/> and handed to the
+/// <see cref="DuckDbBulkWriter"/> whenever the packet count or the estimated batch size reaches its limit, so memory
+/// stays bounded by one batch regardless of capture size. Each flush is one DuckDB transaction.
+/// </para>
+/// <para>
+/// <b>Existing output:</b> the first packet deletes an existing database file (and its <c>.wal</c>) at the target
+/// path, so a re-export replaces the file instead of appending to it.
+/// </para>
 /// </summary>
 public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, IDisposable
 {
@@ -47,6 +56,9 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
 
     private ColumnarPacketBatch? _Batch;
     private DuckDbBulkWriter? _Writer;
+
+    // Sum of the in-memory size estimates of all flushed batches. Used for EstimatedOutputBytes so that reading the
+    // property never touches the file system (the database file is also larger or smaller than this estimate).
     private long _FlushedOutputBytes;
 
     private bool _HasError;
@@ -103,7 +115,10 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
         get;
     }
 
-    /// <summary>Number of packets written so far.</summary>
+    /// <summary>
+    /// Number of packets accepted so far. A packet counts as soon as it is added to the current batch, which may
+    /// still be buffered in memory and not yet written to the database.
+    /// </summary>
     public int PacketCount
     {
         get; private set;
@@ -145,6 +160,8 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
     /// <inheritdoc/>
     public bool OnPacket(Packet packet)
     {
+        // Stop signals first: cancellation, an earlier fatal error, or a finished exporter all end the export. After
+        // OnFinish the writer and batch are released, so a late packet must never reach them.
         if (_CancellationToken.IsCancellationRequested)
         {
             return false;
@@ -155,6 +172,7 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
             return false;
         }
 
+        // Lazy start: the database file is created only when the first packet arrives.
         if (!_Started)
         {
             _Start(packet);
@@ -168,6 +186,8 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
     }
 
     /// <inheritdoc/>
+    /// <remarks>Idempotent: only the first call finalizes the database. Also invoked by <see cref="Dispose"/>.</remarks>
+    /// <exception cref="AggregateException">One or more resource release steps failed.</exception>
     public void OnFinish()
     {
         if (_Finished)
@@ -191,7 +211,7 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
             new ExporterReleaseStep("batch disposal", _DisposeBatch));
     }
 
-    /// <summary>Flushes the last batch and completes the writer (catalog rows, appender close, commit).</summary>
+    /// <summary>Flushes the last batch and completes the writer (catalog rows, commit, then the single checkpoint).</summary>
     private void _FinalizeDatabase()
     {
         if (_Batch is not null && _Batch.PacketCount > 0)
@@ -249,6 +269,8 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
     /// <param name="firstPacket">The first packet of the export.</param>
     private void _Start(Packet firstPacket)
     {
+        // _Started is set before the work so a failed start is not retried with the next packet; the error flag
+        // below then stops the export. The writer constructor deletes any previous database at the path.
         _Started = true;
         try
         {
@@ -277,18 +299,19 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
     /// <summary>Adds one packet to the current batch, flushing to the writer if the batch is full.</summary>
     private bool _HandlePacket(Packet packet)
     {
+        // Target reached: refuse further packets so the caller stops feeding the exporter.
         if (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount)
         {
             return false;
         }
 
+        // The packet is added first and the flush happens only when a limit is reached. A packet without a field tree
+        // is rejected by AddPacket (InvalidOperationException) and handled here like any other failure. AddPacket is
+        // all-or-nothing: when it throws, the batch is exactly as it was, so only this packet is skipped.
+        bool shouldFlush;
         try
         {
-            bool shouldFlush = _Batch!.AddPacket(packet);
-            if (shouldFlush)
-            {
-                _FlushBatch();
-            }
+            shouldFlush = _Batch!.AddPacket(packet);
         }
         catch (Exception ex)
         {
@@ -300,6 +323,34 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
             });
         }
 
+        if (shouldFlush)
+        {
+            // The batch includes this packet, and the packets before it in the batch were already counted as written.
+            int packetsInBatch = _Batch.PacketCount;
+            try
+            {
+                _FlushBatch();
+            }
+            catch (Exception ex)
+            {
+                // _FlushBatch discarded the batch (see there), so none of its packets reached the database. The earlier
+                // ones were counted as written when they were accepted; take them back and count them as skipped, so
+                // WrittenCount and SkippedCount describe what is in the database. This packet is counted by _HandleSkip below.
+                int lostEarlier = packetsInBatch - 1;
+                int itemIndex = PacketCount - lostEarlier;
+                PacketCount -= lostEarlier;
+                SkippedCount = SkippedCount > int.MaxValue - lostEarlier
+                    ? int.MaxValue
+                    : SkippedCount + lostEarlier;
+                return _HandleSkip(new ExportErrorEventArgs
+                {
+                    ItemIndex = itemIndex,
+                    Kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
+                    Message = $"DuckDB batch write failed, {packetsInBatch.ToString(CultureInfo.InvariantCulture)} packets lost: {ex.Message}",
+                });
+            }
+        }
+
         PacketCount++;
         return true;
     }
@@ -308,10 +359,28 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
     /// Flushes the current batch and accounts its estimated size toward
     /// <see cref="EstimatedOutputBytes"/> (in-memory only — no filesystem probe).
     /// </summary>
+    /// <remarks>
+    /// The batch is emptied whether the flush succeeds or not. The database transaction already rolled the failed batch
+    /// back, so no row is duplicated by a retry, but keeping the rows would let the batch grow without bound while the
+    /// output keeps failing and would re-run the failing flush for every following packet. The exporter instead reports
+    /// the packets of the batch as lost, the same as the Parquet exporter.
+    /// </remarks>
     private void _FlushBatch()
     {
+        // Read the estimate before WriteBatch/Reset: Reset clears it.
         long batchBytes = _Batch!.EstimatedSizeBytes;
-        _Writer!.WriteBatch(_Batch);
+        try
+        {
+            _Writer!.WriteBatch(_Batch);
+        }
+        catch
+        {
+            _Batch.Reset();
+            throw;
+        }
+
+        // Saturating add: the sum is only a progress estimate; wrapping to a negative value would be worse than
+        // pinning it at the maximum.
         if (_FlushedOutputBytes > long.MaxValue - batchBytes)
         {
             _FlushedOutputBytes = long.MaxValue;
@@ -361,19 +430,29 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
         private string _UiName = "DuckDB Exporter";
         private string? _Description;
         private CancellationToken _CancellationToken;
+        // Flush thresholds for the in-memory batch: 1..int.MaxValue packets / 1..long.MaxValue estimated bytes;
+        // threat: unbounded memory growth, since the whole batch is held until flushed; configurable by the
+        // library caller through WithMaxPacketsPerBlock / WithMaxBlockSize; whichever limit is hit first triggers the
+        // flush. Defaults 50 000 packets / 16 MiB (the same as the PBF and Parquet exporters; the origin of these
+        // numbers is not recorded).
         private int _MaxPacketsPerBlock = 50000;
         private long _MaxBlockSize = 16 * 1024 * 1024;
         private int _TargetPacketCount;
         private ColumnarDetailFlags _ColumnarDetailFlags = ColumnarDetailFlags.All;
         private bool _IsTimestampSorted;
+
+        // DuckDB resource limits; 0 means "not set" (DuckDB's defaults apply, open by default). See
+        // DuckDbBulkWriter.BuildSettingsSql for the limit description.
         private long _MemoryLimitBytes;
         private int _Threads;
 
         /// <summary>
         /// Sets the output <c>.duckdb</c> file path. Required — DuckDB output is always a single
         /// database file, never a directory or stream. The file is created lazily on the first
-        /// <see cref="OnPacket"/> call.
+        /// <see cref="OnPacket"/> call; an existing file (and its <c>.wal</c>) at the path is deleted at that point.
         /// </summary>
+        /// <param name="path">Database file path; resolved to a full path immediately so later working-directory changes do not move it.</param>
+        /// <exception cref="ArgumentException"><paramref name="path"/> is <see langword="null"/> or empty.</exception>
         public Builder ToFile(string path)
         {
             ArgumentException.ThrowIfNullOrEmpty(path);
@@ -407,9 +486,16 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
         /// When the target is reached, <see cref="OnPacket"/> returns <c>false</c> and
         /// <see cref="IsFinished"/> becomes <c>true</c>.
         /// </summary>
+        /// <param name="count">Packet limit; 0 means unlimited.</param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="count"/> is negative or exceeds <see cref="ArrayIndexIdRange.MaxCount"/>.
+        /// </exception>
         public Builder WithTargetPacketCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+            // The upper limit is the number of items an array-index ID can address (ArrayIndexIdRange.MaxCount);
+            // packet IDs are non-negative int32 values (INTEGER columns).
             if (count > ArrayIndexIdRange.MaxCount)
             {
                 throw new ArgumentOutOfRangeException(
@@ -424,6 +510,8 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
         }
 
         /// <summary>Sets the maximum number of packets accumulated per batch before an automatic flush.</summary>
+        /// <param name="count">Packets per flush; must be positive.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is zero or negative.</exception>
         public Builder WithMaxPacketsPerBlock(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
@@ -431,7 +519,12 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, ID
             return this;
         }
 
-        /// <summary>Sets the maximum estimated batch size (bytes) before an automatic flush.</summary>
+        /// <summary>
+        /// Sets the maximum estimated batch size (bytes) before an automatic flush. The size is the batch's in-memory
+        /// estimate, so the real peak memory can be higher.
+        /// </summary>
+        /// <param name="bytes">Estimated bytes per flush; must be positive.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bytes"/> is zero or negative.</exception>
         public Builder WithMaxBlockSize(long bytes)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bytes);

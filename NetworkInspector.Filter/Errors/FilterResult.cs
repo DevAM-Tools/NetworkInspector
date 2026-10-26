@@ -6,6 +6,13 @@ namespace NetworkInspector.Filter.Errors;
 /// Holds either a success value or a <see cref="FilterError"/>.
 /// Used by every filter API that can fail so callers never pay exception cost for expected
 /// failures such as syntax errors or unknown field names.
+/// <para>
+/// A struct, so a success carries its value without an allocation on the compile and evaluation paths. Immutable and
+/// therefore thread-safe. <c>default(FilterResult&lt;T&gt;)</c> is not a meaningful result: it reports
+/// <see cref="IsSuccess"/> as <see langword="false"/> but holds no error, so <see cref="Error"/> returns
+/// <see langword="null"/> despite its non-nullable type. Create results only through <see cref="FilterResult.Ok{T}"/>,
+/// <see cref="FilterResult.Fail{T}"/>, or the implicit conversions.
+/// </para>
 /// </summary>
 /// <typeparam name="T">The success value type.</typeparam>
 public readonly struct FilterResult<T> : IEquatable<FilterResult<T>>
@@ -98,6 +105,7 @@ public readonly struct FilterResult<T> : IEquatable<FilterResult<T>>
 
     /// <inheritdoc />
     public bool Equals(FilterResult<T> other) =>
+        // Errors compare by reference: FilterError defines no value equality, and one failure is one error instance.
         IsSuccess == other.IsSuccess
         && ReferenceEquals(_Error, other._Error)
         && EqualityComparer<T?>.Default.Equals(_Value, other._Value);

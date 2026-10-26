@@ -2,7 +2,10 @@
 
 namespace NetworkInspector.Plugins.Loader;
 
-/// <summary>A plugin contribution that threw while it was applied to a real stack or settings manager.</summary>
+/// <summary>
+/// A plugin contribution that threw while it was applied to a real stack or settings manager (the commit-time probe passed,
+/// so this is a contribution that fails when repeated or on the real target). The other contributions still ran.
+/// </summary>
 /// <param name="PluginName">Plugin that owns the contribution.</param>
 /// <param name="Message">One-line description: exception type and message.</param>
 /// <param name="Exception">The exception, for logs.</param>

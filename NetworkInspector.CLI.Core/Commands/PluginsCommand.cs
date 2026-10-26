@@ -5,7 +5,10 @@ namespace NetworkInspector.CLI.Commands;
 /// <summary>
 /// <c>ni plugins list [--json]</c>: the plugins of this run (built-in and from <c>plugins.paths</c>) with their state, path,
 /// license, load time, and what they contribute, preceded by the pre-scan summary. Text goes to the output writer as lines;
-/// <c>--json</c> writes one indented JSON document.
+/// <c>--json</c> writes one indented JSON document. The plugins are really loaded and started (the command opens the same session as
+/// <c>convert</c> and <c>export</c>), so the state column shows what a run would get, including plugins that failed to start.
+/// The list is the result of the command and goes to the output writer; load problems go to the error writer through the session.
+/// Stateless; thread-safe.
 /// </summary>
 internal static class PluginsCommand
 {
@@ -28,8 +31,14 @@ internal static class PluginsCommand
     #region Private Helpers
 
     /// <summary>Parses the arguments and runs the sub-command.</summary>
+    /// <param name="args">The arguments after the command name.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="cancellationToken">Cancels the plugin load and start.</param>
+    /// <returns>The exit code.</returns>
+    /// <exception cref="ArgumentException">An option is unknown; the caller maps it to exit code 1.</exception>
     private static async Task<int> _RunCoreAsync(string[] args, CliIo io, CancellationToken cancellationToken)
     {
+        // "list" is the only sub-command. No sub-command is a usage error; a help flag in place of it is a success.
         if (args.Length == 0)
         {
             _PrintUsage(io.Error);
@@ -49,6 +58,8 @@ internal static class PluginsCommand
             return (int)ExitCode.ArgumentError;
         }
 
+        // Options after "list": the settings options, --json, or help. Anything else is refused with exit code 1 (an unknown
+        // option is never ignored).
         bool json = false;
         CliSettingsOptionsBuilder settings = new();
         for (int i = 1; i < args.Length; i++)
@@ -73,6 +84,8 @@ internal static class PluginsCommand
             throw new ArgumentException($"Unknown option '{args[i]}' for 'plugins list'.");
         }
 
+        // Open the session (settings, plugin load, plugin start) and print the report it holds. The report is read before the
+        // session is disposed, which stops the plugins again.
         (CliPluginSession? session, int openExit) = await CliPluginSession.OpenAsync(settings.Build(), io, cancellationToken)
             .ConfigureAwait(false);
         if (session is null)
@@ -95,7 +108,12 @@ internal static class PluginsCommand
         return (int)ExitCode.Success;
     }
 
-    /// <summary>Writes the summary line and one line per plugin.</summary>
+    /// <summary>
+    /// Writes the summary line and one line per plugin: the columns are separated by two spaces and every free text goes through
+    /// <see cref="Cell"/> so that a plugin line stays one line. Numbers use the invariant culture.
+    /// </summary>
+    /// <param name="report">The load report of the session.</param>
+    /// <param name="output">The output writer.</param>
     private static void _WriteText(PluginLoadReport report, TextWriter output)
     {
         PrescanSummary prescan = report.Prescan;
@@ -113,7 +131,13 @@ internal static class PluginsCommand
         }
     }
 
-    /// <summary>Writes the report as one indented JSON document.</summary>
+    /// <summary>
+    /// Writes the report as one indented JSON document. Every value is written through the JSON writer, which escapes control
+    /// characters and quotes, so text that a plugin controls (name, reason, descriptions) cannot break the document. Durations are
+    /// rounded to 0.1 ms like in the text form.
+    /// </summary>
+    /// <param name="report">The load report of the session.</param>
+    /// <returns>The JSON text.</returns>
     private static string _ToJson(PluginLoadReport report)
     {
         using MemoryStream stream = new();
@@ -140,7 +164,9 @@ internal static class PluginsCommand
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    /// <summary>Writes one plugin object.</summary>
+    /// <summary>Writes one plugin object: identity, state, dependencies, and the contributions grouped by kind (empty kinds are left out).</summary>
+    /// <param name="writer">The JSON writer positioned inside the <c>plugins</c> array.</param>
+    /// <param name="record">The plugin record.</param>
     private static void _WriteRecord(Utf8JsonWriter writer, PluginRecord record)
     {
         writer.WriteStartObject();
@@ -190,7 +216,12 @@ internal static class PluginsCommand
         writer.WriteEndObject();
     }
 
-    /// <summary>The lower-case tier name used in the output.</summary>
+    /// <summary>
+    /// The lower-case tier name used in the output. <c>core</c> is the fallback of the switch: the enumeration has the three tiers
+    /// Core, Host, and App, so a tier added later shows as <c>core</c> until it is named here.
+    /// </summary>
+    /// <param name="tier">The tier of the plugin.</param>
+    /// <returns>The tier name.</returns>
     private static string _TierName(PluginTier tier) => tier switch
     {
         PluginTier.Host => "host",
@@ -201,8 +232,10 @@ internal static class PluginsCommand
     /// <summary>
     /// The text of one column of a plugin line: a dash for an empty or missing text, so the columns never collapse, and no
     /// control characters, because the reason of a failed plugin can be a multi-line exception message and the row must stay
-    /// one line (the JSON form escapes them itself).
+    /// one line (the JSON form escapes them itself). Internal so that the tests can pin the exact cleaning.
     /// </summary>
+    /// <param name="text">The text of the column; may be <see langword="null"/>.</param>
+    /// <returns>A dash, or the text with control characters replaced by spaces.</returns>
     internal static string Cell(string? text) =>
         string.IsNullOrEmpty(text)
             ? "-"

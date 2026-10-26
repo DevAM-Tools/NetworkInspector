@@ -18,18 +18,28 @@ internal static class AscEthernetParser
 {
     #region Constants
 
-    /// <summary>Bytes a hex continuation line may contain: hex digits, space, tab.</summary>
+    /// <summary>
+    /// Bytes a hex continuation line may contain: hex digits, space, tab. A <see cref="SearchValues{T}"/> set, built once,
+    /// so <c>IndexOfAnyExcept</c> checks a whole line with vectorized code instead of a byte loop (run for each line
+    /// that follows a packet line).
+    /// </summary>
     private static readonly SearchValues<byte> _HexOrBlankBytes = SearchValues.Create("0123456789abcdefABCDEF \t"u8);
 
     /// <summary>Hex digits; a continuation line needs at least one.</summary>
     private static readonly SearchValues<byte> _HexDigitBytes = SearchValues.Create("0123456789abcdefABCDEF"u8);
 
-    /// <summary>Largest <c>DataLen</c> the spec allows. Allocation never exceeds this.</summary>
+    /// <summary>
+    /// Largest <c>DataLen</c> the Vector Ethernet ASC specification allows. Allocation never exceeds this. Constant of the
+    /// format (not host-dependent); a larger declared length is a parse failure, not truncated.
+    /// </summary>
     internal const int MaxDataLength = 1518;
 
     /// <summary>
     /// Bytes a caller should present from the start of the packet line so a wrapped
-    /// 1518-byte payload still fits, including one-byte-per-line wrapping.
+    /// 1518-byte payload still fits, including one-byte-per-line wrapping (two hex digits, CR, and LF per line are about
+    /// 6 KB for 1518 bytes; blanks between digits add more, and 16 KiB leaves room for that). This also caps the work and
+    /// memory one packet can cost: a continuation text that does not end the packet within this many bytes is cut off, so a
+    /// file cannot make one record grow without bound. Constant, not configurable: derived from the format limit above.
     /// </summary>
     internal const int MaxRecordBytes = 16384;
 
@@ -77,17 +87,28 @@ internal static class AscEthernetParser
             return false;
         }
 
+        // DataLen 0 is an empty frame: legal only when no hex follows (before the next logging event).
         if (dataLen == 0)
         {
             return !_HasExtraHex(hexText);
         }
 
-        Memory<byte> buffer = FrameSlabAllocator.RentZeroed(slabs, dataLen);
-        if (!_TryCopyHex(hexText, buffer.Span))
+        // The hex is decoded into a stack scratch (at most MaxDataLength = 1518 bytes, so the stack cost is bounded) and
+        // verified first; only a payload that passed is copied into slab or array space. Renting before the check left an
+        // unused region behind in the slab for every malformed packet, so a file of broken packets could burn slab memory
+        // with no frame to show for it (the CAN, CAN FD and LIN parsers rent after validation as well).
+        Span<byte> scratch = stackalloc byte[MaxDataLength];
+        Span<byte> decoded = scratch[..dataLen];
+        if (!_TryCopyHex(hexText, decoded))
         {
             return false;
         }
 
+        // The decoded bytes overwrite every byte of the rented region, so the zeroing in RentZeroed is not needed here.
+        Memory<byte> buffer = slabs is null
+            ? new byte[dataLen]
+            : slabs.Allocate(dataLen);
+        decoded.CopyTo(buffer.Span);
         frame = buffer;
         return true;
     }
@@ -123,7 +144,12 @@ internal static class AscEthernetParser
     }
 
     /// <summary>
-    /// A continuation line has no timestamp-plus-token prefix. Logging events stop the hex join.
+    /// A continuation line has no timestamp-plus-token prefix. Logging events stop the hex join. A line is a logging
+    /// event when its first blank-delimited token is a timestamp and at least one more token follows. A timestamp has a
+    /// decimal point (<c>0.039255</c>): a hex payload group such as <c>12</c> or <c>0042</c> is all decimal digits too, so
+    /// digits alone must not count, or a wrapped payload line written with blanks (<c>12 34 56</c>) would end the packet
+    /// early and cut the frame. A genuine event with an integer first token always carries a word that is not hex
+    /// (the bus or event name), so <see cref="IsHexContinuation"/> still ends the packet on it.
     /// </summary>
     internal static bool IsNewLoggingEvent(ReadOnlySpan<byte> line)
     {
@@ -139,7 +165,9 @@ internal static class AscEthernetParser
             return false;
         }
 
-        if (!AscLineClassifier.LooksLikeTimestamp(trimmed[..space]))
+        // The decimal point separates a timestamp from a payload group (see the summary): digits and dots alone are not enough.
+        ReadOnlySpan<byte> firstToken = trimmed[..space];
+        if (!firstToken.Contains((byte)'.') || !AscLineClassifier.LooksLikeTimestamp(firstToken))
         {
             return false;
         }
@@ -226,6 +254,11 @@ internal static class AscEthernetParser
         return true;
     }
 
+    /// <summary>
+    /// Finds <c>DataLen:</c> in the text after the header tokens. The colon must lie on the first line, the digits before
+    /// it (at most four: 1518 is four decimal digits and three hex digits) must start after a blank or at the start, and
+    /// the value must not exceed <see cref="MaxDataLength"/>. <paramref name="hexStart"/> is the index after the colon.
+    /// </summary>
     private static bool _TryParseDataLength(
         ReadOnlySpan<byte> rest,
         int numericBase,
@@ -296,6 +329,12 @@ internal static class AscEthernetParser
         return true;
     }
 
+    /// <summary>
+    /// Fills <paramref name="destination"/> from the hex text, two digits per byte. The two digits of one byte must be
+    /// adjacent (a line break between them fails the parse); blanks and wrapped lines are allowed between bytes. The
+    /// hex count must match exactly: too few bytes fail, and further hex digits after the last byte fail too (unless a new
+    /// logging event follows).
+    /// </summary>
     private static bool _TryCopyHex(ReadOnlySpan<byte> text, Span<byte> destination)
     {
         int index = 0;
@@ -332,6 +371,10 @@ internal static class AscEthernetParser
         return !_HasExtraHex(text[index..]);
     }
 
+    /// <summary>
+    /// True when another hex digit follows in <paramref name="text"/> before its end or the next logging event, i.e. the
+    /// packet carries more data than its DataLen says. A non-hex character stops the scan and does not count.
+    /// </summary>
     private static bool _HasExtraHex(ReadOnlySpan<byte> text)
     {
         int index = 0;
@@ -348,6 +391,14 @@ internal static class AscEthernetParser
     /// Advances to the next hex digit. Whitespace and continuation lines are skipped.
     /// A new logging event stops the scan without consuming it.
     /// </summary>
+    /// <param name="text">The hex text of the record (the part after <c>DataLen:</c>), lines separated by LF.</param>
+    /// <param name="index">Scan position; on <c>true</c> without <paramref name="atEvent"/> it points at the hex digit.</param>
+    /// <param name="atLineStart">True after an LF until the first non-blank character of that line has been classified.</param>
+    /// <param name="atEvent">True when the scan stopped at a line that ends the packet.</param>
+    /// <returns>
+    /// <c>true</c> when a hex digit was found or the packet ended (<paramref name="atEvent"/>); <c>false</c> at the end of
+    /// the text or at a character that is not a hex digit.
+    /// </returns>
     private static bool _MoveToHexDigit(
         ReadOnlySpan<byte> text,
         ref int index,

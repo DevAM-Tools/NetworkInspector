@@ -42,11 +42,23 @@ internal sealed class DecodedGroupCache
 
     #region Fields
 
+    /// <summary>
+    /// The calling thread's instance. <see cref="ThreadStaticAttribute"/> gives the lock-free per-thread isolation described
+    /// in the type remarks; the price is one thread-static read per lookup, which <see cref="Current"/> inlines.
+    /// </summary>
     [ThreadStatic]
     private static DecodedGroupCache? _Current;
 
+    /// <summary>Key and state of each way; an entry with owner 0 is empty (the array starts zeroed).</summary>
     private readonly Entry[] _Entries = new Entry[Ways];
+
+    /// <summary>Decoded values, <see cref="GroupSize"/> slots per way (way <c>w</c> starts at <c>w · GroupSize</c>).</summary>
     private readonly long[] _Values = new long[Ways * GroupSize];
+
+    /// <summary>
+    /// Round-robin replacement pointer, used when no way already belongs to the touched sequence. It advances only on a
+    /// replacement, so a hit does no bookkeeping.
+    /// </summary>
     private int _Victim;
 
     /// <summary>Way of the previous hit or touch: an in-order walk stays in one group for 64 reads.</summary>
@@ -106,6 +118,14 @@ internal sealed class DecodedGroupCache
     /// Records a first touch of <paramref name="group"/>. A way of the same sequence is reused first, so random access on
     /// one sequence never evicts the groups of other sequences read on this thread.
     /// </summary>
+    /// <remarks>
+    /// Protocol with the sequence: <see cref="Find"/> misses, the sequence calls <see cref="Touch"/> and decodes just the
+    /// one lane; a second <see cref="Find"/> hit that is not yet decoded makes the sequence fill <see cref="Slots"/> and
+    /// call <see cref="MarkDecoded"/>. A touched entry is overwritten by the next touch of the same sequence, so a
+    /// random access pattern never pays a 64-value decode.
+    /// </remarks>
+    /// <param name="owner">Process-unique sequence id (never 0).</param>
+    /// <param name="group">Sealed group index.</param>
     internal void Touch(long owner, int group)
     {
         Entry[] entries = _Entries;

@@ -5,6 +5,10 @@ namespace NetworkInspector.Sessions;
 /// <summary>
 /// Name-based field configuration for a <see cref="ValueCacheRequest"/>.
 /// Session resolves <see cref="FieldName"/> against the current stack at construction and on Restart.
+/// The request holds names, not field ids, because ids belong to one stack and Restart rebinds the same request to
+/// the new stack. At least one of <see cref="RecordValue"/>, <see cref="RecordCustomText"/> and
+/// <see cref="RecordCustomRepresentation"/> must be <see langword="true"/>; the value cache rejects a field that
+/// records nothing, and the session reports that as <see cref="SessionErrorCode.ValueCacheInvalidRequest"/>.
 /// </summary>
 public sealed class ValueCacheFieldRequest
 {

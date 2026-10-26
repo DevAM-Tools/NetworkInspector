@@ -80,7 +80,10 @@ public static class SettingsManagerFactory
     /// The syntax rules of <see cref="ProfileNames.TryValidateSyntax"/> apply: 1 to 256 ASCII letters, digits, spaces, dots,
     /// dashes, and underscores, no leading or trailing space or dot, and no device name.
     /// </param>
-    /// <returns>The resolved absolute storage path.</returns>
+    /// <returns>
+    /// The storage path: <paramref name="settingsPath"/> (as given, not made absolute) or the platform default, followed by
+    /// the storage name of the profile when one is given. Absolute whenever <paramref name="settingsPath"/> is absolute or null.
+    /// </returns>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="profileName"/> breaks the syntax rules of <see cref="ProfileNames.TryValidateSyntax"/>
     /// (path separators, traversal sequences, and every other character outside the allowed set included).
@@ -98,6 +101,9 @@ public static class SettingsManagerFactory
             return basePath;
         }
 
+        // Security: the profile name becomes a folder name under the base directory, so it is a path-traversal vector. The
+        // syntax rule is an allow-list (ASCII letters, digits, space, dot, dash, underscore; no separators and no leading dot,
+        // so no ".." segment; no device names), and a name that breaks it is refused with an exception rather than altered.
         // One rule for every caller; reserved names stay allowed here because the hosts open "application" through
         // this method. User-given names are checked with ProfileNames.TryValidate before they get here. The folder is the
         // storage name, so long names stay valid folder names.

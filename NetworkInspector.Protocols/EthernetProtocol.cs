@@ -60,7 +60,7 @@ public sealed partial class EthernetProtocol : IProtocol
 
     #region Fields
 
-    // ETH-02: BytesField container carries header byte range for UI highlighting
+    // BytesField container carries the header byte range for UI highlighting
     [BytesField("eth", "Ethernet", IndexGroup = _EthIndexGroup)]
     private FieldId _ProtocolFieldId;
 
@@ -76,14 +76,15 @@ public sealed partial class EthernetProtocol : IProtocol
     // must consult the alias registry instead of enumerating duplicate field nodes.
     private FieldAliasGroupId _AddrAliasGroupId;
 
-    // Mutually exclusive: type (Ethernet II) vs length (802.3)
+    // Mutually exclusive: type (Ethernet II) vs length (802.3). The field is named like the dispatch table
+    // ("eth.type"); the table and the field are separate registrations that merely share the name constant.
     [U64Field(EtherTypeTableName, "Type", IndexGroup = "eth.type")]
     private FieldId _TypeFieldId;
 
     [U64Field("eth.len", "Length", IndexGroup = "eth.len")]
     private FieldId _LenFieldId;
 
-    // ETH-01: Padding and trailer fields (optional)
+    // Padding and trailer fields (optional)
     [BytesField("eth.padding", "Padding", IndexGroup = "eth.padding")]
     private FieldId _PaddingFieldId;
 
@@ -114,6 +115,8 @@ public sealed partial class EthernetProtocol : IProtocol
 
     // Sparse dispatch cache built from the EtherType protocol table at stack start.
     // Linear scan over typically 4–6 entries; avoids dictionary hash computation per packet.
+    // Written only once in _OnStartCustom (single-threaded build phase) and read-only afterwards, so concurrent
+    // Parse calls need no synchronization. Keys with several protocols are not cached and use the table lookup.
     private (ulong Key, ProtocolId Id)[] _EtherTypeSparseCache = [];
 
     /// <summary>
@@ -157,14 +160,17 @@ public sealed partial class EthernetProtocol : IProtocol
         _EtherTypeSparseCache = stack.BuildU64SparseIdCache(_EtherTypeTableId);
 
     /// <summary>
-    /// Parses a Ethernet protocol unit from the supplied <paramref name="data"/> buffer,
-    /// appending decoded fields under <paramref name="parentField"/> and dispatching any
-    /// payload via the surrounding <paramref name="context"/>.
+    /// Parses an Ethernet II or IEEE 802.3 frame from the supplied <paramref name="data"/> buffer,
+    /// appending decoded fields under <paramref name="parentField"/> and dispatching the payload
+    /// (by EtherType, or to the LLC handler for 802.3) via the surrounding <paramref name="context"/>.
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
-    /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
-    /// <param name="context">Owning stack used to dispatch the next-protocol payload (when applicable).</param>
-    /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
+    /// <param name="data">Raw frame bytes starting at the destination MAC address (no preamble).</param>
+    /// <param name="context">Parse context; records index presence and carries the stack used to dispatch the payload.</param>
+    /// <returns>
+    /// The whole <paramref name="data"/> length (header, payload, padding, trailer and FCS), a
+    /// <see cref="ParseError"/> when the frame is shorter than the 14-byte header, or the error of the dispatched payload.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         if (data.Length < _HeaderSize)
@@ -178,8 +184,8 @@ public sealed partial class EthernetProtocol : IProtocol
 
         ReadOnlySpan<byte> span = data.Span;
 
-        // Read only EtherType/length at parse time — MAC addresses are parsed lazily
-        // inside the populator (which re-reads from stored header bytes).
+        // EtherType / length field (bytes 12-13, big-endian). Values >= 0x0600 (1536) are an EtherType (Ethernet II);
+        // smaller values are an IEEE 802.3 payload length (the maximum payload is 1500, so the ranges cannot overlap).
         ushort typeOrLen = BinaryPrimitives.ReadUInt16BigEndian(span[12..14]);
 
         // Record optional index groups based on frame type
@@ -225,12 +231,14 @@ public sealed partial class EthernetProtocol : IProtocol
             ethContainer.Append(_LenFieldId, FieldValue.NewU64(typeOrLen));
         }
 
-        // Cache Ethernet MAC addresses in the thread-local field directly on this
-        // protocol for potential downstream use (ARP, 802.1X, diagnostics).
+        // Cache the Ethernet MAC addresses in a [ThreadStatic] slot (see _ThreadCache) so downstream protocols can read
+        // them without walking the field tree. Currently no protocol in this assembly reads it. It must be written before
+        // the payload is dispatched, because the readers run inside that dispatch.
         SetCachedAddresses(parentField.Packet.Id, src, dst);
 
         // Dispatch to next protocol on parentField (sibling dispatch)
-        // If FCS is assumed present, strip the last 4 bytes before dispatch.
+        // If FCS is assumed present, strip the last 4 bytes before dispatch. Captures normally do not contain the FCS
+        // (the NIC strips it), so it is only assumed when the eth.assume_fcs setting says the source keeps it.
         const int FcsSize = 4;
         bool hasFcs = _AssumeFcs && data.Length >= _HeaderSize + FcsSize;
         ReadOnlyMemory<byte> payloadRegion = hasFcs ? data[_HeaderSize..^FcsSize] : data[_HeaderSize..];
@@ -326,6 +334,8 @@ public sealed partial class EthernetProtocol : IProtocol
 
         int extraStart = _HeaderSize + declaredPayloadLen;
 
+        // The wire does not mark where padding ends, so this is a heuristic: the bytes needed to bring the payload up to the
+        // 46-byte minimum are classified as padding, anything beyond that as trailer.
         // Calculate how much padding is needed to reach minimum frame size (60 bytes)
         int minFramePayload = _MinPayloadSize; // 46 bytes
         int paddingNeeded = Math.Max(0, minFramePayload - declaredPayloadLen);

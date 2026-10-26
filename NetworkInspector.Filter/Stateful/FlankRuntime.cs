@@ -29,16 +29,21 @@ internal sealed class FlankRuntime
 {
     #region Fields
 
+    // Pairwise slot: the previous sample (value, timestamp in nanoseconds, packet id). Valid only when _HasLast is set.
     private FieldValueData _Last;
     private long _LastNanos;
     private int _LastPacketId;
     private bool _HasLast;
 
+    // Armed-mode "Arm" candidate: the oldest in-window sample that matched from:. Valid only when _Armed is set;
+    // the stored values are ignored (and may be stale) while the flag is false, which is why clearing only resets flags.
     private bool _Armed;
     private FieldValueData _ArmValue;
     private long _ArmNanos;
     private int _ArmPacketId;
 
+    // Armed-mode "Next" candidate: the second-oldest in-window from: sample, kept so it can replace Arm when Arm
+    // expires. Valid only when _HasNext is set.
     private bool _HasNext;
     private FieldValueData _NextValue;
     private long _NextNanos;
@@ -49,6 +54,12 @@ internal sealed class FlankRuntime
     #region Construction
 
     /// <summary>Creates a tracker for one flank expression.</summary>
+    /// <param name="accessor">Reads the tracked field from a packet.</param>
+    /// <param name="from">Optional predecessor-region endpoint.</param>
+    /// <param name="to">Optional arrival-region endpoint.</param>
+    /// <param name="by">Optional numeric-delta predicate.</param>
+    /// <param name="isAnyChange">Whether any value change fires; the parser sets it when no condition is given.</param>
+    /// <param name="window">The mandatory proximity window. Parameters are not validated: the parser enforces the argument rules.</param>
     public FlankRuntime(
         ValueAccessor accessor,
         FlankEndpoint? from,
@@ -87,7 +98,10 @@ internal sealed class FlankRuntime
     /// <summary>The mandatory proximity window.</summary>
     public FlankWindow Window { get; }
 
-    /// <summary>The compiled <c>when:</c> gate, or <see langword="null"/>.</summary>
+    /// <summary>
+    /// The compiled <c>when:</c> gate, or <see langword="null"/>. Assigned by the code generator after construction
+    /// (the gate is compiled separately from the tracker); the tree evaluator checks it before feeding the tracker.
+    /// </summary>
     public FilterEvalFn? When { get; set; }
 
     /// <summary>
@@ -123,17 +137,22 @@ internal sealed class FlankRuntime
     /// <param name="current">The sample taken from the current packet.</param>
     /// <param name="nanos">The packet timestamp in nanoseconds.</param>
     /// <param name="packetId">The packet id, used by packet-count windows.</param>
+    /// <returns>True when this sample completes the configured transition within the window.</returns>
     public bool Advance(in FieldValueData current, long nanos, int packetId)
     {
         bool fired;
         if (IsArmedMode)
         {
+            // Armed mode: first drop candidates that fell out of the window (promoting Next if Arm expired), then try
+            // to complete the transition against the surviving Arm.
             _ExpireAndPromote(nanos, packetId, out bool promoted);
 
             fired = _Armed
                 && _CanFireWindow(_ArmNanos, _ArmPacketId, nanos, packetId)
                 && _TryFireArmed(current);
 
+            // After a fire both candidates are dropped and the firing sample is not offered as a new from: candidate,
+            // so staying inside to: does not fire again; a fresh from: sample must arrive on a later packet.
             if (fired)
             {
                 _ClearArmAndNext();
@@ -145,11 +164,14 @@ internal sealed class FlankRuntime
         }
         else
         {
+            // Pairwise mode: compare against the single previous sample (nothing to compare on the first sample).
             fired = _HasLast
                 && _CanFireWindow(_LastNanos, _LastPacketId, nanos, packetId)
                 && _IsPairwiseTransition(current);
         }
 
+        // The pairwise slot is updated for every sample, whether or not the packet fired (storage policy in the class
+        // remarks). Armed mode never reads it; the update is a few stores, so it is not made conditional.
         _Last = current;
         _LastNanos = nanos;
         _LastPacketId = packetId;
@@ -170,7 +192,7 @@ internal sealed class FlankRuntime
     /// <summary>
     /// Time distance in nanoseconds. Unchecked: capture clocks are not proven to stay inside a
     /// range where <c>now − ref</c> cannot wrap; a wrap looks like a future reference (keep, do
-    /// not fire), matching H5.
+    /// not fire), the same outcome as a backwards clock (see <see cref="_IsTooOld"/> and <see cref="_CanFireWindow"/>).
     /// </summary>
     private static long _TimeElapsed(long refNanos, long nowNanos) => nowNanos - refNanos;
 
@@ -211,7 +233,11 @@ internal sealed class FlankRuntime
     /// <summary>
     /// Drops an expired Next first, then promotes Next into Arm while Arm is strictly too old.
     /// <paramref name="promoted"/> is true when this packet consumed Next into Arm. Packet-window
-    /// Offer uses that flag so H3 does not refill Next on the same sample.
+    /// Offer uses that flag so the current sample does not immediately refill the Next slot just freed.
+    /// <para>
+    /// Next is checked first on purpose: a promoted Next is then known to be inside the window, so the loop ends after
+    /// one promotion instead of promoting an expired candidate.
+    /// </para>
     /// </summary>
     private void _ExpireAndPromote(long nowNanos, int nowId, out bool promoted)
     {
@@ -241,7 +267,8 @@ internal sealed class FlankRuntime
 
     /// <summary>
     /// Armed fire predicate: <c>to:</c> if present, and <c>by:</c> against Arm if present.
-    /// Does not apply the pairwise “last was outside <c>to:</c>” guard (C8b).
+    /// Does not apply the pairwise “last was outside <c>to:</c>” guard: Armed mode compares the current sample
+    /// with the stored <c>from:</c> sample (Arm), not with the immediately preceding sample, so that guard has no role.
     /// </summary>
     private bool _TryFireArmed(in FieldValueData current)
     {
@@ -252,8 +279,9 @@ internal sealed class FlankRuntime
 
     /// <summary>
     /// Packet windows ignore a later <c>from:</c> when both slots were already filled: a promote
-    /// that consumes Next does not open a slot for the current packet (H3). Time windows still
-    /// rank by timestamp, including after a promote.
+    /// that consumes Next does not open a slot for the current packet. Time windows still
+    /// rank by timestamp (Arm is always the earliest candidate, Next the second earliest), including after a
+    /// promote; this tolerates timestamps that are not monotonic in packet order.
     /// </summary>
     private void _OfferCandidate(in FieldValueData current, long nanos, int packetId, bool promoted)
     {
@@ -399,6 +427,9 @@ internal sealed class FlankRuntime
             return false;
         }
 
+        // Overflow guard for cur - refer without widening: with a positive subtrahend the result underflows when
+        // cur < MinValue + refer; with a negative one it overflows when cur > MaxValue + refer. The bound
+        // expressions themselves cannot overflow because refer has the opposite sign of the limit it is added to.
         if (refer > 0 && cur < long.MinValue + refer)
         {
             return false;

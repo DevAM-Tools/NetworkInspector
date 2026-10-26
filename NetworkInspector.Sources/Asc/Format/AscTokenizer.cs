@@ -5,6 +5,13 @@ namespace NetworkInspector.Sources.Asc.Format;
 /// <summary>
 /// Lightweight span-based tokenizer for whitespace-separated ASC line tokens.
 /// Allocation-free: works directly on the input <see cref="ReadOnlySpan{T}"/>.
+/// <para>
+/// Character (UTF-16) variant used only by the <see cref="AscLineClassifier"/> overload for <c>ReadOnlySpan&lt;char&gt;</c>;
+/// the sources use <see cref="AscTokenizerBytes"/>. Tokens end at a space or tab, but leading whitespace is skipped with
+/// <c>TrimStart</c>, which also skips CR and LF.
+/// </para>
+/// A <c>ref struct</c> (stack only, holds the span of the line): cannot be stored in a field of a class or captured, which is
+/// what keeps the tokenizer allocation-free. Not thread-safe; one tokenizer per line and per thread.
 /// </summary>
 internal ref struct AscTokenizer
 {
@@ -62,6 +69,12 @@ internal ref struct AscTokenizer
 /// Lightweight span-based tokenizer for whitespace-separated ASC line tokens,
 /// operating directly on raw ASCII bytes without conversion to <see cref="string"/>.
 /// Allocation-free.
+/// <para>
+/// Only the space (0x20) and tab (0x09) bytes separate tokens. LF and CR are not separators: the Ethernet parser joins a
+/// packet and its continuation lines with LF into one span and relies on a token running up to a blank, so it can find
+/// line breaks itself. Callers strip the CR of a CRLF file before tokenizing.
+/// </para>
+/// A <c>ref struct</c> (stack only): the tokenizer is created per line, never stored, and cannot allocate. Not thread-safe.
 /// </summary>
 internal ref struct AscTokenizerBytes
 {
@@ -150,7 +163,7 @@ internal ref struct AscTokenizerBytes
         return span[..(i + 1)];
     }
 
-    /// <summary>Trims leading and trailing ASCII whitespace bytes.</summary>
+    /// <summary>Trims leading and trailing ASCII blanks (space and tab only; CR and LF are kept).</summary>
     internal static ReadOnlySpan<byte> TrimAscii(ReadOnlySpan<byte> span) =>
         TrimEndAscii(TrimStartAscii(span));
 

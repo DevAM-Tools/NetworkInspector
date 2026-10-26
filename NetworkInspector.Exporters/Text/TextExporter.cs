@@ -34,6 +34,13 @@ namespace NetworkInspector.Exporters.Text;
 /// must be called sequentially from a single thread. The caller is responsible for
 /// synchronization when driving this exporter from multiple threads.
 /// </para>
+/// <para>
+/// <b>Allocation strategy:</b> each packet is formatted completely into one reusable <see cref="PooledBuffer"/> and
+/// handed to the output with a single write. Text is encoded to UTF-8 on the stack (or a reused instance scratch
+/// array for large values) and values are formatted straight into UTF-8, so the common path allocates nothing per
+/// field. Because a packet is written only after it is fully formatted, a failure while formatting never leaves half a
+/// packet in the output.
+/// </para>
 /// </summary>
 public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDisposable
 {
@@ -51,7 +58,13 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     private readonly CancellationToken _CancellationToken;
     private readonly TextDetailLevel _DetailLevel;
 
-    /// <summary>Maximum characters for string/bytes values. 0 = unlimited.</summary>
+    /// <summary>
+    /// Maximum characters for string/bytes values. 0 = unlimited.
+    /// Limit: default 256 characters, 0 (unlimited) to <see cref="int.MaxValue"/>. Threat: a single huge value (for
+    /// example a large string or byte payload) inflating every output line and the memory held for formatting it.
+    /// Configurable by the library caller through <c>WithMaxTextLength</c>. Posture: secure by default (truncation is
+    /// on); unlimited output is an explicit opt-in. The origin of the value 256 is not recorded.
+    /// </summary>
     private readonly int _MaxTextLength;
     private readonly int _TargetPacketCount;
 
@@ -62,9 +75,11 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     private bool _Started;
     private bool _Finished;
 
-    // Instance UTF-8 scratch buffer shared by _WriteString and _WriteIndent.
+    // Instance UTF-8 scratch buffer shared by _WriteString, _WriteSpan, _WriteValueDirect and _WriteIndent for values
+    // too large for the 512-byte stack buffers.
     // Grows to the maximum bytes ever needed by this exporter instance and is then
-    // reused without allocation. Buffer lifetime is tied to the exporter instance.
+    // reused without allocation. Buffer lifetime is tied to the exporter instance (it is never shrunk, so with an
+    // unlimited text length it stays as large as the largest value seen).
     private byte[]? _Utf8Scratch;
 
     // ========================================================================
@@ -119,6 +134,11 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     public int WrittenCount => PacketCount;
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Bytes accepted by the output plus the length of the packet buffer. The buffer is only reset when the next
+    /// packet starts, so it still holds the most recently written packet and the value can exceed the true size by
+    /// that packet.
+    /// </remarks>
     public long EstimatedOutputBytes =>
         (_Output?.AcceptedBytes ?? 0L) + _Buffer.Length;
 
@@ -155,6 +175,8 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// <inheritdoc/>
     public bool OnPacket(Packet packet)
     {
+        // Stop signals first: cancellation, an earlier fatal error, or a finished exporter all end the export. After
+        // OnFinish the buffer is returned to the pool, so a late packet must never reach it.
         if (_CancellationToken.IsCancellationRequested)
         {
             return false;
@@ -172,8 +194,9 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// <remarks>
     /// If no packets were written before <see cref="OnFinish"/> is called, the output
     /// is a single newline (valid empty text export). Callers that need packet content must
-    /// check <see cref="IExporterStatistics.WrittenCount"/> before use.
+    /// check <see cref="IExporterStatistics.WrittenCount"/> before use. Idempotent; also invoked by <see cref="Dispose"/>.
     /// </remarks>
+    /// <exception cref="AggregateException">One or more resource release steps failed.</exception>
     public void OnFinish()
     {
         if (_Finished)
@@ -200,6 +223,8 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
             return;
         }
 
+        // An export without packets still creates the output and writes a single newline, so the result is a valid
+        // (empty) text file as the exporter guide requires; skipped after an error so no output is started then.
         if (!_Started && !_HasError)
         {
             _Started = true;
@@ -240,11 +265,14 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// <summary>Handles a single packet — formats it and writes it to the output.</summary>
     private bool _HandlePacket(Packet packet)
     {
+        // Target reached: refuse further packets so the caller stops feeding the exporter.
         if (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount)
         {
             return false;
         }
 
+        // Skip packets carry no field tree, so there is nothing to print; counted as a skipped item
+        // (in Strict mode the export ends instead).
         if (!packet.HasFieldTree)
         {
             if (ErrorCount < int.MaxValue)
@@ -252,16 +280,17 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
                 ErrorCount++;
             }
 
+            // The item counts as skipped in both modes (like in the other exporters); Strict then stops the export.
             int index = PacketCount;
+            if (SkippedCount < int.MaxValue)
+            {
+                SkippedCount++;
+            }
+
             if (ErrorTolerance == ErrorToleranceMode.Strict)
             {
                 _HasError = true;
                 return false;
-            }
-
-            if (SkippedCount < int.MaxValue)
-            {
-                SkippedCount++;
             }
 
             ItemSkipped?.Invoke(this, new ExportErrorEventArgs
@@ -276,6 +305,10 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         try
         {
             _Started = true;
+
+            // Format the whole packet into the reusable buffer first and write it with one call at the end, so an
+            // exception while walking the tree (for example a lazy field that fails to materialize) cannot leave a
+            // partial packet in the output.
             // Visit-time materialize via Children/HasChildren — avoid full-tree MaterializeAll.
             _Buffer.Reset();
 
@@ -291,8 +324,17 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
         catch (Exception ex)
         {
-            if (ErrorCount < int.MaxValue) ErrorCount++;
+            if (ErrorCount < int.MaxValue)
+            {
+                ErrorCount++;
+            }
+
+            // The item counts as skipped in both modes (like in the other exporters); Strict then stops the export.
             int index = PacketCount;
+            if (SkippedCount < int.MaxValue)
+            {
+                SkippedCount++;
+            }
 
             if (ErrorTolerance == ErrorToleranceMode.Strict)
             {
@@ -300,7 +342,6 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
                 return false;
             }
 
-            if (SkippedCount < int.MaxValue) SkippedCount++;
             _RaiseItemSkipped(index, ExportErrorKind.SerializationError, ex.Message);
             return true;
         }
@@ -320,7 +361,8 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         // "Packet "
         _Buffer.Write("Packet "u8);
 
-        // Packet number — max 19 digits for a 64-bit integer plus sign; 20 bytes is sufficient.
+        // Packet number — an int needs at most 11 bytes (sign plus 10 digits), so 20 bytes is ample and
+        // TryFormat cannot fail; formatting into a stack buffer avoids the string that ToString() would allocate.
         Span<byte> numBuf = stackalloc byte[20];
         if (packetNumber.TryFormat(numBuf, out int numWritten, format: default, provider: CultureInfo.InvariantCulture))
         {
@@ -362,7 +404,9 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
             return;
         }
 
-        // Root (depth 0) is skipped in output; recurse into its children at depth 1
+        // Root (depth 0) is skipped in output; recurse into its children at depth 1. Recursion depth follows the
+        // field tree depth; unlike the PBF Standard writer there is no explicit nesting limit here, so it is bounded
+        // only by the protocol nesting of the parsed packet.
         foreach (Field child in root.Children(materialize: true))
         {
             _WriteField(child, depth: 1);
@@ -471,57 +515,96 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
             return;
         }
 
-        // 2. Zero-alloc IUtf8SpanFormattable path: ask the value for its formatted UTF-8 byte length,
-        //    then format directly into a rentable UTF-8 buffer. The buffer must be sized for the full
-        //    value (charCount) so TryFormat succeeds; truncation is applied after formatting by clamping
-        //    the written byte count to the byte equivalent of _MaxTextLength characters.
-        //    All current value types are ASCII-only in their UTF-8 form (1 byte per char).
+        // 2. Zero-alloc IUtf8SpanFormattable path: ask the value for its size, then format directly into a UTF-8
+        //    buffer. The buffer must be sized for the full value (charCount, which for numbers is an upper bound, not the
+        //    exact length) so TryFormat succeeds. The truncation is decided on the formatted text, not on the size
+        //    estimate: the text is cut after at most _MaxTextLength UTF-16 characters (never inside a character), and the
+        //    ellipsis is written only when something was cut. Deciding on the estimate would append an ellipsis to a short
+        //    number, and clamping to a byte count would not cut an ASCII value shorter than three times the limit.
         //    A 512-byte limit keeps the full-value buffer on the stack; larger values fall back to the
         //    instance scratch buffer.
         if (field.Value.TryGetStringSize(format: default, CultureInfo.InvariantCulture, out int charCount))
         {
-            bool needsEllipsis = _MaxTextLength > 0 && charCount > _MaxTextLength;
-            int limit = needsEllipsis ? _MaxTextLength : charCount;
-
-            // Buffer sized for the full value so TryFormat succeeds; output clamped to limit after.
             int fullMaxBytes = Encoding.UTF8.GetMaxByteCount(charCount);
-            int limitMaxBytes = Encoding.UTF8.GetMaxByteCount(limit);
-
-            if (fullMaxBytes <= 512)
+            Span<byte> buf = fullMaxBytes <= 512
+                ? stackalloc byte[fullMaxBytes]
+                : _GetScratch(fullMaxBytes);
+            if (field.Value.TryFormat(buf, out int written, format: default, provider: CultureInfo.InvariantCulture))
             {
-                Span<byte> buf = stackalloc byte[fullMaxBytes];
-                if (field.Value.TryFormat(buf, out int written, format: default, provider: CultureInfo.InvariantCulture))
-                {
-                    _Buffer.Write(buf[..Math.Min(written, limitMaxBytes)]);
-                    if (needsEllipsis)
-                    {
-                        _WriteString("…");
-                    }
-                    return;
-                }
-            }
-            else
-            {
-                if (_Utf8Scratch is null || _Utf8Scratch.Length < fullMaxBytes)
-                {
-                    _Utf8Scratch = new byte[fullMaxBytes];
-                }
-                Span<byte> buf = _Utf8Scratch.AsSpan(0, fullMaxBytes);
-                if (field.Value.TryFormat(buf, out int written, format: default, provider: CultureInfo.InvariantCulture))
-                {
-                    _Buffer.Write(buf[..Math.Min(written, limitMaxBytes)]);
-                    if (needsEllipsis)
-                    {
-                        _WriteString("…");
-                    }
-                    return;
-                }
+                _WriteUtf8Truncated(buf[..written]);
+                return;
             }
         }
 
-        // 3. Fallback: ToString() — one allocation, covers exotic or future value types.
+        // 3. Fallback: ToString() — one allocation, covers exotic or future value types, and is reached when the
+        //    value cannot report its size or formatting into the buffer failed.
         // FieldValue.ToString() uses InvariantCulture via FieldValueData.ToTempString() / ZA.String.
         _WriteString(_TruncateText(field.Value.ToString(), _MaxTextLength));
+    }
+
+    /// <summary>
+    /// Returns a span over the instance scratch buffer with at least <paramref name="minSize"/> bytes, growing the buffer
+    /// when it is too small (to exactly the requested size, as the other scratch users do).
+    /// </summary>
+    private Span<byte> _GetScratch(int minSize)
+    {
+        if (_Utf8Scratch is null || _Utf8Scratch.Length < minSize)
+        {
+            _Utf8Scratch = new byte[minSize];
+        }
+
+        return _Utf8Scratch.AsSpan(0, minSize);
+    }
+
+    /// <summary>
+    /// Writes already-encoded UTF-8 text, cut after at most <see cref="_MaxTextLength"/> UTF-16 characters (0 means no
+    /// limit), and appends the ellipsis only when something was cut.
+    /// </summary>
+    private void _WriteUtf8Truncated(ReadOnlySpan<byte> utf8)
+    {
+        int keep = _MaxTextLength > 0
+            ? _Utf8PrefixLength(utf8, _MaxTextLength)
+            : utf8.Length;
+        _Buffer.Write(utf8[..keep]);
+        if (keep < utf8.Length)
+        {
+            _WriteString("…");
+        }
+    }
+
+    /// <summary>
+    /// Returns the length in bytes of the longest prefix of <paramref name="utf8"/> that holds at most
+    /// <paramref name="maxChars"/> UTF-16 characters and ends between two characters (a character is never split, and a
+    /// surrogate pair counts as two and is kept or dropped as a whole). Bytes that are not valid UTF-8 count as one
+    /// replacement character each step, so the scan always advances.
+    /// </summary>
+    private static int _Utf8PrefixLength(ReadOnlySpan<byte> utf8, int maxChars)
+    {
+        // A character takes at least as many bytes as it has UTF-16 units, so a text with no more bytes than the limit
+        // fits as a whole (the common case for short values).
+        if (utf8.Length <= maxChars)
+        {
+            return utf8.Length;
+        }
+
+        int chars = 0;
+        int offset = 0;
+        while (offset < utf8.Length)
+        {
+            OperationStatus status = Rune.DecodeFromUtf8(utf8[offset..], out Rune rune, out int consumed);
+            int units = status == OperationStatus.Done
+                ? rune.Utf16SequenceLength
+                : 1;
+            if (chars + units > maxChars)
+            {
+                break;
+            }
+
+            chars += units;
+            offset += Math.Max(consumed, 1);
+        }
+
+        return Math.Min(offset, utf8.Length);
     }
 
     /// <summary>
@@ -588,9 +671,12 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
 
         ReadOnlySpan<byte> span = bytes.Span;
 
+        // Each byte renders as two hex digits plus one separator between bytes, so n bytes take 3n - 1 characters. The
+        // largest n that stays within the character limit is (limit + 1) / 3 rounded down; rounding up would let the
+        // output exceed the limit by a character (limit 4 would print "aa bb", five characters).
         int maxBytes = _MaxTextLength == 0
             ? span.Length
-            : Math.Min(span.Length, (_MaxTextLength + 2) / 3);
+            : Math.Min(span.Length, (_MaxTextLength + 1) / 3);
 
         ReadOnlySpan<byte> nibbles = "0123456789abcdef"u8;
         Span<byte> pair = stackalloc byte[2];
@@ -637,8 +723,8 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
             return;
         }
 
-        // Use a fixed-size stackalloc for small indents, the instance scratch
-        // for large indents (deep nesting). Avoids heap allocation.
+        // Use a fixed-size stackalloc for small indents (up to 64 spaces, i.e. 32 nesting levels), the instance
+        // scratch for large indents (deeper nesting). Avoids a heap allocation per line.
         if (spaces <= 64)
         {
             Span<byte> indent = stackalloc byte[spaces];
@@ -719,7 +805,10 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
             return this;
         }
 
-        /// <summary>Sets the output to an existing stream.</summary>
+        /// <summary>
+        /// Sets the output to an existing stream. The caller keeps ownership: the exporter flushes the stream when
+        /// it finishes but does not close it.
+        /// </summary>
         public Builder ToStream(Stream stream)
         {
             _Output = ExportOutput.FromStream(stream);
@@ -758,9 +847,13 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
 
         /// <summary>
         /// Sets the maximum number of characters for string and bytes field values.
-        /// Values longer than this are truncated with an ellipsis (<c>…</c>).
-        /// Set to 0 for unlimited output. Default: 256.
+        /// Values longer than this are cut after that many characters and get an ellipsis (<c>…</c>); a value that fits is
+        /// written as it is. The ellipsis does not count toward the limit.
+        /// Set to 0 for unlimited output. Default: 256. With 0, one very large value is formatted completely and the
+        /// exporter's scratch buffer grows to its size, so unlimited is only advisable for trusted input.
         /// </summary>
+        /// <param name="maxLength">Maximum characters; 0 means unlimited.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxLength"/> is negative.</exception>
         public Builder WithMaxTextLength(int maxLength)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(maxLength);
@@ -769,9 +862,15 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
 
         /// <summary>Stops after writing the specified number of packets. 0 means unlimited.</summary>
+        /// <param name="count">Packet limit; 0 means unlimited.</param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="count"/> is negative or exceeds <see cref="ArrayIndexIdRange.MaxCount"/>.
+        /// </exception>
         public Builder WithTargetPacketCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+            // The upper limit is the number of items an array-index ID can address (ArrayIndexIdRange.MaxCount).
             if (count > ArrayIndexIdRange.MaxCount)
             {
                 throw new ArgumentOutOfRangeException(

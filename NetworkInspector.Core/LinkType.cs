@@ -3,9 +3,16 @@
 namespace NetworkInspector.Core;
 
 /// <summary>
-/// Pcap link-layer header types (DLT values).
+/// Pcap link-layer header types.
 /// Maps to libpcap's <c>LINKTYPE_*</c> / <c>DLT_*</c> constants.
 /// See <see href="https://www.tcpdump.org/linktypes.html"/> for the canonical registry.
+/// <para>
+/// The numeric values are the <c>LINKTYPE_*</c> numbers that capture files store (pcap global header, PCAPNG interface
+/// description block). The <c>DLT_*</c> names in the member summaries are libpcap's symbolic names for the same link
+/// types; the numeric <c>DLT_*</c> values of some types differ between operating systems, so never take a number from a
+/// platform header. A file can carry a value that has no member here: such a value converts to an undefined
+/// <see cref="LinkType"/>, and <see cref="LinkTypeExtensions.UiName"/> then falls back to the number.
+/// </para>
 /// </summary>
 public enum LinkType
 {
@@ -172,7 +179,7 @@ public enum LinkType
     Ieee80216MacCps = 188,
     /// <summary>USB packets with Linux header (DLT_USB_LINUX).</summary>
     UsbLinux = 189,
-    /// <summary>CAN 2.0B (DLT_CAN_SOCKETCAN).</summary>
+    /// <summary>CAN 2.0B (DLT_CAN20B).</summary>
     Can20B = 190,
     /// <summary>IEEE 802.15.4, Linux (DLT_IEEE802_15_4_LINUX).</summary>
     Ieee802154Linux = 191,
@@ -423,7 +430,12 @@ public enum LinkType
 public static class LinkTypeExtensions
 {
     #region Extension Methods
-    /// <summary>Returns a human-readable display name for this link type.</summary>
+    /// <summary>
+    /// Returns a human-readable display name for this link type. A value without a name here (including numbers
+    /// that are not members of the enum) yields <see cref="Enum.ToString()"/>, which is the member name or the
+    /// decimal number; the method never throws and never returns <see langword="null"/>.
+    /// </summary>
+    /// <param name="linkType">The link type to name.</param>
     public static string UiName(this LinkType linkType) => linkType switch
     {
         // Core Link Types

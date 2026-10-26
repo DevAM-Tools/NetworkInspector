@@ -6,6 +6,9 @@ namespace NetworkInspector.Exporters.Columnar;
 /// Helpers for reading optional export columns from a <see cref="Field"/> / <see cref="FieldValue"/>
 /// under <see cref="ColumnarDetailFlags"/>, and for materializing fixed-size address / bytes
 /// payloads as <see cref="byte"/> arrays for columnar sinks.
+/// <para>
+/// <b>Thread safety:</b> Stateless; safe to call from multiple threads.
+/// </para>
 /// </summary>
 internal static class FieldValueMaterializer
 {
@@ -56,6 +59,11 @@ internal static class FieldValueMaterializer
     /// <see cref="byte"/> array suitable for Parquet/DuckDB BLOB columns. Returns
     /// <see langword="null"/> for non-byte payload types.
     /// </summary>
+    /// <remarks>
+    /// Always returns a new, exactly sized array that the caller owns (it never aliases the value's backing memory, which
+    /// may belong to a recycled packet buffer). The arrays are created with <see cref="GC.AllocateUninitializedArray{T}"/>
+    /// because every element is overwritten immediately by the copy, which skips the redundant zeroing.
+    /// </remarks>
     internal static byte[]? ToBytesArray(in FieldValueData data)
     {
         switch (data.Type)

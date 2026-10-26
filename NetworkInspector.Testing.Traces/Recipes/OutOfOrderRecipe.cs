@@ -14,12 +14,16 @@ public sealed class OutOfOrderRecipe : TraceRecipe
     /// <summary>UDP destination port.</summary>
     public const ushort Port = 6001;
 
+    /// <summary>Forward step between two frames: 1 ms in nanoseconds.</summary>
     private const long _StepNanos = 1_000_000;
 
+    /// <summary>Backward step of an out-of-order frame: 5 ms in nanoseconds, subtracted from the time of its predecessor.</summary>
     private const long _BackwardNanos = 5_000_000;
 
+    /// <summary>Remainder of the frame index (modulo <c>_BackwardPeriod</c>) that marks a backward frame.</summary>
     private const int _BackwardRemainder = 6;
 
+    /// <summary>Period of the backward frames: every seventh frame.</summary>
     private const int _BackwardPeriod = 7;
 
     #endregion
@@ -91,6 +95,10 @@ public sealed class OutOfOrderRecipe : TraceRecipe
         for (int i = 0; i < Frames; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            // The timestamp is relative to the previous frame, not to the index: a backward frame is 5 ms before its
+            // predecessor, and the following frame continues from the backward time. The offset never drops below 0 because
+            // at least five forward steps (5 ms) precede every backward step (5 ms).
             if (i > 0)
             {
                 nanos += i % _BackwardPeriod == _BackwardRemainder

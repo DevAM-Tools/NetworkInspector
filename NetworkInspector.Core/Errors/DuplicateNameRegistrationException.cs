@@ -5,8 +5,10 @@ namespace NetworkInspector.Core.Errors;
 /// <summary>
 /// Thrown during the registration phase when a name that has already been registered
 /// is registered again (e.g., duplicate protocol name, field name, or table name).
+/// Names are the stable keys of the stack's lookup maps, so a second registration would either replace the first
+/// silently or make lookups ambiguous; it is rejected at registration time instead.
 /// </summary>
-/// <remarks>Creates a new duplicate-name registration exception.</remarks>
+/// <param name="name">The name that was registered twice; also reported in the message.</param>
 public sealed class DuplicateNameRegistrationException(string name) : RegistrationException($"Duplicate name: '{name}'")
 {
     #region Properties
@@ -19,6 +21,7 @@ public sealed class DuplicateNameRegistrationException(string name) : Registrati
     #region Factory Methods
 
     /// <summary>Creates a duplicate-name exception for the given name.</summary>
+    /// <param name="name">The name that was registered twice.</param>
     internal static DuplicateNameRegistrationException For(string name) => new(name);
 
     #endregion

@@ -4,8 +4,11 @@ namespace NetworkInspector.CLI.Commands;
 
 /// <summary>
 /// <c>ni profile list | create &lt;name&gt; [--copy-from &lt;profile&gt;] | rename &lt;old&gt; &lt;new&gt; | delete &lt;name&gt;</c>: manages
-/// the profile folders under the settings base. No plugins are loaded; only folders change. A profile that a running app
-/// uses can still be renamed or deleted here (the command cannot see the app); the app re-reads the list.
+/// the profile folders under the settings base. No plugins are loaded; only folders change. The rules (names, case-insensitive
+/// uniqueness, the last profile cannot be deleted, atomic create) live in <see cref="SettingsProfiles"/>. This command adds no
+/// check for a profile that a running application uses: it cannot see the application, so a rename or delete changes the folder
+/// under it (the file system may still refuse it). Results go to the output writer, errors to the error writer. Stateless;
+/// thread-safe.
 /// </summary>
 internal static class ProfileCommand
 {
@@ -27,6 +30,10 @@ internal static class ProfileCommand
     #region Private Helpers
 
     /// <summary>Parses the arguments and runs the sub-command.</summary>
+    /// <param name="args">The arguments after the command name.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <returns>The exit code.</returns>
+    /// <exception cref="ArgumentException">An option has no value or an invalid value; the caller maps it to exit code 1.</exception>
     private static int _RunCore(string[] args, CliIo io)
     {
         if (args.Length == 0)
@@ -41,7 +48,8 @@ internal static class ProfileCommand
             return (int)ExitCode.Success;
         }
 
-        // Positional arguments and the two options of this command; the settings options are accepted so scripts can share them.
+        // Positional arguments and the option of this command (--copy-from); the settings options are accepted so scripts can
+        // share them, but only --settings-path has an effect here: --profile and the limits do not apply to folder operations.
         string command = args[0].ToUpperInvariant();
         List<string> positional = [];
         string? copyFrom = null;
@@ -68,6 +76,8 @@ internal static class ProfileCommand
             positional.Add(args[i]);
         }
 
+        // The base folder is made absolute so that every message and folder operation names one place. No profile name is passed
+        // to ResolvePath: the profiles are the folders below the base.
         string settingsBase = Path.GetFullPath(SettingsManagerFactory.ResolvePath(settings.Build().SettingsPath, null));
         return command switch
         {
@@ -162,12 +172,32 @@ internal static class ProfileCommand
         return (int)ExitCode.ArgumentError;
     }
 
-    /// <summary>Reports a refusal of the profile operation as one error line.</summary>
+    /// <summary>
+    /// Reports a refusal of the profile operation as one error line. A refusal by a rule (name, existence, last profile) is a
+    /// usage error (1); a failure of the file system (the folder cannot be created, moved, or deleted, the name file cannot be
+    /// written) is a runtime failure (3), like every other I/O failure of the tool, so a script can tell "fix the command" from
+    /// "fix the environment".
+    /// </summary>
     private static int _Refuse(string message, CliIo io)
     {
         io.Error.WriteLine("Error: " + message);
-        return (int)ExitCode.ArgumentError;
+        return _IsFileSystemFailure(message)
+            ? (int)ExitCode.RuntimeError
+            : (int)ExitCode.ArgumentError;
     }
+
+    /// <summary>
+    /// Whether the message of <see cref="SettingsProfiles"/> reports a file-system failure. The profile members return the error
+    /// as text only, and they append the message of the exception after one of these phrases (<c>Profile 'x' cannot be
+    /// created: …</c>, <c>cannot be renamed: …</c>, <c>cannot be deleted: …</c>, <c>The name file '…' cannot be written: …</c>);
+    /// the rule refusals never contain them. Accepted risk: a changed wording in the library makes a failure fall back to the
+    /// usage error (1), the behavior before this check.
+    /// </summary>
+    private static bool _IsFileSystemFailure(string message) =>
+        message.Contains(" cannot be created: ", StringComparison.Ordinal)
+        || message.Contains(" cannot be renamed: ", StringComparison.Ordinal)
+        || message.Contains(" cannot be deleted: ", StringComparison.Ordinal)
+        || message.Contains(" cannot be written: ", StringComparison.Ordinal);
 
     /// <summary>Prints usage information for the profile command.</summary>
     private static void _PrintUsage(TextWriter error)

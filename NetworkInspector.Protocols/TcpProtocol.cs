@@ -99,6 +99,15 @@ public sealed partial class TcpProtocol : IProtocol
     /// <summary>Index group for always-present TCP fields.</summary>
     private const string _TcpIndexGroup = "tcp";
 
+    /// <summary>
+    /// Error text for a segment that completes more reassembled PDUs than the packet can bind. Limit: 255 additional buffers per
+    /// packet. Threat: a hostile segment packed with tiny PDUs. Constant (the effect-layer keys of the packet use 8 bits for the
+    /// buffer index, a format fact, not configurable); secure by default. Exceeding it is an expected failure that is named, not
+    /// a silent drop.
+    /// </summary>
+    private const string _BoundBufferLimitMessage =
+        "Too many reassembled PDUs in one packet: a packet can hold at most 255 additional buffers; the remaining PDUs were not parsed";
+
     #endregion
 
     #region Fields (always present)
@@ -538,26 +547,41 @@ public sealed partial class TcpProtocol : IProtocol
 
     #region Settings
 
+    // Off by default: verification costs one pass over the whole segment per packet and needs the enclosing IP addresses for the
+    // pseudo-header. When off, tcp.checksum.status is not emitted at all.
     [BoolSetting("tcp.verify_checksum", "Verify Checksum", "tcp", Default = false)]
     private bool _VerifyChecksum;
 
+    // When on, the displayed tcp.seq / tcp.ack are ISN-relative; tcp.seq_raw / tcp.ack_raw always carry the wire values.
     [BoolSetting("tcp.relative_sequence_numbers", "Relative sequence numbers", "tcp", Default = true)]
     private bool _RelativeSequenceNumbers;
 
+    // Stream-key extensions (off by default): with the plain address/port tuple, the same tuple seen on two VLANs or two capture
+    // interfaces is one stream. Turning these on splits such tuples into separate streams (see _TryCreateConnectionKey).
     [BoolSetting("tcp.stream_key_last_vlan", "Include last VLAN id in the TCP stream key", "tcp", Default = false)]
     private bool _StreamKeyLastVlan;
 
+    // Despite the display name, the "frame identity" in the key is the capture interface id (see _ReadFrameIdentity), not a frame id.
     [BoolSetting("tcp.stream_key_frame", "Include frame identity in the TCP stream key", "tcp", Default = false)]
     private bool _StreamKeyFrame;
 
-    [U64Setting("tcp.max_tracked_streams", "Maximum tracked TCP streams", "tcp", Default = 100000)]
+    // Limit: number of TCP connections the tracker keeps. Value: default 10000; values at or above int.MaxValue are clamped to
+    // int.MaxValue in _RunAnalysis. Threat: every distinct tuple allocates a TcpConnectionState that lives as long as this
+    // protocol instance (the stack), so a scan or SYN flood would otherwise grow memory without bound. Configurable (setting,
+    // changed by the operator/user), not a constant, because the right size depends on the host and the capture. Posture: secure
+    // by default (a tight default; raising it is opt-in), because the input comes from untrusted networks. Exceeding it is an
+    // expected failure, reported per packet as tcp.error.stream_limit, never a silent drop.
+    [U64Setting("tcp.max_tracked_streams", "Maximum tracked TCP streams", "tcp", Default = 10000,
+        Description = "Upper bound for the number of tracked TCP connections. A new connection beyond it gets no stream index "
+            + "and is flagged; raising the value lets a flood of distinct address/port pairs use more memory.")]
     private ulong _MaxTrackedStreams;
 
     #endregion
 
     #region Cross-Protocol References
     // Resolved during OnStart via stack.GetFieldId() for reading IP addresses
-    // from the field tree via sibling navigation (not flat-array scan).
+    // from the field tree via sibling navigation (not flat-array scan). This is only the fallback: the normal path reads the
+    // per-thread address caches of the IP protocols (see _TryCreateConnectionKey), which also work when no field tree is built.
 
     /// <summary>FieldId of the IPv4 container field ("ip"), used to identify the IP
     /// container when walking backwards through siblings.</summary>
@@ -582,14 +606,20 @@ public sealed partial class TcpProtocol : IProtocol
     /// <see cref="IProtocol.Parse"/> is dispatched from an enclosing IPv6 layer.</summary>
     private ProtocolId _Ipv6ProtocolId;
 
-    // Pre-allocated populator and dispatch cache
+    // Populator delegate created once in OnStart: a method-group conversion per packet would allocate a delegate each time.
     private LazyPopulator _Populator = null!;
+
+    // One entry per port that has exactly one registered protocol, built once in OnStart. _DispatchPort scans this short array
+    // linearly (cheaper than hashing for a handful of entries) before falling back to the table lookup, which also handles ports
+    // with several registered protocols.
     private (ulong Key, ProtocolId Id)[] _PortSparseCache = [];
 
-    // TCP connection tracking for analysis
+    // TCP connection tracking for analysis. Mutable cross-packet state: only the ordered first-parse path may touch it
+    // (see the class remarks); replays read the recorded effect instead.
     private readonly TcpConnectionTracker _ConnectionTracker = new();
 
-    // TCP stream reassembly engine (buffers segments and extracts PDUs)
+    // TCP stream reassembly engine (buffers segments and extracts PDUs). Same single-writer rule as the connection tracker.
+    // Created in OnStart because it needs the stack to look up per-protocol reassembly configurations.
     private TcpReassemblyEngine? _ReassemblyEngine;
 
     // Bundled field IDs for passing to the options parser
@@ -606,11 +636,14 @@ public sealed partial class TcpProtocol : IProtocol
         _Ipv4ProtocolId = stack.GetProtocolId("ip") ?? ProtocolId.Invalid;
         _Ipv6ProtocolId = stack.GetProtocolId("ipv6") ?? ProtocolId.Invalid;
         _HeuristicTableId = stack.GetHeuristicProtocolTableId(HeuristicTableName) ?? HeuristicProtocolTableId.Invalid;
+
+        // Per-stack state, built once here and never per packet: the populator delegate, the sparse port-dispatch cache
+        // (DispatchCacheHelper requires OnStart), and the reassembly engine that needs the stack for its config lookups.
         _Populator = _PopulateTcp;
         _PortSparseCache = stack.BuildU64SparseIdCache(_PortTableId);
         _ReassemblyEngine = new TcpReassemblyEngine(stack);
 
-        // Bundle option field IDs for the parser
+        // Bundle the option field IDs so TcpOptionsParser receives one readonly struct instead of dozens of parameters.
         _OptionsFieldIds = new TcpOptionsFieldIds
         {
             Eol = _OptEolFieldId,
@@ -695,6 +728,8 @@ public sealed partial class TcpProtocol : IProtocol
     /// </summary>
     private ParseResult _PopulateTcp(in MutField container)
     {
+        // The container value is the whole TCP segment (header + payload) stored by _ParseBody, so the populator can re-read
+        // the header itself and the lazy work costs nothing when nobody expands the node.
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> tcpData))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -705,17 +740,17 @@ public sealed partial class TcpProtocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, TcpHeader.MinSize, (ulong)tcpData.Length);
         }
 
-        ushort srcPort = header.SrcPort.Value;
-        ushort dstPort = header.DstPort.Value;
-
         // tcp.srcport and tcp.dstport are eagerly appended by Parse() so checksum
         // validation and stream tracking can read ports without materialising the lazy TCP group.
         // The any-match name "tcp.port" is exposed via the alias group registered in
         // _RegisterFieldsCustom; no duplicate tcp.port field node is appended.
 
+        // Checksum: displayed as hex from the precomputed table (no per-packet string formatting).
         string csumText = DisplayTables.FormatHexU16(header.Checksum.Value);
         container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(header.Checksum.Value), csumText);
 
+        // Optional verification. Field order matters: tcp.checksum.status directly follows tcp.checksum (the index group is
+        // recorded in _ParseBody under the same _VerifyChecksum condition, so the setting must not change between the two).
         if (_VerifyChecksum)
         {
             bool? valid = _ValidateChecksum(in container, tcpData.Span);
@@ -728,6 +763,8 @@ public sealed partial class TcpProtocol : IProtocol
             container.Append(_ChecksumStatusFieldId, FieldValue.NewString(statusText));
         }
 
+        // Header length and payload length. _ParseBody has already rejected data offsets below 5 and headers longer than the
+        // data, so headerLen <= tcpData.Length holds here and the slices below cannot go out of range.
         int headerLen = header.HeaderLength;
         int payloadLen = Math.Max(0, tcpData.Length - headerLen);
 
@@ -738,6 +775,9 @@ public sealed partial class TcpProtocol : IProtocol
 
         container.Append(_HdrLenFieldId, FieldValue.NewU64((ulong)headerLen));
 
+        // Flags: header byte 13. CWR/ECE are the ECN bits (RFC 3168), the other six are the classic RFC 793 control bits.
+        // NS (RFC 3540) is the lowest bit of byte 12 (shared with the data offset and the 3 reserved bits), so it is read
+        // from the parsed header and is not part of this byte.
         byte flags = header.Flags;
         string flagsText = TcpFlagsFormatter.Format(flags);
         container.AppendWithCustomText(_FlagsFieldId,
@@ -757,7 +797,8 @@ public sealed partial class TcpProtocol : IProtocol
         container.Append(_WindowFieldId, FieldValue.NewU64(header.WindowSize.Value));
         container.Append(_UrgentPointerFieldId, FieldValue.NewU64(header.UrgentPointer.Value));
 
-        // TCP Options (between fixed 20-byte header and payload)
+        // TCP Options (between fixed 20-byte header and payload). The span handed to the parser ends at the header
+        // length, so option parsing is confined to the header and cannot run into the payload.
         if (headerLen > TcpHeader.MinSize)
         {
             int optionsLen = headerLen - TcpHeader.MinSize;
@@ -770,6 +811,7 @@ public sealed partial class TcpProtocol : IProtocol
             TcpOptionsParser.Parse(optionsData, in optionsContainer, in _OptionsFieldIds);
         }
 
+        // Payload: a slice of the original segment memory, not a copy.
         container.Append(_LenFieldId, FieldValue.NewU64((ulong)payloadLen));
 
         if (payloadLen > 0)
@@ -781,10 +823,14 @@ public sealed partial class TcpProtocol : IProtocol
     }
 
     /// <summary>
-    /// Validates the TCP checksum from cached IP addresses first, then sibling walk on Build.
+    /// Validates the TCP checksum (RFC 793: ones' complement sum over the pseudo-header and the whole segment, which is zero for
+    /// a valid segment). The IP addresses come from the field tree first (the nearest enclosing IP layer), and only when there is
+    /// no tree (skip mode) or it holds no IP layer from the per-thread address caches of the IP protocols.
     /// Returns <see langword="true"/> if valid, <see langword="false"/> if invalid,
     /// or <see langword="null"/> if no IP layer was found.
     /// </summary>
+    /// <param name="container">The TCP container.</param>
+    /// <param name="tcpData">The whole TCP segment (header and payload).</param>
     private bool? _ValidateChecksum(in MutField container, ReadOnlySpan<byte> tcpData)
     {
         const byte TcpProtocolNumber = 6;
@@ -793,27 +839,44 @@ public sealed partial class TcpProtocol : IProtocol
         int tcpLength = tcpData.Length;
         PacketId packetId = container.Packet.Id;
 
+        // Find the enclosing IP addresses. In an IPv4/IPv6 tunnel the packet holds an outer and an inner IP layer, and the
+        // pseudo-header must use the one that directly encloses TCP. The field tree answers that: walking back through the
+        // previous siblings meets the innermost IP container first.
         (IPv4Address Src, IPv4Address Dst)? ipv4 = null;
         (IPv6Address Src, IPv6Address Dst)? ipv6 = null;
-        if (IPv4Protocol.TryGetCachedAddresses(packetId, out IPv4Address src4, out IPv4Address dst4))
-        {
-            ipv4 = (src4, dst4);
-        }
-        else if (IPv6Protocol.TryGetCachedAddresses(packetId, out IPv6Address src6, out IPv6Address dst6))
-        {
-            ipv6 = (src6, dst6);
-        }
-        else if (!container.HasFieldTree
-            || !IpAddressExtractor.TryFindPreviousIpAddresses(
+        bool found = container.HasFieldTree
+            && IpAddressExtractor.TryFindPreviousIpAddresses(
                 in container,
                 _IpContainerFieldId, _Ipv6ContainerFieldId,
                 _IpSrcFieldId, _IpDstFieldId, _Ipv6SrcFieldId, _Ipv6DstFieldId,
                 out ipv4,
-                out ipv6))
+                out ipv6);
+
+        if (!found)
         {
-            return null;
+            // Without a tree (skip mode) the per-thread address caches of the IP protocols are the only source. They are keyed
+            // by packet id, so a stale entry of an earlier packet is never used. Known limitation: each cache holds one pair per
+            // IP version, and the lazy populator has no dispatch context to tell which IP layer called TCP (the IP protocols
+            // dispatch to TCP through a direct call that carries none), so in an IPv4/IPv6 tunnel without a field tree the
+            // IPv4 pair wins here.
+            ipv4 = null;
+            ipv6 = null;
+            if (IPv4Protocol.TryGetCachedAddresses(packetId, out IPv4Address src4, out IPv4Address dst4))
+            {
+                ipv4 = (src4, dst4);
+            }
+            else if (IPv6Protocol.TryGetCachedAddresses(packetId, out IPv6Address src6, out IPv6Address dst6))
+            {
+                ipv6 = (src6, dst6);
+            }
+            else
+            {
+                return null;
+            }
         }
 
+        // Pseudo-header sum (IPv4: src, dst, protocol, 16-bit length; IPv6: 128-bit addresses, 32-bit length, next header),
+        // then fold in the segment. A correct segment sums to 0 (the transmitted checksum cancels the rest).
         ulong pseudoSum;
         if (ipv4.HasValue)
         {
@@ -845,7 +908,11 @@ public sealed partial class TcpProtocol : IProtocol
     /// records the resulting analysis and dispatch decisions; every later parse of that id replays
     /// those recordings and leaves both engines untouched. The watermark
     /// (<see cref="_IsReplay"/>) separates both paths. A first parse that ends in an exception
-    /// records nothing, so its replay degrades to the stateless raw-port path.
+    /// records nothing, so its replay degrades to the stateless raw-port path (the watermark is
+    /// still raised in the <see langword="finally"/>, so the packet can never re-enter the first-parse path).
+    /// </para>
+    /// <para>
+    /// Thread safety: see the class remarks; the first-parse path must be serialized by the caller, replays may be concurrent.
     /// </para>
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
@@ -855,10 +922,19 @@ public sealed partial class TcpProtocol : IProtocol
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Packet packet = parentField.Packet;
+
+        // The effect store is keyed by (packet id, buffer location of this layer's data). A slice that is not inside the
+        // packet's buffers (for example a heap copy) cannot be keyed, so ingest and replay would disagree: reject it.
         if (!parentField.TryGetEffectLayerKey(data, out int layerKey))
         {
             return ParseError.Custom(ProtocolName, "Parse data is not a slice of this packet's buffers.");
         }
+
+        // First parse or replay is decided only by the watermark; there is deliberately no caller-supplied mode flag.
+        // TCP can be entered again while the same packet is still being parsed (nested layers, for example tunnels).
+        // The watermark is raised only by the outermost first-parse call, so an inner layer of the same packet still sees
+        // its own packet id as "not yet parsed" and takes the first-parse path too. _ParseNesting is a plain int: it is only
+        // touched on the serialized first-parse path, replays never read or write it.
         bool isReplay = _IsReplay(packet.Id);
         bool raiseWatermark = !isReplay && _ParseNesting == 0;
         if (!isReplay)
@@ -866,6 +942,8 @@ public sealed partial class TcpProtocol : IProtocol
             _ParseNesting++;
         }
 
+        // The watermark must be raised in finally, also after errors and exceptions: otherwise a later parse of this id would
+        // re-enter the first-parse path and mutate the tracker a second time.
         try
         {
             return _ParseBody(in parentField, data, in context, layerKey, isReplay);
@@ -885,7 +963,8 @@ public sealed partial class TcpProtocol : IProtocol
 
     /// <summary>
     /// Parse body. <paramref name="layerKey"/> is <see cref="MutField.TryGetEffectLayerKey"/> at the parse call and
-    /// <paramref name="isReplay"/> selects effect replay over stateful analysis.
+    /// <paramref name="isReplay"/> selects effect replay over stateful analysis. Everything that is shown in the packet list or
+    /// the filter index is appended eagerly here; only the bulky header details are deferred to <see cref="_PopulateTcp"/>.
     /// </summary>
     private ParseResult _ParseBody(
         in MutField parentField,
@@ -899,6 +978,7 @@ public sealed partial class TcpProtocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, TcpHeader.MinSize, (ulong)data.Length);
         }
 
+        // Index presence is recorded for the packet index (filters/lookups) regardless of whether the lazy tree is ever built.
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_TcpGroupId);
 
@@ -914,7 +994,8 @@ public sealed partial class TcpProtocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, TcpHeader.MinSize, (ulong)data.Length);
         }
 
-        // Validate data offset (minimum 5 = 20 bytes header)
+        // Validate data offset (minimum 5 words = 20 bytes header). Both checks protect _PopulateTcp, which slices the options and
+        // the payload from the stored segment without re-validating (a data offset of 15 means up to 60 header bytes).
         if (header.DataOffset < 5)
         {
             return ParseError.InvalidData(ProtocolName, "Data offset too small");
@@ -945,17 +1026,22 @@ public sealed partial class TcpProtocol : IProtocol
             context.RecordGroupPresence(_TcpOptionsGroupId);  // IndexGroup = "tcp.options"
         }
 
-        // Summary fragments capture srcPort, dstPort, flags, payloadLen without ZA.Lazy.
+        // Summary text. flagsText comes from a precomputed 256-entry table (no allocation). The packet info is a LazyString that
+        // captures only the value-typed ports, so the text is built only if somebody reads the info column.
         string flagsText = TcpFlagsFormatter.Format(flags);
 
         parentField.SetPacketInfo(ZA.Lazy(srcPort, " → ", dstPort));
 
-        // Store full TCP segment (header + payload) for lazy populator
+        // Store full TCP segment (header + payload) for the lazy populator. The custom representation ("32 bytes") is only
+        // built when the packet wants custom text (tree or cache needs it); on a skip-mode parse this saves the allocation.
         FieldValue containerValue = FieldValue.NewBytes(data);
         if (parentField.WantsCustomText(_ProtocolFieldId))
         {
             containerValue = containerValue.WithCustomRepresentation(ZA.Lazy(headerLen, " bytes"));
         }
+
+        // The title line differs only in the ", Len: " part; two call sites keep the format arguments typed (no boxing, no
+        // intermediate string) and the title is only formatted if the packet wants custom text.
         MutField tcpContainer = payloadLen > 0
             ? parentField.AppendLazyWithCustomText(
                 _ProtocolFieldId, containerValue,
@@ -968,8 +1054,10 @@ public sealed partial class TcpProtocol : IProtocol
                 ", Dst Port: ", dstPort,
                 " [", flagsText, "]", _Populator);
 
-        // Eagerly append ports and the displayed sequence numbers. Relative values come from analysis;
-        // the lazy populator keeps tcp.seq_raw / tcp.ack_raw as the wire values.
+        // Eagerly append ports and the displayed sequence numbers. Ports are needed by checksum validation and stream tracking
+        // without materialising the lazy group. Relative seq/ack values come from the analysis, which only exists during
+        // parse (live tracker or recorded effect), so they cannot be produced by the lazy populator, which may run later on
+        // any thread; it keeps tcp.seq_raw / tcp.ack_raw as the wire values.
         tcpContainer.Append(_SrcPortFieldId, FieldValue.NewU64(srcPort));
         tcpContainer.Append(_DstPortFieldId, FieldValue.NewU64(dstPort));
 
@@ -978,11 +1066,16 @@ public sealed partial class TcpProtocol : IProtocol
             in parentField, srcPort, dstPort, header.SeqNumber.Value, header.AckNumber.Value,
             flags, header.WindowSize.Value, payloadLen, span, in context, layerKey, isReplay);
 
+        // Relative numbers are shown only when the analysis knows the ISN; otherwise the wire value is displayed.
         uint shownSeq = analysis.SequenceIsRelative ? analysis.RelativeSeq : header.SeqNumber.Value;
         uint shownAck = analysis.AckIsRelative ? analysis.RelativeAck : header.AckNumber.Value;
         tcpContainer.Append(_SeqFieldId, FieldValue.NewU64(shownSeq));
         tcpContainer.Append(_AckFieldId, FieldValue.NewU64(shownAck));
 
+        // Stream table full (see tcp.max_tracked_streams): the header stays visible, but there is no stream state, so no
+        // tcp.stream, no analysis and no payload dispatch. The condition is reported as a field, never dropped silently.
+        // The effect (carrying StreamLimitReached) is still recorded on the first parse, so a replay reproduces this outcome
+        // even if the table has room later, instead of asking the tracker again.
         if (analysis.StreamLimitReached)
         {
             parentField.Append(_StreamLimitFieldId, FieldValue.NewString("TCP stream table is full"));
@@ -1007,7 +1100,7 @@ public sealed partial class TcpProtocol : IProtocol
             context.RecordGroupPresence(_TcpErrorGroupId);
         }
 
-        // Eagerly append stream timing fields
+        // Eagerly append stream timing fields. NaN is the "not measured" sentinel of TcpAnalysisResult (also for replays).
         if (!double.IsNaN(analysis.TimeRelative))
         {
             parentField.Append(_TimeRelativeFieldId, FieldValue.NewF64(analysis.TimeRelative));
@@ -1018,7 +1111,7 @@ public sealed partial class TcpProtocol : IProtocol
             parentField.Append(_TimeDeltaFieldId, FieldValue.NewF64(analysis.TimeDelta));
         }
 
-        // Eagerly append scaled window size when window scale factor is known
+        // Eagerly append scaled window size when window scale factor is known (-1 = no scaling: this segment is a SYN, or the sender's SYN carried no scale).
         if (analysis.WindowScaleFactor >= 0)
         {
             parentField.Append(_WindowSizeFieldId, FieldValue.NewU64(analysis.ScaledWindowSize));
@@ -1026,14 +1119,16 @@ public sealed partial class TcpProtocol : IProtocol
             context.RecordGroupPresence(_TcpWindowsizeGroupId);
         }
 
-        // Eagerly append analysis fields (if any flags were detected)
-        if (!analysis.NoIpLayer && !analysis.StreamLimitReached)
+        // Eagerly append analysis fields. The container always carries at least tcp.analysis.connection_state, so the group is
+        // recorded whenever the connection was tracked. A full stream table already returned above, so only the missing
+        // IP layer is left as an untracked case here.
+        if (!analysis.NoIpLayer)
         {
             context.RecordGroupPresence(_TcpAnalysisGroupId);
             _AppendAnalysisFields(in parentField, in analysis, in context);
         }
 
-        // Dispatch by port on parentField, with reassembly and heuristic fallback
+        // Dispatch by port on parentField (sibling of the TCP container, not a child), with reassembly and heuristic fallback.
         if (payloadLen > 0)
         {
             ReadOnlyMemory<byte> payload = data[headerLen..];
@@ -1108,6 +1203,9 @@ public sealed partial class TcpProtocol : IProtocol
             in parentField, srcPort, dstPort, sequence, payload, in context,
             in analysis, totalConsumed,
             out PayloadDispatchMode mode, out List<PduEffect>? pdus, out ProtocolId heuristicProtocolId);
+
+        // The learned server port is copied into the effect now: the live connection state keeps changing with later
+        // packets, so a replay could not read it from there and must not (it would race with the ingest thread).
         bool hasPreferred = analysis.ConnectionState is { ServerPortSet: true };
         ushort preferred = hasPreferred ? analysis.ConnectionState!.ServerPort : (ushort)0;
         _RecordEffect(parentField.Packet.Id, layerKey, in analysis, mode, pdus, heuristicProtocolId, preferred, hasPreferred);
@@ -1131,12 +1229,19 @@ public sealed partial class TcpProtocol : IProtocol
         out List<PduEffect>? pdus,
         out ProtocolId heuristicProtocolId)
     {
+        // Out parameters describe what actually happened so the caller can record it as the replay effect; they are assigned
+        // up front because every early return (including errors) must still leave a consistent record.
         ushort lowPort = Math.Min(srcPort, dstPort);
         ushort highPort = Math.Max(srcPort, dstPort);
         mode = PayloadDispatchMode.RawPort;
         pdus = null;
         heuristicProtocolId = ProtocolId.Invalid;
 
+        // Step 1: pick the application protocol that owns this connection, for reassembly. Server port learned from the SYN
+        // wins (a client port that happens to be well-known must not select a protocol); without it, the lower port is the
+        // usual server side, and the higher port is only consulted when the lower port has no protocol at all. Reassembly
+        // is configured per protocol, so a port with zero or several registered protocols is not reassembled (several owners
+        // are ambiguous and fall through to the plain port dispatch below).
         bool serverPortKnown = analysis.ConnectionState is { ServerPortSet: true };
         ushort serverPort = serverPortKnown ? analysis.ConnectionState!.ServerPort : (ushort)0;
         ProtocolId targetProtocol = default;
@@ -1169,6 +1274,8 @@ public sealed partial class TcpProtocol : IProtocol
             }
         }
 
+        // Step 2: reassembly path. Segments are buffered per direction; every complete PDU is dispatched to the owning protocol
+        // (zero, one or several per segment: a segment can complete a pending PDU, carry several, or only add to a partial one).
         if (singleOwner && targetProtocol.IsValid && _ReassemblyEngine is not null
             && analysis.ConnectionState is not null)
         {
@@ -1177,16 +1284,24 @@ public sealed partial class TcpProtocol : IProtocol
                 in connKey, targetProtocol,
                 analysis.SrcAddr, srcPort, out bool reassemblyForward);
 
+            // A null stream state means the protocol has no reassembly configuration: fall through to plain port dispatch.
             if (streamState is not null)
             {
+                // Passed to context-aware PDU detectors via StreamDetectionContext.HandshakeObserved: set once the capture
+                // contains the SYN or SYN-ACK, i.e. the stream is seen from its start rather than joined mid-flow.
                 if ((analysis.ConnectionState.Completeness
                         & (TcpConnectionState.SynSeen | TcpConnectionState.SynAckSeen)) != 0)
                 {
                     streamState.HandshakeObserved = true;
                 }
+            }
 
-                TcpReassemblyEngine.FeedSegment(streamState, reassemblyForward, sequence, payload);
-
+            // A segment that the stream buffer refuses (the per-direction buffer limit was hit, or there is no boundary
+            // detector) also falls through: the buffer abandons the stream and would otherwise swallow every later segment
+            // without any sign. The plain dispatch shows what the segment holds on its own.
+            if (streamState is not null
+                && TcpReassemblyEngine.FeedSegment(streamState, reassemblyForward, sequence, payload))
+            {
                 bool emitted = false;
                 while (TcpReassemblyEngine.TryExtractPdu(streamState, reassemblyForward,
                     out ReadOnlyMemory<byte> pdu))
@@ -1198,8 +1313,22 @@ public sealed partial class TcpProtocol : IProtocol
                         pdus = [];
                     }
 
-                    // TryExtractPdu already owns the PDU bytes. Do not copy them again.
+                    // TryExtractPdu already returns a caller-owned byte[] (never a slice of Frame.Data), so do not copy it again.
+                    // It is attached to the packet as an additional buffer before the nested parse so the inner layer's data
+                    // slice gets an effect layer key. The recorded PduEffect keeps the same bytes: a replay binds them again in
+                    // the same order and therefore gets the same buffer index and layer key as this first parse. A zero-copy
+                    // slice of the frame here would key as the frame on ingest but as an extra buffer on replay, and the
+                    // replay lookup would miss.
                     ReadOnlyMemory<byte> bound = parentField.BindParseBuffer(pdu);
+                    if (bound.IsEmpty)
+                    {
+                        // The packet holds at most 255 bound buffers (a constant of the packet's effect keys), so a segment that
+                        // completes more PDUs than that cannot nest-parse the rest. An empty slice would reach the inner
+                        // protocol as "no data" or as an unrelated error, so the limit is named here. The PDU is not recorded
+                        // as an effect: it was not dispatched.
+                        return ParseError.Custom(ProtocolName, _BoundBufferLimitMessage);
+                    }
+
                     pdus.Add(new PduEffect(targetProtocol, pdu));
 
                     ParseResult pduResult = parentField.CallProtocol(targetProtocol, bound, in context);
@@ -1218,6 +1347,8 @@ public sealed partial class TcpProtocol : IProtocol
             }
         }
 
+        // Step 3: plain port dispatch of the raw segment payload (no reassembly). With a learned server port only that port is
+        // tried; otherwise the lower port first, then the higher one if the lower port consumed nothing.
         mode = PayloadDispatchMode.RawPort;
         ParseResult result;
         if (serverPortKnown)
@@ -1246,6 +1377,9 @@ public sealed partial class TcpProtocol : IProtocol
             }
         }
 
+        // Step 4: content-based detection as the last resort when no port matched. A hit is recorded (mode Heuristic plus the
+        // protocol id) so a replay calls that protocol directly; re-running the detectors would
+        // read and write the per-connection cache (HeuristicProtocolId), and a replay must not touch connection state.
         if (!result.TryGetConsumed(out _) && _HeuristicTableId.IsValid)
         {
             result = _TryHeuristicDispatch(in parentField, payload, in context, analysis.ConnectionState);
@@ -1276,6 +1410,8 @@ public sealed partial class TcpProtocol : IProtocol
         in ParseContext context,
         int layerKey)
     {
+        // No recorded effect (the first parse threw before recording): degrade to the stateless low-then-high port dispatch.
+        // It never falls back into mutation (tracker/reassembly), so a reader thread stays race-free.
         TcpLayerEffect? recorded = _FindRecordedEffect(parentField.Packet.Id, layerKey);
         if (recorded is null)
         {
@@ -1299,6 +1435,7 @@ public sealed partial class TcpProtocol : IProtocol
             return totalConsumed;
         }
 
+        // Replay the recorded decision exactly; the switch mirrors the modes written by _DispatchTcpPayloadFirstParse.
         PayloadDispatchEffect dispatch = recorded.Value.Dispatch;
         switch (dispatch.Mode)
         {
@@ -1307,7 +1444,15 @@ public sealed partial class TcpProtocol : IProtocol
                 {
                     foreach (PduEffect pdu in dispatch.Pdus)
                     {
+                        // Binding in recorded order reproduces the buffer indices (and thus effect layer keys) of the first
+                        // parse, so nested stateful layers find their own recorded effects.
                         ReadOnlyMemory<byte> bound = parentField.BindParseBuffer(pdu.PduBytes);
+                        if (bound.IsEmpty)
+                        {
+                            // Same limit as on the first parse (the replay binds the same PDUs in the same order).
+                            return ParseError.Custom(ProtocolName, _BoundBufferLimitMessage);
+                        }
+
                         ParseResult pduResult = parentField.CallProtocol(
                             pdu.ProtocolId, bound, in context);
                         if (pduResult.TryPropagateError(out ParseResult pduError))
@@ -1320,6 +1465,7 @@ public sealed partial class TcpProtocol : IProtocol
                 return totalConsumed;
 
             case PayloadDispatchMode.ReassemblyNoEmit:
+                // No complete PDU was available on the first parse, so nothing was dispatched then and nothing is now.
                 return totalConsumed;
 
             case PayloadDispatchMode.Heuristic:
@@ -1337,6 +1483,8 @@ public sealed partial class TcpProtocol : IProtocol
 
             case PayloadDispatchMode.RawPort:
             default:
+                // RawPort also covers None and unknown modes. A learned server port was the only port tried on the first parse,
+                // so only it is replayed; otherwise the low-then-high order of the first parse applies.
                 if (dispatch.HasPreferredPort)
                 {
                     ParseResult preferredResult = _DispatchPort(
@@ -1370,8 +1518,13 @@ public sealed partial class TcpProtocol : IProtocol
         }
     }
 
-    /// <summary>Copies live analysis into an immutable effect (no connection reference).</summary>
+    /// <summary>
+    /// Copies live analysis into an immutable effect. The mutable <see cref="TcpConnectionState"/> reference is dropped on
+    /// purpose: it is owned by the ingest thread, and a stored effect is read by any number of replay threads.
+    /// </summary>
     private static AnalysisEffect _ToAnalysisEffect(in TcpAnalysisResult analysis) =>
+        // The enum casts are value casts: AnalysisEffectFlags must mirror TcpAnalysisFlags bit for bit (the internal enum cannot
+        // be part of the public effect type), and TcpConnectionPhase is a byte enum. Keep both in sync when adding a value.
         new(
             StreamIndex: analysis.StreamIndex,
             Flags: (AnalysisEffectFlags)analysis.Flags,
@@ -1444,8 +1597,11 @@ public sealed partial class TcpProtocol : IProtocol
             };
         }
 
+        // Stream table limit (tcp.max_tracked_streams, see the setting). The setting is a ulong while the tracker compares
+        // against a Dictionary count (int), so values from int.MaxValue up are clamped instead of overflowing the cast.
+        // A full table is an expected failure: report it to the caller (it appends tcp.error.stream_limit) and keep going.
         int maxStreams = _MaxTrackedStreams >= int.MaxValue ? int.MaxValue : (int)_MaxTrackedStreams;
-        if (!_ConnectionTracker.TryGetOrCreate(in key, maxStreams, out TcpConnectionState conn))
+        if (!_ConnectionTracker.TryGetOrCreate(in key, maxStreams, out TcpConnectionState? conn))
         {
             return TcpAnalysisResult.Empty with
             {
@@ -1455,15 +1611,20 @@ public sealed partial class TcpProtocol : IProtocol
             };
         }
 
+        // Direction relative to the normalized key (the key orders the two endpoints, so both directions share one state).
         bool isForward = key.IsForward(srcAddr, srcPort);
 
         // Extract Window Scale from SYN/SYN-ACK options for connection state tracking.
         // This must be done eagerly (not lazily) because subsequent packets need the
-        // scale factor to compute the correct scaled window size.
+        // scale factor to compute the correct scaled window size. The option is only valid in SYN segments (RFC 7323),
+        // so other segments are not scanned. The lightweight scan avoids running the full options parser, which would
+        // append fields, just to read one byte.
         byte? windowScale = null;
         bool isSyn = (flags & 0x02) != 0;
         if (isSyn && tcpSegment.Length > TcpHeader.MinSize)
         {
+            // Data offset is the high nibble of header byte 12, in 32-bit words. The options span is bounds-checked against
+            // the segment length before slicing, so the scan stays inside the segment.
             int headerLen = (tcpSegment[12] >> 4) * 4; // data offset from raw header
             if (headerLen > TcpHeader.MinSize && headerLen <= tcpSegment.Length)
             {
@@ -1472,6 +1633,8 @@ public sealed partial class TcpProtocol : IProtocol
             }
         }
 
+        // The analyzer mutates the connection state, which is why this method is first-parse only. The connection key and
+        // source address are attached to the result for the reassembly step.
         return TcpConnectionTracker.Analyze(
             conn, isForward, seqNum, ackNum, flags, window, payloadLen, timestamp,
             srcPort, dstPort, windowScale, _RelativeSequenceNumbers)
@@ -1491,8 +1654,11 @@ public sealed partial class TcpProtocol : IProtocol
         const byte OptEol = 0;
         const byte OptNop = 1;
         const byte OptWindowScale = 3;
+        // RFC 7323 section 2.3: a shift count above 14 must be treated as 14 (the largest window stays below 1 GiB).
         const byte MaxWindowScale = 14;
 
+        // Walk the option list (kind, length, data; EOL and NOP are single bytes). Every length is validated against the
+        // remaining span, so a malformed option ends the scan instead of reading out of range or looping forever (length < 2).
         int offset = 0;
         while (offset < optionsData.Length)
         {
@@ -1545,6 +1711,8 @@ public sealed partial class TcpProtocol : IProtocol
         bool callerIsIpv4 = context.Dispatch.HasDispatch && context.Dispatch.CallerProtocolId == _Ipv4ProtocolId;
         bool callerIsIpv6 = context.Dispatch.HasDispatch && context.Dispatch.CallerProtocolId == _Ipv6ProtocolId;
 
+        // Optional key extensions (settings tcp.stream_key_last_vlan / tcp.stream_key_frame). Both default to 0 so streams
+        // are not split unless the setting is on; the discard is deliberate (no VLAN tag simply leaves the key part at 0).
         ushort lastVlan = 0;
         if (_StreamKeyLastVlan)
         {
@@ -1557,7 +1725,9 @@ public sealed partial class TcpProtocol : IProtocol
             frameIdentity = _ReadFrameIdentity(parentField.Packet);
         }
 
-        // Fast path: read from per-protocol thread-local caches
+        // Fast path: read from per-protocol thread-local caches (no field-tree walk, works in skip mode where no tree exists).
+        // IPv4 addresses are stored as IPv4-mapped IPv6 (::ffff:a.b.c.d: upper 64 bits zero, bits 47..32 of the lower half
+        // set) so one UInt128 address type serves both IP versions in the key and in the direction check.
         if (!callerIsIpv6 && IPv4Protocol.TryGetCachedAddresses(packetId, out IPv4Address src4, out IPv4Address dst4))
         {
             key = TcpConnectionKey.FromIPv4(src4.RawValue, dst4.RawValue, srcPort, dstPort, lastVlan, frameIdentity);
@@ -1571,8 +1741,9 @@ public sealed partial class TcpProtocol : IProtocol
             return true;
         }
 
-        // Fallback: walk previous siblings to find typed IP addresses.
-        // materialize: false — IP containers are already eager at parse time.
+        // Fallback (no cache entry matches this packet id or the caller guard excluded it): walk previous siblings to find
+        // typed IP addresses. Needs a field tree, so it returns false in skip mode.
+        // materialize: false — IP containers are already eager at parse time, so no lazy group is expanded for the lookup.
         if (!parentField.HasFieldTree
             || !parentField.TryGetLastChild(out MutField prev, materialize: false))
         {
@@ -1628,7 +1799,9 @@ public sealed partial class TcpProtocol : IProtocol
 
     /// <summary>
     /// Eagerly appends tcp.analysis container and its sub-fields to the parent field.
-    /// Only called when there is analysis data worth displaying.
+    /// Called for every tracked segment (the container always carries at least the connection state);
+    /// the individual flag fields appear only for the conditions that were detected. Works on a recorded analysis
+    /// as well as a live one, so a replay yields identical fields.
     /// </summary>
     private void _AppendAnalysisFields(in MutField parentField, in TcpAnalysisResult analysis, in ParseContext context)
     {
@@ -1709,8 +1882,9 @@ public sealed partial class TcpProtocol : IProtocol
     }
 
     /// <summary>
-    /// Dispatches to the next protocol by TCP port using the sparse cache.
-    /// Falls back to full table dispatch for uncached ports.
+    /// Dispatches to the next protocol by TCP port using the sparse cache (ports with exactly one registered protocol).
+    /// Falls back to full table dispatch for uncached ports, which also covers ports with several registered protocols
+    /// and ports without any. Returns <see cref="ParseResult.NotDispatched"/> when the table has no protocol for the port.
     /// </summary>
     private ParseResult _DispatchPort(
         in MutField parentField, ulong port, ReadOnlyMemory<byte> payload, in ParseContext context)
@@ -1730,7 +1904,8 @@ public sealed partial class TcpProtocol : IProtocol
     /// Attempts heuristic-based protocol dispatch with per-connection caching.
     /// On the first data packet of a connection, runs all registered heuristic parsers.
     /// If a match is found, caches the protocol ID on the connection state so subsequent
-    /// packets bypass the heuristic tests.
+    /// packets bypass the heuristic tests. Writes the cache on the connection state, so it belongs to the
+    /// first-parse path only; replays use the recorded <see cref="PayloadDispatchMode.Heuristic"/> effect instead.
     /// </summary>
     private ParseResult _TryHeuristicDispatch(
         in MutField parentField, ReadOnlyMemory<byte> payload, in ParseContext context,
@@ -1758,6 +1933,10 @@ public sealed partial class TcpProtocol : IProtocol
         return parentField.CallProtocol(matchedId.Value, payload, in context);
     }
 
+    /// <summary>
+    /// Returns the protocols registered for <paramref name="port"/> in the TCP port table, or an empty span when the parse
+    /// context carries no stack. Used to decide whether a port has a single owner (the precondition for reassembly).
+    /// </summary>
     private ReadOnlySpan<ProtocolId> _PortProtocols(ushort port, in ParseContext context)
     {
         Stack? stack = context.Stack;

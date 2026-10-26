@@ -22,6 +22,12 @@ public readonly struct ValueCacheSeriesHandle<T>
 
     #region Constructors
 
+    /// <summary>
+    /// Wraps the keys-only snapshot with the typed series, so that count, flags, and the key columns come from one frozen
+    /// prefix (see <see cref="ValueCacheSeriesHandle"/>) and the value column is read against the same count.
+    /// </summary>
+    /// <param name="series">The live series.</param>
+    /// <param name="keys">The snapshot taken from <paramref name="series"/>; its count bounds every read of this handle.</param>
     internal ValueCacheSeriesHandle(ValueCacheSeries<T> series, ValueCacheSeriesHandle keys)
     {
         _Series = series;
@@ -66,6 +72,8 @@ public readonly struct ValueCacheSeriesHandle<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T GetValue(int index)
     {
+        // Checked against the frozen count, then read without the series' volatile count check: the value slot below the
+        // frozen count was written before that count was published.
         if ((uint)index >= (uint)Count)
         {
             _ThrowIndexOutOfRange(index);
@@ -74,7 +82,7 @@ public readonly struct ValueCacheSeriesHandle<T>
         return _Series.ValueAt(index);
     }
 
-    /// <summary>Gathered row at <paramref name="index"/>.</summary>
+    /// <summary>Gathered row at <paramref name="index"/>. Each of the three reads checks the frozen count again; use an enumerator for scans.</summary>
     public ValueCacheRow<T> this[int index] =>
         new ValueCacheRow<T>(GetPacketId(index), GetTimestamp(index), GetValue(index));
 
@@ -220,7 +228,11 @@ public readonly struct ValueCacheSeriesHandle<T>
         #endregion
     }
 
-    /// <summary>Ref enumerator over <see cref="Chunk"/> slices for SIMD / bulk scans.</summary>
+    /// <summary>
+    /// Ref enumerator over <see cref="Chunk"/> slices for SIMD / bulk scans. A <c>ref struct</c> holding spans straight into
+    /// the series' inner chunk arrays (no copy, no allocation); it cannot cross an <c>await</c> or be stored in a field.
+    /// Not thread-safe (one enumerator per thread); the underlying data is stable.
+    /// </summary>
     public ref struct ChunkEnumerator
     {
         #region Fields
@@ -239,8 +251,10 @@ public readonly struct ValueCacheSeriesHandle<T>
 
         #region Constructors
 
+        /// <summary>Starts at row <paramref name="startIndex"/>; callers have already validated the bounds against the frozen count.</summary>
         internal ChunkEnumerator(ValueCacheSeries<T> series, int startIndex, int endExclusive)
         {
+            // The chunk size is a power of two (1 << ChunkShift), so row -> (chunk, slot) is a shift and a mask.
             _Series = series;
             _EndExclusive = endExclusive;
             _ChunkShift = series.ChunkShift;
@@ -279,6 +293,8 @@ public readonly struct ValueCacheSeriesHandle<T>
                 return false;
             }
 
+            // Fetch the three columns of the chunk that holds 'next', each clipped to the snapshot end. A failed lookup ends
+            // the walk instead of throwing (see ValueCacheSeriesHandle.ChunkEnumerator.MoveNext).
             int chunkIndex = next >> _ChunkShift;
             if (!_Series.TryGetPacketIdChunk(chunkIndex, _EndExclusive, out ReadOnlySpan<int> packetIds)
                 || !_Series.TryGetTimestampChunk(chunkIndex, _EndExclusive, out ReadOnlySpan<long> timestamps)
@@ -287,6 +303,7 @@ public readonly struct ValueCacheSeriesHandle<T>
                 return false;
             }
 
+            // Slice from the watermark slot (non-zero only for the first chunk); continue after the clipped chunk.
             int slot = next & _ChunkMask;
             _PacketIds = packetIds[slot..];
             _Timestamps = timestamps[slot..];
@@ -300,7 +317,11 @@ public readonly struct ValueCacheSeriesHandle<T>
         #endregion
     }
 
-    /// <summary>Ref enumerator over packet-id, timestamp, and value columns for one index span.</summary>
+    /// <summary>
+    /// Ref enumerator over packet-id, timestamp, and value columns for one index span. A <c>ref struct</c> that keeps the
+    /// current chunk's spans, so per row it costs three span reads; the chunk lookup happens once per chunk, not once per
+    /// row. Cannot cross an <c>await</c>. Not thread-safe; the underlying data is stable.
+    /// </summary>
     public ref struct Enumerator
     {
         #region Fields
@@ -322,12 +343,15 @@ public readonly struct ValueCacheSeriesHandle<T>
 
         #region Constructors
 
+        /// <summary>Starts before row <paramref name="startIndex"/>; callers have already validated the bounds against the frozen count.</summary>
         internal Enumerator(ValueCacheSeries<T> series, int startIndex, int endExclusive)
         {
             _Series = series;
             _EndExclusive = endExclusive;
             _ChunkShift = series.ChunkShift;
             _ChunkMask = (1 << _ChunkShift) - 1;
+
+            // Index is the last row returned; the first MoveNext advances to startIndex. LoadedChunk -1 forces the first load.
             _Index = startIndex - 1;
             _LoadedChunk = -1;
             _PacketIds = [];
@@ -368,6 +392,7 @@ public readonly struct ValueCacheSeriesHandle<T>
                 return false;
             }
 
+            // Reload the column spans only when the walk crosses into another chunk; a failed lookup ends the walk early.
             int chunkIndex = next >> _ChunkShift;
             if (chunkIndex != _LoadedChunk)
             {
@@ -396,6 +421,8 @@ public readonly struct ValueCacheSeriesHandle<T>
 
     #region Private helpers
 
+    /// <summary>Kept out of line (NoInlining) so the inlined index getters and enumerator factories stay small.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">Always.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void _ThrowIndexOutOfRange(int index) =>
         throw new ArgumentOutOfRangeException(nameof(index), index, "Index must be in the published snapshot range.");

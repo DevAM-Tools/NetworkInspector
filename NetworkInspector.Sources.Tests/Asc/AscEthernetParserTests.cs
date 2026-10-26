@@ -163,7 +163,7 @@ internal sealed class AscEthernetParserTests
     [Arguments(" \t\r", null)]
     [Arguments("aabb2233 4455", false)]
     [Arguments("00112233", false)]
-    [Arguments("00112233 4455", true)]
+    [Arguments("00112233 4455", false)]
     [Arguments("  aabb\tCCDD", false)]
     [Arguments("0.600000 1 123 Rx d 1 01", true)]
     [Arguments("// comment", true)]
@@ -172,8 +172,9 @@ internal sealed class AscEthernetParserTests
     [Arguments("00112233\r", true)]
     public async Task EndsPacketFollowsTheHexScan(string line, bool? expected)
     {
-        // "00112233 4455": a leading all-digit token followed by more text looks like a timestamp, so the hex scan
-        // treats the line as a new logging event; EndsPacket must say the same.
+        // "00112233 4455": a hex payload line written with blanks. Its first group is all decimal digits, but a timestamp
+        // has a decimal point, so the line is a continuation and the packet goes on; EndsPacket must say the same as the
+        // hex scan.
         // Arrange
         byte[] bytes = Encoding.Latin1.GetBytes(line);
 

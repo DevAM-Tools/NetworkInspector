@@ -4,15 +4,23 @@ namespace NetworkInspector.Protocols.Dns;
 
 /// <summary>
 /// Precomputed display text tables for DNS field values.
-/// Provides zero-allocation lookups for common DNS types, classes, opcodes, and rcodes.
+/// Provides zero-allocation lookups for common DNS types, classes, opcodes, and rcodes: every table is built once in
+/// the type initializer, so a per-packet lookup is an array index (values outside a table fall back to
+/// <c>ToString</c>, which allocates but is rare). The DNSSEC lookups return a <see cref="LazyString"/>: named
+/// values are literals, unnamed ones defer their formatting until the text is read.
 /// </summary>
+/// <remarks>
+/// <para><b>Thread safety:</b> all tables are immutable after type initialization; safe for concurrent use.</para>
+/// </remarks>
 internal static class DnsDisplayTables
 {
     #region DNS Record Types (QType)
     // Only the most common types have named entries; the rest show just the number.
-    // Max known type code is 257 (CAA) — a 258-entry array covers all defined types.
+    // Highest named type code is 257 (CAA) — a 258-entry array covers all named types. Larger codes (for example the
+    // private-use range) are not tabulated and take the numeric fallback in the getters.
 
-    // Private holder built once; both public arrays reference its fields.
+    // Private holder built once; both arrays below reference its fields, so one pass fills the names and the display
+    // texts together (static field initializers run in textual order, so this must stay above them).
     private static readonly (string?[] _TypeNames, string[] DisplayTexts) _TypeData = _BuildTypeData();
 
     /// <summary>
@@ -67,7 +75,8 @@ internal static class DnsDisplayTables
         foreach ((ushort code, string name) in knownTypes)
         {
             names[code] = name;
-            displayTexts[code] = $"{name} ({code})";
+            // Invariant formatting: display texts must not depend on the culture of the thread that first touches this table.
+            displayTexts[code] = string.Create(CultureInfo.InvariantCulture, $"{name} ({code})");
         }
 
         return (names, displayTexts);
@@ -107,7 +116,7 @@ internal static class DnsDisplayTables
 
     #region DNS Classes
 
-    /// <summary>Precomputed 8-entry display text table for DNS query classes.</summary>
+    /// <summary>Precomputed 5-entry display text table for DNS classes 0-4; class 255 (ANY) is handled separately.</summary>
     private static readonly string[] _ClassDisplayTexts =
     [
         "Reserved (0)",   // 0
@@ -137,7 +146,10 @@ internal static class DnsDisplayTables
 
     #region DNS Opcodes
 
-    /// <summary>Precomputed 16-entry display text table for DNS opcodes.</summary>
+    /// <summary>
+    /// Precomputed 16-entry display text table for DNS opcodes (the opcode field is 4 bits wide, so every possible
+    /// value has an entry; unassigned codes show just the number).
+    /// </summary>
     private static readonly string[] _OpcodeDisplayTexts =
     [
         "Standard query (0)",    // 0
@@ -166,7 +178,10 @@ internal static class DnsDisplayTables
 
     #region DNS Response Codes
 
-    /// <summary>Precomputed 16-entry display text table for DNS response codes.</summary>
+    /// <summary>
+    /// Precomputed 16-entry display text table for the 4-bit header RCODE (every possible value has an entry).
+    /// Extended RCODEs from an EDNS0 OPT record (upper 8 bits) are shown separately and are not covered here.
+    /// </summary>
     private static readonly string[] _RcodeDisplayTexts =
     [
         "No error (0)",       // 0

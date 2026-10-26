@@ -30,15 +30,36 @@ namespace NetworkInspector.Core.Index;
 /// Set operations that allocate a new bitmap (<see cref="And"/>, <see cref="Or"/>, …) copy
 /// containers and are intended for a private result or a bitmap that is no longer growing.
 /// </para>
+/// <para>
+/// <b>Set operations and concurrent growth:</b> Every set operation, immutable or in place, reads its
+/// <i>operand</i> bitmap (<c>other</c>) directly, without the seqlock. The operand must therefore not be appended to
+/// while the operation runs; only the receiver of an in-place operation is protected for concurrent readers.
+/// </para>
+/// <para>
+/// <b>Why a seqlock:</b> A packet index is appended by one writer (the parser thread) while other threads keep
+/// reading it. With a seqlock the writer pays two fences per mutation and readers never write shared state, so readers
+/// neither block the writer nor each other. The price is that a reader retries when it overlaps a mutation and spins
+/// (<see cref="Thread.SpinWait(int)"/>, no timeout) while one is in flight, which is short for <see cref="Add"/> but
+/// can be long for <see cref="RunOptimize"/> or an in-place set operation on a large bitmap. The writer always makes
+/// the sequence even again in a <c>finally</c> block, so a mutation that throws cannot leave readers spinning forever
+/// (the data it half-changed stays as left; callers must treat a throwing in-place operation as a bug).
+/// </para>
 /// </summary>
 public sealed class RoaringBitmap
 {
     #region Fields
 
-    // Sorted parallel arrays: keys (high 16 bits) + containers (low 16 bits)
+    // Sorted parallel arrays: keys (high 16 bits) + containers (low 16 bits). Only the first _Count slots are valid;
+    // _Keys is strictly ascending, which the binary search in _FindChunk and the merges in the set operations rely on.
+    // The writer may replace either array (growth, merge) or shift entries while a reader looks at them; readers
+    // therefore only touch these fields inside a seqlock read section (see _SeqLock). Plain fields, no volatile: the
+    // seqlock fences provide the ordering.
     private ushort[] _Keys;
     private IContainer[] _Containers;
     private int _Count;
+
+    // Cached sum of all container cardinalities so Cardinality is O(1). Maintained by _AddUnsynchronized and
+    // _InsertChunk incrementally, and recomputed after the in-place set operations.
     private long _Cardinality;
 
     // Even = stable; odd = writer in Add / in-place set op. Readers retry while odd or changed.
@@ -62,7 +83,10 @@ public sealed class RoaringBitmap
 
     #region Public API
 
-    /// <summary>Total number of values stored.</summary>
+    /// <summary>
+    /// Total number of values stored (O(1), cached). Safe for concurrent readers while a single writer appends; the
+    /// seqlock also guards against a torn 64-bit read on 32-bit processes.
+    /// </summary>
     public long Cardinality
     {
         get
@@ -88,10 +112,16 @@ public sealed class RoaringBitmap
     /// <summary>Whether the bitmap is empty.</summary>
     public bool IsEmpty => Cardinality == 0L;
 
-    /// <summary>Adds a 32-bit value to the bitmap.</summary>
+    /// <summary>
+    /// Adds a 32-bit value to the bitmap. Single writer: concurrent <see cref="Add"/> calls from several threads are not
+    /// supported. Adding a value that is already present changes nothing.
+    /// </summary>
+    /// <param name="value">The value to add.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Add(uint value)
     {
+        // Every mutation sits between _BeginWrite and _EndWrite so readers can detect it. The finally block restores an
+        // even sequence even if the insert throws (for example OutOfMemoryException), so readers never wait forever.
         _BeginWrite();
         try
         {
@@ -122,8 +152,9 @@ public sealed class RoaringBitmap
     /// <returns><see langword="true"/> when at least one container was converted.</returns>
     internal bool RunOptimizeKeys(int firstKey, int endKey)
     {
-        // Containers are replaced, never mutated: a clone or a set-operation result that shares the old container
-        // keeps it unchanged.
+        // Locate the first chunk at or above firstKey with one binary search (a miss yields the insertion point, ~index).
+        // Plain reads of _Count / _Keys are fine here: this is the single writer. The early return when the range holds
+        // no chunk happens before _BeginWrite, so an empty range never makes readers retry.
         int index = _FindChunk((ushort)Math.Clamp(firstKey, 0, ushort.MaxValue));
         if (index < 0)
         {
@@ -135,6 +166,9 @@ public sealed class RoaringBitmap
             return false;
         }
 
+        // Convert chunk by chunk, but only when the run form is strictly smaller in the Roaring serialized sizes; a run
+        // container is never converted again. Containers are replaced, never mutated: the old container object is left
+        // unchanged for anyone still holding it, and the swap of the array slot is covered by the write section.
         bool converted = false;
         _BeginWrite();
         try
@@ -160,12 +194,19 @@ public sealed class RoaringBitmap
         return converted;
     }
 
-    /// <summary>Checks if a 32-bit value is present.</summary>
+    /// <summary>
+    /// Checks if a 32-bit value is present. Safe for concurrent readers while a single writer appends; allocation-free.
+    /// </summary>
+    /// <param name="value">The value to look up.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(uint value)
     {
+        // Split into the chunk key (high 16 bits) and the position inside the chunk's container (low 16 bits).
         ushort high = (ushort)(value >> 16);
         ushort low = (ushort)(value & 0xFFFF);
+
+        // Seqlock read section: wait out an in-flight write, read, then validate that no write started or finished
+        // meanwhile. Otherwise the result may be torn and is discarded.
         while (true)
         {
             int seq = _ReadSeqLock();
@@ -433,7 +474,13 @@ public sealed class RoaringBitmap
 
     #region Immutable set operations
 
-    /// <summary>AND (intersection) with another bitmap.</summary>
+    // These build a new private result by a sorted merge over both key arrays (O(chunks of both)), appending chunks at the
+    // end of the result (_InsertChunk with idx == _Count, so no shifting). Neither operand is modified. Both operands are
+    // read without the seqlock, so neither may be appended to concurrently (see the type remarks). Chunks present on one
+    // side only are cloned, so a later in-place Add to the result (containers mutate in place) cannot corrupt an operand.
+
+    /// <summary>AND (intersection) with another bitmap. Neither operand is modified.</summary>
+    /// <param name="other">The other operand; must not be appended to while this runs.</param>
     public RoaringBitmap And(RoaringBitmap other)
     {
         RoaringBitmap result = new();
@@ -581,11 +628,16 @@ public sealed class RoaringBitmap
 
     #region In-place set operations
 
+    // All in-place operations run inside one seqlock write section on the receiver, so concurrent readers of the receiver
+    // retry instead of seeing a half-merged key/container array pair. The operand `other` is read without any
+    // synchronization and must not be appended to concurrently.
+
     /// <summary>
     /// In-place AND: removes all values not present in <paramref name="other"/>.
     /// Avoids allocating a new RoaringBitmap. Containers that become empty are removed.
     /// Uses SIMD in-place path for BitmapContainer×BitmapContainer.
     /// </summary>
+    /// <param name="other">The other operand; must not be appended to while this runs.</param>
     public void AndWith(RoaringBitmap other)
     {
         _BeginWrite();
@@ -610,6 +662,8 @@ public sealed class RoaringBitmap
                         && other._Containers[j] is BitmapContainer otherBmp)
                     {
                         // Clone before in-place mutation to avoid corrupting aliased operands from Or/AndNot/Xor.
+                        // The SIMD AND then runs on the private clone. A result with at most ArrayContainer.MaxCapacity
+                        // values is demoted to an array container, the smaller form (a bitmap container is always 8 KiB).
                         BitmapContainer mutableBmp = (BitmapContainer)thisBmp.Clone();
                         mutableBmp.AndWith(otherBmp);
                         intersected = mutableBmp.Cardinality <= ArrayContainer.MaxCapacity
@@ -631,6 +685,8 @@ public sealed class RoaringBitmap
                     j++;
                 }
             }
+            // The merge compacted the surviving chunks to the front; null the unused tail so the dropped containers
+            // can be collected (the array itself is kept, its capacity is reused by later adds).
             for (int c = writePos; c < _Count; c++)
             {
                 _Containers[c] = null!;
@@ -648,6 +704,7 @@ public sealed class RoaringBitmap
     /// In-place OR: adds all values from <paramref name="other"/>.
     /// Clones chunks adopted from <paramref name="other"/>; this-side chunks are kept in place.
     /// </summary>
+    /// <param name="other">The other operand; must not be appended to while this runs.</param>
     public void OrWith(RoaringBitmap other)
     {
         _BeginWrite();
@@ -664,6 +721,10 @@ public sealed class RoaringBitmap
                 return;
             }
 
+        // Merge into fresh arrays and swap them in (O(chunks of both)); inserting chunk by chunk into the current arrays
+        // would shift entries once per new chunk. This-side containers are moved by reference (not copied: they stay
+        // this bitmap's own containers), chunks only in `other` are cloned so the two bitmaps never share a mutable
+        // container, and chunks present in both are united into a new container.
         ushort[] keys = _Keys;
         IContainer[] containers = _Containers;
         int count = _Count;
@@ -754,6 +815,7 @@ public sealed class RoaringBitmap
     /// In-place ANDNOT: removes all values present in <paramref name="other"/>.
     /// Uses SIMD in-place path for BitmapContainer×BitmapContainer.
     /// </summary>
+    /// <param name="other">The other operand; must not be appended to while this runs.</param>
     public void AndNotWith(RoaringBitmap other)
     {
         _BeginWrite();
@@ -781,6 +843,7 @@ public sealed class RoaringBitmap
                     && other._Containers[j] is BitmapContainer otherBmp)
                 {
                     // Clone before in-place mutation to avoid corrupting aliased operands from Or/AndNot/Xor.
+                    // Demotion to an array container below ArrayContainer.MaxCapacity values: see AndWith.
                     BitmapContainer mutableBmp = (BitmapContainer)thisBmp.Clone();
                     mutableBmp.AndNotWith(otherBmp);
                     diff = mutableBmp.Cardinality <= ArrayContainer.MaxCapacity
@@ -826,6 +889,7 @@ public sealed class RoaringBitmap
     /// In-place XOR: toggles all values from <paramref name="other"/>.
     /// Clones chunks adopted from <paramref name="other"/>; this-side chunks are kept in place.
     /// </summary>
+    /// <param name="other">The other operand; must not be appended to while this runs.</param>
     public void XorWith(RoaringBitmap other)
     {
         _BeginWrite();
@@ -842,6 +906,8 @@ public sealed class RoaringBitmap
             return;
         }
 
+        // Same merge-into-fresh-arrays strategy as OrWith. A chunk present in both whose XOR is empty is dropped from the
+        // result, so newCount can end below the old count (hence the cleanup of the old tail below).
         ushort[] keys = _Keys;
         IContainer[] containers = _Containers;
         int count = _Count;
@@ -1031,6 +1097,10 @@ public sealed class RoaringBitmap
     private static void _ThrowEmpty() =>
         throw new InvalidOperationException("Bitmap is empty.");
 
+    /// <summary>
+    /// Replaces this (empty) bitmap's content with deep copies of <paramref name="other"/>'s chunks, so an in-place OR /
+    /// XOR into an empty receiver needs no merge. Must run inside a write section.
+    /// </summary>
     private void _AdoptClonedChunks(RoaringBitmap other)
     {
         _Keys = new ushort[other._Count];
@@ -1044,6 +1114,7 @@ public sealed class RoaringBitmap
         _Cardinality = other._Cardinality;
     }
 
+    /// <summary>An odd sequence value means a writer is between <see cref="_BeginWrite"/> and <see cref="_EndWrite"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsWriteInProgress(int seq) => (seq & 1) != 0;
 
@@ -1080,6 +1151,10 @@ public sealed class RoaringBitmap
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _EndWrite() => Volatile.Write(ref _SeqLock, _SeqLock + 1);
 
+    /// <summary>
+    /// The add itself, without the write section: callers must hold one (<see cref="Add"/>). The name refers to the
+    /// absence of synchronization inside this method.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _AddUnsynchronized(uint value)
     {
@@ -1094,6 +1169,9 @@ public sealed class RoaringBitmap
             : _FindChunk(high);
         if (idx >= 0)
         {
+            // IContainer.Add mutates in place and returns either the same container or an upgraded one (array to
+            // bitmap at ArrayContainer.MaxCapacity). Comparing cardinalities tells whether the value was new, which
+            // keeps the cached total exact for a duplicate add; the slot is only rewritten when something changed.
             IContainer oldContainer = _Containers[idx];
             int oldCardinality = oldContainer.Cardinality;
             IContainer newContainer = oldContainer.Add(low);
@@ -1105,16 +1183,26 @@ public sealed class RoaringBitmap
         }
         else
         {
+            // First value of a new chunk: every container starts as a small array container. ~idx is the sorted
+            // insertion point returned by the binary search (for an append it equals _Count, so nothing shifts).
             IContainer newContainer = new ArrayContainer().Add(low);
             _InsertChunk(~idx, high, newContainer);
         }
     }
 
+    /// <summary>Binary search over the valid prefix of the key array: index when found, otherwise the complement of the insertion point.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int _FindChunk(ushort key) => Array.BinarySearch(_Keys, 0, _Count, key);
 
+    /// <summary>
+    /// Inserts a chunk at sorted position <paramref name="idx"/> and adds its cardinality to the cached total. Doubles the
+    /// arrays when full (amortized O(1) appends). Used inside write sections on the receiver, and on private result
+    /// bitmaps that are still being built (appending at <c>_Count</c>).
+    /// </summary>
     private void _InsertChunk(int idx, ushort key, IContainer container)
     {
+        // Array.Resize allocates a new array and copies; a concurrent reader may still hold the old arrays, which is
+        // exactly what the seqlock retry covers.
         if (_Count == _Keys.Length)
         {
             int newCap = _Keys.Length * 2;
@@ -1132,6 +1220,10 @@ public sealed class RoaringBitmap
         _Cardinality += container.Cardinality;
     }
 
+    /// <summary>
+    /// Rebuilds the cached total after an in-place set operation changed many containers at once (O(chunks)); the
+    /// incremental update used by <see cref="Add"/> does not apply there.
+    /// </summary>
     private void _RecomputeCachedCardinality()
     {
         long total = 0;
@@ -1147,7 +1239,7 @@ public sealed class RoaringBitmap
     {
         if (container is ArrayContainer arr)
         {
-            // Values are sorted — find insertion point
+            // Values are sorted: count the prefix that is <= threshold and stop at the first larger value (linear scan).
             int count = 0;
             for (int i = 0; i < arr.Cardinality; i++)
             {
@@ -1165,6 +1257,7 @@ public sealed class RoaringBitmap
 
         if (container is BitmapContainer bmp)
         {
+            // Population count of all whole words below the threshold's word, then the masked partial word.
             int count = 0;
             int fullWords = threshold >> 6;
             for (int i = 0; i < fullWords && i < BitmapContainer.BitmapSize; i++)
@@ -1181,7 +1274,8 @@ public sealed class RoaringBitmap
             return count;
         }
 
-        // Fallback: linear scan
+        // Fallback for run containers (no dedicated path): probe every value up to the threshold. The v == MaxValue guard
+        // is required: for threshold 65535 the ushort counter would wrap to 0 and the loop would never end.
         int cnt = 0;
         for (ushort v = 0; v <= threshold; v++)
         {
@@ -1226,7 +1320,8 @@ public sealed class RoaringBitmap
             }
         }
 
-        // Fallback
+        // Fallback for run containers (no dedicated path): scan all 65 536 values and count set ones. Returns 0 when n is
+        // out of range, which Select's cardinality check upstream prevents.
         int count = 0;
         for (int v = 0; v <= ushort.MaxValue; v++)
         {

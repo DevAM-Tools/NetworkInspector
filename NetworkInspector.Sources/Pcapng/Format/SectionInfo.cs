@@ -31,7 +31,10 @@ internal sealed class SectionInfo
 
     /// <summary>
     /// Interfaces declared in this section, indexed by their IDB order. Single writer (scanner); reference slots are
-    /// published lock-free, so <c>FrameById</c> may read them during a lazy scan.
+    /// published lock-free, so <c>FrameById</c> may read them during a lazy scan. Grow-only: an interface, once added,
+    /// is never moved or removed, which is what lets readers hold an <see cref="InterfaceInfo"/> reference for good.
+    /// Chunks of 16 interfaces (shift 4): a typical section declares one or a few interfaces, so it allocates one small
+    /// chunk, while a section with thousands of interfaces still grows without copying existing slots.
     /// </summary>
     private readonly ChunkedGrowOnlyStore<InterfaceInfo> _Interfaces = new(chunkShift: 4);
 
@@ -109,6 +112,12 @@ internal sealed class SectionInfo
     /// <summary>
     /// Parses the options area of a Section Header Block and applies recognized options.
     /// </summary>
+    /// <remarks>
+    /// Must run before the section is published (see the type remarks): it writes the plain properties without
+    /// synchronization. Unknown options are skipped. A repeated option keeps the last value. Each text is bounded by
+    /// the u16 option length (at most 64 KiB), and the option data by the block size cap, so a hostile SHB can only
+    /// cause short-lived string allocations, not an unbounded one.
+    /// </remarks>
     internal void ParseShbOptions(ReadOnlySpan<byte> optionData)
     {
         PcapOptionIterator iter = new(optionData, ByteSwapped);
@@ -132,6 +141,13 @@ internal sealed class SectionInfo
     /// <summary>
     /// Parses the options area of an Interface Description Block and builds an InterfaceInfo.
     /// </summary>
+    /// <remarks>
+    /// The returned interface is fully configured here, before the caller adds it to the section
+    /// (<see cref="AddInterface"/>); it is immutable from then on. Options with an unexpected value size are ignored
+    /// rather than failing the block: option metadata must never make the packets of the interface unreadable. The one
+    /// exception with an effect is an unsupported <c>if_tsresol</c>, which marks the interface so its packets are
+    /// skipped (see <see cref="InterfaceInfo.HasSupportedTimestampResolution"/>).
+    /// </remarks>
     internal InterfaceInfo ParseIdbOptions(ushort rawLinkType, uint snapLength, ReadOnlySpan<byte> optionData)
     {
         InterfaceInfo info = new(rawLinkType, snapLength);
@@ -149,6 +165,8 @@ internal sealed class SectionInfo
                     info.SetDescription(Encoding.UTF8.GetString(option.Value));
                     break;
                 case PcapConstants.OptIfTsResol when option.Value.Length == 1:
+                    // An unsupported exponent is recorded on the interface itself (HasSupportedTimestampResolution);
+                    // the packet readers skip such packets, so the result needs no handling here.
                     _ = info.TrySetTimestampResolution(option.Value[0]);
                     break;
                 case PcapConstants.OptIfFcsLen when option.Value.Length == 1:

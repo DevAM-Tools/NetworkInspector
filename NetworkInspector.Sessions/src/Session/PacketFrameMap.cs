@@ -3,10 +3,16 @@
 namespace NetworkInspector.Sessions;
 
 /// <summary>
-/// Dense packet index → (frame id, source id) in groups of 64. One source with consecutive frames costs a single word
-/// per group (0.25 B per packet); alternating sources add one slot plane per doubling; skipped frames add residual
-/// planes. A group whose frame ids do not strictly ascend per source is stored raw (8 B per packet), so any input
-/// reads back exactly.
+/// Dense packet index → (frame id, source id) in groups of 64. One source with consecutive frames costs a single data
+/// word plus one info word per group (16 B per 64 packets = 0.25 B per packet); alternating sources add one slot plane
+/// per doubling; skipped frames add residual planes. A group whose frame ids do not strictly ascend per source is
+/// stored raw (8 B per packet), so any input reads back exactly.
+/// <para>
+/// Why it is compressed: the session keeps no parsed packets, so it must remember for every packet id which captured
+/// frame (and source) it came from, for captures of very many packets. A plain <c>long</c> per packet would cost 8 B;
+/// the common case is consecutive frames of one source, which this encoding reduces to a base value and no further
+/// planes. The raw fallback guarantees correctness for input that does not fit the encoding.
+/// </para>
 /// </summary>
 /// <remarks>
 /// <para>
@@ -31,9 +37,15 @@ internal sealed class PacketFrameMap
 {
     #region Constants
 
+    // Group of 64 packets: one 64-bit word per bit plane holds one bit of every lane, which is what lets the plane
+    // helpers (BitPlanes) work on whole words. The size is a format fact of the plane layout, not a tuning value.
     private const int _GroupShift = 6;
     private const int _GroupSize = 1 << _GroupShift;
     private const int _GroupMask = _GroupSize - 1;
+
+    // Bit layout of a group's info word (see the class remarks): bits 0..6 residual width, 7..9 slot width,
+    // 10..15 source count − 1 (up to 64 sources), bit 16 raw flag, bits 17.. word offset in the word store.
+    // Widths: slot width ≤ 6 (64 sources) and residual width ≤ 31 (frame ids are non-negative ints), so they fit.
     private const int _InfoOffsetShift = 17;
     private const long _InfoRawBit = 1L << 16;
     private const int _InfoSourcesShift = 10;
@@ -44,8 +56,15 @@ internal sealed class PacketFrameMap
 
     #region Fields
 
+    // Variable-length encoded groups (bases, slot planes, residual planes), addressed by the offset in the info word.
     private readonly PackedWordStore _Words = new();
+
+    // One info word per sealed group, indexed by group number. Chunked so it grows without copying already published
+    // entries (readers hold no lock); 1 << 13 slots = 8192 longs = 64 KiB per chunk.
     private readonly ChunkedGrowOnlyStore<long> _GroupInfo = new(chunkShift: 13);
+
+    // The open (not yet full) group: packed (frame, source) values by lane. Written by the single writer, read by any
+    // thread through Volatile; a lane is reused by the next group only after the full group was sealed and published.
     private readonly long[] _Staging = new long[_GroupSize];
 
     // Writer-only scratch of _SealGroup: no allocation per group.
@@ -61,7 +80,12 @@ internal sealed class PacketFrameMap
     /// <summary>Process-unique key of this map in the per-thread <see cref="DecodedGroupCache"/>.</summary>
     private readonly long _Id = Interlocked.Increment(ref _LastId);
 
+    // Recorded packets. Published (volatile write) after the packet's staging slot, so a reader that sees the count
+    // sees the slot.
     private volatile int _Count;
+
+    // Number of groups whose info word is published and readable; the groups at and above it live in _Staging.
+    // Published after the group's words and info word.
     private volatile int _SealedGroups;
 
     #endregion
@@ -83,12 +107,14 @@ internal sealed class PacketFrameMap
     /// <exception cref="InvalidOperationException"><paramref name="packetIndex"/> is not the next index.</exception>
     internal void Record(int packetIndex, FrameId frameId, FrameSourceId sourceId)
     {
+        // Dense sequential appends are an invariant of the encoding (group = index / 64, lane = index % 64): a gap or
+        // repeat would corrupt every later lookup, so it is a bug, not an expected failure.
         if (packetIndex != _Count)
         {
             throw new InvalidOperationException("Packet-to-frame mapping requires dense sequential PacketId appends.");
         }
 
-        // Slot first, then the count: a reader that sees the count sees the slot.
+        // Slot first, then the count: a reader that sees the count sees the slot. The 64th lane seals the group.
         int lane = packetIndex & _GroupMask;
         Volatile.Write(ref _Staging[lane], Session.PackFrameMapping(frameId, sourceId));
         _Count = packetIndex + 1;
@@ -105,6 +131,8 @@ internal sealed class PacketFrameMap
     /// </summary>
     internal bool TryGet(int packetIndex, out FrameId frameId, out FrameSourceId sourceId)
     {
+        // One unsigned compare rejects negative and not-yet-recorded indexes. The count is read once; the writer
+        // only increases it, so an index below it stays readable.
         if ((uint)packetIndex >= (uint)_Count)
         {
             frameId = FrameId.Invalid;
@@ -122,6 +150,8 @@ internal sealed class PacketFrameMap
         else
         {
             // Open group: read the slot, then re-check that the group was not sealed (and the slot reused) meanwhile.
+            // Without the re-check a reader could read a lane that the writer already overwrote with a packet of the
+            // next group; once the group is sealed, the sealed copy is the authoritative value.
             packed = Volatile.Read(ref _Staging[lane]);
             if (group < _SealedGroups)
             {
@@ -140,7 +170,9 @@ internal sealed class PacketFrameMap
     /// <summary>Encodes the 64 staged packets as the next sealed group and publishes it. Writer thread.</summary>
     private void _SealGroup()
     {
-        // Source list in first-appearance order, slot per packet, residual per packet; raw when a source steps back.
+        // Pass 1: build the source list in first-appearance order plus the slot and residual of every packet, using the
+        // writer-only scratch arrays (no allocation per group). Stop at the first packet that cannot be encoded and
+        // fall back to the raw form for the whole group.
         int sources = 0;
         ulong maxResidual = 0;
         bool raw = false;
@@ -182,6 +214,7 @@ internal sealed class PacketFrameMap
             }
         }
 
+        // Pass 2: write the words of the chosen form into the word store, then compose the info word.
         long offset;
         long info;
         if (raw)
@@ -198,6 +231,10 @@ internal sealed class PacketFrameMap
         }
         else
         {
+            // Plane counts: slotWidth = bits needed for the largest slot index (sources − 1), 0 for a single source.
+            // residualWidth = bit length of the largest residual; maxResidual is the OR of all residuals, which has
+            // the same highest set bit as the maximum, so no per-lane max is needed. A group of consecutive frames
+            // has residual width 0 and stores no residual plane at all.
             int slotWidth = sources == 1 ? 0 : 32 - BitOperations.LeadingZeroCount((uint)(sources - 1));
             int residualWidth = maxResidual == 0 ? 0 : 64 - BitOperations.LeadingZeroCount(maxResidual);
             int wordCount = sources + slotWidth + residualWidth;
@@ -226,7 +263,9 @@ internal sealed class PacketFrameMap
     /// <summary>
     /// Lane <paramref name="lane"/> of the sealed group <paramref name="group"/> through the per-thread cache: the first
     /// touch decodes one lane, the second consecutive touch decodes the whole group, later touches are an array load.
-    /// Sealed groups never change, so a cached copy stays exact.
+    /// Sealed groups never change, so a cached copy stays exact. The two-touch rule keeps a random single lookup cheap
+    /// (one lane decoded, no 64-lane decode) while a reader that walks packets in order decodes each group once; the
+    /// cache is thread-local, so it needs no lock (see <see cref="DecodedGroupCache"/>).
     /// </summary>
     private long _ReadSealedCached(int group, int lane)
     {

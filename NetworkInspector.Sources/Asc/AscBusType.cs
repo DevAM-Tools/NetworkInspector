@@ -50,7 +50,10 @@ internal static class AscBusTypeExtensions
     };
 
     /// <summary>
-    /// Returns the <see cref="LinkType"/> used when registering a frame interface for this bus.
+    /// Returns the <see cref="LinkType"/> used when registering a frame interface for this bus. Classic CAN, CAN FD and
+    /// CAN XL all use the SocketCAN link type: the parsers write all three into SocketCAN-layout frames, and the CAN
+    /// protocol parser tells them apart by the flag bits in the frame, not by link type. No source calls this method
+    /// today: they assign the link type directly where they parse a line, so the two mappings have to be kept in step by hand.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static LinkType ToLinkType(this AscBusType busType) => busType switch

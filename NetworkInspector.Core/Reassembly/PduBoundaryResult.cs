@@ -12,6 +12,11 @@ namespace NetworkInspector.Core.Reassembly;
 /// states, or build instances exclusively via <see cref="Complete"/>,
 /// <see cref="Incomplete"/>, and <see cref="Invalid"/>.
 /// </para>
+/// <para>
+/// A signed length with sentinels keeps the result a 4-byte value (no allocation per detection, no extra flag).
+/// Caveat: <c>default(PduBoundaryResult)</c> has length 0 and therefore reads as <see cref="IsComplete"/> with a
+/// zero-length PDU, which the stream buffer rejects as an error; detectors must never return <c>default</c>.
+/// </para>
 /// </summary>
 public readonly record struct PduBoundaryResult
 {
@@ -68,9 +73,16 @@ public readonly record struct PduBoundaryResult
 
 /// <summary>
 /// Detects PDU (Protocol Data Unit) boundaries in a byte stream.
+/// The stream buffer calls <see cref="Detect"/> on the contiguous in-order prefix of the stream and consumes a complete
+/// PDU before it calls again; implementations must not keep the span after returning.
 /// </summary>
 public interface IPduBoundaryDetector
 {
     /// <summary>Attempts to find a complete PDU in the provided data.</summary>
+    /// <param name="data">The contiguous buffered bytes, starting at the first byte not yet consumed.</param>
+    /// <returns>
+    /// Complete with the PDU length (which must be positive and at most the data length), Incomplete when more bytes are
+    /// needed, or Invalid when the data at the start cannot begin a PDU and a resync heuristic should run.
+    /// </returns>
     PduBoundaryResult Detect(ReadOnlySpan<byte> data);
 }

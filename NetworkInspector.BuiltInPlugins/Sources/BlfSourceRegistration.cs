@@ -48,14 +48,26 @@ internal static class BlfSourceRegistration
         FileSourceOptions.RegisterUiName(options);
         FileSourceOptions.RegisterScanMode(options);
         FileSourceOptions.RegisterErrorTolerance(options);
+        // Defaults are read from a fresh options object, so the setting default and the Core class default cannot drift
+        // apart. The preload budget is null (never preload) only when a caller of the Core class asks for it; the default
+        // object always has a value, and 0 (always map) is the equivalent setting.
         FileSourceOptions.RegisterPreloadBudget(options, new BlfSourceOptions().PreloadBudget ?? 0);
 
         // The cache budget is an int in the options class, so the bound keeps every accepted value castable.
         options.RegisterI64Setting(_CacheBudgetOption, "Container cache", "", new BlfSourceOptions().CacheBudget, min: 0,
             max: int.MaxValue, description: "Byte budget of the decompressed container cache; 0 disables it.");
         FileSourceOptions.RegisterTimeZone(options);
+
+        // Limit: largest uncompressed container, 0 (check off) or 1 byte and up, default 128 MiB from the Core options class.
+        // Threat: memory exhaustion through an untrusted uncompressedSize field, rejected before any allocation. Secure by
+        // default; disabling it is opt-in with 0. Configurable here by whoever opens the source (CLI, MCP, UI); the setting
+        // adds no ceiling of its own; the Core options class owns the rule.
         options.RegisterI64Setting(_MaxContainerOption, "Container size limit", "", BlfSourceOptions.DefaultMaxUncompressedContainerSize,
             min: 0, description: "Largest uncompressed container in bytes; 0 disables the check.");
+
+        // Limit: parallel decompressions, 1 to int.MaxValue. Threat: transient memory of up to this number times the container
+        // limit when many reader threads miss the container cache at once. The default is host-derived (core count): it is read
+        // from the Core options class, which derives it from the processor count.
         options.RegisterI64Setting(_ConcurrencyOption, "Decompression threads", "", new BlfSourceOptions().MaxDecompressionConcurrency,
             min: 1, max: int.MaxValue, description: "Number of container decompressions that may run in parallel.");
         FileSourceOptions.RegisterFrameSlab(options);

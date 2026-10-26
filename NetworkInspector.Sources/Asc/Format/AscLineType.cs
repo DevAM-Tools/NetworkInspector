@@ -3,7 +3,10 @@
 namespace NetworkInspector.Sources.Asc.Format;
 
 /// <summary>
-/// Classifies the type of an ASC file line for efficient dispatch.
+/// Classifies the type of an ASC file line for efficient dispatch. Produced by <see cref="AscLineClassifier"/> from the
+/// line prefix only (no full parse). Only the frame-producing members (CAN, CAN FD, CAN XL, error and overload frames,
+/// LIN message, FlexRay message, Ethernet packet) become frames; every other member is skipped by the sources, although a
+/// timestamped one still advances a relative clock.
 /// </summary>
 internal enum AscLineType : byte
 {
@@ -34,10 +37,10 @@ internal enum AscLineType : byte
     /// <summary>CAN XL message. The token after the timestamp is <c>CANXL</c>.</summary>
     CanXlMessage,
 
-    /// <summary>CAN error frame (<c>ErrorFrame</c>).</summary>
+    /// <summary>CAN error frame: <c>&lt;channel&gt; ErrorFrame</c> after the timestamp (the keyword is the second token).</summary>
     CanErrorFrame,
 
-    /// <summary>CAN overload frame (<c>OverloadFrame</c>).</summary>
+    /// <summary>CAN overload frame: <c>&lt;channel&gt; OverloadFrame</c> after the timestamp (the keyword is the second token).</summary>
     CanOverloadFrame,
 
     /// <summary>CAN bus statistics event.</summary>
@@ -46,16 +49,25 @@ internal enum AscLineType : byte
     /// <summary>CAN status event (<c>CAN &lt;channel&gt; Status:…</c>).</summary>
     CanStatus,
 
-    /// <summary>LIN message or event (channel starts with <c>L</c>).</summary>
+    /// <summary>
+    /// LIN message: the token after the timestamp is a LIN channel (<c>Li</c>, or <c>L</c> plus digits) and the line is
+    /// not a sleep or wakeup event.
+    /// </summary>
     LinMessage,
 
-    /// <summary>LIN event (sleep, wakeup, scheduler mode change, etc.).</summary>
+    /// <summary>
+    /// LIN sleep or wakeup event: a LIN channel line where the token one or two places after the channel token starts with <c>sleep</c> or <c>wakeup</c>.
+    /// Not a frame.
+    /// </summary>
     LinEvent,
 
-    /// <summary>FlexRay message (line contains <c>Fr</c> prefix).</summary>
+    /// <summary>FlexRay message: <c>Fr</c> prefix followed by <c>RMSG</c>, <c>PDU</c>, or the numeric channel of the old format.</summary>
     FlexRayMessage,
 
-    /// <summary>FlexRay start cycle event.</summary>
+    /// <summary>
+    /// FlexRay start cycle event. Declared, but <see cref="AscLineClassifier"/> never returns it (such lines are
+    /// <see cref="Unknown"/>).
+    /// </summary>
     FlexRayStartCycle,
 
     /// <summary>Ethernet packet. <c>ETH</c> or <c>AFDX</c> plus channel and direction <c>Rx</c>, <c>Tx</c>, <c>TxRq</c>, or <c>TxFwd</c>. Status lines are not packets.</summary>

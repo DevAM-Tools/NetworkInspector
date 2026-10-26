@@ -13,6 +13,12 @@ internal readonly record struct AscTimestamp(long WholeSeconds, int Nanoseconds)
 {
     private const int _NanosPerSecond = 1_000_000_000;
 
+    /// <summary>Largest whole-second count whose product with 1e9 fits a <see cref="long"/>.</summary>
+    private const long _MaxScalableSeconds = long.MaxValue / _NanosPerSecond;
+
+    /// <summary>Smallest whole-second count whose product with 1e9 fits a <see cref="long"/>.</summary>
+    private const long _MinScalableSeconds = long.MinValue / _NanosPerSecond;
+
     /// <summary>
     /// Parses an ASC timestamp token. An optional leading <c>-</c> is allowed.
     /// Up to nine fractional digits are kept; a tenth digit <c>&gt;= 5</c> rounds up by one nanosecond.
@@ -122,20 +128,25 @@ internal readonly record struct AscTimestamp(long WholeSeconds, int Nanoseconds)
     internal static bool TryAdd(AscTimestamp left, AscTimestamp right, out AscTimestamp sum)
     {
         sum = default;
+
+        // Both fractions are below 1e9, so their sum (< 2e9) fits an int and needs at most one carry.
         int nanos = left.Nanoseconds + right.Nanoseconds;
-        long seconds;
-        try
-        {
-            seconds = checked(left.WholeSeconds + right.WholeSeconds);
-            if (nanos >= _NanosPerSecond)
-            {
-                nanos -= _NanosPerSecond;
-                seconds = checked(seconds + 1);
-            }
-        }
-        catch (OverflowException)
+
+        // A wrapped second count is a false result, so a corrupt or hostile timestamp is reported as a bad line instead of
+        // silently producing a wrong time. The range is checked explicitly: a try/catch around checked arithmetic would cost
+        // one exception per hostile line, and an expected failure must not use an exception.
+        if (!_TryAddLongs(left.WholeSeconds, right.WholeSeconds, out long seconds))
         {
             return false;
+        }
+
+        if (nanos >= _NanosPerSecond)
+        {
+            nanos -= _NanosPerSecond;
+            if (!_TryAddLongs(seconds, 1, out seconds))
+            {
+                return false;
+            }
         }
 
         sum = new AscTimestamp(seconds, nanos);
@@ -144,7 +155,7 @@ internal readonly record struct AscTimestamp(long WholeSeconds, int Nanoseconds)
 
     /// <summary>
     /// Converts a header Unix time plus an ASC offset into nanoseconds since the Unix epoch.
-    /// Uses <c>checked</c> arithmetic so a value that does not fit is rejected instead of wrapping.
+    /// Range-checks every step so a value that does not fit is rejected instead of wrapping (no exception is used).
     /// </summary>
     /// <param name="startUnixNanos">Header date in nanoseconds since the Unix epoch.</param>
     /// <param name="offset">Line clock (absolute offset or accumulated relative offset).</param>
@@ -153,23 +164,40 @@ internal readonly record struct AscTimestamp(long WholeSeconds, int Nanoseconds)
     internal static bool TryToUnixNanos(long startUnixNanos, AscTimestamp offset, out long unixNanos)
     {
         unixNanos = 0;
+
+        // The type promises a fraction in 0..999_999_999; a default or hand-built value that breaks it (negative or too
+        // large) is rejected here, because the second scaling below assumes it. The unsigned compare checks both ends.
         if ((uint)offset.Nanoseconds >= (uint)_NanosPerSecond)
         {
             return false;
         }
 
-        try
-        {
-            long extra = checked((offset.WholeSeconds * _NanosPerSecond) + offset.Nanoseconds);
-            unixNanos = checked(startUnixNanos + extra);
-            return true;
-        }
-        catch (OverflowException)
+        // Every step is range-checked without exceptions (a hostile timestamp must not cost one exception per line): seconds
+        // x 1e9 overflows a long beyond about 292 years, and adding the fraction or the header date can overflow too. The
+        // seconds are checked against the largest and smallest count whose product with 1e9 still fits, so the multiplication
+        // below cannot wrap.
+        if (offset.WholeSeconds > _MaxScalableSeconds || offset.WholeSeconds < _MinScalableSeconds)
         {
             return false;
         }
+
+        long scaledSeconds = offset.WholeSeconds * _NanosPerSecond;
+        if (!_TryAddLongs(scaledSeconds, offset.Nanoseconds, out long extra)
+            || !_TryAddLongs(startUnixNanos, extra, out long total))
+        {
+            return false;
+        }
+
+        unixNanos = total;
+        return true;
     }
 
+    /// <summary>
+    /// Reads the digits before the decimal point into <paramref name="whole"/> and advances <paramref name="index"/> past them.
+    /// Hand-rolled instead of <c>long.Parse</c>/<c>double.Parse</c>: it works on the raw bytes without a string, and the
+    /// integer parse keeps full precision (a <see cref="double"/> loses nanoseconds beyond about 2^53 ns, roughly 104 days).
+    /// </summary>
+    /// <returns><c>false</c> when there is no digit or the value would overflow <see cref="long"/>.</returns>
     private static bool _TryParseWholeSeconds(ReadOnlySpan<byte> token, ref int index, out long whole)
     {
         whole = 0;
@@ -178,6 +206,8 @@ internal readonly record struct AscTimestamp(long WholeSeconds, int Nanoseconds)
         {
             any = true;
             int digit = token[index] - (byte)'0';
+
+            // Overflow guard before the multiply: whole * 10 + digit must stay ≤ long.MaxValue.
             if (whole > (long.MaxValue - digit) / 10)
             {
                 return false;
@@ -190,6 +220,12 @@ internal readonly record struct AscTimestamp(long WholeSeconds, int Nanoseconds)
         return any;
     }
 
+    /// <summary>
+    /// Reads the fraction digits after the decimal point. The first nine digits become the nanoseconds; the tenth only
+    /// decides rounding (half up); any further digits are consumed and ignored. A carry out of the fraction
+    /// (<c>.9999999995</c>) increments <paramref name="whole"/>.
+    /// </summary>
+    /// <returns><c>false</c> when a non-digit follows or the carry would overflow <see cref="long"/>.</returns>
     private static bool _TryParseFraction(ReadOnlySpan<byte> token, ref int index, ref long whole, out int nanos)
     {
         nanos = 0;
@@ -217,6 +253,7 @@ internal readonly record struct AscTimestamp(long WholeSeconds, int Nanoseconds)
             return false;
         }
 
+        // Scale a short fraction to nanoseconds: ".5" is 500 000 000 ns. Integer math only, so the result is exact.
         for (int pad = digits; pad < 9; pad++)
         {
             nanos *= 10;
@@ -227,6 +264,7 @@ internal readonly record struct AscTimestamp(long WholeSeconds, int Nanoseconds)
             nanos++;
         }
 
+        // Rounding up can produce exactly one second: carry it into the whole seconds so the fraction stays below 1e9.
         if (nanos < _NanosPerSecond)
         {
             return true;
@@ -242,6 +280,10 @@ internal readonly record struct AscTimestamp(long WholeSeconds, int Nanoseconds)
         return true;
     }
 
+    /// <summary>
+    /// Negates the parsed magnitude while keeping the fraction non-negative: −(w + n/10^9) = −(w + 1) + (10^9 − n)/10^9.
+    /// </summary>
+    /// <returns><c>false</c> when borrowing one second would overflow <see cref="long"/>.</returns>
     private static bool _ApplyNegative(ref long whole, ref int nanos)
     {
         if (nanos == 0)
@@ -260,6 +302,18 @@ internal readonly record struct AscTimestamp(long WholeSeconds, int Nanoseconds)
         return true;
     }
 
+    /// <summary>
+    /// Adds two longs and reports whether the sum fits. Signed addition overflows exactly when both operands have the same
+    /// sign and the wrapped result has the other one, which the XOR test below detects without an exception.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool _TryAddLongs(long left, long right, out long sum)
+    {
+        sum = unchecked(left + right);
+        return ((left ^ sum) & (right ^ sum)) >= 0;
+    }
+
+    /// <summary>ASCII digit test with one unsigned compare (a value below '0' wraps to a large <see cref="uint"/>).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsDigit(byte value) => (uint)(value - (byte)'0') <= 9;
 }

@@ -7,7 +7,16 @@ namespace NetworkInspector.Protocols;
 /// <summary>
 /// HTTP/1.x protocol parser (RFC 7230-7235).
 /// Parses HTTP request and response messages from TCP stream data.
-/// Uses lazy population for header and body details.
+/// Uses lazy population for the header and body fields of the field tree.
+/// <para>
+/// Design: two passes read each message. <c>Parse</c> runs eagerly for every packet and does only what the packet
+/// index and sub-protocol dispatch need: the first line (packet summary), a header scan that records the index groups
+/// and collects the values that drive dispatch, body decoding (dechunk, decompress) and the dispatch to the
+/// content-type, JSON/Text, or Upgrade protocol. The field tree itself is built later by the lazy populator, only when
+/// somebody expands the container. The populator cannot record index state (it gets no <see cref="ParseContext"/>), so
+/// the eager scan has to mirror the populator's emission conditions exactly; the cost is that headers and the body
+/// decode are processed twice for a message that is expanded.
+/// </para>
 /// <para>Field tree structure:</para>
 /// <code>
 /// http: HTTP/1.1 200 OK
@@ -30,7 +39,9 @@ namespace NetworkInspector.Protocols;
 /// ├── http.upgrade: "websocket"                   [if present]
 /// ├── http.connection: "Upgrade"                  [if present]
 /// ├── http.payload: (body bytes)                  [if present]
-/// └── http.payload.decoded: (decoded body bytes)  [if chunked/compressed]
+/// ├── http.payload.decoded: (decoded body bytes)  [if chunked/compressed]
+/// ├── http.error.header_limit: (limit text)       [if more than 256 header lines or a line over 8192 bytes]
+/// └── http.error.decompress_limit: (limit text)   [if the body inflates beyond http.max_decompressed_bytes]
 /// </code>
 /// </summary>
 /// <remarks>
@@ -59,10 +70,22 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>Protocol table name for content-type–based dispatch.</summary>
     public const string ContentTypeTableName = "http.content_type";
 
-    /// <summary>Maximum number of headers to parse (DoS protection).</summary>
+    /// <summary>
+    /// Maximum number of headers to parse (DoS protection).
+    /// Value: 256. Threat: a header flood making the eager scan and the field tree arbitrarily large. Constant, not
+    /// configurable (a protocol-sized safety bound, no host dependence); secure by default (fixed), because the input
+    /// comes from untrusted peers. Applies identically to the eager scan and the populator, which share one header walk.
+    /// Exceeding it is an expected failure: the walk stops, the remaining header lines are shown as payload bytes, and the
+    /// <c>http.error.header_limit</c> field names the limit.
+    /// </summary>
     private const int _MaxHeaders = 256;
 
-    /// <summary>Maximum header line length in bytes (DoS protection).</summary>
+    /// <summary>
+    /// Maximum header line length in bytes (DoS protection).
+    /// Value: 8192. Threat: an endless unterminated line making each scan cost grow with the packet. Constant, not
+    /// configurable; secure by default (fixed). A longer line stops the header walk exactly like the header count limit
+    /// and is reported through the <c>http.error.header_limit</c> field.
+    /// </summary>
     private const int _MaxLineLength = 8192;
 
     /// <summary>Protocol table name for HTTP Upgrade dispatch (e.g., WebSocket).</summary>
@@ -178,11 +201,41 @@ public sealed partial class HttpProtocol : IProtocol
     [StringField("http.error.not_http", "Not HTTP", IndexGroup = "http.error")]
     private FieldId _NotHttpFieldId;
 
+    /// <summary>Reported when the header walk stopped at a fixed limit (header count or line length).</summary>
+    [StringField("http.error.header_limit", "Header Limit Reached", IndexGroup = "http.error")]
+    private FieldId _HeaderLimitFieldId;
+
+    /// <summary>Reported when decompressing the body stopped at <c>http.max_decompressed_bytes</c>.</summary>
+    [StringField("http.error.decompress_limit", "Decompression Limit Reached", IndexGroup = "http.error")]
+    private FieldId _DecompressLimitFieldId;
+
+    #endregion
+
+    #region Settings
+
+    // Limit: largest decompressed HTTP body in bytes (Content-Encoding gzip, deflate, br).
+    // Value: default 67108864 (64 MiB), allowed 1024 (1 KiB) to 137438953472 (128 GiB); a value outside the range is rejected by
+    // the settings layer and the default stays. Threat: decompression bomb, a few kilobytes expanding to gigabytes of memory.
+    // Configurable (setting, changed by the operator or user), not a constant, because the right size depends on the host and
+    // on the traffic; it is not a protocol fact. Posture: secure by default, because HTTP bodies come from untrusted peers;
+    // raising it is opt-in. Rejected alternative: a fixed constant (cripples hosts that inspect large downloads).
+    // Exceeding it is an expected failure: inflating stops at the limit, the body stays undecoded (never truncated) and the
+    // http.error.decompress_limit field names this setting. Residual risk: a value near the maximum lets one body use that
+    // much memory (and time); in addition one array holds the result, so about 2 GiB is the hard bound whatever is configured.
+    [U64Setting("http.max_decompressed_bytes", "Maximum decompressed HTTP body size (bytes)", "http",
+        Default = 67108864, HasMin = true, Min = 1024, HasMax = true, Max = 137438953472,
+        Description = "Upper bound for a decompressed HTTP body in bytes (1 KiB to 128 GiB). A larger body is left undecoded and flagged. "
+            + "Raising the value lets a small hostile body use more memory.")]
+    private ulong _MaxDecompressedBytes;
+
     #endregion
 
     #region Runtime state
 
-    /// <summary>Lazy populator delegate for deferred field tree construction.</summary>
+    /// <summary>
+    /// Lazy populator delegate for deferred field tree construction. Created once at stack start: converting the
+    /// instance method <c>_PopulateHttpFields</c> per packet would allocate a delegate on every parse.
+    /// </summary>
     private LazyPopulator _Populator = null!;
 
     /// <summary>Cached protocol ID for JSON sub-protocol (resolved at startup).</summary>
@@ -203,17 +256,26 @@ public sealed partial class HttpProtocol : IProtocol
 
     /// <summary>
     /// Parses an HTTP/1.x message from TCP stream data.
-    /// Uses lazy population for the header/body field tree — only the first line is parsed
-    /// eagerly for the summary. Sub-protocol dispatch (content-type, JSON/Text fallback and the
-    /// HTTP Upgrade table) is performed <b>eagerly</b> here with the real index-carrying
-    /// <see cref="ParseContext"/> so dispatched sub-protocols record their index groups during
+    /// Uses lazy population for the header/body field tree. Eagerly it parses the first line for the summary,
+    /// scans the headers for index groups and dispatch values, and decodes the body. Sub-protocol dispatch
+    /// (content-type, JSON/Text fallback and the HTTP Upgrade table) is performed <b>eagerly</b> here with the real
+    /// index-carrying <see cref="ParseContext"/> so dispatched sub-protocols record their index groups during
     /// the capture/index phase (the lazy populator no longer dispatches).
     /// </summary>
+    /// <param name="parentField">The parent field (the TCP layer) that receives the HTTP container.</param>
+    /// <param name="data">One reassembled HTTP/1 message, or a TCP payload that may not be HTTP.</param>
+    /// <param name="context">The parse context used to record presence and to dispatch sub-protocols.</param>
+    /// <returns>
+    /// The number of bytes consumed (all of <paramref name="data"/>); an insufficient-data error when the buffer
+    /// has no complete first line but could still become an HTTP start line; or a dispatch error from a sub-protocol.
+    /// A payload that is not HTTP is consumed whole and flagged with the <c>http.error.not_http</c> field.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         ReadOnlySpan<byte> span = data.Span;
 
-        // Find the first line (request line or status line)
+        // Find the first line (request line or status line). Without a line end the bytes either still look like the
+        // start of an HTTP message (ask for more data) or are not HTTP (flagged below, consumed whole).
         int firstLineEnd = _FindLineEnd(span);
         if (firstLineEnd < 0)
         {
@@ -254,21 +316,23 @@ public sealed partial class HttpProtocol : IProtocol
             context.RecordGroupPresence(_HttpResponseGroupId);
         }
 
-        // Build summary from first line
+        // Build summary from first line. Non-ASCII bytes become '?' (the line is display text only). The first line
+        // is not length-limited here; it is bounded by the size of the message handed in.
         string firstLineText = Encoding.ASCII.GetString(firstLine);
         LazyString summary = new(firstLineText);
 
         // Set packet info
         parentField.SetPacketInfo(new LazyString(firstLineText));
 
-        // Store whole data as container value for lazy population
+        // Store whole data as container value for lazy population: the container holds a view of the segment bytes
+        // (no copy) and the populator re-reads them when the tree is expanded.
         FieldValue containerValue = FieldValue.NewBytes(data);
         MutField container = parentField.AppendLazyWithCustomText(
             _ProtocolFieldId, containerValue, summary, _Populator);
 
         // Eagerly dispatch the body to sub-protocols (content-type table, JSON/Text fallback
         // and the HTTP Upgrade table) using the real context, so the dispatched sub-protocols
-        // record their index groups during the index phase (Q6: the index must be complete
+        // record their index groups during the index phase (the index must be complete
         // when the packet is finalized). Dispatch targets the same container field index the
         // lazy populator builds into, so the dispatched sub-protocol nests under the HTTP
         // container exactly as before — only the timing (eager) and context (real) change.
@@ -287,6 +351,11 @@ public sealed partial class HttpProtocol : IProtocol
     /// content-type table, the built-in JSON/Text fallback, or — for a 101 Switching Protocols
     /// response — the HTTP Upgrade table. All dispatch uses the real <paramref name="context"/>.
     /// </summary>
+    /// <param name="container">The HTTP container field under which dispatched sub-protocols nest.</param>
+    /// <param name="httpData">The whole HTTP message (start line, headers, body).</param>
+    /// <param name="isResponse"><see langword="true"/> for a status line, <see langword="false"/> for a request line.</param>
+    /// <param name="context">The parse context used to record index groups and to dispatch.</param>
+    /// <returns>0 when nothing failed (whether or not a sub-protocol took the body), or the sub-protocol's error.</returns>
     private ParseResult _DispatchHttpBody(
         in MutField container, ReadOnlyMemory<byte> httpData, bool isResponse, in ParseContext context)
     {
@@ -310,31 +379,22 @@ public sealed partial class HttpProtocol : IProtocol
         // positives), so the presence index is complete when the packet is finalized.
         HttpDispatchScan scan = default;
 
+        // This loop must stop at exactly the same header as the loop in _PopulateHttpFields. Both take their steps from
+        // _NextHeaderStep, so the limits and the end-of-headers test cannot drift apart (the recorded index groups and the
+        // materialized fields would diverge). When a limit stops the walk, offset stays inside the header block and the
+        // remaining bytes count as body.
         int headerCount = 0;
-        while (offset < span.Length && headerCount < _MaxHeaders)
+        _HeaderStep step;
+        while ((step = _NextHeaderStep(span, ref offset, headerCount, out ReadOnlySpan<byte> headerLine)) == _HeaderStep.Line)
         {
-            // Empty line marks end of headers
-            if (offset < span.Length - 1 && span[offset] == (byte)'\r' && span[offset + 1] == (byte)'\n')
-            {
-                offset += 2;
-                break;
-            }
-            if (offset < span.Length && span[offset] == (byte)'\n')
-            {
-                offset += 1;
-                break;
-            }
-
-            int lineEnd = _FindLineEnd(span[offset..]);
-            if (lineEnd < 0 || lineEnd > _MaxLineLength)
-            {
-                break; // Unterminated or excessively long header
-            }
-
-            _ScanHeaderLineForDispatch(span.Slice(offset, lineEnd), ref scan);
-
-            offset = _SkipPastCrLf(span, offset + lineEnd);
+            _ScanHeaderLineForDispatch(headerLine, ref scan);
             headerCount++;
+        }
+
+        // The populator emits http.error.header_limit exactly when the walk stopped at a limit.
+        if (step is _HeaderStep.TooManyHeaders or _HeaderStep.LineTooLong)
+        {
+            context.RecordGroupPresence(_HttpErrorGroupId);
         }
 
         // Record header-derived index groups before any body handling so they are present even for
@@ -383,12 +443,13 @@ public sealed partial class HttpProtocol : IProtocol
         context.RecordGroupPresence(_HttpPayloadGroupId);
 
         // Dechunk / decompress to obtain the effective body for dispatch (same logic the
-        // lazy populator uses for the http.payload.decoded field).
+        // lazy populator uses for the http.payload.decoded field). The order is fixed: the transfer coding (chunked)
+        // is removed first, then the content coding (gzip, deflate, br) of the payload.
         ReadOnlyMemory<byte> effectiveBody = body;
         bool decoded = false;
         if (scan.IsChunked)
         {
-            ReadOnlyMemory<byte>? dechunked = _DechunkBody(body);
+            ReadOnlyMemory<byte>? dechunked = DechunkBody(body);
             if (dechunked is not null)
             {
                 effectiveBody = dechunked.Value;
@@ -397,11 +458,16 @@ public sealed partial class HttpProtocol : IProtocol
         }
         if (scan.ContentEncoding is not null)
         {
-            ReadOnlyMemory<byte>? decompressed = _DecompressBody(effectiveBody, scan.ContentEncoding);
-            if (decompressed is not null)
+            DecompressionStatus status = _DecompressBody(effectiveBody, scan.ContentEncoding, out ReadOnlyMemory<byte> decompressed);
+            if (status == DecompressionStatus.Succeeded)
             {
-                effectiveBody = decompressed.Value;
+                effectiveBody = decompressed;
                 decoded = true;
+            }
+            else if (status == DecompressionStatus.LimitExceeded)
+            {
+                // The populator reports http.error.decompress_limit for the same body; the body stays undecoded.
+                context.RecordGroupPresence(_HttpErrorGroupId);
             }
         }
 
@@ -411,6 +477,8 @@ public sealed partial class HttpProtocol : IProtocol
             context.RecordGroupPresence(_HttpPayloadDecodedGroupId);
         }
 
+        // Dispatch order: the content-type table first, then the built-in JSON/Text fallback, and for a 101 response
+        // the Upgrade table. A sub-protocol "took" the body only if it consumed at least one byte.
         ReadOnlyMemory<byte> dispatchBody = decoded ? effectiveBody : body;
         bool dispatched = false;
         if (scan.ContentType is not null)
@@ -459,6 +527,8 @@ public sealed partial class HttpProtocol : IProtocol
     /// Extracts the HTTP status code from a status line (e.g. <c>HTTP/1.1 200 OK</c>) without
     /// building any field. Returns 0 when the line cannot be parsed.
     /// </summary>
+    /// <param name="line">The status line without its line ending.</param>
+    /// <returns>The status code, or 0 when it cannot be parsed (0 never matches the 101 check).</returns>
     private static ushort _ParseStatusCodeFromLine(ReadOnlySpan<byte> line)
     {
         int firstSpace = line.IndexOf((byte)' ');
@@ -494,6 +564,12 @@ public sealed partial class HttpProtocol : IProtocol
     /// index records http.content_type / .content_length / .host / .user_agent / .transfer_encoding
     /// / .content_encoding / .upgrade / .connection exactly when the populator emits the field.
     /// </summary>
+    /// <param name="line">One header line without its line ending.</param>
+    /// <param name="scan">The scratch that collects the values; a later header of the same name overwrites an earlier one.</param>
+    /// <remarks>
+    /// Must stay in step with <c>_ParseHeaderLine</c>. Content-Length is read by the same helper
+    /// (<c>_TryParseContentLength</c>) in both, so the index group and the materialized field always agree.
+    /// </remarks>
     private static void _ScanHeaderLineForDispatch(ReadOnlySpan<byte> line, ref HttpDispatchScan scan)
     {
         int colonPos = line.IndexOf((byte)':');
@@ -502,7 +578,9 @@ public sealed partial class HttpProtocol : IProtocol
             return; // Malformed header — skip
         }
 
-        // Compare name bytes directly — avoids allocating one string per header (~10–20 per HTTP packet).
+        // Compare name bytes directly — avoids allocating one string per header (~10–20 per HTTP packet), which the
+        // eager path would otherwise pay for every packet even when nobody expands the tree. Only values that drive
+        // dispatch (content type, encoding, upgrade, connection) are turned into strings.
         // All comparisons are case-insensitive ASCII; the header names in the RFC are ASCII-only.
         ReadOnlySpan<byte> nameSpan = line[..colonPos];
         ReadOnlySpan<byte> valueSpan = line[(colonPos + 1)..];
@@ -519,12 +597,9 @@ public sealed partial class HttpProtocol : IProtocol
         }
         else if (System.Text.Ascii.EqualsIgnoreCase(nameSpan, "Content-Length"u8))
         {
-            // Populator emits http.content_length only when the value parses to a non-negative long.
-            // Utf8Parser avoids the intermediate string from Encoding.ASCII.GetString.
-            // _FindLineEnd strips the CRLF, so valueSpan contains only the digits after leading-space trim.
-            if (Utf8Parser.TryParse(valueSpan, out long len, out int consumed)
-                && consumed == valueSpan.Length
-                && len >= 0)
+            // Populator emits http.content_length only when the value parses to a non-negative long. The shared helper
+            // keeps both sides on one definition of "valid" (the index group must not disagree with the field).
+            if (_TryParseContentLength(valueSpan, out _))
             {
                 scan.HasContentLength = true;
             }
@@ -565,6 +640,8 @@ public sealed partial class HttpProtocol : IProtocol
     /// Carries both the values that drive sub-protocol dispatch (content type, transfer/content
     /// encoding, upgrade, connection) and the presence flags used to record header-derived index
     /// groups, so the eager scan decides both in a single header walk.
+    /// A mutable struct passed by <see langword="ref"/>: it lives on the stack of <c>_DispatchHttpBody</c>, so the scan
+    /// allocates no scratch object; it must never be copied while it is being filled.
     /// </summary>
     private struct HttpDispatchScan
     {
@@ -582,6 +659,12 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>
     /// Lazily populates all HTTP fields from the stored message data.
     /// </summary>
+    /// <param name="container">The lazy HTTP container whose value holds the whole message bytes.</param>
+    /// <returns>0 on success (not significant for a populator), or an error for a non-bytes or line-less container.</returns>
+    /// <remarks>
+    /// Runs when the container is expanded, on the expanding thread. It reads only the immutable message bytes and
+    /// instance state that is read-only after start, so it needs no synchronization.
+    /// </remarks>
     private ParseResult _PopulateHttpFields(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> httpData))
@@ -612,7 +695,7 @@ public sealed partial class HttpProtocol : IProtocol
         // Move past the first line + CRLF
         int offset = _SkipPastCrLf(span, firstLineEnd);
 
-        // Parse headers
+        // Parse headers. The walk, its limits, and its end-of-headers test must match _DispatchHttpBody exactly (see there).
         string? contentType = null;
         long contentLength = -1;
         bool isChunked = false;
@@ -621,35 +704,32 @@ public sealed partial class HttpProtocol : IProtocol
         string? connection = null;
 
         int headerCount = 0;
-        while (offset < span.Length && headerCount < _MaxHeaders)
+        _HeaderStep step;
+        while ((step = _NextHeaderStep(span, ref offset, headerCount, out ReadOnlySpan<byte> headerLine)) == _HeaderStep.Line)
         {
-            // Empty line marks end of headers
-            if (offset < span.Length - 1 && span[offset] == (byte)'\r' && span[offset + 1] == (byte)'\n')
-            {
-                offset += 2;
-                break;
-            }
-            if (offset < span.Length && span[offset] == (byte)'\n')
-            {
-                offset += 1;
-                break;
-            }
-
-            int lineEnd = _FindLineEnd(span[offset..]);
-            if (lineEnd < 0 || lineEnd > _MaxLineLength)
-            {
-                break; // Unterminated or excessively long header
-            }
-
-            ReadOnlySpan<byte> headerLine = span.Slice(offset, lineEnd);
             _ParseHeaderLine(in container, headerLine, ref contentType, ref contentLength,
                 ref isChunked, ref contentEncoding, ref upgrade, ref connection);
-
-            offset = _SkipPastCrLf(span, offset + lineEnd);
             headerCount++;
         }
 
-        // Append well-known header fields
+        // A fixed limit ended the walk: say so instead of silently showing the rest of the header block as payload.
+        if (step == _HeaderStep.TooManyHeaders)
+        {
+            string limitText = string.Create(
+                CultureInfo.InvariantCulture,
+                $"More than {_MaxHeaders} header lines; header parsing stopped, the remaining lines are shown as payload");
+            container.Append(_HeaderLimitFieldId, FieldValue.NewString(limitText));
+        }
+        else if (step == _HeaderStep.LineTooLong)
+        {
+            string limitText = string.Create(
+                CultureInfo.InvariantCulture,
+                $"A header line is longer than {_MaxLineLength} bytes; header parsing stopped, the remaining lines are shown as payload");
+            container.Append(_HeaderLimitFieldId, FieldValue.NewString(limitText));
+        }
+
+        // Append well-known header fields that are derived from the whole header block (the others, such as Host, are
+        // appended while their header line is parsed)
         if (contentType is not null)
         {
             container.Append(_ContentTypeFieldId, FieldValue.NewString(contentType));
@@ -669,7 +749,7 @@ public sealed partial class HttpProtocol : IProtocol
             bool decoded = false;
             if (isChunked)
             {
-                ReadOnlyMemory<byte>? dechunked = _DechunkBody(body);
+                ReadOnlyMemory<byte>? dechunked = DechunkBody(body);
                 if (dechunked is not null)
                 {
                     effectiveBody = dechunked.Value;
@@ -680,11 +760,21 @@ public sealed partial class HttpProtocol : IProtocol
             // Step 2: Decompress if Content-Encoding is gzip, deflate, or br
             if (contentEncoding is not null)
             {
-                ReadOnlyMemory<byte>? decompressed = _DecompressBody(effectiveBody, contentEncoding);
-                if (decompressed is not null)
+                DecompressionStatus status = _DecompressBody(effectiveBody, contentEncoding, out ReadOnlyMemory<byte> decompressed);
+                if (status == DecompressionStatus.Succeeded)
                 {
-                    effectiveBody = decompressed.Value;
+                    effectiveBody = decompressed;
                     decoded = true;
+                }
+                else if (status == DecompressionStatus.LimitExceeded)
+                {
+                    // Name the setting so the user knows which limit to raise; the body stays undecoded, never truncated. The
+                    // effective bound is shown: one array holds the result, so it cannot exceed Array.MaxLength.
+                    ulong effectiveLimit = Math.Min(_MaxDecompressedBytes, (ulong)Array.MaxLength);
+                    string limitText = string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"Decompressed body is larger than {effectiveLimit} bytes (setting http.max_decompressed_bytes); not decoded");
+                    container.Append(_DecompressLimitFieldId, FieldValue.NewString(limitText));
                 }
             }
 
@@ -823,7 +913,8 @@ public sealed partial class HttpProtocol : IProtocol
         }
         else if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
         {
-            if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long len) && len >= 0)
+            // Same parse as the eager scan, otherwise a value with trailing blanks would be shown here but not indexed.
+            if (_TryParseContentLength(valueSpan, out long len))
             {
                 contentLength = len;
             }
@@ -865,6 +956,11 @@ public sealed partial class HttpProtocol : IProtocol
     /// Attempts to dispatch the body to a known protocol based on content type.
     /// Falls back to JSON protocol for application/json, Text protocol for text/* types.
     /// </summary>
+    /// <param name="container">The HTTP container field under which the sub-protocol nests.</param>
+    /// <param name="baseType">The content type without parameters.</param>
+    /// <param name="body">The decoded body, or the raw body when nothing was decoded.</param>
+    /// <param name="context">The parse context used to dispatch.</param>
+    /// <returns><see langword="true"/> when the sub-protocol consumed at least one byte.</returns>
     private bool _TryDispatchByContentType(in MutField container, string baseType, ReadOnlyMemory<byte> body, in ParseContext context)
     {
         // JSON content types
@@ -890,6 +986,10 @@ public sealed partial class HttpProtocol : IProtocol
     /// Finds the end of the current line (position of CR or LF).
     /// Returns -1 if no line ending is found.
     /// </summary>
+    /// <remarks>
+    /// Unlike the stream detector, this stops at the first CR or LF, so a bare CR also ends a line. The detector and this
+    /// parser agree on every well-formed message; they can differ on a message with a bare CR.
+    /// </remarks>
     private static int _FindLineEnd(ReadOnlySpan<byte> data)
     {
         for (int i = 0; i < data.Length; i++)
@@ -960,6 +1060,10 @@ public sealed partial class HttpProtocol : IProtocol
             || _IsPrefixOf(data, "TRACE "u8);
     }
 
+    /// <summary>
+    /// True when the shorter of the two spans is a prefix of the longer: the buffer may be a partial token (a method cut
+    /// off by a segment boundary), or it already starts with the whole token.
+    /// </summary>
     private static bool _IsPrefixOf(ReadOnlySpan<byte> data, ReadOnlySpan<byte> token)
     {
         int take = Math.Min(data.Length, token.Length);
@@ -991,21 +1095,47 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>
     /// Parses an ASCII status code from the given span.
     /// </summary>
+    /// <param name="data">The status code text (normally exactly three digits).</param>
+    /// <param name="code">The parsed code, or 0 on failure.</param>
+    /// <returns>
+    /// <see langword="true"/> when the text is a valid code: three digits starting with 1-5 (the fast path), or 1 to 5
+    /// digits with a value up to 65535 (a non-standard code such as "20" or "1000"). Longer tokens and non-digits fail.
+    /// </returns>
     private static bool _TryParseStatusCode(ReadOnlySpan<byte> data, out ushort code)
     {
         code = 0;
         if (data.Length != 3)
         {
-            // Try to parse whatever we have
-            Span<char> chars = stackalloc char[Math.Min(data.Length, 5)];
-            for (int i = 0; i < chars.Length; i++)
+            // A non-standard code such as "20" or "1000": digits only, at most 5 of them (the longest ushort, "65535"). A
+            // longer token is rejected as a whole; cutting it to its first 5 digits would show a code that is not on the
+            // wire. Parsed by hand, so there is no buffer and no sign or blank handling that a text parser would add.
+            if (data.Length == 0 || data.Length > 5)
             {
-                chars[i] = (char)data[i];
+                return false;
             }
-            return ushort.TryParse(chars, NumberStyles.Integer, CultureInfo.InvariantCulture, out code);
+
+            int value = 0;
+            foreach (byte digit in data)
+            {
+                if (digit < (byte)'0' || digit > (byte)'9')
+                {
+                    return false;
+                }
+
+                value = (value * 10) + (digit - '0');
+            }
+
+            if (value > ushort.MaxValue)
+            {
+                return false;
+            }
+
+            code = (ushort)value;
+            return true;
         }
 
-        // Fast path for exactly 3 digits
+        // Fast path for exactly 3 digits: the standard case, parsed without going through ushort.TryParse.
+        // The first digit is limited to 1-5 (the status code classes of RFC 7231).
         if (data[0] >= (byte)'1' && data[0] <= (byte)'5' &&
             data[1] >= (byte)'0' && data[1] <= (byte)'9' &&
             data[2] >= (byte)'0' && data[2] <= (byte)'9')
@@ -1036,12 +1166,25 @@ public sealed partial class HttpProtocol : IProtocol
     /// Format: {hex-size}\r\n{data}\r\n ... 0\r\n\r\n
     /// Returns null if the data does not look like valid chunked encoding.
     /// </summary>
-    private static ReadOnlyMemory<byte>? _DechunkBody(ReadOnlyMemory<byte> body)
+    /// <param name="body">The bytes after the header block.</param>
+    /// <returns>
+    /// The concatenated chunk data (an empty memory for a body of only the terminal chunk), or <see langword="null"/>
+    /// when the structure is invalid (including a body cut off inside a chunk) or the decoded size exceeds 16 MiB.
+    /// A body that ends cleanly after a complete chunk, without the terminal chunk, is decoded as far as it goes.
+    /// A null result makes the caller show the raw body.
+    /// </returns>
+    /// <remarks>
+    /// Limit: the decoded size is capped at 16 MiB. Threat: memory exhaustion by a chunked body that is decoded into
+    /// a second copy. Constant, not configurable; secure by default (fixed). A body above the cap is reported as
+    /// "not decoded" (null), never truncated. Trailers after the terminal chunk are ignored.
+    /// </remarks>
+    internal static ReadOnlyMemory<byte>? DechunkBody(ReadOnlyMemory<byte> body)
     {
         ReadOnlySpan<byte> span = body.Span;
 
         // Pre-scan to compute total decoded size and validate structure.
-        // This avoids resizing during the copy pass.
+        // This avoids resizing during the copy pass. The second pass relies on this validation: every chunk
+        // that it copies was already checked to lie completely inside the body.
         int scanPos = 0;
         long totalSize = 0;
         while (scanPos < span.Length)
@@ -1098,7 +1241,9 @@ public sealed partial class HttpProtocol : IProtocol
             return ReadOnlyMemory<byte>.Empty;
         }
 
-        // Second pass: copy chunk data into result buffer
+        // Second pass: copy chunk data into result buffer. The array is not zeroed first because every byte that is
+        // returned is written by the copy below: the result is cut to writePos, so uninitialized tail bytes (if the
+        // loop stopped early) are never exposed.
         byte[] result = GC.AllocateUninitializedArray<byte>((int)totalSize);
         int writePos = 0;
         int readPos = 0;
@@ -1134,6 +1279,16 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>
     /// Parses a hexadecimal chunk size from ASCII bytes.
     /// </summary>
+    /// <param name="hex">The size text of a chunk-size line (without extensions). Spaces and tabs anywhere in it are skipped.</param>
+    /// <param name="size">The parsed size, or 0 on failure.</param>
+    /// <returns>
+    /// <see langword="true"/> when the text has 1 to 8 characters, all hex digits or blanks, and the value fits an
+    /// <see cref="int"/> (at most 0x7FFFFFFF).
+    /// </returns>
+    /// <remarks>
+    /// The length limit counts blanks as well. A value above <see cref="int.MaxValue"/> is rejected: wrapping it to a
+    /// negative size would make the callers slice with a negative length.
+    /// </remarks>
     private static bool _TryParseHexChunkSize(ReadOnlySpan<byte> hex, out int size)
     {
         size = 0;
@@ -1166,56 +1321,175 @@ public sealed partial class HttpProtocol : IProtocol
                 return false;
             }
 
+            // Reject before shifting: eight digits can reach 0xFFFFFFFF, which does not fit the int result. Written without
+            // performing the overflowing operation.
+            if (size > (int.MaxValue - digit) / 16)
+            {
+                size = 0;
+                return false;
+            }
+
             size = (size << 4) | digit;
         }
         return true;
     }
 
     /// <summary>
-    /// Decompresses an HTTP response body based on Content-Encoding.
-    /// Supports gzip, deflate, and br (Brotli).
-    /// Returns null if decompression fails or the encoding is unsupported.
+    /// Parses a Content-Length header value: optional blanks around a non-negative whole number.
     /// </summary>
-    private static ReadOnlyMemory<byte>? _DecompressBody(ReadOnlyMemory<byte> body, string encoding)
+    /// <param name="value">The header value after the colon (leading blanks may already be removed).</param>
+    /// <param name="length">The parsed length, or 0 on failure.</param>
+    /// <returns><see langword="true"/> when the whole value (blanks aside) is a non-negative number that fits a <see cref="long"/>.</returns>
+    /// <remarks>
+    /// One definition for the eager scan and the populator. Surrounding spaces and tabs (the optional whitespace of
+    /// RFC 9110 section 5.6.3) are ignored; any other trailing byte makes the value invalid, never partially accepted.
+    /// </remarks>
+    private static bool _TryParseContentLength(ReadOnlySpan<byte> value, out long length)
     {
+        ReadOnlySpan<byte> trimmed = value.Trim(" \t"u8);
+        if (Utf8Parser.TryParse(trimmed, out length, out int consumed)
+            && consumed == trimmed.Length
+            && length >= 0)
+        {
+            return true;
+        }
+
+        length = 0;
+        return false;
+    }
+
+    /// <summary>One step of the shared header walk (see <see cref="_NextHeaderStep"/>).</summary>
+    private enum _HeaderStep
+    {
+        /// <summary>A header line was read.</summary>
+        Line,
+
+        /// <summary>The empty line (or the end of the data) ended the header block.</summary>
+        End,
+
+        /// <summary>The next line has no line ending in the data.</summary>
+        Unterminated,
+
+        /// <summary>A further header would exceed <see cref="_MaxHeaders"/>.</summary>
+        TooManyHeaders,
+
+        /// <summary>The next header line is longer than <see cref="_MaxLineLength"/>.</summary>
+        LineTooLong
+    }
+
+    /// <summary>
+    /// Reads the next header line of the block. The eager scan and the populator both walk the headers through this one
+    /// method, so they stop at exactly the same line.
+    /// </summary>
+    /// <param name="span">The whole message.</param>
+    /// <param name="offset">The position of the next header line; advanced past the line (or past the empty line that ends the block).</param>
+    /// <param name="headerCount">How many header lines were read so far.</param>
+    /// <param name="line">The header line without its line ending, for <see cref="_HeaderStep.Line"/>.</param>
+    /// <returns>What was found at <paramref name="offset"/>; <paramref name="offset"/> is unchanged for the limit and unterminated results.</returns>
+    private static _HeaderStep _NextHeaderStep(ReadOnlySpan<byte> span, ref int offset, int headerCount, out ReadOnlySpan<byte> line)
+    {
+        line = default;
+        if (offset >= span.Length)
+        {
+            return _HeaderStep.End;
+        }
+
+        // An empty line marks the end of the headers. It is checked before the count limit, so a block of exactly
+        // _MaxHeaders headers still ends cleanly instead of leaving its empty line to be shown as body.
+        if (offset < span.Length - 1 && span[offset] == (byte)'\r' && span[offset + 1] == (byte)'\n')
+        {
+            offset += 2;
+            return _HeaderStep.End;
+        }
+
+        if (span[offset] == (byte)'\n')
+        {
+            offset += 1;
+            return _HeaderStep.End;
+        }
+
+        if (headerCount >= _MaxHeaders)
+        {
+            return _HeaderStep.TooManyHeaders;
+        }
+
+        int lineEnd = _FindLineEnd(span[offset..]);
+        if (lineEnd < 0)
+        {
+            return _HeaderStep.Unterminated;
+        }
+
+        if (lineEnd > _MaxLineLength)
+        {
+            return _HeaderStep.LineTooLong;
+        }
+
+        line = span.Slice(offset, lineEnd);
+        offset = _SkipPastCrLf(span, offset + lineEnd);
+        return _HeaderStep.Line;
+    }
+
+    /// <summary>
+    /// Decompresses an HTTP body based on Content-Encoding.
+    /// Supports gzip, deflate, and br (Brotli).
+    /// </summary>
+    /// <param name="body">The (dechunked) compressed body.</param>
+    /// <param name="encoding">The Content-Encoding value; a single coding, matched case-insensitively. A list such as "gzip, br" is unsupported.</param>
+    /// <param name="decompressed">The decompressed bytes on success; empty otherwise.</param>
+    /// <returns>
+    /// <see cref="DecompressionStatus.Succeeded"/>; <see cref="DecompressionStatus.LimitExceeded"/> when the decompressed
+    /// size is above <c>http.max_decompressed_bytes</c> (inflating stopped there, nothing is truncated or returned);
+    /// <see cref="DecompressionStatus.Failed"/> for an empty body, an unsupported coding or corrupt data.
+    /// </returns>
+    /// <remarks>
+    /// Security: the decompressed size is bounded by the setting (see <see cref="_MaxDecompressedBytes"/> for the full limit
+    /// record) and inflated through a bounded read buffer, so a decompression bomb costs at most the limit. The compressed
+    /// body is read in place when it is backed by an array. It is still inflated twice for a message that is expanded: once
+    /// for the eager dispatch in <c>Parse</c> and again when the field tree is built, because the populator has no place
+    /// to keep the first result without retaining a decoded body per packet.
+    /// </remarks>
+    private DecompressionStatus _DecompressBody(ReadOnlyMemory<byte> body, string encoding, out ReadOnlyMemory<byte> decompressed)
+    {
+        decompressed = default;
         if (body.Length == 0)
         {
-            return null;
+            return DecompressionStatus.Failed;
         }
 
         // Normalize encoding for comparison (use uppercase per CA1308)
         string normalizedEncoding = encoding.Trim().ToUpperInvariant();
-
-        try
+        if (normalizedEncoding is not ("GZIP" or "DEFLATE" or "BR"))
         {
-            using IO.MemoryStream input = new(body.ToArray(), writable: false);
-            using IO.Stream decompressor = normalizedEncoding switch
-            {
-                "GZIP" => new GZipStream(input, CompressionMode.Decompress, leaveOpen: true),
-                "DEFLATE" => new DeflateStream(input, CompressionMode.Decompress, leaveOpen: true),
-                "BR" => new BrotliStream(input, CompressionMode.Decompress, leaveOpen: true),
-                _ => IO.Stream.Null // Unsupported encoding — will produce empty output
-            };
-
-            // Unsupported encoding returns null
-            if (ReferenceEquals(decompressor, IO.Stream.Null))
-            {
-                return null;
-            }
-
-            using IO.MemoryStream output = new();
-            decompressor.CopyTo(output);
-
-            return output.ToArray();
+            return DecompressionStatus.Failed;
         }
-        catch (IO.InvalidDataException)
+
+        // The stream wrappers read from a stream, not a memory. Read the packet memory in place when it is array backed
+        // (always, for captured frames); the copy is only the fallback for other memory kinds.
+        byte[] array;
+        int start;
+        int count;
+        if (MemoryMarshal.TryGetArray(body, out ArraySegment<byte> segment) && segment.Array is not null)
         {
-            return null; // Corrupted compressed data
+            array = segment.Array;
+            start = segment.Offset;
+            count = segment.Count;
         }
-        catch (IO.IOException)
+        else
         {
-            return null; // I/O error during decompression
+            array = body.ToArray();
+            start = 0;
+            count = array.Length;
         }
+
+        using IO.MemoryStream input = new(array, start, count, writable: false);
+        using IO.Stream decompressor = normalizedEncoding switch
+        {
+            "GZIP" => new GZipStream(input, CompressionMode.Decompress, leaveOpen: true),
+            "DEFLATE" => new DeflateStream(input, CompressionMode.Decompress, leaveOpen: true),
+            _ => new BrotliStream(input, CompressionMode.Decompress, leaveOpen: true)
+        };
+
+        return BoundedDecompressor.TryDecompress(decompressor, _MaxDecompressedBytes, out decompressed);
     }
     #endregion
 }

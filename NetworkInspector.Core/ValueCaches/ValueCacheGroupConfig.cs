@@ -5,6 +5,8 @@ namespace NetworkInspector.Core.ValueCaches;
 /// <summary>
 /// Configuration expanded at construction to every stack field whose index group equals <see cref="GroupId"/>.
 /// An explicit <see cref="ValueCacheFieldConfig"/> for the same field wins for a given series.
+/// The expansion happens once, when the <see cref="ValueCache"/> is constructed, against the (final) stack: fields are not
+/// added to the cache later, and a group with no member fields creates no series.
 /// </summary>
 /// <param name="GroupId">Index group to expand. Must be in range for the cache's stack.</param>
 /// <param name="CaptureMode">Capture mode applied to expanded series unless an explicit field config already created that series.</param>

@@ -20,13 +20,18 @@ internal sealed class TraceCache
     /// <summary>Longest pause between two attempts to take the lock.</summary>
     private const int _MaxPauseMilliseconds = 64;
 
-    /// <summary>Longest total wait for the lock of another writer.</summary>
+    /// <summary>
+    /// Longest total wait for the lock of another writer. A waiting test must outlast the build of the largest recipe
+    /// that another process may be writing, but must still fail with a message instead of hanging forever when a writer is
+    /// stuck. The value is a test-support constant, not an input limit.
+    /// </summary>
     private static readonly TimeSpan _LockTimeout = TimeSpan.FromSeconds(120);
 
     #endregion
 
     #region Fields
 
+    /// <summary>The cache folder; created on the first write.</summary>
     private readonly string _Directory;
 
     #endregion
@@ -49,6 +54,10 @@ internal sealed class TraceCache
     /// <returns>The key.</returns>
     internal static string KeyOf(TraceRecipe recipe)
     {
+        // The key must change whenever the written bytes can change: name and version identify the layout, the canonical
+        // parameter text identifies the content (seeds included). Anything that is not part of this text is not part of the
+        // key, so a recipe must put every byte-relevant parameter into CanonicalParameters. The truncation to 64 bits is
+        // enough for the few recipes of a cache folder; the key is a file name, not a security measure.
         string text = string.Create(CultureInfo.InvariantCulture, $"{recipe.Name}\n{recipe.Version}\n{recipe.CanonicalParameters}");
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)).AsSpan(0, 8));
     }
@@ -72,10 +81,12 @@ internal sealed class TraceCache
             return new TraceFile(tracePath, recipe.FrameCount, existing);
         }
 
+        // Slow path: serialize writers of this recipe across threads and processes. The using declaration keeps the lock until
+        // the method returns, i.e. until the trace is in its final place (or the write failed and was cleaned up).
         Directory.CreateDirectory(_Directory);
         using FileStream writerLock = await _AcquireLockAsync(stem + ".lock", cancellationToken).ConfigureAwait(false);
 
-        // Another writer may have finished while this one waited.
+        // Another writer may have finished while this one waited; building twice would only waste time.
         if (File.Exists(tracePath) && _TryReadSettings(settingsPath, out existing))
         {
             return new TraceFile(tracePath, recipe.FrameCount, existing);
@@ -94,6 +105,8 @@ internal sealed class TraceCache
         settings = FrozenDictionary<string, string>.Empty;
         try
         {
+            // FileShare.ReadWrite | Delete: a reader must not block the writer that replaces the file with File.Move (on
+            // Windows a replace fails while another handle without FileShare.Delete is open), and readers take no lock.
             using FileStream stream = new(settingsPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             Dictionary<string, string>? parsed = JsonSerializer.Deserialize<Dictionary<string, string>>(stream);
             if (parsed is null)
@@ -110,7 +123,11 @@ internal sealed class TraceCache
         }
     }
 
-    /// <summary>Takes the exclusive lock of one recipe; waits for another writer with a pause from 1 to 64 ms, for two minutes at most.</summary>
+    /// <summary>
+    /// Takes the exclusive lock of one recipe; waits for another writer with a pause from 1 to 64 ms, for two minutes at most.
+    /// The lock is an open handle with <see cref="FileShare.None"/>, so the operating system releases it when the holder
+    /// ends, also when the holder process dies; no stale lock can survive a crash.
+    /// </summary>
     private static async ValueTask<FileStream> _AcquireLockAsync(string lockPath, CancellationToken cancellationToken)
     {
         long start = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -125,10 +142,13 @@ internal sealed class TraceCache
             catch (IOException exception) when (exception is not (DirectoryNotFoundException or FileNotFoundException)
                 && System.Diagnostics.Stopwatch.GetElapsedTime(start) < _LockTimeout)
             {
-                // Another writer holds the lock; the condition is waited for, not slept away.
+                // A sharing violation: another writer holds the lock. A file lock has no wait handle across processes, so the
+                // loop polls with a doubling pause (short builds are picked up fast, long builds do not hammer the disk) and
+                // checks the timeout in the filter. A missing folder is no contention and propagates.
             }
             catch (IOException exception) when (exception is not (DirectoryNotFoundException or FileNotFoundException))
             {
+                // The same contention after the deadline: fail with a message that names the lock file instead of waiting on.
                 throw new TimeoutException($"The trace lock '{lockPath}' was not released within {_LockTimeout.TotalSeconds:0} seconds.", exception);
             }
 
@@ -141,6 +161,11 @@ internal sealed class TraceCache
     private static TraceFile _Build(TraceRecipe recipe, string stem, string tracePath, string settingsPath,
         CancellationToken cancellationToken)
     {
+        // Temporary names sit next to the final names (same folder, same volume), so the final File.Move is a rename and
+        // therefore atomic: a reader sees either no trace or the complete one. The Guid keeps leftovers of a dead writer from
+        // colliding with a new write. Side files are the exception: settings that point at them hold their final paths, so
+        // they are written straight into the final side folder; that is safe because readers look at the trace file first
+        // and the trace is moved last.
         string sideDirectory = stem + ".files";
         string temporaryTrace = tracePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         string temporarySettings = settingsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -158,6 +183,9 @@ internal sealed class TraceCache
             IReadOnlyDictionary<string, string> settings = recipe.Write(temporaryTrace, sideDirectory, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
+            // Publication order: settings first, the trace last. The fast path of a reader keys on the trace file and then
+            // needs the settings, so the trace must never be visible before the settings are complete. overwrite: false on
+            // the trace is a guard: under the lock the path is free, so an existing file means a broken invariant.
             File.WriteAllText(temporarySettings, JsonSerializer.Serialize(settings));
             File.Move(temporarySettings, settingsPath, overwrite: true);
             File.Move(temporaryTrace, tracePath, overwrite: false);
@@ -165,7 +193,8 @@ internal sealed class TraceCache
         }
         catch
         {
-            // A failed or cancelled write leaves nothing a reader could take for a trace.
+            // A failed or cancelled write leaves nothing a reader could take for a trace. A catch-all is right here because
+            // the exception is rethrown unchanged after the cleanup; it never swallows a failure.
             _DeleteQuietly(temporaryTrace);
             _DeleteQuietly(temporarySettings);
             _DeleteQuietly(tracePath);

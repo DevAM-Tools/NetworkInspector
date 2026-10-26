@@ -238,6 +238,43 @@ internal sealed class PrunePlanTests
 
     #endregion
 
+    #region Retention
+
+    /// <summary>Builds an index, queries it through <paramref name="filter"/>, and returns only a weak handle to it.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference _QueryTemporaryIndex(Stack stack, Filter filter, bool useView)
+    {
+        PacketIndex index = _IndexShapes(stack);
+        bool pruned = useView
+            ? filter.TryIsPresenceCandidate(index.AsReadOnlyView(), 0, out _)
+            : filter.TryIsPresenceCandidate(index, 0, out _);
+        if (!pruned)
+        {
+            throw new InvalidOperationException("The filter was expected to prune.");
+        }
+
+        return new WeakReference(index);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task PlanDoesNotKeepTheLastQueriedIndexAlive(bool useView)
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        Filter filter = FilterTestHelper.CompileOrThrow("udp", stack);
+
+        WeakReference weak = _QueryTemporaryIndex(stack, filter, useView);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        await Assert.That(weak.IsAlive).IsFalse();
+        GC.KeepAlive(filter);
+    }
+
+    #endregion
+
     #region Stateful
 
     [Test]

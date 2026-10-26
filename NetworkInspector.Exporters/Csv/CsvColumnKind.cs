@@ -7,10 +7,13 @@ namespace NetworkInspector.Exporters.Csv;
 /// </summary>
 public enum CsvColumnKind
 {
-    /// <summary>The packet number (1-based ID).</summary>
+    /// <summary>
+    /// The packet number: the raw <c>PacketId</c> value of the packet, written as decimal. It is not renumbered by the
+    /// exporter, so it is exactly the id the packet carries in the pipeline (ids are array indices in Core).
+    /// </summary>
     PacketNumber,
 
-    /// <summary>The packet timestamp in ISO-8601 format.</summary>
+    /// <summary>The packet timestamp in ISO-8601 format with nanosecond resolution, UTC (<c>Timestamp.TryFormat</c>).</summary>
     Timestamp,
 
     /// <summary>The packet info/summary string.</summary>

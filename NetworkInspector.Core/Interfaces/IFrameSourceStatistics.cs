@@ -22,7 +22,7 @@ public interface IFrameSourceStatistics
     /// <summary>
     /// Number of frames that were skipped due to recoverable errors
     /// (e.g., corrupted block, decompression failure, unresolved interface).
-    /// Saturates at <see cref="int.MaxValue"/> when multiple errors map to one frame.
+    /// Saturates at <see cref="int.MaxValue"/> instead of wrapping around to a negative count.
     /// </summary>
     int SkippedFrameCount
     {

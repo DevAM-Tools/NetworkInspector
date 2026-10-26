@@ -7,10 +7,16 @@ namespace NetworkInspector.Filter.Eval;
 /// <summary>
 /// A test applied to one transformed field value.
 /// <para>
-/// Implementations are <see langword="readonly"/> structs and are passed to
-/// <see cref="FilterEvalContext.AnyValueMatches{TPredicate}"/> through a generic type parameter,
+/// Implementations are structs (readonly, except <see cref="CapturePredicate"/>, which records the value it sees) and are
+/// passed to <see cref="FilterEvalContext.AnyValueMatches{TPredicate}"/> by <c>ref</c> through a generic type parameter,
 /// so the runtime specializes the walk per predicate and the test inlines without boxing or a
-/// delegate call.
+/// delegate call. A class or an interface-typed argument would put a virtual call (and a heap object) on the per-value
+/// path of every packet.
+/// </para>
+/// <para>
+/// Implementations hold no shared mutable state apart from <see cref="CapturePredicate"/> (a per-call stack value), so
+/// they are as thread-safe as the data they reference; a <see cref="MatchesPredicate"/> shares an immutable, thread-safe
+/// <see cref="Regex"/>.
 /// </para>
 /// </summary>
 internal interface IValuePredicate
@@ -41,6 +47,9 @@ internal readonly struct SetPredicate(FieldValueData[] values) : IValuePredicate
     /// <inheritdoc />
     public bool Test(in FieldValueData value)
     {
+        // Linear scan through FilterCompare, so membership follows exactly the coercion rules of "==" (cross-type numbers,
+        // booleans against 0/1). A hash set would need a hash consistent with that cross-type equality; literal sets in
+        // filter expressions are short, so the scan is the simple and correct choice.
         foreach (FieldValueData candidate in _Values)
         {
             if (FilterCompare.Compare(value, candidate) == 0)
@@ -75,7 +84,10 @@ internal readonly struct ContainsPredicate(string needle) : IValuePredicate
         && text.Contains(_Needle, StringComparison.Ordinal);
 }
 
-/// <summary>Regular-expression test on string values.</summary>
+/// <summary>
+/// Regular-expression test on string values. A <see cref="RegexMatchTimeoutException"/> from a backtracking pattern is not
+/// handled here; <see cref="FilterRuntime.Matches"/> catches it once around the whole value walk.
+/// </summary>
 internal readonly struct MatchesPredicate(Regex regex) : IValuePredicate
 {
     private readonly Regex _Regex = regex;
@@ -87,7 +99,10 @@ internal readonly struct MatchesPredicate(Regex regex) : IValuePredicate
         && _Regex.IsMatch(text);
 }
 
-/// <summary>Captures the first value it sees and always reports a match.</summary>
+/// <summary>
+/// Captures the first value it sees and always reports a match, which ends the value walk after one value. Used by
+/// flank to take a single sample per packet. Mutable struct: pass it by <c>ref</c>, a copy would lose the capture.
+/// </summary>
 internal struct CapturePredicate : IValuePredicate
 {
     /// <summary>The captured value; only meaningful when <see cref="HasValue"/> is set.</summary>

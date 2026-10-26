@@ -4,8 +4,15 @@ namespace NetworkInspector.Protocols.SomeIp;
 
 /// <summary>
 /// Configuration model for SOME/IP protocol. Provides service and method
-/// name resolution from a JSON config file.
+/// name resolution from a JSON config file (setting <c>someip.config_file</c>).
 /// </summary>
+/// <remarks>
+/// Pure DTOs for untrusted, user-supplied JSON: no validation here. <c>SomeIpProtocol</c> copies them into frozen
+/// lookup tables once at registration; the DTOs are not used while parsing. If the same service id or message id
+/// (service id and method id) is defined more than once, the first definition wins and later ones are ignored
+/// without a warning. Ids are plain JSON numbers (decimal), limited to the 16-bit range by the property type, so
+/// out-of-range values are rejected by the JSON deserializer.
+/// </remarks>
 internal sealed class SomeIpConfig
 {
     /// <summary>List of service definitions with method name mappings.</summary>
@@ -53,7 +60,9 @@ internal sealed class SomeIpMethodEntry
 
 /// <summary>
 /// Source-generated JSON serialization context for AOT-safe deserialization
-/// of SOME/IP configuration files.
+/// of SOME/IP configuration files (no reflection at runtime).
+/// The options are deliberately lenient because the file is hand-edited: property names match case-insensitively,
+/// comments are skipped, and trailing commas are allowed.
 /// </summary>
 [JsonSourceGenerationOptions(
     PropertyNameCaseInsensitive = true,

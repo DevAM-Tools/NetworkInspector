@@ -95,6 +95,9 @@ JOIN 'packets_dataset/fields/field_42.parquet' f USING (packet_id);
 - There is no stream or stdout target; the output is always a directory.
 - If no packets arrive, no directory is created. The first packet creates the directory and clears old dataset
   files, even when that packet is then skipped.
+- A packet that cannot be added to a batch leaves the batch unchanged and is skipped. When writing a batch fails, the
+  whole batch is dropped (it is never written a second time): its packets count as skipped, not as written, and one
+  error is raised. The tables of that batch may hold partial row groups, because Parquet files cannot be rolled back.
 - Do not run the exporter on a thread with a `SynchronizationContext` (a UI thread). Parquet.Net has only an
   asynchronous writer and `IPacketListener` is synchronous, so the exporter waits in one place with
   `ConfigureAwait(false).GetAwaiter().GetResult()`.

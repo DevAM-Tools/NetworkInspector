@@ -21,11 +21,18 @@ internal static class FilterCompare
 {
     #region Comparison
 
-    /// <summary>Applies a comparison operator to two values.</summary>
+    /// <summary>
+    /// Applies a comparison operator to two values. Per value on the packet path: inlined, and the values are passed
+    /// by <c>in</c> so the tagged-union struct is not copied.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool Apply(in FieldValueData left, CompareOp op, in FieldValueData right)
     {
+        // One three-way comparison serves all six operators. Incomparable types are ordered by
+        // FieldValueData.CompareTo, so != is true for them and == is false (they never compare equal).
         int order = Compare(left, right);
+
+        // The last arm is GreaterEqual; every CompareOp member is covered.
         return op switch
         {
             CompareOp.Equal => order == 0,

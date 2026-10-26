@@ -6,6 +6,8 @@ namespace NetworkInspector.Sources.Pcapng.Format.Blocks;
 /// Interface Description Block (IDB) — 16 bytes.
 /// Describes a capture interface. Fields are read as little-endian;
 /// byte-swapping is applied externally based on the enclosing section's byte order.
+/// The 16 bytes are the fixed part only; the options (name, timestamp resolution, and so on) and the trailing block
+/// length follow.
 /// </summary>
 [BinaryParsable]
 internal readonly partial struct InterfaceDescriptionBlock
@@ -28,7 +30,7 @@ internal readonly partial struct InterfaceDescriptionBlock
         get; init;
     }
 
-    /// <summary>Reserved field, must be zero.</summary>
+    /// <summary>Reserved field; the format says zero. The reader does not validate it (a non-zero value is tolerated).</summary>
     public U16LE Reserved
     {
         get; init;

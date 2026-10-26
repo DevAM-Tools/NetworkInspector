@@ -4,6 +4,11 @@ namespace NetworkInspector.Exporters.Json;
 
 /// <summary>
 /// Defines the JSON output format for the <see cref="JsonExporter"/>.
+/// <para>
+/// In every format the file is one JSON array of packet objects, and the packet timestamp is an integer number of
+/// nanoseconds since the Unix epoch. Such values exceed 2^53, so consumers that parse JSON numbers as IEEE doubles lose
+/// precision.
+/// </para>
 /// </summary>
 public enum JsonExportFormat
 {

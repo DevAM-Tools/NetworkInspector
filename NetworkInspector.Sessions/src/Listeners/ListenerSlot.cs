@@ -16,24 +16,31 @@ namespace NetworkInspector.Sessions.Listeners;
 /// <para>
 /// <b>Flag protocol:</b>
 /// Producers: <c>Interlocked.Or(ref slot.Flags, (int)flag)</c> — non-blocking, idempotent.
-/// Consumer: <c>Interlocked.Exchange(ref _Flags, 0)</c> — reads all flags and clears atomically.
+/// Consumer: <c>Interlocked.Exchange(ref Flags, 0)</c> — reads all flags and clears atomically.
 /// Producers also signal <see cref="ManualResetEventSlim"/> so the consumer blocks without polling.
+/// Why this shape: a notification carries no payload (the listener pulls the data from the session), so repeated
+/// notifications of one kind add no information and may be merged. One word replaces a queue: no allocation per
+/// event, no growth under a fast producer, and a slow listener sees one merged batch instead of a backlog.
 /// </para>
 ///
 /// <para>
-/// Thread-safety: flag field and wake event are safe for concurrent producers and one consumer.
+/// Thread-safety: flag field and wake event are safe for concurrent producers and one consumer (the listener thread).
+/// The packet cursor is written by that thread and, on a stack swap, reset by the session coordinator.
 /// </para>
 /// </summary>
 internal sealed class ListenerSlot : IDisposable
 {
     #region Fields
 
+    // Pending notification bits (NotifyFlags). Internal so producers can Interlocked.Or it directly; all access
+    // is atomic. Volatile for the plain reads, Interlocked for every read-modify-write.
     internal volatile int Flags;
     private readonly ISessionListener _Listener;
     private readonly ISessionReader _SessionReader;
     private readonly Job _Job;
     private readonly ManualResetEventSlim _Wake = new(initialState: false);
-    // Tracks how far this listener has consumed announced packet ids.
+    // Tracks how far this listener has consumed announced packet ids (exclusive end of the last delivered range).
+    // Written by the listener thread and reset to zero by the coordinator on a stack swap; see _DispatchFlags.
     private volatile int _PacketCursor;
     // 0 = OnUnsubscribed not yet invoked; 1 = invoked (RunLoop finally or coordinator fallback).
     private volatile int _OnUnsubscribedInvoked;
@@ -135,6 +142,9 @@ internal sealed class ListenerSlot : IDisposable
     /// <param name="filter">The filter, already bound to the session stack; <see langword="null"/> means no filter.</param>
     internal void SetFilter(PacketFilter? filter)
     {
+        // The four fields describe one consistent filter state (the filter, its fault and the cached pre-check built
+        // for it), so they change together under the gate that matching reads also hold. The section is a few
+        // assignments: no I/O, no callbacks.
         lock (FilterGate)
         {
             _Filter = filter;
@@ -151,6 +161,8 @@ internal sealed class ListenerSlot : IDisposable
     /// </summary>
     internal void SetFilterFault(FilterError failure)
     {
+        // Same consistency reasoning as SetFilter. With the filter null and the fault set, matching reads fail with
+        // the fault instead of treating the missing filter as "no filter" (which would let every packet through).
         lock (FilterGate)
         {
             _Filter = null;
@@ -167,16 +179,29 @@ internal sealed class ListenerSlot : IDisposable
     /// <summary>Starts the listener slot's background thread.</summary>
     internal void Start()
     {
-        try
+        if (!TryStart(out Exception? failure))
         {
-            _Job.Start();
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
         }
-        catch
+    }
+
+    /// <summary>
+    /// Starts the slot's thread like <see cref="Start"/>, but returns <see langword="false"/> instead of throwing when the
+    /// thread cannot be started. The job is then already Failed with <paramref name="failure"/> recorded
+    /// (<see cref="JobInfo.FailureException"/>), and the listener has been told it is unsubscribed.
+    /// </summary>
+    /// <param name="failure">The exception that stopped the thread from starting; <see langword="null"/> on success.</param>
+    /// <returns><see langword="true"/> when the slot is running or was started before.</returns>
+    internal bool TryStart([NotNullWhen(false)] out Exception? failure)
+    {
+        if (_Job.TryStart(out failure))
         {
-            // Thread creation failed — RunLoop never runs; coordinator must still notify.
-            EnsureOnUnsubscribed();
-            throw;
+            return true;
         }
+
+        // Thread creation failed — RunLoop never runs; coordinator must still notify.
+        EnsureOnUnsubscribed();
+        return false;
     }
     /// <summary>
     /// Invokes <see cref="ISessionListener.OnUnsubscribed"/> at most once.
@@ -189,7 +214,10 @@ internal sealed class ListenerSlot : IDisposable
             _Listener.OnUnsubscribed();
         }
     }
-    /// <summary>Requests cancellation of the listener slot and wakes the run loop.</summary>
+    /// <summary>
+    /// Requests cancellation of the listener slot and wakes the run loop. Safe on a disposed slot (shutdown may cancel a slot
+    /// from its snapshot that a concurrent unsubscribe has already disposed).
+    /// </summary>
     internal void Cancel()
     {
         _Job.Cancel();
@@ -212,6 +240,15 @@ internal sealed class ListenerSlot : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Notify(NotifyFlags flags)
     {
+        // Safe on a disposed slot: a source thread that took its slot snapshot before TryUnsubscribe removed the slot may
+        // still notify it after the session disposed it. The flag word is plain memory, and Set() on a disposed
+        // ManualResetEventSlim does not throw (it is only Wait and Reset that check disposal); a test pins this. No lock
+        // is taken per frame to prevent the late call, and nobody can be waiting on the event any more (the slot is
+        // disposed after its thread was joined).
+        // Set the wake event only when none of these bits was already pending. A pending bit means the listener has
+        // not consumed the flags yet (it clears them atomically before dispatching, and re-reads them after resetting
+        // the event, see _RunLoop), so it will pick up this call's bits without another wakeup. Skipping the redundant
+        // Set avoids taking the event's internal lock once per packet from the ingest thread.
         int prior = Interlocked.Or(ref Flags, (int)flags);
         if ((prior & (int)flags) == 0)
         {
@@ -257,6 +294,8 @@ internal sealed class ListenerSlot : IDisposable
         {
             while (!ct.IsCancellationRequested)
             {
+                // Take every pending flag at once (merging repeated notifications) and clear them atomically, so a
+                // producer that sets a flag during dispatch is seen on the next iteration instead of being lost.
                 int flags = Interlocked.Exchange(ref Flags, 0);
                 if (flags != 0)
                 {
@@ -264,7 +303,10 @@ internal sealed class ListenerSlot : IDisposable
                     continue;
                 }
 
-                // Manual-reset: clear before wait so a stale Set() cannot spin.
+                // Manual-reset: clear before wait so a stale Set() cannot spin. Lost-wakeup protection: a producer
+                // that raised a flag after the Exchange above but set the event before this Reset would have its
+                // wakeup erased, so the flags are read once more after the Reset. A producer that acts after the
+                // second Exchange sets the event again, and the Wait below returns at once.
                 _Wake.Reset();
                 flags = Interlocked.Exchange(ref Flags, 0);
                 if (flags != 0)
@@ -273,14 +315,28 @@ internal sealed class ListenerSlot : IDisposable
                     continue;
                 }
 
-                _Wake.Wait(ct);
+                // Cancellation also interrupts this wait, so the loop needs no timeout and the idle listener costs no CPU.
+                // The interruption leaves the loop through the drain below instead of an exception: an exception would skip
+                // the drain, and a flag raised just before the cancel (the last NewPackets window, ShuttingDown) would
+                // be lost for a listener that was idle at that moment.
+                if (!_WaitForWork(ct))
+                {
+                    break;
+                }
             }
-            // Drain: process any flags set between the last Exchange and cancellation.
+
+            // Drain once: whatever was raised before the cancellation took effect is delivered, whichever way the loop was
+            // left (loop condition or interrupted wait). One pass bounds the exit; flags raised from here on belong to a
+            // session that is ending and are not promised.
             int remaining = Interlocked.Exchange(ref Flags, 0);
             if (remaining != 0)
             {
                 _DispatchFlags((NotifyFlags)remaining);
             }
+
+            // The job maps this exception to the Cancelled status. Returning normally would end the job as Completed,
+            // and only for the exit paths that happened to skip the exception; every cancelled slot ends Cancelled.
+            ct.ThrowIfCancellationRequested();
         }
         finally
         {
@@ -290,6 +346,27 @@ internal sealed class ListenerSlot : IDisposable
             EnsureOnUnsubscribed();
         }
     }
+    /// <summary>
+    /// Blocks on the wake event until a producer signals or the job is cancelled.
+    /// </summary>
+    /// <returns>
+    /// <see langword="true"/> when the event was signalled; <see langword="false"/> when the cancellation ended the wait.
+    /// </returns>
+    private bool _WaitForWork(CancellationToken ct)
+    {
+        try
+        {
+            _Wake.Wait(ct);
+            return true;
+        }
+        catch (OperationCanceledException ex) when (ex.CancellationToken == ct)
+        {
+            // Expected: this slot's own cancellation. Reported as a return value so the caller can still drain the flags
+            // that were raised before it. A cancellation from any other token is not ours and propagates.
+            return false;
+        }
+    }
+
     /// <summary>
     /// Dispatches all set flags to the appropriate <see cref="ISessionListener"/> callbacks.
     /// Order of dispatch matches logical dependency: packets first, then sources,
@@ -307,13 +384,18 @@ internal sealed class ListenerSlot : IDisposable
         if ((notify & NotifyFlags.StackChanged) != 0)
         {
             // Reset the cursor so the subsequent NewPackets branch delivers
-            // all re-parsed packets from index 0.
+            // all re-parsed packets from index 0. The coordinator resets it too (ResetPacketCursor), but an
+            // in-flight NewPackets dispatch can store its end index after that reset; repeating the reset here, on
+            // the thread that owns the cursor and before the packets branch below, makes the outcome independent
+            // of that race.
             _PacketCursor = 0;
             _Listener.OnStackChanged(_SessionReader);
         }
         // ── Packets ──────────────────────────────────────────────
         if ((notify & NotifyFlags.NewPackets) != 0)
         {
+            // Pull model: the flag only says "something arrived"; the range is derived from the session's current
+            // count, so packets announced after the flag was raised are delivered in the same batch.
             int current = _SessionReader.PacketCount;
             int cursor = _PacketCursor;
             if (current > cursor)

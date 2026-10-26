@@ -227,7 +227,8 @@ internal sealed class DatagramDefragmenterTests
     public async Task FragmentBuffer_GappedFragments_StayIncomplete()
     {
         DatagramFragmentBuffer buffer = new();
-        buffer.AddFragment(0, moreFragments: false, [0x01]);
+        // The first fragment is not the last one (MF=1); two last fragments with different ends would be a contradiction.
+        buffer.AddFragment(0, moreFragments: true, [0x01]);
         FragmentAddResult second = buffer.AddFragment(4, moreFragments: false, [0x02]);
         await Assert.That(second).IsEqualTo(FragmentAddResult.Incomplete);
     }
@@ -275,6 +276,79 @@ internal sealed class DatagramDefragmenterTests
 
         await Assert.That(terminal).IsEqualTo(FragmentAddResult.Complete);
         await Assert.That(duplicate).IsEqualTo(FragmentAddResult.Complete);
+    }
+
+    [Test]
+    public async Task FragmentBuffer_DuplicateWithoutMoreFragments_SetsAnUnknownTotalLength()
+    {
+        DatagramFragmentBuffer buffer = new();
+        buffer.AddFragment(0, moreFragments: true, [0x01, 0x02]);
+        FragmentAddResult first = buffer.AddFragment(2, moreFragments: true, [0x03, 0x04]);
+
+        // The same offset again, now marked as the last fragment: it is the first fragment to say where the datagram ends.
+        FragmentAddResult retransmit = buffer.AddFragment(2, moreFragments: false, [0x03, 0x04]);
+
+        await Assert.That(first).IsEqualTo(FragmentAddResult.Incomplete);
+        await Assert.That(retransmit).IsEqualTo(FragmentAddResult.Complete);
+        await Assert.That(buffer.Reassemble()).IsEquivalentTo(new byte[] { 0x01, 0x02, 0x03, 0x04 });
+    }
+
+    [Test]
+    public async Task FragmentBuffer_DuplicateWithoutMoreFragments_DoesNotReplaceAKnownTotalLength()
+    {
+        DatagramFragmentBuffer buffer = new();
+        buffer.AddFragment(0, moreFragments: true, [0x01, 0x02]);
+        FragmentAddResult terminal = buffer.AddFragment(2, moreFragments: false, [0x03, 0x04]);
+
+        // A duplicate at an existing offset claims a different end; the known end stays and the datagram is not discarded.
+        FragmentAddResult duplicate = buffer.AddFragment(0, moreFragments: false, [0x01]);
+
+        await Assert.That(terminal).IsEqualTo(FragmentAddResult.Complete);
+        await Assert.That(duplicate).IsEqualTo(FragmentAddResult.Complete);
+        await Assert.That(buffer.Reassemble()).IsEquivalentTo(new byte[] { 0x01, 0x02, 0x03, 0x04 });
+    }
+
+    [Test]
+    public async Task FragmentBuffer_SecondTerminalFragmentWithOtherEnd_DiscardsTheDatagram()
+    {
+        DatagramFragmentBuffer buffer = new();
+        buffer.AddFragment(0, moreFragments: true, [0x01, 0x02]);
+        FragmentAddResult terminal = buffer.AddFragment(2, moreFragments: false, [0x03, 0x04]);
+
+        // A last fragment at another offset with another end contradicts the known total length.
+        FragmentAddResult conflicting = buffer.AddFragment(4, moreFragments: false, [0x05, 0x06]);
+        FragmentAddResult after = buffer.AddFragment(0, moreFragments: true, [0x01, 0x02]);
+
+        await Assert.That(terminal).IsEqualTo(FragmentAddResult.Complete);
+        await Assert.That(conflicting).IsEqualTo(FragmentAddResult.OverlapDiscarded);
+        await Assert.That(after).IsEqualTo(FragmentAddResult.OverlapDiscarded);
+    }
+
+    [Test]
+    public async Task FragmentBuffer_SecondTerminalFragmentWithSameEnd_IsAccepted()
+    {
+        DatagramFragmentBuffer buffer = new();
+        buffer.AddFragment(0, moreFragments: true, [0x01, 0x02]);
+        buffer.AddFragment(2, moreFragments: false, [0x03, 0x04]);
+
+        // Re-fragmented retransmission: a different offset, the same end of the datagram.
+        FragmentAddResult resent = buffer.AddFragment(3, moreFragments: false, [0x04]);
+
+        await Assert.That(resent).IsEqualTo(FragmentAddResult.Complete);
+    }
+
+    [Test]
+    public async Task ProcessFragment_SecondTerminalFragmentWithOtherEnd_RemovesTheBuffer()
+    {
+        DatagramDefragmenter<IntKey> d = new();
+        d.ProcessFragment(new IntKey(1), 0, moreFragments: true, [0x01, 0x02]);
+        d.ProcessFragment(new IntKey(1), 8, moreFragments: false, [0x09]);
+        await Assert.That(d.PendingCount).IsEqualTo(1);
+
+        byte[]? result = d.ProcessFragment(new IntKey(1), 16, moreFragments: false, [0x10]);
+
+        await Assert.That(result).IsNull();
+        await Assert.That(d.PendingCount).IsEqualTo(0);
     }
 
     [Test]

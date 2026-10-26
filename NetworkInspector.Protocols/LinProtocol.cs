@@ -32,23 +32,26 @@ namespace NetworkInspector.Protocols;
 /// lin: LIN Frame, ID: 0x10, Len: 4
 /// ├── lin.message_format: 1
 /// ├── lin.message_type: Frame
-/// ├── lin.checksum_type: Enhanced
+/// ├── lin.checksum_type: Enhanced            [non-Event messages only, down to lin.checksum.status]
 /// ├── lin.pid: 0xD0
 /// ├── lin.id: 0x10 (6-bit frame identifier)
 /// ├── lin.parity: 0x03
 /// ├── lin.parity.valid: Valid
 /// ├── lin.length: 4
 /// ├── lin.checksum: 0xAB
-/// ├── lin.checksum.status: [Good]
+/// ├── lin.checksum.status: [Good]            [only when the whole payload was captured]
 /// ├── lin.errors: 0x00
-/// └── lin.data: (4 bytes)
+/// │   (lin.errors.no_slave_response, .framing, .parity, .checksum, .invalid_id, .overflow: one bool each,
+/// │    appended as children of lin, not of lin.errors)
+/// └── lin.data: (4 bytes)                    [only when the payload is not empty]
 ///
 /// signal_message: ...                     [optional sibling, when registered on lin.id]
 /// </code>
 /// </summary>
 /// <remarks>
-/// <para><b>Thread safety:</b> Not thread-safe; designed for single-threaded use within a
-/// protocol stack. Each <see cref="Stack"/> instance is owned by exactly one parsing thread.</para>
+/// <para><b>Thread safety:</b> <see cref="IProtocol.Parse"/> keeps no mutable state outside local variables and the
+/// field ids fixed at start, so it may be called concurrently on the same instance. The sub-protocol it
+/// dispatches to must make the same guarantee for that to hold end to end.</para>
 /// </remarks>
 [Protocol("lin", "LIN", Description = "LIN (ISO 17987)")]
 [RegisterAtTable(FrameProtocol.LinkTypeTableName, LinkTypeKey)]
@@ -74,16 +77,21 @@ public sealed partial class LinProtocol : IProtocol
     /// <summary>Mask for the checksum-type field in byte 4 (bits 1-0).</summary>
     private const byte _ChecksumTypeMask = 0x03;
 
-    /// <summary>Message type: standard frame (unconditional or sporadic).</summary>
+    /// <summary>Message type 0: frame.</summary>
     private const byte _MsgTypeFrame = 0;
 
-    /// <summary>Message type: event-triggered frame.</summary>
+    /// <summary>
+    /// Message type 3: "Event" in the DLT_LIN header. For this type only the message format, the message type and the
+    /// error flags are decoded (no checksum type, PID, parity, length or checksum), and its payload is never
+    /// dispatched to a sub-protocol.
+    /// </summary>
     private const byte _MsgTypeEvent = 3;
 
     /// <summary>Mask for the 6-bit frame ID within the PID byte.</summary>
     private const byte _FrameIdMask = 0x3F;
 
-    // Error flag bits in byte 7 (per Wireshark packet-lin.h)
+    // Error flag bits in byte 7 (per Wireshark packet-lin.h). Bits 6 and 7 are not defined and not decoded, but they
+    // are part of the raw 'lin.errors' value and make it non-zero, which disables payload dispatch.
     private const byte _ErrNoSlaveResponse = 0x01;
     private const byte _ErrFraming = 0x02;
     private const byte _ErrParity = 0x04;
@@ -195,7 +203,16 @@ public sealed partial class LinProtocol : IProtocol
     /// <summary>
     /// Parses a LIN frame in DLT_LIN format (per Wireshark packet-lin.c).
     /// Dispatches the data payload to sub-protocols keyed by the 6-bit frame ID.
+    /// <para>
+    /// All fields are decoded eagerly (this protocol has no lazy populator). Truncated captures are accepted: the
+    /// payload is clamped to the bytes present.
+    /// <para>Thread safety: stateless; may be called concurrently.</para>
+    /// </para>
     /// </summary>
+    /// <param name="parentField">Parent field that receives the LIN container; sub-protocols become its siblings.</param>
+    /// <param name="data">Raw DLT_LIN record starting at the format revision byte.</param>
+    /// <param name="context">Parse context used to record index groups and dispatch the payload.</param>
+    /// <returns>Number of bytes consumed (header plus payload), or a <see cref="ParseError"/>.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         if (data.Length < _HeaderSize)
@@ -226,14 +243,17 @@ public sealed partial class LinProtocol : IProtocol
         // ── Byte 7: Error Flags ───────────────────────────────────────────────
         byte errorFlags = span[7];
 
-        // Total consumed: 8-byte header + data payload (clamped to available data).
+        // Total consumed: 8-byte header + data payload (clamped to available data). The length nibble can announce up
+        // to 15 bytes although LIN frames carry at most 8; the clamp to the available bytes bounds the slice below.
+        // A shorter capture (actualDataLen < payloadLength) is still shown, but its checksum cannot be validated.
         int actualDataLen = Math.Min((int)payloadLength, data.Length - _HeaderSize);
         int totalConsumed = _HeaderSize + actualDataLen;
 
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_LinGroupId);
 
-        // Container field showing type, ID, and length in the summary
+        // Container field showing type, ID, and length in the summary. The container value covers exactly header plus
+        // payload (not trailing bytes), and the custom text parts are formatted only when text is displayed.
         string msgTypeSummaryText = msgType == _MsgTypeEvent ? "Event" : "Frame";
         MutField container = parentField.AppendWithCustomText(
             _ProtocolFieldId,
@@ -244,7 +264,8 @@ public sealed partial class LinProtocol : IProtocol
         // Message format revision
         container.Append(_MessageFormatFieldId, FieldValue.NewU64(msgFormatRev));
 
-        // Message type
+        // Message type. Values 1 and 2 are named here as "Event-triggered" and "Sporadic" and are decoded like
+        // frames; only 3 ("Event") switches off the frame decoding below.
         string msgTypeText = msgType switch
         {
             _MsgTypeFrame => "Frame",
@@ -296,7 +317,8 @@ public sealed partial class LinProtocol : IProtocol
                 FieldValue.NewU64(checksum),
                 Helpers.DisplayTables.FormatHexU8(checksum));
 
-            // Checksum validation (only possible when full data was received)
+            // Checksum validation (only possible when full data was received: the checksum covers every data byte,
+            // so a clamped payload would produce a false "[Bad]")
             if (actualDataLen == (int)payloadLength)
             {
                 bool valid = _ValidateChecksum(span.Slice(_HeaderSize, actualDataLen), pid, checksumType, checksum);
@@ -306,7 +328,7 @@ public sealed partial class LinProtocol : IProtocol
             }
         }
 
-        // Error flags
+        // Error flags (shown for every message type, Events included): the raw byte plus one bool per defined bit.
         container.AppendWithCustomText(_ErrorsFieldId,
             FieldValue.NewU64(errorFlags),
             Helpers.DisplayTables.FormatHexU8(errorFlags));
@@ -343,12 +365,20 @@ public sealed partial class LinProtocol : IProtocol
     /// Validates the LIN checksum using carry-add (mod 255) then bit-inversion.
     /// Classic checksum (type 1): sums data bytes only.
     /// Enhanced checksum (type 2): includes the PID byte in the sum (ISO 17987).
+    /// Any other checksum type (unknown, undefined) is validated like the classic checksum.
     /// </summary>
+    /// <param name="dataBytes">The data bytes of the frame (without PID and checksum).</param>
+    /// <param name="pid">The protected ID byte (frame ID plus parity), part of the sum for the enhanced checksum.</param>
+    /// <param name="checksumType">Checksum type from the capture header (2 selects the enhanced checksum).</param>
+    /// <param name="expected">The checksum byte that was transmitted.</param>
     private static bool _ValidateChecksum(ReadOnlySpan<byte> dataBytes, byte pid, byte checksumType, byte expected)
     {
-        // Enhanced checksum includes the PID in the initial sum
+        // Enhanced checksum includes the PID in the initial sum. The capture's checksum type decides; the protocol
+        // does not apply the rule that the diagnostic frames (IDs 60 and 61) always use the classic checksum.
         uint sum = checksumType == 2 ? pid : 0u;
 
+        // Inverted 8-bit sum with end-around carry (sum modulo 255). The running sum never exceeds 0x1FF, so the
+        // uint cannot overflow; folding the carry after every byte equals folding once at the end.
         foreach (byte b in dataBytes)
         {
             sum += b;
@@ -367,6 +397,8 @@ public sealed partial class LinProtocol : IProtocol
     /// P0 (bit 6 of PID) = ID0 ^ ID1 ^ ID2 ^ ID4.
     /// P1 (bit 7 of PID) = NOT(ID1 ^ ID3 ^ ID4 ^ ID5).
     /// </summary>
+    /// <param name="frameId">The 6-bit frame ID.</param>
+    /// <param name="parity">The 2-bit parity field: bit 0 is P0, bit 1 is P1 (PID bits 6 and 7 shifted down).</param>
     private static bool _ValidateParity(byte frameId, byte parity)
     {
         int id0 = (frameId >> 0) & 1;

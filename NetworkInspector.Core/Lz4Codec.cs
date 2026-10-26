@@ -10,12 +10,14 @@ namespace NetworkInspector.Core;
 /// https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md
 /// </para>
 /// <para>
-/// <b>Algorithm — Compression (HC-style, one hash table pass):</b>
+/// <b>Algorithm — Compression (fast single-probe LZ4, one hash table pass, not LZ4_HC):</b>
 /// The compressor maintains a 64 K-entry hash table (Knuth multiplicative hash,
 /// prime 2 654 435 761) keyed on the 4-byte value at each input position.  On
 /// each step the table is probed with the current position, and if a match of at
 /// least 4 bytes is found within a 64 KB backward window the match is extended
-/// forward byte-by-byte.  All unmatched bytes between the anchor and the match
+/// forward byte-by-byte.  Only the most recent position per hash slot is kept (no
+/// chains), which makes the pass fast but finds fewer matches than a high-compression
+/// mode.  All unmatched bytes between the anchor and the match
 /// start are emitted as literals.  A token byte encodes the literal-run length
 /// (upper nibble) and the match length minus 4 (lower nibble); values ≥ 15 use
 /// an extra variable-length byte stream (multiples of 255 followed by a
@@ -29,10 +31,20 @@ namespace NetworkInspector.Core;
 /// using the same variable-length encoding, copies literals from the compressed
 /// stream, then copies <c>matchLength</c> bytes from a back-reference
 /// <c>offset</c> bytes before the current output position.  When
-/// <c>offset &lt; matchLength</c> the copy overlaps itself and is performed
-/// byte-by-byte to replicate the run-length-encoding effect (e.g. offset 1
-/// repeats the last byte).  For non-overlapping copies
-/// <see cref="Unsafe"/> (<c>CopyBlockUnaligned</c>) is used for maximum throughput.
+/// <c>offset &lt; matchLength</c> the copy overlaps itself and replicates the
+/// run-length-encoding effect (e.g. offset 1 repeats the last byte); it is done in
+/// doubling block copies instead of a byte loop (see the comment at the copy).
+/// All copies use <see cref="Unsafe"/> (<c>CopyBlockUnaligned</c>) for maximum throughput.
+/// </para>
+/// <para>
+/// <b>Security (untrusted input):</b> <see cref="Decompress"/> reads blocks from capture files that may be hostile or
+/// corrupt.  Threats are out-of-bounds reads and writes through crafted lengths and offsets, integer overflow of the
+/// length accumulators, and memory exhaustion.  Mitigations: every read and write is checked with an unsigned
+/// bounds test before the unchecked copy, the back-reference must lie inside the output already produced, the
+/// variable-length accumulators are overflow-checked, and the output size is bounded by the buffer the caller
+/// supplies (a decompression bomb cannot write more than the caller allocated).  Residual risk: a truncated block that
+/// ends on a literal run is indistinguishable from a complete one, so callers must compare the returned size with the
+/// uncompressed size recorded in their container (the BLF reader does).
 /// </para>
 /// <para>
 /// <b>Thread safety:</b> All mutable state lives in a
@@ -48,6 +60,8 @@ namespace NetworkInspector.Core;
 /// thread exits — there is no pool return. This avoids <see cref="ArrayPool{T}"/> rent/return
 /// overhead and stack exhaustion from a 256 KB <c>stackalloc</c>, but increases steady-state
 /// memory when many thread-pool threads compress over their lifetime (~256 KB × active compressors).
+/// Each array is above the ~85 KB large-object-heap threshold, so it is allocated once per thread and then reused for
+/// the thread's lifetime instead of being allocated per call.
 /// Acceptable for dedicated parse/compress worker threads; monitor pool thread count under load.
 /// </para>
 /// </summary>
@@ -58,9 +72,9 @@ public static class Lz4Codec
     private const int _MinMatch = 4;          // minimum match length required by the format
     private const int _HashLog = 16;          // hash table: 2^16 = 65 536 entries
     private const int _HashSize = 1 << _HashLog;
-    private const int _MaxInputSizePerBlock = 0x7E000000; // ~2 GB LZ4 hard limit
-    private const int _MFlimit = 12;          // minimum input remaining to enter the main match loop
-    private const int _LastLiterals = 5;      // last 5 input bytes are always emitted as literals
+    private const int _MaxInputSizePerBlock = 0x7E000000; // 2 113 929 216 bytes: LZ4_MAX_INPUT_SIZE of the reference implementation
+    private const int _MFlimit = 12;          // block format: the last match must start at least 12 bytes before the end of the block
+    private const int _LastLiterals = 5;      // block format: the last 5 input bytes are always emitted as literals
 
     #endregion
 
@@ -110,10 +124,18 @@ public static class Lz4Codec
     /// Destination buffer.  Must be at least <see cref="MaxCompressedSize"/> bytes.
     /// </param>
     /// <returns>
-    /// The number of bytes written to <paramref name="output"/>, or <c>-1</c> if the
-    /// compressed output would be larger than or equal to the input (caller should
-    /// store the data uncompressed).
+    /// The number of bytes written to <paramref name="output"/> (0 for empty input), or <c>-1</c> if the
+    /// compressed output would be larger than the input (caller should store the data uncompressed), the
+    /// input exceeds the per-block limit, or <paramref name="output"/> is too small. An output of exactly the
+    /// input size is returned as compressed. Input shorter than 12 bytes always yields <c>-1</c>: it cannot
+    /// contain a match and a literal-only block is larger than its input.
     /// </returns>
+    /// <remarks>
+    /// Expected failures are reported through the return value, not exceptions, because this runs once per block of a
+    /// capture and incompressible data is a normal outcome. No parameter validation beyond that is needed: a
+    /// <paramref name="output"/> smaller than <see cref="MaxCompressedSize"/> is handled safely (every write is
+    /// bounds-checked) but may return <c>-1</c> for compressible data.
+    /// </remarks>
     public static int Compress(ReadOnlySpan<byte> input, Span<byte> output)
     {
         if (input.Length == 0)
@@ -126,48 +148,52 @@ public static class Lz4Codec
             return -1;
         }
 
+        int inputLength = input.Length;
+        int matchLimit = inputLength - _MFlimit;
+
+        // Too short for any match, so the only possible block is all literals, and that is always larger than the input
+        // (token byte plus the payload). The answer is therefore -1 whether or not such a block would fit into the output.
+        // Encoding it first, as an earlier version did, wrote bytes into the caller's buffer that nobody can use and cleared
+        // the hash table for nothing. Nothing is written to the output for such an input.
+        if (inputLength < _MFlimit)
+        {
+            return -1;
+        }
+
         // Acquire the thread-local hash table (lazily allocated, reused across calls).
-        // Clear it before use because position values from the previous call are stale.
+        // Clear it before use because position values from the previous call are stale. The clear also establishes the
+        // "slot is empty" encoding the match loop relies on: position 0 means no entry (see matchPos <= 0 below).
         int[] hashTableArray = _HashTable ??= new int[_HashSize];
         Span<int> hashTable = hashTableArray.AsSpan(0, _HashSize);
         hashTable.Clear();
 
-        int inputLength = input.Length;
         int outputPos = 0;
         int anchor = 0; // first byte of the current unmatched literal run
         int inputPos = 0;
-        int matchLimit = inputLength - _MFlimit;
 
-        if (inputLength < _MFlimit)
-        {
-            // Too short for any match — emit everything as literals.
-            // Non-empty literal-only blocks always expand (token + payload > input size).
-            outputPos = _EmitLastLiterals(input, output, outputPos, anchor, inputLength);
-            if (outputPos < 0)
-            {
-                return -1;
-            }
-
-            return -1;
-        }
-
-        // Start one byte in so the first hash probe has a left-neighbour.
+        // Start at position 1: the table is zero-filled and 0 means "empty slot", so position 0 can never be stored as a
+        // match candidate. (Byte 0 simply becomes part of the first literal run.)
         inputPos++;
         int step = 1;
 
+        // Main match loop. Invariant: bytes [anchor, inputPos) are not yet emitted. Stops at matchLimit because the block
+        // format forbids a match starting in the last 12 bytes; the tail is flushed as literals after the loop.
         while (inputPos < matchLimit)
         {
             int hash = _Hash(input, inputPos);
             int matchPos = hashTable[hash];
             hashTable[hash] = inputPos;
 
-            // Reject: no prior entry, too far back (>64 KB), or 4-byte mismatch.
+            // Reject: no prior entry (0 = empty slot), too far back (the offset field is 16 bits, so at most 65 535),
+            // or a hash collision (the 4 bytes differ).
             if (matchPos <= 0 || inputPos - matchPos > 65535
                 || !_SequenceEqual4(input, matchPos, inputPos))
             {
                 inputPos += step;
                 // Acceleration: widen step on misses (capped at 16) to amortise
-                // cost on incompressible blocks.
+                // cost on incompressible blocks. The step grows by one on every miss, so a long run without matches
+                // skips up to 15 positions per probe; that trades some ratio on sparse matches for a bounded
+                // worst-case time on incompressible data. A match resets the step.
                 if (step < 16)
                 {
                     step++;
@@ -202,10 +228,11 @@ public static class Lz4Codec
             inputPos += matchLength;
             anchor = inputPos;
 
-            // Back-fill hash table for bytes inside the just-consumed match so
-            // they can serve as future match candidates.  Filling every 2 bytes
-            // (rather than a single entry) gives the compressor more candidates
-            // on subsequent steps, improving ratio on repetitive data.
+            // Back-fill the hash table with the last two positions of the just-consumed match
+            // (inputPos - 2 and inputPos - 1) so they can serve as future match candidates; the positions inside the
+            // match were skipped by the jump above. Two entries rather than none gives the compressor more
+            // candidates on subsequent steps, improving ratio on repetitive data. Guarded by matchLimit because
+            // _Hash reads 4 bytes.
             if (inputPos < matchLimit)
             {
                 hashTable[_Hash(input, inputPos - 2)] = inputPos - 2;
@@ -234,11 +261,14 @@ public static class Lz4Codec
     /// </summary>
     /// <param name="input">Compressed LZ4 block data (raw block format, no frame header).</param>
     /// <param name="output">
-    /// Destination buffer.  Must be exactly the original (uncompressed) size.
+    /// Destination buffer.  Should be exactly the original (uncompressed) size: a larger buffer is accepted and only
+    /// its first <c>return value</c> bytes are written, a smaller one makes the call fail with <c>-1</c>.
+    /// Its length is the upper bound on what hostile input can make this method write.
     /// </param>
     /// <returns>
-    /// The number of bytes written to <paramref name="output"/>, or <c>-1</c> on
-    /// any format error (truncated data, invalid back-reference).
+    /// The number of bytes written to <paramref name="output"/> (0 for empty input), or <c>-1</c> on
+    /// any format error (truncated data, invalid back-reference, output buffer too small).
+    /// Callers must compare a non-negative result with the expected uncompressed size.
     /// </returns>
     public static int Decompress(ReadOnlySpan<byte> input, Span<byte> output)
     {
@@ -285,7 +315,9 @@ public static class Lz4Codec
                 }
 
                 // Use Unsafe.CopyBlockUnaligned for bulk copy — fastest path for
-                // large literal runs; no overlap is possible here.
+                // large literal runs; no overlap is possible here (compressed input and output are distinct buffers).
+                // Security: the unchecked copy is only reached after _HasInputSpace / _HasOutputSpace proved that
+                // literalLength bytes exist in both buffers; the indexers below bounds-check just the first byte.
                 Unsafe.CopyBlockUnaligned(
                     ref output[outputPos],
                     ref Unsafe.AsRef(in input[inputPos]),
@@ -312,6 +344,8 @@ public static class Lz4Codec
             int offset = input[inputPos] | (input[inputPos + 1] << 8);
             inputPos += 2;
 
+            // Offset 0 is invalid in the format, and a back-reference may only point into output already produced
+            // (outputPos < offset would read before the start of the buffer).
             if (offset == 0 || outputPos < offset)
             {
                 return -1; // invalid back-reference
@@ -388,7 +422,9 @@ public static class Lz4Codec
 
     /// <summary>
     /// Computes a 16-bit hash index from the 4 bytes starting at <paramref name="pos"/>.
-    /// Uses Knuth's multiplicative hash with prime 2 654 435 761.
+    /// Uses Knuth's multiplicative hash with prime 2 654 435 761: the product wraps modulo 2^32 on purpose and the
+    /// top 16 bits (the best mixed ones) form the index. Reads little-endian so the hash of a given byte sequence is
+    /// the same on every platform. Callers guarantee that four bytes are available at <paramref name="pos"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int _Hash(ReadOnlySpan<byte> data, int pos)
@@ -577,11 +613,19 @@ public static class Lz4Codec
         return true;
     }
 
+    /// <summary>
+    /// Whether <paramref name="length"/> bytes starting at <paramref name="position"/> fit inside a buffer of
+    /// <paramref name="bufferLength"/>. Formulated as <c>length &lt;= bufferLength - position</c> in unsigned
+    /// arithmetic so that a huge or negative length cannot overflow an addition and wrap into range (a negative value
+    /// becomes a huge uint and is rejected). Identical to <c>_HasOutputSpace</c>; the two names document which buffer
+    /// is being checked at each call site.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _HasInputSpace(int position, int length, int bufferLength) =>
         (uint)position <= (uint)bufferLength
         && (uint)length <= (uint)bufferLength - (uint)position;
 
+    /// <summary>Output-buffer twin of <c>_HasInputSpace</c>; see there for the overflow reasoning.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _HasOutputSpace(int position, int length, int bufferLength) =>
         (uint)position <= (uint)bufferLength

@@ -4,7 +4,16 @@ namespace NetworkInspector.CLI.Commands;
 
 /// <summary>
 /// The settings options every command accepts: <c>--profile</c>, <c>--settings-path</c>,
-/// <c>--settings-max-config-file-bytes</c>, and <c>--settings-max-json-depth</c>.
+/// <c>--settings-max-config-file-bytes</c>, and <c>--settings-max-json-depth</c>. Immutable.
+/// <para>
+/// The two <c>Max…</c> values are the trust-boundary limits of the settings loader: they stop a hostile or runaway settings
+/// file from exhausting memory or the parser (size) and the stack of recursive walks (depth); the files are parsed into a
+/// complete in-memory document. They are configurable here by the operator of the command line, who also owns the files, and
+/// default to the open defaults of <see cref="SettingsManager"/> (<see cref="SettingsManager.DefaultMaxConfigFileBytes"/>,
+/// <see cref="SettingsManager.DefaultMaxJsonDepth"/>): a loose default so that large legitimate files load, lowering is opt-in.
+/// A value of zero or less disables the check; that is the operator's explicit choice. The manager applies the
+/// values; a file over a limit is skipped with a warning, never truncated silently.
+/// </para>
 /// </summary>
 /// <param name="SettingsPath">Base folder of the settings, or <see langword="null"/> for the default of the platform.</param>
 /// <param name="Profile">Profile name, or <see langword="null"/> for <see cref="SettingsProfiles.DefaultProfile"/>.</param>
@@ -12,7 +21,7 @@ namespace NetworkInspector.CLI.Commands;
 /// <param name="MaxJsonDepth">Deepest accepted JSON nesting; 0 or less disables the check.</param>
 internal sealed record CliSettingsOptions(string? SettingsPath, string? Profile, long MaxConfigFileBytes, int MaxJsonDepth)
 {
-    /// <summary>The options when none is given.</summary>
+    /// <summary>The options when none is given: the platform default folder, the profile <c>default</c>, and the default limits.</summary>
     internal static CliSettingsOptions Defaults { get; } =
         new(null, null, SettingsManager.DefaultMaxConfigFileBytes, SettingsManager.DefaultMaxJsonDepth);
 }
@@ -46,6 +55,9 @@ internal sealed class CliSettingsOptionsBuilder
     /// <exception cref="ArgumentException">The option has no value or the value is not a number.</exception>
     internal bool TryConsume(string[] args, ref int index)
     {
+        // Case-insensitive like every option of the CLI. A repeated option overwrites the earlier one (last one wins). The
+        // numbers are parsed here, so a malformed value is a usage error before any command work starts; their range is the
+        // manager's business (zero or less disables the check).
         switch (args[index].ToUpperInvariant())
         {
             case "--PROFILE":

@@ -204,6 +204,18 @@ internal static class TestHarness
         ?? throw new InvalidOperationException("Session no longer has a _ParseMutex field.");
 
     /// <summary>
+    /// Number of random-access sources in the session private copy-on-write table. Read by reflection because the table
+    /// is private and only the sum of all writers decides whether an entry was lost.
+    /// </summary>
+    internal static int RandomAccessSourceCountOf(Session session)
+    {
+        object? table = typeof(Session).GetField("_RandomAccessSources", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(session);
+        return table is RandomAccessSourceTable typed
+            ? typed.Count
+            : throw new InvalidOperationException("Session no longer has a _RandomAccessSources table.");
+    }
+
+    /// <summary>
     /// Computes the one's-complement IPv4 header checksum.
     /// </summary>
     private static ushort _CalculateIpv4Checksum(ReadOnlySpan<byte> header)

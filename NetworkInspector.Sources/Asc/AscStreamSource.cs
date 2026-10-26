@@ -18,6 +18,12 @@ namespace NetworkInspector.Sources.Asc;
 /// <see cref="Start"/> returns immediately. Interface registration is also deferred
 /// to the first time each (busType, channel) combination is seen.
 /// </para>
+/// <para>
+/// Thread safety: not thread-safe. <see cref="NextFrame"/> and <see cref="Start"/> must be called from one thread at a
+/// time; the latches that <see cref="IsRunning"/> and <see cref="Dispose"/> use are volatile, but the line reader, the
+/// running clock and the interface map are plain single-threaded state. Unlike <see cref="AscSource"/> there is no
+/// random access: lines are parsed straight out of reusable buffers and nothing is indexed.
+/// </para>
 /// </summary>
 public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 {
@@ -59,7 +65,9 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     // ── Byte-based line reader state ──────────────────────────────────────────
 
     /// <summary>
-    /// Raw read buffer — bytes are read from the stream in chunks to avoid per-line allocations.
+    /// Raw read buffer — bytes are read from the stream in chunks to avoid per-line allocations: lines are handed to the
+    /// parsers as spans into this buffer. 4 MiB (like the disk scan of <see cref="AscSource"/>) keeps the number of
+    /// <see cref="Stream.Read(byte[], int, int)"/> calls low for files and pipes; allocated once per source.
     /// </summary>
     private readonly byte[] _ReadBuffer = new byte[AscSourceOptions.DiskReadBufferSize];
 
@@ -71,7 +79,9 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     /// <summary>
     /// Carry-over buffer: bytes belonging to an incomplete line that started near the end
-    /// of the previous chunk and did not fit entirely into <see cref="_ReadBuffer"/>.
+    /// of the previous chunk and did not fit entirely into <see cref="_ReadBuffer"/>. Fixed at
+    /// <see cref="AscSourceOptions.MaxLineLength"/>: a line that outgrows it while it straddles chunks is discarded, so memory
+    /// stays bounded however long a line is. A line that lies wholly inside one chunk is not carried and is not limited.
     /// </summary>
     private readonly byte[] _CarryBuffer = new byte[AscSourceOptions.MaxLineLength];
 
@@ -102,7 +112,11 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <summary>True after the header selects <c>timestamps relative</c>.</summary>
     private bool _RelativeClock;
 
-    /// <summary>One physical line pushed back because it was not an Ethernet continuation.</summary>
+    /// <summary>
+    /// One physical line pushed back because it was not an Ethernet continuation. The reader's span is only valid until
+    /// its next call, so the line is copied here (see <see cref="_PushBack"/>); the buffer is reused and grows only when
+    /// a longer line is pushed.
+    /// </summary>
     private byte[]? _Pushback;
 
     /// <summary>Valid length of <see cref="_Pushback"/>.</summary>
@@ -111,7 +125,10 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <summary>When true, the next line read returns <see cref="_Pushback"/>.</summary>
     private bool _HasPushback;
 
-    /// <summary>Reusable buffer for an Ethernet packet plus its continuation lines.</summary>
+    /// <summary>
+    /// Reusable buffer for an Ethernet packet plus its continuation lines, joined with LF. Sized
+    /// <see cref="AscEthernetParser.MaxRecordBytes"/>, the record limit of both backends, so no packet allocates a buffer.
+    /// </summary>
     private readonly byte[] _EthernetRecord = new byte[AscEthernetParser.MaxRecordBytes];
 
     #endregion
@@ -121,8 +138,12 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// <summary>Source ID assigned during <see cref="Start"/>.</summary>
     private FrameSourceId _SourceId;
 
-    /// <summary>Registry for interface registration.</summary>
-    private FrameInterfaceRegistry? _Registry;
+    /// <summary>
+    /// Registry for interface registration. Cleared by <see cref="Dispose"/> from any thread, hence volatile (the same
+    /// publication rule as <see cref="AscSource"/>); <see cref="_ParseLine"/> reads it once per frame and hands that snapshot
+    /// to every helper.
+    /// </summary>
+    private volatile FrameInterfaceRegistry? _Registry;
 
     /// <summary>
     /// Maps (busType, channel) → <see cref="FrameInterfaceId"/> for lazy per-channel registration.
@@ -321,7 +342,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     #region Initialization
 
     /// <summary>
-    /// Creates the <see cref="StreamReader"/> with a 4 MiB buffer and parses the ASC file header.
+    /// Parses the ASC file header from the byte line reader (no <see cref="StreamReader"/>, so no string per line).
     /// If the first non-header line is a data line (files without "Begin Triggerblock"),
     /// it is parsed immediately and stored in <see cref="_PendingFirstFrame"/> so it is not lost.
     /// </summary>
@@ -580,7 +601,22 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
         ReadOnlySpan<byte> parseSpan = span;
         if (lineType == AscLineType.EthernetPacket)
         {
-            int recordLength = _CollectEthernetRecord(span);
+            int recordLength = _CollectEthernetRecord(span, out bool recordTruncated);
+            if (recordTruncated)
+            {
+                // The packet text is longer than the record limit, which is derived from the largest legal packet: report the
+                // packet as skipped and name the limit, instead of parsing half of it (or losing the rest unseen).
+                _HandleSkip(new FrameReadErrorEventArgs
+                {
+                    FrameIndex = _FrameIndex,
+                    FileOffset = -1,
+                    Kind = FrameReadErrorKind.Other,
+                    Message = Invariant(
+                        $"Ethernet packet text exceeds the record limit of {AscEthernetParser.MaxRecordBytes} bytes; the packet was skipped."),
+                });
+                return null;
+            }
+
             parseSpan = _EthernetRecord.AsSpan(0, recordLength);
         }
 
@@ -651,7 +687,17 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
             });
             return null;
         }
-        FrameInterfaceId interfaceId = _GetOrRegisterInterface(busType, channel, linkType);
+
+        // One read of the registry: Dispose can null it on another thread at any time, and the helper and Frame.Create must see the
+        // same value. A null snapshot means the source was disposed meanwhile; the source ends quietly (there is nobody to report to).
+        FrameInterfaceRegistry? registry = _Registry;
+        if (registry is null)
+        {
+            _Exhausted = true;
+            return null;
+        }
+
+        FrameInterfaceId interfaceId = _GetOrRegisterInterface(registry, busType, channel, linkType);
 
         int frameId = _FrameIndex++;
         ParseResult<Frame> result = Frame.Create(
@@ -660,7 +706,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
             frameData,
             linkType,
             interfaceId,
-            _Registry!);
+            registry);
 
         if (result.IsSuccess)
         {
@@ -668,7 +714,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
             return result.Value;
         }
 
-        // Frame.Create failed — record and handle the error (F14)
+        // Frame.Create failed — record and handle the error.
         _HandleSkip(new FrameReadErrorEventArgs
         {
             FrameIndex = frameId,
@@ -710,9 +756,11 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
     /// <summary>
     /// Gets or lazily registers a frame interface for the given bus type and channel.
-    /// Single-threaded; no locking required.
+    /// Single-threaded; no locking required. The registry is the caller's snapshot of <c>_Registry</c>, so a concurrent
+    /// <see cref="Dispose"/> cannot null it between the check and the use.
     /// </summary>
-    private FrameInterfaceId _GetOrRegisterInterface(AscBusType busType, int channel, LinkType linkType)
+    private FrameInterfaceId _GetOrRegisterInterface(
+        FrameInterfaceRegistry registry, AscBusType busType, int channel, LinkType linkType)
     {
         (AscBusType, int) key = (busType, channel);
         if (_InterfaceMap.TryGetValue(key, out FrameInterfaceId existingId))
@@ -720,13 +768,8 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
             return existingId;
         }
 
-        if (_Registry is null)
-        {
-            return default;
-        }
-
         string displayName = busType.ToDisplayName();
-        FrameInterfaceId id = _Registry.Register(
+        FrameInterfaceId id = registry.Register(
             _SourceId, $"{displayName} {channel}", null, linkType,
             new Dictionary<string, object>
             {
@@ -746,22 +789,41 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
     /// Copies the Ethernet packet line and any following continuation lines into <see cref="_EthernetRecord"/>.
     /// A later logging event is pushed back so the next <see cref="NextFrame"/> call still sees it.
     /// </summary>
-    private int _CollectEthernetRecord(ReadOnlySpan<byte> firstLine)
+    /// <param name="firstLine">The packet's first line (the header and the start of the hex).</param>
+    /// <param name="truncated">
+    /// True when the packet does not fit <see cref="AscEthernetParser.MaxRecordBytes"/> bytes: the first line alone is
+    /// longer, or a continuation line would overflow the buffer. The remaining hex continuation lines of the packet are
+    /// read and dropped, so they can neither be taken for lines of their own nor leave the packet half read.
+    /// </param>
+    /// <returns>The bytes written to <see cref="_EthernetRecord"/>; 0 when the first line alone exceeds the buffer.</returns>
+    private int _CollectEthernetRecord(ReadOnlySpan<byte> firstLine, out bool truncated)
     {
+        truncated = false;
+
+        // The record is capped at MaxRecordBytes (the same cap as the random-access backend); a longer first line is not copied.
+        // The caller still has to drop the continuation lines of this packet, so it goes through the drain loop below.
+        int written = 0;
         if (firstLine.Length > _EthernetRecord.Length)
         {
-            return 0;
+            truncated = true;
+        }
+        else
+        {
+            // The first line is the packet header; the loop below appends hex continuation lines, separated by LF as the
+            // parser expects them in a multi-line window.
+            firstLine.CopyTo(_EthernetRecord);
+            written = firstLine.Length;
         }
 
-        firstLine.CopyTo(_EthernetRecord);
-        int written = firstLine.Length;
-        while (written < _EthernetRecord.Length)
+        while (true)
         {
             if (!_TryReadNextLine(out ReadOnlySpan<byte> next))
             {
                 return written;
             }
 
+            // A forward-only stream cannot seek back: the first line that is not a continuation was already consumed
+            // from the reader, so it is kept (_PushBack) and returned by the next _TryReadNextLine.
             ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimAscii(next);
             if (AscEthernetParser.IsNewLoggingEvent(trimmed)
                 || !AscEthernetParser.IsHexContinuation(trimmed))
@@ -770,10 +832,14 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
                 return written;
             }
 
-            if (written + 1 + next.Length > _EthernetRecord.Length)
+            // The continuation would overflow the record buffer. Its bytes cannot be part of a valid packet (the buffer is
+            // derived from the largest legal packet), and pushing the line back would only let it be read as a line of its
+            // own and vanish, leaving a silently cut packet. Remember the overflow and keep reading to drop the rest of
+            // the packet's continuation lines; the caller reports the skip.
+            if (truncated || written + 1 + next.Length > _EthernetRecord.Length)
             {
-                _PushBack(next);
-                return written;
+                truncated = true;
+                continue;
             }
 
             _EthernetRecord[written] = (byte)'\n';
@@ -781,8 +847,6 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
             next.CopyTo(_EthernetRecord.AsSpan(written));
             written += next.Length;
         }
-
-        return written;
     }
 
     /// <summary>

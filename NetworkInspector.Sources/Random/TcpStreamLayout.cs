@@ -21,6 +21,10 @@ internal readonly record struct TcpFrameLocation(int StreamIndex, int LocalFrame
 /// All connections share the same structure (same segment count, same handshake/teardown flags),
 /// making the layout uniform and trivially indexable.
 /// </para>
+/// <para>
+/// Immutable and thread-safe. The options must have passed <see cref="TcpStreamOptions.Validate"/> first: the
+/// constructor multiplies in <see cref="int"/> without overflow checks and relies on that validation.
+/// </para>
 /// </summary>
 internal readonly record struct TcpStreamLayout
 {
@@ -54,8 +58,11 @@ internal readonly record struct TcpStreamLayout
     /// <summary>
     /// Creates a layout from the given TCP stream options.
     /// </summary>
+    /// <param name="options">Options that passed <see cref="TcpStreamOptions.Validate"/> (not re-validated here).</param>
     internal TcpStreamLayout(TcpStreamOptions options)
     {
+        // A handshake is always 3 frames (SYN, SYN-ACK, ACK) and a teardown 4 (FIN-ACK, ACK, FIN-ACK, ACK: the
+        // four-way close, each side's FIN acknowledged separately).
         HandshakeFrames = options.IncludeHandshake ? 3 : 0;
         DataFrames = options.SegmentsPerStream;
         TeardownFrames = options.IncludeTeardown ? 4 : 0;
@@ -76,11 +83,16 @@ internal readonly record struct TcpStreamLayout
     /// <returns>The stream and local position, or <c>null</c> if the index is out of range.</returns>
     internal TcpFrameLocation? Locate(int globalIndex)
     {
+        // Also covers a layout without any frame (no phases and no segments): TotalFrameCount is 0, so the divisions
+        // below never see a zero divisor.
         if (globalIndex < 0 || globalIndex >= TotalFrameCount)
         {
             return null;
         }
 
+        // Interleaved: frame r of every stream comes before frame r + 1 of any stream, so the global index splits into
+        // (round = local frame, stream = position within the round). Sequential: each stream is a contiguous block.
+        // Both are one division and one remainder: no search, no state.
         if (Interleaved)
         {
             int round = globalIndex / StreamCount;

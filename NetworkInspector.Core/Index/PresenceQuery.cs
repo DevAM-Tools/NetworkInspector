@@ -10,14 +10,14 @@ namespace NetworkInspector.Core.Index;
 /// <see cref="AndGroup"/>, <see cref="AndField"/>) behave as <c>Select*</c> when called as the
 /// very first operation on a fresh query (i.e. before any <c>Select*</c>/<c>Or*</c>). This makes
 /// <c>index.Query().AndProtocol(p).AndField(f)</c> behave the same as
-/// <c>index.Query().SelectProtocol(p).AndField(f)</c>. After the first call the result becomes
-/// non-empty and subsequent <c>And*</c> calls perform a real intersection.
+/// <c>index.Query().SelectProtocol(p).AndField(f)</c>. After the first call a result exists
+/// (it may still be empty) and subsequent <c>And*</c> calls perform a real intersection.
 /// </para>
 /// <para>
 /// <c>OrField</c>/<c>OrGroup</c>/<c>OrProtocol</c> always perform a union with the current
-/// result, treating an unset result as the empty bitmap. <c>AndNot*</c> and <c>Xor*</c> against
-/// an unset result are no-ops in the AndNot case and equivalent to <c>Select*</c> in the Xor
-/// case.
+/// result, treating an unset result as the empty bitmap. <c>AndNot*</c> against an unset result
+/// yields an empty result (nothing to remove from), and <c>Xor*</c> against an unset result is
+/// equivalent to <c>Select*</c>. In both cases a result exists afterwards.
 /// </para>
 /// <para>
 /// <b>Allocation model:</b> The first set operation stores a live view of the index-owned
@@ -27,6 +27,14 @@ namespace NetworkInspector.Core.Index;
 /// index is no longer growing. Subsequent operations mutate the buffer in place.
 /// Prefer per-packet <see cref="Contains"/> on <see cref="PacketIndex"/> views while capture
 /// is live. <see cref="ToBitmap"/> always returns a detached copy.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> Not thread-safe; a query is a short-lived value owned by one thread. It is a
+/// <c>ref struct</c> so the query itself never allocates and cannot be stored in a field or kept across an
+/// <c>await</c>. The fluent methods mutate the query in place and return a copy of the struct; all copies share the
+/// same private mutable bitmap, so continue with the returned value and do not branch from an earlier copy.
+/// The in-place operations read the index bitmaps without the seqlock (see <see cref="RoaringBitmap.AndWith"/>), which
+/// is why chaining requires an index that is no longer growing.
 /// </para>
 /// </summary>
 public ref struct PresenceQuery
@@ -50,7 +58,9 @@ public ref struct PresenceQuery
     private RoaringBitmap? _MutableResult;
     private bool _HasResult;
 
-    /// <summary>Creates a presence query against the given packet index.</summary>
+    /// <summary>Creates a presence query against the given packet index. Created through <see cref="PacketIndex.Query"/>.</summary>
+    /// <param name="index">The index whose bitmaps are queried.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="index"/> is <see langword="null"/>.</exception>
     internal PresenceQuery(PacketIndex index)
     {
         ArgumentNullException.ThrowIfNull(index);
@@ -63,6 +73,9 @@ public ref struct PresenceQuery
     #region Select (initial set)
 
     /// <summary>Selects packets containing a specific protocol.</summary>
+    /// <param name="protocolId">Protocol ID of the index's own stack.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="protocolId"/> is out of range for the index.</exception>
     public PresenceQuery SelectProtocol(ProtocolId protocolId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveProtocolBitmap(protocolId);
@@ -71,6 +84,9 @@ public ref struct PresenceQuery
     }
 
     /// <summary>Selects packets containing a specific index group.</summary>
+    /// <param name="groupId">Index group ID of the index's own stack.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="groupId"/> is out of range for the index.</exception>
     public PresenceQuery SelectGroup(IndexGroupId groupId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveGroupBitmap(groupId);
@@ -79,6 +95,9 @@ public ref struct PresenceQuery
     }
 
     /// <summary>Selects packets containing a specific field (resolved via index group).</summary>
+    /// <param name="fieldId">Field ID of the index's own stack. A field without an index group selects nothing.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="fieldId"/> is out of range for the index's stack.</exception>
     public PresenceQuery SelectField(FieldId fieldId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveFieldBitmap(fieldId);
@@ -90,7 +109,10 @@ public ref struct PresenceQuery
 
     #region AND
 
-    /// <summary>ANDs with packets containing a specific protocol.</summary>
+    /// <summary>ANDs with packets containing a specific protocol. The first operation of a query acts as a select.</summary>
+    /// <param name="protocolId">Protocol ID of the index's own stack.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="protocolId"/> is out of range for the index.</exception>
     public PresenceQuery AndProtocol(ProtocolId protocolId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveProtocolBitmap(protocolId);
@@ -98,7 +120,10 @@ public ref struct PresenceQuery
         return this;
     }
 
-    /// <summary>ANDs with packets containing a specific index group.</summary>
+    /// <summary>ANDs with packets containing a specific index group. The first operation of a query acts as a select.</summary>
+    /// <param name="groupId">Index group ID of the index's own stack.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="groupId"/> is out of range for the index.</exception>
     public PresenceQuery AndGroup(IndexGroupId groupId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveGroupBitmap(groupId);
@@ -106,7 +131,10 @@ public ref struct PresenceQuery
         return this;
     }
 
-    /// <summary>ANDs with packets containing a specific field.</summary>
+    /// <summary>ANDs with packets containing a specific field. The first operation of a query acts as a select.</summary>
+    /// <param name="fieldId">Field ID of the index's own stack. A field without an index group matches nothing.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="fieldId"/> is out of range for the index's stack.</exception>
     public PresenceQuery AndField(FieldId fieldId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveFieldBitmap(fieldId);
@@ -119,6 +147,9 @@ public ref struct PresenceQuery
     #region OR
 
     /// <summary>ORs with packets containing a specific protocol.</summary>
+    /// <param name="protocolId">Protocol ID of the index's own stack.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="protocolId"/> is out of range for the index.</exception>
     public PresenceQuery OrProtocol(ProtocolId protocolId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveProtocolBitmap(protocolId);
@@ -127,6 +158,9 @@ public ref struct PresenceQuery
     }
 
     /// <summary>ORs with packets containing a specific index group.</summary>
+    /// <param name="groupId">Index group ID of the index's own stack.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="groupId"/> is out of range for the index.</exception>
     public PresenceQuery OrGroup(IndexGroupId groupId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveGroupBitmap(groupId);
@@ -135,6 +169,9 @@ public ref struct PresenceQuery
     }
 
     /// <summary>ORs with packets containing a specific field.</summary>
+    /// <param name="fieldId">Field ID of the index's own stack. A field without an index group adds nothing.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="fieldId"/> is out of range for the index's stack.</exception>
     public PresenceQuery OrField(FieldId fieldId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveFieldBitmap(fieldId);
@@ -146,7 +183,10 @@ public ref struct PresenceQuery
 
     #region ANDNOT (difference)
 
-    /// <summary>Removes packets containing a specific protocol from the result.</summary>
+    /// <summary>Removes packets containing a specific protocol from the result. Without a prior result the result is empty.</summary>
+    /// <param name="protocolId">Protocol ID of the index's own stack.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="protocolId"/> is out of range for the index.</exception>
     public PresenceQuery AndNotProtocol(ProtocolId protocolId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveProtocolBitmap(protocolId);
@@ -154,7 +194,10 @@ public ref struct PresenceQuery
         return this;
     }
 
-    /// <summary>Removes packets containing a specific index group from the result.</summary>
+    /// <summary>Removes packets containing a specific index group from the result. Without a prior result the result is empty.</summary>
+    /// <param name="groupId">Index group ID of the index's own stack.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="groupId"/> is out of range for the index.</exception>
     public PresenceQuery AndNotGroup(IndexGroupId groupId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveGroupBitmap(groupId);
@@ -162,7 +205,10 @@ public ref struct PresenceQuery
         return this;
     }
 
-    /// <summary>Removes packets containing a specific field from the result.</summary>
+    /// <summary>Removes packets containing a specific field from the result. Without a prior result the result is empty.</summary>
+    /// <param name="fieldId">Field ID of the index's own stack.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="fieldId"/> is out of range for the index's stack.</exception>
     public PresenceQuery AndNotField(FieldId fieldId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveFieldBitmap(fieldId);
@@ -174,7 +220,10 @@ public ref struct PresenceQuery
 
     #region XOR (symmetric difference)
 
-    /// <summary>XORs with packets containing a specific protocol.</summary>
+    /// <summary>XORs with packets containing a specific protocol. Without a prior result this acts as a select.</summary>
+    /// <param name="protocolId">Protocol ID of the index's own stack.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="protocolId"/> is out of range for the index.</exception>
     public PresenceQuery XorProtocol(ProtocolId protocolId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveProtocolBitmap(protocolId);
@@ -182,7 +231,10 @@ public ref struct PresenceQuery
         return this;
     }
 
-    /// <summary>XORs with packets containing a specific index group.</summary>
+    /// <summary>XORs with packets containing a specific index group. Without a prior result this acts as a select.</summary>
+    /// <param name="groupId">Index group ID of the index's own stack.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="groupId"/> is out of range for the index.</exception>
     public PresenceQuery XorGroup(IndexGroupId groupId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveGroupBitmap(groupId);
@@ -190,7 +242,10 @@ public ref struct PresenceQuery
         return this;
     }
 
-    /// <summary>XORs with packets containing a specific field.</summary>
+    /// <summary>XORs with packets containing a specific field. Without a prior result this acts as a select.</summary>
+    /// <param name="fieldId">Field ID of the index's own stack.</param>
+    /// <returns>This query, for chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="fieldId"/> is out of range for the index's stack.</exception>
     public PresenceQuery XorField(FieldId fieldId)
     {
         ReadOnlyRoaringBitmap bitmap = _ResolveFieldBitmap(fieldId);
@@ -202,7 +257,10 @@ public ref struct PresenceQuery
 
     #region Terminal operations
 
-    /// <summary>Returns the number of matching packets.</summary>
+    /// <summary>
+    /// Returns the number of matching packets. After a single operation this reads the live index bitmap and can grow
+    /// while capture continues; after chained operations it is the cardinality of the private snapshot.
+    /// </summary>
     public readonly long Count()
     {
         if (_MutableResult is not null)
@@ -216,7 +274,11 @@ public ref struct PresenceQuery
         return 0;
     }
 
-    /// <summary>Checks whether a specific packet matches.</summary>
+    /// <summary>
+    /// Checks whether a specific packet matches. Zero-allocation. After a single operation this is a live view and sees
+    /// packets committed later (preferred while capture is running); after chained operations it is a snapshot.
+    /// </summary>
+    /// <param name="packetId">Packet id to test.</param>
     public readonly bool Contains(uint packetId)
     {
         if (_MutableResult is not null)
@@ -307,6 +369,10 @@ public ref struct PresenceQuery
         {
             return bitmap;
         }
+
+        // TryGetFieldBitmap reports false both for a field ID out of range and for a valid field without an index group.
+        // GetFieldBitmap tells them apart: it returns the empty bitmap for the second case and throws the descriptive
+        // ArgumentOutOfRangeException for the first.
         return _Index.GetFieldBitmap(fieldId);
     }
 
@@ -330,6 +396,10 @@ public ref struct PresenceQuery
         _InitialResult = null;
     }
 
+    // The four _Apply* methods share one shape: the first operation only stores a reference (no allocation, no copy);
+    // the second operation pays for the single clone in _EnsureMutable; later operations mutate the clone in place.
+    // The in-place operations read `bitmap.Inner` without the seqlock, which is only safe while that bitmap is not
+    // appended to (see the type remarks).
     private void _ApplyInitialOrAnd(ReadOnlyRoaringBitmap bitmap)
     {
         if (!_HasResult)

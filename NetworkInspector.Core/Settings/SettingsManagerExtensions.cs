@@ -71,6 +71,10 @@ public static class SettingsManagerExtensions
             return false;
         }
 
+        // Relative paths are resolved against the settings folder, or the application folder when the manager does not persist.
+        // Security: the path comes from a user-editable setting and is untrusted. JsonConfigFile.TryLoad confines it to this base
+        // directory (traversal and escapes are refused) instead of this method sanitizing the string; the size and depth caps of
+        // the manager bound the file. Failures come back as a warning, never as an exception, so a bad path cannot stop startup.
         string? baseDirectory = settings.StoragePath ?? AppContext.BaseDirectory;
         if (string.IsNullOrWhiteSpace(baseDirectory))
         {

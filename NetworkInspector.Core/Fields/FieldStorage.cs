@@ -219,6 +219,12 @@ internal struct FieldStorage
 
     #region Private helpers
 
+    /// <summary>
+    /// Resolves a slot of a follow-up chunk: descriptor lookup, then the slot inside the slab slice. Both steps are
+    /// checked array accesses on purpose (see <see cref="Slot"/>). Division and modulo by the constant power-of-two
+    /// <see cref="ChunkSize"/> on a <see langword="uint"/> compile to a shift and a mask.
+    /// </summary>
+    /// <param name="index">Slot index of at least <see cref="FirstChunkSize"/>.</param>
     // Follow-up path, inlined: with small first chunks most protocol fields live here. A negative index wraps to a huge
     // uint and fails the descriptor bounds check; a missing table or buffer throws NullReferenceException.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -230,9 +236,18 @@ internal struct FieldStorage
         return ref chunk.Buffer[chunk.Offset + (int)(relative % ChunkSize)];
     }
 
+    /// <summary>
+    /// Slow path of <see cref="EnsureSlot"/>: makes follow-up chunk <paramref name="chunkIndex"/> visible, appending it
+    /// itself when this thread is the one allowed to, otherwise waiting for the thread that is. Kept out of line so the
+    /// inlined fast path of <see cref="EnsureSlot"/> stays small; it runs once per chunk, not once per field.
+    /// </summary>
+    /// <param name="chunkIndex">Zero-based follow-up chunk index.</param>
+    /// <param name="reservedIndex">The slot index this caller reserved.</param>
+    /// <param name="postSeal">Whether the packet is sealed (other threads may reserve slots concurrently).</param>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _EnsureChunk(int chunkIndex, int reservedIndex, bool postSeal)
     {
+        // The waiter backs off for threads that did not reserve the chunk's first slot.
         SpinWait waiter = default;
         while (true)
         {
@@ -249,6 +264,9 @@ internal struct FieldStorage
             }
 
             // Post-Seal: the owner of the chunk's first slot appends after the previous chunk became visible.
+            // Exactly one thread reserves that slot, which is what makes the append single-writer without a lock; the
+            // other threads only spin (waiter.SpinOnce below) until the chunk shows up in the count. Chunks become
+            // visible in order, because each owner waits for the previous chunk first.
             if ((reservedIndex - FirstChunkSize) % ChunkSize == 0)
             {
                 SpinWait spin = default;
@@ -265,6 +283,7 @@ internal struct FieldStorage
         }
     }
 
+    /// <summary>Number of follow-up chunks readers may use (acquire read of the published count).</summary>
     private readonly int _VisibleChunks()
     {
         ChunkTable? table = _Chunks;

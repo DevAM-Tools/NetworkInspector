@@ -5,8 +5,13 @@ namespace NetworkInspector.Sources.Blf.Format;
 /// <summary>
 /// Parsed BLF object metadata extracted from block + log object headers.
 /// Combines the critical fields needed for frame extraction: object type,
-/// raw timestamp, flags, channel index, and payload data boundaries.
+/// resolved timestamp, flags, client index, and payload data boundaries.
 /// </summary>
+/// <remarks>
+/// A <c>ref struct</c> on purpose: <see cref="Payload"/> is a span into the caller's buffer (mapped view, file array, or
+/// decompressed container), so parsing an object allocates nothing and the info cannot outlive that buffer. Not shared
+/// between threads.
+/// </remarks>
 internal readonly ref struct BlfObjectInfo
 {
     /// <summary>Object type identifier.</summary>
@@ -27,7 +32,7 @@ internal readonly ref struct BlfObjectInfo
         get; init;
     }
 
-    /// <summary>Client/channel index (0 for V3 headers which lack this field).</summary>
+    /// <summary>Client/channel index (0 for V2 and V3 headers, which lack this field; only V1 carries it).</summary>
     internal ushort ClientIndex
     {
         get; init;
@@ -118,6 +123,24 @@ internal static class BlfObjectHeaderParser
     /// <see cref="ReadOnlyMemory{T}"/> payload slice so frame reconstruction can alias
     /// an existing array.
     /// </summary>
+    /// <param name="data">Data starting at the "LOBJ" magic.</param>
+    /// <param name="startOffset">Offset of this object, surfaced on <see cref="BlfObjectInfo.StartOffset"/>.</param>
+    /// <param name="objectMemory">
+    /// Memory over the same bytes as <paramref name="data"/> (or empty). When it is shorter than the object, the memory
+    /// slice of the result stays empty and callers fall back to copying from the span.
+    /// </param>
+    /// <param name="info">Parsed object info on success.</param>
+    /// <param name="skipDistance">Bytes to advance to the next object; set even when the parse fails after the size check.</param>
+    /// <returns>
+    /// False when the data holds fewer bytes than the block header, the signature is not "LOBJ", the claimed size exceeds
+    /// <see cref="int.MaxValue"/>, the span is shorter than the object (a split object at a container end), or the header
+    /// type is unknown.
+    /// </returns>
+    /// <remarks>
+    /// Unlike <see cref="BlfBlockHeader.TryGetSkipDistance"/> (file-level objects, capped at
+    /// <see cref="BlfConstants.MaxBlockReadSize"/>), this parser works on bytes that are already in memory, so the only
+    /// size bound is what a span can address; an <c>object_length</c> of 0 yields the header size as skip distance.
+    /// </remarks>
     internal static bool TryParse(
         ReadOnlySpan<byte> data,
         long startOffset,

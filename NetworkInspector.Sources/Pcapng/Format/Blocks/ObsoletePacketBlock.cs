@@ -29,7 +29,7 @@ internal readonly partial struct ObsoletePacketBlock
         get; init;
     }
 
-    /// <summary>Number of packets dropped between this and the previous packet.</summary>
+    /// <summary>Number of packets dropped between this and the previous packet. Parsed but not used by the reader.</summary>
     public U16LE DropsCount
     {
         get; init;

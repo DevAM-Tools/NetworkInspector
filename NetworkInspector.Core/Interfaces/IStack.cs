@@ -9,6 +9,12 @@ namespace NetworkInspector.Core.Interfaces;
 /// by strongly-typed identifiers. Implemented by both <see cref="StackBuilder"/>
 /// (during registration) and <see cref="Stack"/> (after freezing).
 /// </para>
+/// <para>
+/// <b>Thread-safety:</b> depends on the implementation. <see cref="Stack"/> is immutable after
+/// <see cref="StackBuilder.Build"/> and all members of this interface may be called from any thread;
+/// <see cref="StackBuilder"/> is a single-threaded registration object and must not be read while another thread
+/// registers.
+/// </para>
 /// </summary>
 public interface IStack
 {
@@ -110,7 +116,10 @@ public interface IStack
         get;
     }
 
-    /// <summary>Gets the index group assigned to a field. Returns <see cref="IndexGroupId.Invalid"/> if none.</summary>
+    /// <summary>
+    /// Gets the index group assigned to a field. Returns <see cref="IndexGroupId.Invalid"/> if the field has no group
+    /// or the ID is out of range, so callers that need to tell the two apart must check the field ID first.
+    /// </summary>
     IndexGroupId GetFieldIndexGroup(FieldId fieldId);
 
     #endregion
@@ -207,8 +216,8 @@ public interface IStack
     /// <para>
     /// Sort key: <see cref="PostParserInfo.Priority"/> ascending (lower values first),
     /// then <see cref="PostParserInfo.Id"/> ascending (registration order) as a stable
-    /// tie-breaker. The sort is performed once at build time in <see cref="StackBuilder.Build"/>;
-    /// no runtime sorting occurs in the parse hot path.
+    /// tie-breaker. The builder keeps the list in this order and <see cref="StackBuilder.Build"/> sorts it
+    /// once more, so the final order never depends on how the list was filled; no sorting occurs in the parse hot path.
     /// </para>
     /// <para>
     /// Execution lifecycle: post-parsers run after the main protocol dispatch on every packet,

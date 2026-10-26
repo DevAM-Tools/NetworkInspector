@@ -35,6 +35,10 @@ internal enum ValueAccessorKind : byte
 /// aliases that buffer and is only valid until the next slice on the same accessor, which is
 /// exactly the lifetime the predicate needs.
 /// </para>
+/// <para>
+/// <b>Thread-safety:</b> not thread-safe, because of that mutable slice buffer. One accessor belongs to one compiled
+/// filter and is never shared between filters; a derived filter builds its own accessors.
+/// </para>
 /// </summary>
 internal sealed class ValueAccessor
 {
@@ -121,6 +125,8 @@ internal sealed class ValueAccessor
             return _TryCopySlice(bytes.Span, out transformed);
         }
 
+        // Numbers, timestamps, UUIDs and addresses are sliced through their wire bytes. 16 bytes is the widest fixed type
+        // (UUID, IPv6), so the scratch fits on the stack and slicing a number allocates nothing per packet.
         Span<byte> fixedBuffer = stackalloc byte[16];
         if (!_TryWriteFixedWidth(raw, fixedBuffer, out int written))
         {
@@ -133,12 +139,16 @@ internal sealed class ValueAccessor
 
     private bool _TryCopySlice(ReadOnlySpan<byte> source, out FieldValueData transformed)
     {
+        // A value shorter than the slice end never matches ("missing data never matches"). This check also guarantees that
+        // the buffer allocated below is never larger than a value that really exists.
         if (SliceEnd > source.Length)
         {
             transformed = default;
             return false;
         }
 
+        // Reuse one buffer per accessor instead of allocating a byte array per packet; see the class remarks for the
+        // aliasing lifetime. The buffer is fully overwritten on every call (same width), so no stale bytes leak through.
         // The parser guarantees 0 <= SliceStart < SliceEnd <= ArrayIndexIdRange.MaxValue, so the width is positive.
         byte[] buffer = _SliceBuffer ??= new byte[SliceEnd - SliceStart];
         source[SliceStart..SliceEnd].CopyTo(buffer);

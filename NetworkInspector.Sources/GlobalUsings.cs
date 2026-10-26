@@ -9,10 +9,13 @@ global using System.Diagnostics.CodeAnalysis;
 global using System.Globalization;
 global using System.IO;
 global using System.IO.Compression;
+// Memory-mapped capture files (MmapPool): one read-only view serves the scan and all random-access readers.
 global using System.IO.MemoryMappedFiles;
 global using System.Numerics;
 global using System.Runtime.CompilerServices;
 global using System.Runtime.InteropServices;
+// Hardware intrinsics: used for the cache prefetch hint (CachePrefetch), which checks IsSupported before use and has a
+// portable fallback, so no instruction set is assumed.
 global using System.Runtime.Intrinsics;
 global using System.Runtime.Intrinsics.X86;
 global using System.Text;
@@ -35,6 +38,8 @@ global using NetworkInspector.Values;
 #endregion
 
 #region NetworkInspector.Protocols
+// Sources has no project reference to Protocols (it stays Core-only). This namespace resolves only because
+// FlexRayLinkTypeFrame is link-compiled into this assembly as an internal type (see the project file).
 global using NetworkInspector.Protocols;
 #endregion
 
@@ -50,6 +55,8 @@ global using NetworkInspector.Sources.Pcapng.Format.Blocks;
 #endregion
 
 #region External Dependencies
+// ZeroAlloc: provides the [BinaryParsable] attribute and the fixed-width endian field types (for example U32LE) that the
+// packed on-disk header structs use (for example BlfLogObjectHeaderV2).
 global using ZeroAlloc;
 #endregion
 

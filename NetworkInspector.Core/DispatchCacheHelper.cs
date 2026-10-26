@@ -11,6 +11,22 @@ namespace NetworkInspector.Core;
 /// path.
 /// </para>
 /// <para>
+/// <b>Why OnStart:</b> the dispatch tables are frozen when the stack is built, and parse delegates exist only on the
+/// built <see cref="Stack"/> (the builder's resolver always returns <see langword="null"/>). <c>OnStart</c> runs after
+/// both are available, so a cache built there is a complete snapshot and stays valid for the lifetime of the stack.
+/// A cache built any earlier would be empty or incomplete. Each build call enumerates the table and allocates the
+/// result, which is why it is a startup cost and not a per-packet one.
+/// </para>
+/// <para>
+/// <b>Single-protocol keys only:</b> a key that maps to zero or to several protocols is left out of every cache. Several
+/// protocols for one key need the full table dispatch (it decides among them), so the caller must keep that fallback
+/// for keys the cache does not contain.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> stateless static methods. The returned arrays are not modified afterwards and may be read
+/// concurrently by any number of threads.
+/// </para>
+/// <para>
 /// <b>ID caches</b> (<see cref="BuildU64IdCache"/>, <see cref="BuildU64SparseIdCache"/>)
 /// store <see cref="ProtocolId"/> values. Production dispatch uses these with
 /// <see cref="MutField.CallProtocol"/> so invalid ids return a <see cref="ParseError"/>.
@@ -28,6 +44,10 @@ public static class DispatchCacheHelper
 
     /// <summary>
     /// Maximum dense-cache domain size (16-bit key). 8-bit callers pass 256 (~2 kB of delegates).
+    /// Limit (value 65 536 · threat: a caller-supplied domain size turning one startup call into an arbitrarily
+    /// large allocation or an array-constructor overflow · constant, because it is the key range of a 16-bit
+    /// protocol field, not a host-dependent value · posture: secure by default, a larger domain is not offered; use the
+    /// sparse caches for wider keys). At most 65 536 references (about 512 KB) are allocated per call.
     /// </summary>
     private const int _MaxDenseDomain = 65_536;
 
@@ -47,6 +67,14 @@ public static class DispatchCacheHelper
     /// At dispatch time: <c>cache[protocolByte]?.Invoke()</c> — one array load + direct call.
     /// </para>
     /// </summary>
+    /// <returns>
+    /// A dense array of length <paramref name="domainSize"/>; <see langword="null"/> entries mean "use table dispatch".
+    /// Keys at or above <paramref name="domainSize"/> are not cached. The array is a snapshot, not updated afterwards.
+    /// </returns>
+    /// <remarks>
+    /// An unknown table id yields an all-<see langword="null"/> array, not an exception, so a missing table degrades to
+    /// the table dispatch fallback.
+    /// </remarks>
     /// <param name="stack">The stack that owns the protocol table.</param>
     /// <param name="tableId">U64 protocol table to cache.</param>
     /// <param name="domainSize">Dense array length. Must be in <c>[1, 65536]</c>.</param>
@@ -69,7 +97,9 @@ public static class DispatchCacheHelper
         foreach (KeyValuePair<ulong, ReadOnlyMemory<ProtocolId>> kvp in entries)
         {
             ulong key = kvp.Key;
+
             // Only cache single-protocol keys within the allocated domain; multi-protocol → fallback.
+            // The comparison is done in ulong so a key above int range cannot wrap into a valid index.
             if (key < (ulong)domainSize && kvp.Value.Length == 1)
             {
                 cache[key] = stack.ResolveParseDelegate(kvp.Value.Span[0]);
@@ -90,6 +120,12 @@ public static class DispatchCacheHelper
     /// At dispatch time: direct delegate call, no ID resolution or vtable lookup.
     /// </para>
     /// </summary>
+    /// <param name="stack">The stack that owns the protocol table.</param>
+    /// <param name="tableId">U64 protocol table to cache.</param>
+    /// <returns>
+    /// Pairs of key and delegate for every single-protocol key whose protocol has a parse delegate; empty when the table
+    /// does not exist. Not sorted by key; look up by linear scan.
+    /// </returns>
     public static (ulong Key, ParseDelegate Parse)[] BuildU64SparseDelegateCache(
         this Stack stack, ProtocolTableId tableId)
     {
@@ -100,12 +136,14 @@ public static class DispatchCacheHelper
             return [];
         }
 
+        // The result size is unknown up front (only single-protocol keys qualify), so collect in a list and freeze once.
         List<(ulong Key, ParseDelegate Parse)> result = [];
         foreach (KeyValuePair<ulong, ReadOnlyMemory<ProtocolId>> kvp in entries)
         {
             // Skip multi-protocol entries — those require the full table dispatch path.
             if (kvp.Value.Length == 1)
             {
+                // A protocol id without a bound delegate is left out as well, so the key also falls back to table dispatch.
                 ParseDelegate? parse = stack.ResolveParseDelegate(kvp.Value.Span[0]);
                 if (parse is not null)
                 {
@@ -129,10 +167,14 @@ public static class DispatchCacheHelper
     /// <see langword="null"/> so the caller falls back to full table dispatch.
     /// <para>
     /// Intended for 8-bit key domains (e.g., IP protocol byte, IPv6 next-header byte)
-    /// where the full 256-entry array costs only ~1 kB — smaller than a typical dictionary's
-    /// bucket array.
+    /// where the full 256-entry array costs only ~2 kB (<c>ProtocolId?</c> is 8 bytes) — smaller than a typical
+    /// dictionary's bucket array.
     /// </para>
     /// </summary>
+    /// <returns>
+    /// A dense array of length <paramref name="domainSize"/>; <see langword="null"/> entries mean "use table dispatch".
+    /// Keys at or above <paramref name="domainSize"/> are not cached. The array is a snapshot, not updated afterwards.
+    /// </returns>
     /// <param name="stack">The stack that owns the protocol table.</param>
     /// <param name="tableId">U64 protocol table to cache.</param>
     /// <param name="domainSize">Dense array length. Must be in <c>[1, 65536]</c>.</param>
@@ -154,6 +196,8 @@ public static class DispatchCacheHelper
 
         foreach (KeyValuePair<ulong, ReadOnlyMemory<ProtocolId>> kvp in entries)
         {
+            // Same rule as the delegate cache: single-protocol keys inside the domain only; the ulong comparison keeps
+            // a huge key from wrapping into a valid index.
             ulong key = kvp.Key;
             if (key < (ulong)domainSize && kvp.Value.Length == 1)
             {
@@ -173,6 +217,9 @@ public static class DispatchCacheHelper
     /// hashing for small entry counts.
     /// </para>
     /// </summary>
+    /// <param name="stack">The stack that owns the protocol table.</param>
+    /// <param name="tableId">U64 protocol table to cache.</param>
+    /// <returns>Pairs of key and protocol id for every single-protocol key; empty when the table does not exist.</returns>
     public static (ulong Key, ProtocolId Id)[] BuildU64SparseIdCache(
         this Stack stack, ProtocolTableId tableId)
     {
@@ -203,6 +250,8 @@ public static class DispatchCacheHelper
     /// Rejects non-positive and oversized dense domains so <c>OnStart</c> fails with a named
     /// <see cref="ArgumentOutOfRangeException"/> instead of an array-ctor overflow or OOM.
     /// </summary>
+    /// <param name="domainSize">Requested dense array length.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="domainSize"/> is not in <c>[1, 65536]</c>.</exception>
     private static void _ValidateDenseDomainSize(int domainSize)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(domainSize);

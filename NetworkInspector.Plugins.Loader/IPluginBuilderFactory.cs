@@ -21,6 +21,10 @@ public interface IPluginBuilderFactory
     /// <returns>The builder the loader hands to <see cref="IPlugin.Configure"/> and to the tier steps.</returns>
     IPluginBuilder Create(PluginRecordDraft plugin, ContributionRecorder recorder);
 
-    /// <summary>The tier methods above <c>Configure</c>, in ascending tier order, one per tier up to the application tier.</summary>
+    /// <summary>
+    /// The tier methods above <c>Configure</c>, in ascending tier order, one per tier up to the application tier. The loader
+    /// checks the list on every <see cref="PluginLoader.Load"/> (count and tiers) and rejects a mismatch with an
+    /// <see cref="ArgumentException"/>, because a missing step would silently skip a whole tier of every plugin.
+    /// </summary>
     IReadOnlyList<PluginTierStep> TierSteps { get; }
 }

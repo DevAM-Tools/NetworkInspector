@@ -24,7 +24,10 @@ namespace NetworkInspector.Sources.Blf.Format.Objects;
 /// Only records whose <c>source</c> equals <see cref="BlfConstants.AppTextSourceChannel"/>
 /// carry a channel name. Other AppText records (comments, metadata, XML) are ignored.
 /// </summary>
-/// <remarks>Not thread-safe. Caller synchronisation required.</remarks>
+/// <remarks>
+/// Stateless and thread-safe: every call works on its own arguments. AppText records are metadata that occur a few times
+/// per file (one per channel), so unlike the per-frame parsers this one allocates a string and does not use frame slabs.
+/// </remarks>
 internal static class AppTextParser
 {
     #region Constants
@@ -39,7 +42,8 @@ internal static class AppTextParser
     #region Public API
 
     /// <summary>
-    /// Tries to extract a channel name entry from an AppText payload.
+    /// Tries to extract a channel name entry from an AppText payload. Never throws for malformed input; a malformed or
+    /// foreign record is simply not a channel name.
     /// </summary>
     /// <param name="payload">
     /// Raw payload bytes starting immediately after the BLF object header
@@ -70,21 +74,30 @@ internal static class AppTextParser
         busType = 0;
         name = null;
 
+        // Header guard: every field read below lies inside the fixed 16-byte header.
         if (payload.Length < _AppTextHeaderSize)
         {
             return false;
         }
 
+        // Only source 1 carries a channel name; comments, metadata and XML records share object type 65 and are skipped.
         uint source = BinaryPrimitives.ReadUInt32LittleEndian(payload);
         if (source != BlfConstants.AppTextSourceChannel)
         {
             return false;
         }
 
+        // The channel number and bus type are packed into the "reserved" word. Both are single bytes, so the narrowing casts
+        // after the mask cannot lose information.
         uint reserved = BinaryPrimitives.ReadUInt32LittleEndian(payload[4..]);
-        channelNumber = (byte)((reserved >> BlfConstants.AppTextReservedChannelShift) & BlfConstants.AppTextReservedByteMask);
-        busType = (byte)((reserved >> BlfConstants.AppTextReservedBusTypeShift) & BlfConstants.AppTextReservedByteMask);
+        // They are held in locals and only assigned to the out parameters on success, as documented: a record that is rejected
+        // later (text length, missing name) must not hand a half-decoded channel and bus type to the caller.
+        byte parsedChannel = (byte)((reserved >> BlfConstants.AppTextReservedChannelShift) & BlfConstants.AppTextReservedByteMask);
+        byte parsedBusType = (byte)((reserved >> BlfConstants.AppTextReservedBusTypeShift) & BlfConstants.AppTextReservedByteMask);
 
+        // textLength comes from the file and is untrusted. It is compared in uint arithmetic (no sign or overflow surprise)
+        // against the bytes that really follow the header, so a crafted value can neither read out of range nor make the
+        // string below larger than the payload that was already read. Zero is rejected: an empty text has no name.
         uint textLengthUint = BinaryPrimitives.ReadUInt32LittleEndian(payload[8..]);
         if (textLengthUint == 0
             || textLengthUint > (uint)int.MaxValue
@@ -93,6 +106,8 @@ internal static class AppTextParser
             return false;
         }
 
+        // A trailing NUL counted in textLength (C-string style writers) is tolerated: drop one so it does not end up in the
+        // name. This product's own exporter writes no terminator, so both forms round-trip.
         int textLength = (int)textLengthUint;
         ReadOnlySpan<byte> textBytes = payload.Slice(_AppTextHeaderSize, textLength);
         if (textBytes.Length > 0 && textBytes[^1] == 0)
@@ -100,6 +115,8 @@ internal static class AppTextParser
             textBytes = textBytes[..^1];
         }
 
+        // Token 1 of "Path;ClusterName;..." is the interface name. Only the first two separators are located so the rest of
+        // the (possibly long) text is not split into an array of substrings.
         string fullText = Encoding.UTF8.GetString(textBytes);
         int firstSeparator = fullText.IndexOf(';');
         if (firstSeparator < 0)
@@ -117,6 +134,8 @@ internal static class AppTextParser
             return false;
         }
 
+        channelNumber = parsedChannel;
+        busType = parsedBusType;
         name = token;
         return true;
     }

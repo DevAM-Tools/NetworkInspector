@@ -4,8 +4,10 @@ namespace NetworkInspector.Protocols.Attributes;
 
 /// <summary>
 /// Marks a boolean field as a setting that is registered and loaded at startup.
-/// The source generator will register this setting in <c>RegisterFields()</c>
-/// and load it in <c>OnStart()</c>.
+/// The source generator registers this setting in <c>RegisterFields()</c> and, at the end of the same method,
+/// copies its current value from the builder's settings manager into the annotated field (falling back to
+/// <see cref="Default"/>). The value is therefore already populated when the <c>_RegisterFieldsCustom</c> hook runs
+/// and the generated code never assigns it again: it is a snapshot taken while the stack is built, not a live binding.
 /// </summary>
 /// <remarks>Initializes a new bool setting attribute.</remarks>
 /// <param name="name">Machine-readable setting name.</param>
@@ -91,10 +93,10 @@ public sealed class F64SettingAttribute(string name, string uiName, string group
         get; set;
     }
 
-    /// <summary>Optional minimum allowed value.</summary>
+    /// <summary>Optional minimum allowed value. <see cref="double.NaN"/> (the default) means no lower bound.</summary>
     public double Min { get; set; } = double.NaN;
 
-    /// <summary>Optional maximum allowed value.</summary>
+    /// <summary>Optional maximum allowed value. <see cref="double.NaN"/> (the default) means no upper bound.</summary>
     public double Max { get; set; } = double.NaN;
 
     /// <summary>Optional description text.</summary>
@@ -131,7 +133,8 @@ public sealed class U64SettingAttribute(string name, string uiName, string group
     }
 
     /// <summary>Whether <see cref="Min"/> is set. Set this to <see langword="true"/> together with <see cref="Min"/>
-    /// to enable lower-bound validation.</summary>
+    /// to enable lower-bound validation. A flag is needed because every <see cref="ulong"/> (including 0) is a
+    /// legal bound, so there is no "unset" sentinel value like <see cref="double.NaN"/> for the floating-point settings.</summary>
     public bool HasMin
     {
         get; set;
@@ -375,10 +378,10 @@ public sealed class F64ArraySettingAttribute(string name, string uiName, string 
     /// <summary>Default value when no override is configured.</summary>
     public double[] Default { get; set; } = [];
 
-    /// <summary>Optional minimum allowed value for each element.</summary>
+    /// <summary>Optional minimum allowed value for each element. <see cref="double.NaN"/> (the default) means no lower bound.</summary>
     public double Min { get; set; } = double.NaN;
 
-    /// <summary>Optional maximum allowed value for each element.</summary>
+    /// <summary>Optional maximum allowed value for each element. <see cref="double.NaN"/> (the default) means no upper bound.</summary>
     public double Max { get; set; } = double.NaN;
 
     /// <summary>Optional description text.</summary>

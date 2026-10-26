@@ -26,7 +26,10 @@ internal readonly partial struct PcapPacketHeader
         get; init;
     }
 
-    /// <summary>Number of octets captured and saved in the file.</summary>
+    /// <summary>
+    /// Number of octets captured and saved in the file. Untrusted: it sizes the record data read, so it must pass
+    /// <see cref="PcapngBlockLayout.TryValidateLegacyInclLen"/> (snaplen and size cap) before it is used.
+    /// </summary>
     public U32LE InclLen
     {
         get; init;

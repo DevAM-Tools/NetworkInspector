@@ -51,6 +51,15 @@ public delegate ref TField GetRefField<T, TField>(ref T item) where TField : cla
 /// <see cref="Clear"/>: an entry written into a replaced generation is unreachable for every reader that loads
 /// the store after that <see cref="Clear"/>.
 /// </para>
+/// <para>
+/// <b>Why one engine for two public types:</b> the dense and the packed store need the same lock-free publication
+/// protocol (write the slot, then publish the count with a release store). Keeping the protocol in one place means a
+/// memory-ordering fix cannot be applied to only one of them. Neither type takes a lock on the read or append path.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> a single writer (enforced by <see cref="Append"/> and <see cref="AppendRange"/> with a
+/// compare-exchange gate, or guaranteed by the caller for <see cref="AppendOwned"/>), any number of lock-free readers.
+/// </para>
 /// </remarks>
 internal sealed class ChunkedSlotStore<T>
 {
@@ -62,7 +71,13 @@ internal sealed class ChunkedSlotStore<T>
     /// </summary>
     private sealed class Generation(int chunkShift)
     {
+        /// <summary>Chunk table of this generation. Its only allocator is the single writer.</summary>
         internal readonly ChunkedOuterArray<T[]> Outer = new(chunkShift);
+
+        /// <summary>
+        /// Number of published slots. <see langword="volatile"/>: the writer's release store makes every slot below the
+        /// count visible to a reader that acquires the count.
+        /// </summary>
         internal volatile int Count;
 
         // Writer-only cache of the chunk the last append wrote into (single writer by contract); readers never read
@@ -76,19 +91,43 @@ internal sealed class ChunkedSlotStore<T>
 
     #region Fields
 
+    /// <summary>Log₂ of slots per chunk; passed on to every new <see cref="Generation"/>.</summary>
     private readonly int _ChunkShift;
+
+    /// <summary>Slots per chunk (<c>1 &lt;&lt; _ChunkShift</c>); a power of two so index math is shift and mask.</summary>
     private readonly int _ChunkSize;
+
+    /// <summary>Value of a slot that was never written; also what failed reads return.</summary>
     private readonly T _UnsetValue;
+
+    /// <summary>
+    /// Whether a new chunk must be filled with <see cref="_UnsetValue"/>. When the sentinel is <c>default</c>, the
+    /// zeroed memory of a fresh array already holds it and the fill is skipped.
+    /// </summary>
     private readonly bool _FillUnset;
+
+    /// <summary>
+    /// <see cref="_CreateChunk"/> converted to a delegate once. Converting the instance method group on every call would
+    /// allocate a delegate each time a chunk is requested.
+    /// </summary>
     private readonly Func<T[]> _ChunkFactory;
 
+    /// <summary>
+    /// The live generation. <see langword="volatile"/> so a reader or the writer always sees the latest swap by
+    /// <see cref="Clear"/>; the object it points to is internally consistent (see the type remarks).
+    /// </summary>
     private volatile Generation _Current;
+
+    /// <summary>1 while an <see cref="Append"/> or <see cref="AppendRange"/> runs. A misuse detector, not a lock.</summary>
     private volatile int _AppendGate;
 
     #endregion
 
     #region Constructors
 
+    /// <summary>Creates an empty store.</summary>
+    /// <param name="chunkShift">Log₂ of slots per chunk; validated by <see cref="ChunkedOuterArray{TChunk}"/>.</param>
+    /// <param name="unsetValue">Sentinel for unwritten slots and failed reads.</param>
     internal ChunkedSlotStore(int chunkShift, T unsetValue)
     {
         // ChunkedOuterArray validates chunkShift and throws ArgumentOutOfRangeException.
@@ -104,12 +143,15 @@ internal sealed class ChunkedSlotStore<T>
 
     #region Properties
 
+    /// <summary>Number of published slots of the live generation (volatile read).</summary>
     internal int Count => _Current.Count;
 
     #endregion
 
     #region Public API
 
+    /// <summary>Reads a published slot, or returns the unset sentinel when <paramref name="index"/> is not published.</summary>
+    /// <param name="index">Slot index.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     [return: MaybeNull]
     internal T Get(int index)
@@ -122,6 +164,10 @@ internal sealed class ChunkedSlotStore<T>
         return value;
     }
 
+    /// <summary>Reads a published slot of the live generation.</summary>
+    /// <param name="index">Slot index; anything outside <c>0 .. Count-1</c> is a miss.</param>
+    /// <param name="value">The slot value, or the unset sentinel on a miss.</param>
+    /// <returns><see langword="false"/> when the index is not published or its chunk does not exist.</returns>
     internal bool TryGet(int index, out T value)
     {
         // One generation snapshot: count and chunks always belong together.
@@ -135,11 +181,20 @@ internal sealed class ChunkedSlotStore<T>
         return _TryReadPublishedUnchecked(generation, index, out value);
     }
 
+    /// <summary>
+    /// Appends one entry and publishes it. Single writer: a second concurrent call throws.
+    /// </summary>
+    /// <param name="item">Entry stored at the current count.</param>
+    /// <exception cref="InvalidOperationException">
+    /// A concurrent <see cref="Append"/> / <see cref="AppendRange"/> is running, or the store reached
+    /// <see cref="Ids.ArrayIndexIdRange.MaxValue"/> entries.
+    /// </exception>
     internal void Append(in T item)
     {
         _EnterAppendGate();
         try
         {
+            // Loop only repeats when Clear replaced the generation while the entry was being published.
             while (true)
             {
                 // Volatile read (acquire). A Clear after this read leaves the write below in a replaced,
@@ -169,7 +224,13 @@ internal sealed class ChunkedSlotStore<T>
     /// <see cref="AppendOwned"/>, <see cref="AppendRange"/>, and <see cref="Clear"/> of this store is serialized by
     /// the caller (the value-cache series holds its series gate around them). Readers stay lock-free: the slot is
     /// written before the count is published with a release store, exactly as in <see cref="Append"/>.
+    /// Motivation: a series that already serializes its writers under its own gate would otherwise pay a second
+    /// compare-exchange (the full fence of <see cref="Append"/>) per appended value; skipping it removes that fence
+    /// from the per-value path. Calling this without the caller-side serialization removes the misuse detection and
+    /// can corrupt the published count, so it must never be used without such a gate.
     /// </summary>
+    /// <param name="item">Entry stored at the current count.</param>
+    /// <exception cref="InvalidOperationException">The store reached <see cref="Ids.ArrayIndexIdRange.MaxValue"/> entries.</exception>
     internal void AppendOwned(in T item)
     {
         while (true)
@@ -188,6 +249,15 @@ internal sealed class ChunkedSlotStore<T>
         }
     }
 
+    /// <summary>
+    /// Appends all values as one publish: a reader sees either none or all of them. Single writer, like
+    /// <see cref="Append"/>. An empty span is a no-op.
+    /// </summary>
+    /// <param name="values">Entries stored from the current count onward.</param>
+    /// <exception cref="InvalidOperationException">
+    /// A concurrent <see cref="Append"/> / <see cref="AppendRange"/> is running, or the store would exceed
+    /// <see cref="Ids.ArrayIndexIdRange.MaxValue"/> entries.
+    /// </exception>
     internal void AppendRange(ReadOnlySpan<T> values)
     {
         if (values.Length == 0)
@@ -203,6 +273,9 @@ internal sealed class ChunkedSlotStore<T>
                 // Same protocol as Append: one generation per attempt, publish once, retry on a replaced generation.
                 Generation generation = _Current;
                 int index = generation.Count;
+
+                // Capacity check before any write. The checked sum only overflows for a huge span; that case is reported
+                // as the same capacity error (InvalidValue is never a valid index) instead of a bare OverflowException.
                 int last;
                 try
                 {
@@ -215,6 +288,8 @@ internal sealed class ChunkedSlotStore<T>
                 }
 
                 Ids.ArrayIndexIdRange.ThrowIfInvalidNextIndex(last, "entry");
+
+                // Write all slots first, then publish the new count once (release): readers never see a partial range.
                 _SetRange(generation, index, values);
 
                 generation.Count = checked(index + values.Length);
@@ -230,6 +305,14 @@ internal sealed class ChunkedSlotStore<T>
         }
     }
 
+    /// <summary>
+    /// Writes <paramref name="values"/> into the slots starting at <paramref name="startIndex"/> of
+    /// <paramref name="generation"/> without publishing them. The caller publishes the count afterwards.
+    /// </summary>
+    /// <param name="generation">The generation to write into.</param>
+    /// <param name="startIndex">First slot index to write.</param>
+    /// <param name="values">Values to copy; may span several chunks.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The range does not fit the valid index range.</exception>
     private void _SetRange(Generation generation, int startIndex, ReadOnlySpan<T> values)
     {
         if (values.Length == 0)
@@ -237,6 +320,7 @@ internal sealed class ChunkedSlotStore<T>
             return;
         }
 
+        // Repeats the capacity checks of AppendRange; these only fire if a caller bypasses it.
         Ids.ArrayIndexIdRange.ValidateIndexOrThrow(startIndex, nameof(startIndex));
         int last;
         try
@@ -255,6 +339,8 @@ internal sealed class ChunkedSlotStore<T>
 
         // The generation is the only allocator of its outer array and never clears it, so a chunk returned by
         // GetOrAllocateChunk stays the live chunk of its index (single-allocator contract of ChunkedOuterArray).
+        // Copy chunk by chunk: each iteration fills the rest of the current chunk (a "run"), so the outer-array lookup
+        // happens once per chunk instead of once per value.
         ChunkedOuterArray<T[]> outer = generation.Outer;
         int offset = 0;
         while (offset < values.Length)
@@ -264,6 +350,9 @@ internal sealed class ChunkedSlotStore<T>
             T[] chunk = outer.GetOrAllocateChunk(chunkIdx, _ChunkFactory);
             int run = Math.Min(outer.ChunkSize - slotIdx, values.Length - offset);
             ReadOnlySpan<T> slice = values.Slice(offset, run);
+
+            // Bulk memmove only for plain 1/2/4/8-byte values; every other T is written element by element through
+            // _WriteSlot so reference and large-struct slots get the same store semantics as a single Append.
             if (_CanBulkCopy())
             {
                 slice.CopyTo(chunk.AsSpan(slotIdx, run));
@@ -280,6 +369,13 @@ internal sealed class ChunkedSlotStore<T>
         }
     }
 
+    /// <summary>
+    /// Returns a reference to a published slot of the live generation. Avoids copying a large entry struct. The
+    /// reference stays valid memory after a <see cref="Clear"/> (it then points into the replaced generation), but only
+    /// the single writer may mutate through it.
+    /// </summary>
+    /// <param name="index">Published slot index.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is negative or not published.</exception>
     internal ref T ItemRef(int index)
     {
         Generation generation = _Current;
@@ -292,10 +388,16 @@ internal sealed class ChunkedSlotStore<T>
         return ref _ItemRefUnchecked(generation, index, count);
     }
 
+    /// <summary>
+    /// Copies a published slot, treating a racing <see cref="Clear"/> as a miss.
+    /// </summary>
+    /// <param name="index">Published slot index.</param>
+    /// <param name="value">The slot value, or the unset sentinel on a miss.</param>
+    /// <returns><see langword="false"/> when the index is not published or the generation was replaced meanwhile.</returns>
     internal bool TryReadPublished(int index, out T value)
     {
-        // A generation replaced before this read returns is a miss, not a hit from the cleared log
-        // (the contract the packed epoch gave before).
+        // A generation replaced before this read returns is a miss, not a hit from the cleared log: the caller
+        // must never receive a row of the old log as if it belonged to the refilled one.
         Generation generation = _Current;
         if ((uint)index >= (uint)generation.Count
             || !_TryReadPublishedUnchecked(generation, index, out value)
@@ -308,6 +410,16 @@ internal sealed class ChunkedSlotStore<T>
         return true;
     }
 
+    /// <summary>
+    /// Binary-searches the published prefix; valid only for strictly ascending keys.
+    /// </summary>
+    /// <param name="sortKey">Key to find.</param>
+    /// <param name="getSortKey">
+    /// Key extractor. A delegate (not an interface constraint) keeps this engine generic over any <typeparamref name="T"/>;
+    /// callers pass a cached static delegate so a search allocates nothing.
+    /// </param>
+    /// <returns>The entry index, or -1 when no entry has the key or a <see cref="Clear"/> raced the search.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="getSortKey"/> is <see langword="null"/>.</exception>
     internal int BinarySearch(int sortKey, GetSortKey<T> getSortKey)
     {
         ArgumentNullException.ThrowIfNull(getSortKey);
@@ -321,7 +433,11 @@ internal sealed class ChunkedSlotStore<T>
         int found = -1;
         while (lo <= hi)
         {
+            // lo + (hi - lo) / 2 cannot overflow, unlike (lo + hi) / 2 for counts near int.MaxValue.
             int mid = lo + ((hi - lo) >> 1);
+
+            // A missing chunk below the published count cannot happen for an intact generation; treat it as a miss
+            // instead of reading garbage.
             if (!_TryReadPublishedUnchecked(generation, mid, out T published))
             {
                 found = -1;
@@ -354,6 +470,15 @@ internal sealed class ChunkedSlotStore<T>
         return found;
     }
 
+    /// <summary>
+    /// Acquire-reads one class field of a published slot in place. Reading the field through the live slot, instead of
+    /// copying the whole entry struct first, is what lets the writer publish that field later with a release write.
+    /// </summary>
+    /// <typeparam name="TField">Class type of the field.</typeparam>
+    /// <param name="index">Published slot index.</param>
+    /// <param name="getter">Returns a reference to the field inside the live slot.</param>
+    /// <returns>The field value, or <see langword="null"/> when the index is not published or a <see cref="Clear"/> raced.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="getter"/> is <see langword="null"/>.</exception>
     internal TField? ReadVolatileRefField<TField>(int index, GetRefField<T, TField> getter)
         where TField : class?
     {
@@ -372,6 +497,8 @@ internal sealed class ChunkedSlotStore<T>
             return null;
         }
 
+        // Volatile.Read pairs with the writer's Volatile.Write of the field: a reader that sees the reference also
+        // sees the object it points to fully constructed.
         TField? value = Volatile.Read(ref getter(ref chunk[slotIdx]));
         if (!ReferenceEquals(_Current, generation))
         {
@@ -381,15 +508,28 @@ internal sealed class ChunkedSlotStore<T>
         return value;
     }
 
+    /// <summary>Drops every slot by swapping in an empty generation.</summary>
     internal void Clear()
     {
         // One volatile write replaces chunks and count together. Readers still on the old generation finish
         // on it; the GC reclaims it afterwards. A concurrent Append notices the swap and retries.
+        // Rejected: resetting the count and clearing the chunks in place, which would let a reader pair a new
+        // count with old chunk contents (or the reverse) and would need a lock or a version counter to detect it.
         _Current = new(_ChunkShift);
     }
 
+    /// <summary>
+    /// Exposes one chunk as a read-only span clipped to the published slots, so a caller can scan a whole chunk
+    /// without a per-element lookup.
+    /// </summary>
+    /// <param name="chunkIndex">Zero-based chunk index.</param>
+    /// <param name="publishedCount">Exclusive upper bound of readable slots; clipped to <see cref="Count"/>.</param>
+    /// <param name="span">The slots of the chunk below the bound.</param>
+    /// <returns><see langword="true"/> when the chunk exists and holds at least one readable slot.</returns>
     internal bool TryGetPublishedChunk(int chunkIndex, int publishedCount, out ReadOnlySpan<T> span)
     {
+        // Clip the caller's bound to the count of the generation read here, so the span can never expose a slot
+        // that this generation has not published.
         Generation generation = _Current;
         int count = generation.Count;
         if (publishedCount > count)
@@ -403,6 +543,7 @@ internal sealed class ChunkedSlotStore<T>
             return false;
         }
 
+        // Guard the shift below against overflow: chunkIndex << shift must stay within int.
         ChunkedOuterArray<T[]> outer = generation.Outer;
         int shift = outer.ChunkShift;
         if (chunkIndex > (int.MaxValue >> shift))
@@ -448,11 +589,13 @@ internal sealed class ChunkedSlotStore<T>
         }
     }
 
+    /// <summary>Throw helper kept out of line so the inlined gate check stays small.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     [DoesNotReturn]
     private static void _ThrowConcurrentAppend() =>
         throw new InvalidOperationException("Concurrent Append is not supported.");
 
+    /// <summary>Allocates one chunk, filled with the unset sentinel when it is not <c>default</c>. Used through <see cref="_ChunkFactory"/>.</summary>
     private T[] _CreateChunk()
     {
         T[] chunk = new T[_ChunkSize];
@@ -464,6 +607,12 @@ internal sealed class ChunkedSlotStore<T>
         return chunk;
     }
 
+    /// <summary>
+    /// Writes one slot of the live append position, allocating its chunk on first use. Does not publish the count.
+    /// </summary>
+    /// <param name="generation">The generation being appended to.</param>
+    /// <param name="index">Slot index, already validated against the index range by the caller.</param>
+    /// <param name="value">Value to store.</param>
     private void _WriteLiveSlot(Generation generation, int index, T value)
     {
         // The generation is the only allocator of its outer array and never clears it, so a chunk it returned stays
@@ -481,6 +630,11 @@ internal sealed class ChunkedSlotStore<T>
         _WriteSlot(ref chunk[index & (_ChunkSize - 1)], value);
     }
 
+    /// <summary>
+    /// Whether <typeparamref name="T"/> is a reference-free value type of 1, 2, 4, or 8 bytes, i.e. one of the shapes
+    /// <see cref="_WriteSlot"/> stores as a single primitive. The JIT evaluates these checks per instantiation, so the
+    /// call folds to a constant.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _CanBulkCopy()
     {
@@ -493,6 +647,15 @@ internal sealed class ChunkedSlotStore<T>
         return size is 1 or 2 or 4 or 8;
     }
 
+    /// <summary>
+    /// Stores one value with the strongest ordering the shape of <typeparamref name="T"/> allows. Reference types and
+    /// reference-free 1/2/4/8-byte values are stored with a single <see cref="Volatile"/> write of one primitive of the same size (release);
+    /// reference-containing structs and larger structs fall back to a plain copy, which is why concurrent readers of
+    /// those are not supported (see the public type remarks). The branches are resolved per instantiation by the JIT,
+    /// so only one remains in the compiled method.
+    /// </summary>
+    /// <param name="slot">Destination slot.</param>
+    /// <param name="value">Value to store.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void _WriteSlot(ref T slot, T value)
     {
@@ -528,6 +691,12 @@ internal sealed class ChunkedSlotStore<T>
         }
     }
 
+    /// <summary>
+    /// Counterpart of <see cref="_WriteSlot"/>: a single <see cref="Volatile"/> read (acquire) for the shapes that were
+    /// stored with one, a plain read otherwise. The value is reinterpreted through a same-size primitive local, which
+    /// avoids boxing and keeps the access a single primitive load.
+    /// </summary>
+    /// <param name="slot">Source slot.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static T _ReadSlot(ref T slot)
     {
@@ -585,6 +754,7 @@ internal sealed class ChunkedSlotStore<T>
         return true;
     }
 
+    /// <summary>Returns a reference to a slot whose index the caller already checked against <paramref name="count"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ref T _ItemRefUnchecked(Generation generation, int index, int count)
     {
@@ -598,6 +768,7 @@ internal sealed class ChunkedSlotStore<T>
         return ref chunk[slotIdx];
     }
 
+    /// <summary>Throw helper kept out of line so the inlined accessors stay small.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     [DoesNotReturn]
     private static void _ThrowIndexOutOfRange(int index, int count) =>
@@ -621,9 +792,15 @@ internal sealed class ChunkedSlotStore<T>
 /// </summary>
 /// <typeparam name="T">
 /// Value stored per slot. Unset / unpublished slots hold the constructor sentinel
-/// (default is <see langword="default"/> of <typeparamref name="T"/>).
+/// (<see langword="default"/> of <typeparamref name="T"/> unless the caller passes another one).
 /// </typeparam>
 /// <remarks>
+/// <para>
+/// Dense, index-addressed view of the shared slot engine (<c>ChunkedSlotStore</c>): values are read by index with
+/// <see cref="Get"/> / <see cref="TryGet"/>. Chunking instead of one growing array means growth never copies existing
+/// values and never moves them, so readers need no lock while the writer extends the store; a chunk is allocated lazily
+/// on the first append that reaches it.
+/// </para>
 /// <para>
 /// Chunks are allocated through <see cref="ChunkedOuterArray{TChunk}"/>. The single appender is its only
 /// allocator, so a chunk it receives stays the live chunk of its index and a slot write needs no re-check.
@@ -650,6 +827,7 @@ public sealed class ChunkedGrowOnlyStore<T>
 {
     #region Fields
 
+    /// <summary>Shared engine; this type only narrows its surface to the dense, index-addressed operations.</summary>
     private readonly ChunkedSlotStore<T> _Store;
 
     #endregion
@@ -688,6 +866,7 @@ public sealed class ChunkedGrowOnlyStore<T>
     public int Count => _Store.Count;
 
     /// <summary>Appends one entry at <see cref="Count"/>. Single-writer only.</summary>
+    /// <param name="item">The entry to store; passed by <c>in</c> reference to avoid copying large structs.</param>
     /// <exception cref="InvalidOperationException">
     /// Concurrent <see cref="Append"/> / <see cref="AppendRange"/>, or the store reached
     /// <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.
@@ -699,14 +878,19 @@ public sealed class ChunkedGrowOnlyStore<T>
     /// <summary>
     /// <see cref="Append"/> without the concurrent-writer check. The caller guarantees that every append and
     /// <see cref="Clear"/> of this store is serialized by the caller; <c>ValueCacheSeries</c> calls it while holding
-    /// its series gate. Readers stay lock-free.
+    /// its series gate. Readers stay lock-free. The gate is skipped because the series already serializes its writers,
+    /// so a second compare-exchange per appended value would be pure overhead; without that serialization the call is unsafe.
     /// </summary>
+    /// <param name="item">The entry to store.</param>
     /// <exception cref="InvalidOperationException">The store reached <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void AppendOwned(in T item) =>
         _Store.AppendOwned(in item);
 
-    /// <summary>Appends <paramref name="values"/> as one publish. Empty span is a no-op.</summary>
+    /// <summary>
+    /// Appends <paramref name="values"/> as one publish (readers see all or none of them). Empty span is a no-op.
+    /// </summary>
+    /// <param name="values">Entries to append in order.</param>
     /// <exception cref="InvalidOperationException">
     /// Concurrent <see cref="Append"/> / <see cref="AppendRange"/>, or the store would exceed
     /// <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.
@@ -720,6 +904,8 @@ public sealed class ChunkedGrowOnlyStore<T>
     /// unset sentinel from the constructor. That sentinel is null for a reference type
     /// only when the caller left it at the default.
     /// </summary>
+    /// <param name="index">Slot index.</param>
+    /// <returns>The stored value, or the unset sentinel.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     [return: MaybeNull]
     public T Get(int index) =>
@@ -731,10 +917,14 @@ public sealed class ChunkedGrowOnlyStore<T>
     /// or the inner chunk is unallocated.
     /// An allocated slot may still hold the unset sentinel.
     /// </summary>
+    /// <param name="index">Slot index.</param>
+    /// <param name="value">The stored value, or the unset sentinel on a miss.</param>
     public bool TryGet(int index, out T value) =>
         _Store.TryGet(index, out value);
 
-    /// <summary>Drops all chunk references.</summary>
+    /// <summary>
+    /// Drops all chunk references by swapping in an empty generation (readers that already loaded the old one finish on it).
+    /// </summary>
     public void Clear() =>
         _Store.Clear();
 
@@ -766,6 +956,12 @@ public sealed class ChunkedGrowOnlyStore<T>
 /// <typeparam name="T">Packed entry type.</typeparam>
 /// <remarks>
 /// <para>
+/// Packed, ordered view of the shared slot engine (<c>ChunkedSlotStore</c>): entries are addressed by their position
+/// and, when appended in ascending key order, found by <see cref="BinarySearch"/>. Readers get a copy of an entry
+/// (<see cref="TryReadPublished"/>) or a reference into the live slot (<see cref="ItemRef"/>) so large entry structs
+/// need not be copied to read one field.
+/// </para>
+/// <para>
 /// One writer for <see cref="Count"/>; lock-free readers. The writer writes the live slot first, then
 /// publishes with a volatile write of <see cref="Count"/>.
 /// Concurrent <see cref="Append"/> / <see cref="AppendRange"/> throws <see cref="InvalidOperationException"/>.
@@ -789,6 +985,7 @@ public sealed class ChunkedAppendOnlyStore<T>
 {
     #region Fields
 
+    /// <summary>Shared engine; this type only narrows its surface to the packed, append-only operations.</summary>
     private readonly ChunkedSlotStore<T> _Store;
 
     #endregion
@@ -845,6 +1042,7 @@ public sealed class ChunkedAppendOnlyStore<T>
     /// The span length is independent of the inner chunk size. An empty span is a no-op.
     /// A concurrent <see cref="Clear"/> causes the publish to fail and this method retries from the live prefix.
     /// </summary>
+    /// <param name="values">Entries to append in order; readers see all or none of them.</param>
     /// <exception cref="InvalidOperationException">
     /// Concurrent <see cref="Append"/> / <see cref="AppendRange"/>, or the store would exceed
     /// <see cref="Ids.ArrayIndexIdRange.MaxValue"/>.
@@ -866,6 +1064,8 @@ public sealed class ChunkedAppendOnlyStore<T>
     /// Returns <see langword="false"/> when the index is outside <see cref="Count"/>, the chunk is
     /// missing, or <see cref="Clear"/> raced.
     /// </summary>
+    /// <param name="index">Published entry index.</param>
+    /// <param name="value">A copy of the entry, or the unset sentinel on a miss.</param>
     public bool TryReadPublished(int index, out T value) =>
         _Store.TryReadPublished(index, out value);
 
@@ -888,6 +1088,9 @@ public sealed class ChunkedAppendOnlyStore<T>
     /// Use this instead of copying the surrounding struct when the field is published with
     /// <see cref="Volatile"/> writes after <see cref="Append"/>.
     /// </summary>
+    /// <typeparam name="TField">Class type of the field.</typeparam>
+    /// <param name="index">Published entry index.</param>
+    /// <param name="getter">Returns a reference to the field inside the live slot; pass a cached static delegate.</param>
     /// <returns>The field, or <see langword="null"/> when the index is unpublished or <see cref="Clear"/> raced.</returns>
     public TField? ReadVolatileRefField<TField>(int index, GetRefField<T, TField> getter)
         where TField : class? =>
@@ -916,7 +1119,11 @@ public static class ChunkedAppendOnlyStoreExtensions
     /// equals <paramref name="sortKey"/>. Valid only when entries were appended in strictly
     /// ascending key order.
     /// </summary>
+    /// <typeparam name="T">Entry type exposing its key through <see cref="ISortKeyed"/>.</typeparam>
+    /// <param name="store">The store to search.</param>
+    /// <param name="sortKey">Key to locate.</param>
     /// <returns>Entry index, or <c>-1</c> when no published entry has the key.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="store"/> is <see langword="null"/>.</exception>
     public static int BinarySearch<T>(this ChunkedAppendOnlyStore<T> store, int sortKey)
         where T : ISortKeyed
     {
@@ -931,7 +1138,10 @@ public static class ChunkedAppendOnlyStoreExtensions
     private static class SortKeyCache<T>
         where T : ISortKeyed
     {
-        /// <summary>Cached sort-key getter so packed binary search does not allocate a delegate per call.</summary>
+        /// <summary>
+        /// Cached sort-key getter so packed binary search does not allocate a delegate per call (a per-call lambda or
+        /// method-group conversion would allocate on every search). One instance per entry type, created on first use.
+        /// </summary>
         public static readonly GetSortKey<T> Getter = static (in T item) => item.SortKey;
     }
 
@@ -950,8 +1160,15 @@ public static class ChunkedGrowOnlyStoreExtensions
     /// Negative <paramref name="fromIndex"/> offsets produce <see langword="null"/> entries in the
     /// prefix of <paramref name="buffer"/> only; indices past
     /// <see cref="Ids.ArrayIndexIdRange.MaxValue"/> stop the copy.
+    /// Each slot is one lock-free <see cref="ChunkedGrowOnlyStore{T}.Get"/>, so a concurrent writer may be
+    /// observed part-way through the range: slots below the published count at the time of their read are returned.
     /// </summary>
+    /// <typeparam name="T">Reference entry type; unset slots read as <see langword="null"/>.</typeparam>
+    /// <param name="store">The store to read.</param>
+    /// <param name="fromIndex">Index of the first slot; may be negative to pad the start of the buffer with holes.</param>
+    /// <param name="buffer">Destination; the method never writes beyond its length.</param>
     /// <returns>Number of slots written (may include <see langword="null"/> holes).</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="store"/> is <see langword="null"/>.</exception>
     public static int ReadRange<T>(this ChunkedGrowOnlyStore<T> store, int fromIndex, Span<T?> buffer)
         where T : class
     {
@@ -961,6 +1178,8 @@ public static class ChunkedGrowOnlyStoreExtensions
         int start = fromIndex;
         int bufferOffset = 0;
 
+        // Negative start: the leading part of the buffer corresponds to indices below zero, which do not exist, so
+        // it is filled with null holes and the copy starts at index 0 behind them.
         if (start < 0)
         {
             // -int.MinValue overflows in int. The prefix is entirely holes for any
@@ -981,6 +1200,15 @@ public static class ChunkedGrowOnlyStoreExtensions
             }
         }
 
+        // A start above MaxValue has no slots at all. Without this check MaxValue - start is negative, the unsigned compare
+        // below never breaks, the buffer is filled with null holes and reported as read (and start + offset could overflow).
+        if (start > Ids.ArrayIndexIdRange.MaxValue)
+        {
+            return count;
+        }
+
+        // Copy the remaining buffer. For start <= MaxValue the unsigned compare stops before start + offset can exceed
+        // MaxValue (and so before the int addition below could overflow).
         for (int i = bufferOffset; i < buffer.Length; i++)
         {
             int offset = i - bufferOffset;
@@ -1036,6 +1264,8 @@ public sealed class ChunkedOuterArray<TChunk> where TChunk : class
 {
     #region Constants
 
+    // Allowed range of the caller-chosen chunk shift: 4 to 20, i.e. 16 to 1 048 576 slots per chunk. These are fixed
+    // limits of this type (a caller tunes the shift, not the limits); the constructor rejects anything outside.
     private const int _MinChunkShift = 4;
     private const int _MaxChunkShift = 20;
 
@@ -1043,8 +1273,16 @@ public sealed class ChunkedOuterArray<TChunk> where TChunk : class
 
     #region Fields
 
+    /// <summary>
+    /// Number of outer slots needed to address every valid index: <c>(MaxValue >> ChunkShift) + 1</c>. The outer array
+    /// never grows beyond this, which also bounds <see cref="GetOrAllocateChunk"/> against a hostile chunk index.
+    /// </summary>
     private readonly int _MaxOuterChunks;
 
+    /// <summary>
+    /// The outer array. <see langword="volatile"/> because <c>_Grow</c> and <see cref="Clear"/> publish a new array
+    /// object that readers pick up without a lock; elements are read and written with <see cref="Volatile"/>.
+    /// </summary>
     private volatile TChunk?[] _Chunks;
 
     /// <summary>Single-allocator gate: 1 while an allocating call or <see cref="Clear"/> runs. A misuse detector, not a lock.</summary>
@@ -1094,19 +1332,27 @@ public sealed class ChunkedOuterArray<TChunk> where TChunk : class
 
     #region Public API
 
-    /// <summary>Splits a dense index into outer chunk index and inner slot index.</summary>
+    /// <summary>
+    /// Splits a dense index into outer chunk index and inner slot index with one shift and one mask (the chunk size is
+    /// a power of two, which is why no division is needed).
+    /// </summary>
+    /// <param name="index">Non-negative dense index; not validated (hot path, callers check the index range first).</param>
     public (int ChunkIndex, int SlotIndex) DecomposeIndex(int index) =>
         (index >> ChunkShift, index & ChunkMask);
 
     /// <summary>Returns the inner chunk at <paramref name="chunkIndex"/>, or <see langword="null"/> when unallocated.</summary>
+    /// <param name="chunkIndex">Outer index; a negative or beyond-the-current-array value is simply "unallocated".</param>
     public TChunk? GetChunk(int chunkIndex)
     {
+        // Load the array once: a concurrent growth swaps in a longer copy, and bounds check and element read must
+        // refer to the same array.
         TChunk?[] chunks = _Chunks;
         if ((uint)chunkIndex >= (uint)chunks.Length)
         {
             return null;
         }
 
+        // Acquire read pairs with the release write that installed the chunk, so a non-null chunk is fully constructed.
         return Volatile.Read(ref chunks[chunkIndex]);
     }
 
@@ -1114,6 +1360,8 @@ public sealed class ChunkedOuterArray<TChunk> where TChunk : class
     /// Returns the inner chunk at <paramref name="chunkIndex"/>, allocating it with
     /// <paramref name="factory"/> when absent.
     /// </summary>
+    /// <param name="chunkIndex">Outer index of the chunk.</param>
+    /// <param name="factory">Creates a new chunk; called at most once per call and only when the chunk is absent.</param>
     /// <remarks>
     /// An installed chunk is returned without calling the factory and without touching the allocation gate; this is
     /// the per-item path of the stores and may run on any thread. Otherwise the call allocates: it takes the gate,

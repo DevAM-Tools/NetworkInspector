@@ -110,6 +110,63 @@ internal sealed class JobTests
         await Assert.That(info.Status).IsEqualTo(JobStatus.Failed);
     }
 
+    [Test]
+    public async Task JobCancelAfterDisposeDoesNotThrow()
+    {
+        // The session disposes a job at shutdown while callers still hold its JobInfo; cancelling a finished job is a no-op.
+        Job job = _CreateJob(static _ => { });
+        job.Start();
+        job.Join();
+        job.Dispose();
+
+        Exception? thrown = null;
+        try
+        {
+            job.Cancel();
+        }
+        catch (Exception ex)
+        {
+            thrown = ex;
+        }
+
+        await Assert.That(thrown).IsNull();
+    }
+
+    [Test]
+    public async Task JobCompletingAfterDisposeStillReachesItsTerminalStatus()
+    {
+        // Shutdown with a timeout disposes a job whose thread still runs. When that thread ends, publishing the terminal
+        // status (which sets the completion event) must not throw on the disposed event.
+        using ManualResetEventSlim gate = new(false);
+        Job job = _CreateJob(ct => gate.Wait(TimeSpan.FromSeconds(30), ct));
+        job.Start();
+        job.Dispose();
+
+        gate.Set();
+        WaitHelper.WaitUntil(() => job.Status is JobStatus.Completed or JobStatus.Cancelled or JobStatus.Failed);
+
+        await Assert.That(job.Status).IsEqualTo(JobStatus.Completed);
+        await Assert.That(job.FailureException).IsNull();
+    }
+
+    [Test]
+    public async Task JobTryStartStartsAPendingJobAndIgnoresARepeat()
+    {
+        using ManualResetEventSlim gate = new(false);
+        using Job job = _CreateJob(ct => gate.Wait(TimeSpan.FromSeconds(30), ct));
+
+        bool first = job.TryStart(out Exception? firstFailure);
+        bool second = job.TryStart(out Exception? secondFailure);
+
+        await Assert.That(first).IsTrue();
+        await Assert.That(firstFailure).IsNull();
+        await Assert.That(second).IsTrue();
+        await Assert.That(secondFailure).IsNull();
+        await Assert.That(job.Status).IsEqualTo(JobStatus.Running);
+        gate.Set();
+        job.Join();
+    }
+
     private static Job _CreateJob(Action<CancellationToken> work)
     {
         return new Job(

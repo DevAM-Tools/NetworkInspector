@@ -22,7 +22,7 @@ internal static class PbfExporterRegistration
     /// <summary>Option name: write the block index at the end of the file.</summary>
     private const string _TrailerOption = "trailerIndex";
 
-    /// <summary>Option name: sort packets by timestamp.</summary>
+    /// <summary>Option name: declares that the packets arrive in non-decreasing timestamp order (metadata only; nothing is sorted).</summary>
     private const string _SortedOption = "timestampSorted";
 
     #endregion
@@ -52,8 +52,9 @@ internal static class PbfExporterRegistration
         options.RegisterBoolSetting(_CompressedOption, "Compressed", "", true, description: "Compress the blocks with LZ4.");
         options.RegisterBoolSetting(_TrailerOption, "Trailer index", "", true,
             description: "Write the block index at the end of the file for random access.");
-        options.RegisterBoolSetting(_SortedOption, "Sort by timestamp", "", false,
-            description: "Sort packets by timestamp before they are written; needs more memory.");
+        options.RegisterBoolSetting(_SortedOption, "Packets arrive sorted", "", false,
+            description: "Declares that the packets arrive in non-decreasing timestamp order. Metadata only: the exporter sorts nothing " +
+                "and the written bytes do not change.");
     }
 
     /// <summary>Creates the Core PBF exporter.</summary>
@@ -68,6 +69,9 @@ internal static class PbfExporterRegistration
             : PbfExportFormat.Standard;
         bool compressed = OptionValues.GetBool(values, _CompressedOption);
         bool trailer = OptionValues.GetBool(values, _TrailerOption);
+
+        // The flag is passed through as the Core builder defines it: a declaration that the packets arrive in timestamp
+        // order; the current PBF writer emits the same bytes either way. It does not sort the packets.
         bool sorted = OptionValues.GetBool(values, _SortedOption);
         return ExporterBuild.TryBuild<IPacketListener>(
             () => PbfExporter.CreateBuilder()

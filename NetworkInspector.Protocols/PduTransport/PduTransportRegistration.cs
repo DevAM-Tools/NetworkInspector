@@ -20,6 +20,13 @@ namespace NetworkInspector.Protocols.PduTransport;
 /// <c>settings.PreloadValue(PduTransportRegistration.UdpDispatchPortsSetting, SettingValue.U64Array([47290UL, 47291UL]));</c>
 /// A scalar <c>ulong</c> preload is ignored (type mismatch; default empty).
 /// </para>
+/// <para>
+/// <b>Trust boundary:</b> the file named by <c>pdu_transport.config_file</c> is loaded by the settings manager, which
+/// bounds file size and JSON depth. The stream overloads (<see cref="TryLoadConfig"/> and
+/// <c>Register(IStackBuilder, Stream, ICollection&lt;SettingsLoadWarning&gt;)</c>) read a caller-owned stream through
+/// <see cref="JsonConfigStream"/>, which applies no size or depth limit; the caller must bound an untrusted stream.
+/// A malformed document is an expected failure and is reported as a warning, never thrown.
+/// </para>
 /// <para><b>Thread safety:</b> not thread-safe; call once during single-threaded stack build.</para>
 /// </remarks>
 public static class PduTransportRegistration
@@ -32,6 +39,7 @@ public static class PduTransportRegistration
     /// <summary>Setting: UDP ports that select PDU Transport on <c>udp.port</c>.</summary>
     public const string UdpDispatchPortsSetting = "pdu_transport.udp_dispatch_ports";
 
+    /// <summary>Settings group name that identifies this protocol on load warnings.</summary>
     private const string _GroupName = "pdu_transport";
 
     #endregion
@@ -103,6 +111,9 @@ public static class PduTransportRegistration
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(warnings);
+        // The result and warning of the stream load are intentionally not inspected here: the protocol keeps the
+        // warning and hands it out through AppendRegistrationWarnings in _RegisterProtocol, and registration must
+        // continue so the file setting still applies.
         PduTransportProtocol protocol = new();
         _ = protocol.TryLoadConfigFromStream(stream, out _);
         _RegisterProtocol(builder, protocol, warnings);
@@ -139,7 +150,14 @@ public static class PduTransportRegistration
 
     #region Private helpers
 
-    /// <summary>Registers the protocol, runs field registration, then copies warnings to the caller.</summary>
+    /// <summary>
+    /// Registers the protocol, runs field registration, then copies warnings to the caller. The order matters:
+    /// field registration is where settings, the name file and the additional config are merged and validated, and
+    /// the warnings exist only after it has run.
+    /// </summary>
+    /// <param name="builder">Stack builder during the registration phase.</param>
+    /// <param name="protocol">New protocol instance; any additional config was applied before this call.</param>
+    /// <param name="warnings">Receives every registration warning.</param>
     private static void _RegisterProtocol(
         IStackBuilder builder,
         PduTransportProtocol protocol,

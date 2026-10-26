@@ -194,6 +194,46 @@ internal sealed class LengthPrefixDetectorTests
     #region Hostile length values
 
     [Test]
+    public async Task Detect_TotalLengthSmallerThanLengthField_ReturnsInvalid()
+    {
+        // The total length covers the 2-byte length field itself, so 1 cannot describe any PDU.
+        LengthPrefixDetector det = new(0, 2, bigEndian: true, lengthIncludesHeader: true);
+        byte[] data = [0, 1, 0xAA];
+
+        PduBoundaryResult result = det.Detect(data);
+
+        await Assert.That(result.IsInvalid).IsTrue();
+    }
+
+    [Test]
+    public async Task Detect_TotalLengthEqualToLengthField_ReturnsComplete()
+    {
+        LengthPrefixDetector det = new(0, 2, bigEndian: true, lengthIncludesHeader: true);
+        byte[] data = [0, 2, 0xAA];
+
+        PduBoundaryResult result = det.Detect(data);
+
+        await Assert.That(result.IsComplete).IsTrue();
+        await Assert.That(result.Length).IsEqualTo(2);
+    }
+
+    [Test]
+    [Arguments(5, false)]
+    [Arguments(6, true)]
+    public async Task Detect_TotalLengthAgainstHeaderSize_ReturnsExpectedState(int totalLength, bool complete)
+    {
+        // Header of 6 bytes with the length field at offset 4: a total length below 6 cannot hold the header.
+        LengthPrefixDetector det = new(4, 2, bigEndian: true, lengthIncludesHeader: true, headerSize: 6);
+        byte[] data = new byte[8];
+        data[5] = (byte)totalLength;
+
+        PduBoundaryResult result = det.Detect(data);
+
+        await Assert.That(result.IsComplete).IsEqualTo(complete);
+        await Assert.That(result.IsInvalid).IsEqualTo(!complete);
+    }
+
+    [Test]
     public async Task Detect_ZeroTotalLength_ReturnsInvalid()
     {
         LengthPrefixDetector det = new(0, 2, bigEndian: true, lengthIncludesHeader: true);

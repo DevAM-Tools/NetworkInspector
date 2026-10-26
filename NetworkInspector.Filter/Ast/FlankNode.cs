@@ -19,10 +19,20 @@ internal readonly record struct FlankWindow
         PacketCount = packetCount;
     }
 
-    /// <summary>Creates a duration window.</summary>
+    /// <summary>
+    /// Creates a duration window. No range check here (omitted on purpose): the window literal parser is the trust
+    /// boundary; it rejects negative amounts and amounts above <see cref="long.MaxValue"/> nanoseconds (about 292 years)
+    /// before this factory is reached, so callers other than the parser must pass a non-negative value.
+    /// </summary>
     public static FlankWindow FromNanoseconds(long nanoseconds) => new(false, nanoseconds, 0);
 
-    /// <summary>Creates a packet-count window.</summary>
+    /// <summary>
+    /// Creates a packet-count window. The upper bound is the packet-index range, so the window can never exceed the
+    /// number of packets a capture can hold.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="packets"/> is negative or above <see cref="ArrayIndexIdRange.MaxCount"/>.
+    /// </exception>
     public static FlankWindow FromPackets(int packets)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(packets);

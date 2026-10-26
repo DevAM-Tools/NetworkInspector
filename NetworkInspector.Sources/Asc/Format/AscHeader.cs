@@ -5,6 +5,7 @@ namespace NetworkInspector.Sources.Asc.Format;
 /// <summary>
 /// Parsed representation of an ASC file header.
 /// Contains metadata extracted from the header lines before the first data event.
+/// Not thread-safe: one scan thread feeds it line by line through <see cref="TryParseLine"/> and only reads it afterwards.
 /// </summary>
 internal sealed class AscHeader
 {
@@ -41,8 +42,8 @@ internal sealed class AscHeader
     }
 
     /// <summary>
-    /// Parsed start timestamp in nanoseconds since the Unix epoch, derived from the date header.
-    /// Zero if the date could not be parsed or was not present.
+    /// Parsed start timestamp in nanoseconds since the Unix epoch, derived from the date header; a parsable date on the
+    /// <c>Begin Triggerblock</c> line replaces it. Zero if the date could not be parsed or was not present.
     /// </summary>
     internal long StartUnixNanos
     {
@@ -136,7 +137,9 @@ internal sealed class AscHeader
             ReadOnlySpan<byte> rest = AscTokenizerBytes.TrimStartAscii(line[18..]);
             if (!rest.IsEmpty)
             {
-                string triggerDate = _ByteSpanToString(rest);
+                // Latin-1 like the date line: the German month "Mär" is the byte 0xE4, which ASCII decoding turns into '?' and the
+                // date parser then rejects, so a trigger-block date written by a German tool was silently ignored.
+                string triggerDate = _Latin1ToString(rest);
                 long triggerNanos = AscDateParser.TryParseToUnixNanos(triggerDate, TimestampTimeZone);
                 if (triggerNanos != 0)
                 {
@@ -256,11 +259,15 @@ internal sealed class AscHeader
     /// </summary>
     private static string _Latin1ToString(ReadOnlySpan<byte> span)
     {
+        // The text comes from the file, so its length is not trusted: only up to 128 chars (256 bytes) use the stack;
+        // anything longer takes the heap path so a hostile header line cannot exhaust the stack. The short path builds the
+        // string with one allocation (the result) and no intermediate array.
         if (span.Length > 128)
         {
             return System.Text.Encoding.Latin1.GetString(span);
         }
 
+        // Latin-1 maps byte value to code point one to one, so a plain widening cast is the decoding.
         Span<char> chars = stackalloc char[span.Length];
         for (int i = 0; i < span.Length; i++)
         {

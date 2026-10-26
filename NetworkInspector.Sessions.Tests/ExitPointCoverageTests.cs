@@ -21,12 +21,12 @@ internal sealed class ExitPointCoverageTests
 
         Stack wrongStack = TestHarness.CreateStack();
         FieldInfo stackField = typeof(Session).GetField(
-            "_Stack",
+            "_Holder",
             BindingFlags.Instance | BindingFlags.NonPublic)!;
-        Stack originalStack = (Stack)stackField.GetValue(session)!;
+        object originalStack = stackField.GetValue(session)!;
         try
         {
-            stackField.SetValue(session, wrongStack);
+            stackField.SetValue(session, new RetirableStack(wrongStack, ownedBySession: false, static (_, _) => { }));
 
             InvalidOperationException? caught = null;
             try

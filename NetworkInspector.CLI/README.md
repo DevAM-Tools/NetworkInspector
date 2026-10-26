@@ -84,7 +84,15 @@ Both commands take one or more source specs. The reader is chosen by file extens
 `ethernet`, `can`, `canfd`, `random`). Plugins add source kinds: `SampleGen:count=10,transport=tcp` is the form
 `kind:key=value,key=value`, where the keys are the option settings of the kind and the values use the text form of
 [`ni settings`](#ni-settings). A misspelled key is refused with the closest valid one
-(`Unknown option 'cout'; did you mean: count?`). `ni plugins list` shows which kinds exist.
+(`Unknown option 'cout'; did you mean: count?`), and so is a pair without a key or without `=`
+(`random:count=5,flag` is an error, not a source with a dropped option; a doubled or trailing comma is ignored).
+`ni plugins list` shows which kinds exist.
+
+The `random` source checks its ranges when it is created and names the option and the range in the error: `maxFrameSize` is
+at most 65 549 for `ipv4`, `udp4`, and `tcp4`, at most 65 589 for `ipv6`, `udp6`, and `tcp6`, and at most 2 147 483 591 for
+`fullrandom` and `ethernet` (the modes `can`, `canfd`, `tcpstream4`, and `tcpstream6` ignore the frame sizes);
+`framesPerSecond` is 0.001 to 1 000 000 000 and must be high enough that the timestamps of the last frame fit in 64 bits
+(at least 0.233 for `count=0`, an unlimited source).
 
 Several inputs are interleaved one frame at a time (round-robin), not concatenated and not merged by timestamp.
 Source specs must not contain shell metacharacters (`| & > < ; \` ( ) { }`); rename such files first.
@@ -107,7 +115,7 @@ ni convert <input> [<input2> ...] --output <path> [options]
 | `--split-size <MiB>` / `--split-count <N>` | Split the output by size or frame count |
 | `--filter <expr>` | Keep frames whose packet matches (parses each frame) |
 | `--progress <N>` | Report progress every N frames on stderr |
-| `--tolerant` | Skip unreadable records instead of aborting |
+| `--tolerant` | Skip unreadable records instead of aborting; a source that fails again before it delivered a frame is dropped |
 | `--blf-cache-size <MiB>` | BLF container cache budget (max 2047) |
 | `--profile <name>`, `--settings-path <dir>` | Protocol settings profile and storage (used with `--filter`) |
 | `--settings-max-config-file-bytes <bytes>` | Max settings/config JSON size (default 1073741824; `<= 0` disables) |
@@ -161,7 +169,7 @@ Export formats:
 
 | Spec | Variants | Inferred from |
 | --- | --- | --- |
-| `csv` | `csv:delimiter=;`, `header=false`, `bom=false`, `columns=ip.src;udp.dstport` | `.csv` |
+| `csv` | `csv:delimiter=;`, `header=false`, `bom=false`, `columns=ip.src;udp.dstport`, `neutralizeFormulas=false` | `.csv` |
 | `json` | `json:style=compact` (default), `pretty`, `array` | `.json` |
 | `text` | `text:level=summary\|standard\|full`, `text:truncate=<N>` (default 256, `0` = no limit) | `.txt` |
 | `pbf` | `pbf:format=standard\|columnar`, `compressed` (default) or `nocompress` | `.pbf` |
@@ -170,8 +178,18 @@ Export formats:
 
 Parameters combine with commas: `text:level=full,truncate=0`, `pbf:format=columnar,nocompress`. Any other
 extension needs `-f`. CSV writes a UTF-8 byte order mark and a header row by default; without `columns` it writes
-the number, time, info, and length of each packet. Packet formats of plugins work the same way
+the number, time, info, and length of each packet. The delimiter is one ASCII character other than NUL, CR, LF, and the
+double quote (a tab is allowed). Packet formats of plugins work the same way
 (`-f SampleText:includeHeader=false`).
+
+**CSV and spreadsheets.** Text from a capture is chosen by whoever sent the traffic, and a spreadsheet runs a cell that
+starts with `=`, `+`, `-`, `@`, a tab, or a carriage return as a formula (CSV injection). By default `csv` therefore puts
+an apostrophe in front of such a text cell (the info column and text fields; numbers, times, addresses, and the header row
+are not changed). Pass `csv:neutralizeFormulas=false` for machine processing, where the apostrophe would change the data;
+a file written that way is unsafe to open in a spreadsheet.
+
+The options `timestampSorted` of `pbf` and `parquet` only declare that the packets arrive in timestamp order; nothing is
+sorted and the written bytes do not change.
 
 > **Known issue in 0.16.0:** `text` with the default level `standard` (and `summary`) omits the protocol
 > containers and prints little more than the packet header. Use `text:level=full`.
@@ -307,14 +325,18 @@ The settings base is `NetworkInspector` in the application data folder of the us
 | Code | Meaning |
 | ---: | --- |
 | `0` | Success, also after Ctrl+C (`Export cancelled.` / `Conversion cancelled.`; the unfinished output is removed) |
-| `1` | Usage or validation error: missing or unknown option, unknown input extension, bad format spec or option, unknown setting or profile, an existing output without `--overwrite`, filter that does not compile |
+| `1` | Usage or validation error: missing or unknown option, unknown input extension, bad format spec or option, a source option without `key=value`, unknown setting or profile, a profile name or operation that the rules refuse, an existing output without `--overwrite`, filter that does not compile |
 | `2` | Source cannot be opened or read: missing file, invalid file header |
-| `3` | Runtime failure during conversion or export, including a packet that fails to parse, a filter that fails to evaluate, a split file that already exists, and a settings folder that stays locked by another process |
+| `3` | Runtime failure during conversion or export, including a packet that fails to parse, a filter that fails to evaluate, a split file that already exists, an output format that stops taking records before the input is finished, a profile operation that fails in the file system (`ni profile create` below a file, a folder that cannot be moved), and a settings folder that stays locked by another process |
 
 ## Operational Notes
 
-- `--tolerant` skips records the reader cannot read. A packet that the parser rejects still stops `export` with
-  code `3`.
+- `--tolerant` skips records the reader cannot read. A source that fails again right after a failure, without delivering
+  a frame in between, cannot move past the problem: it is dropped with a warning that names it, and the other inputs carry
+  on, so a source that fails on every read cannot keep a run alive forever. A packet that the parser rejects still stops
+  `export` with code `3`.
+- In a split run the refusal of an existing output names the first split file (`base_00001.ext`), the first path that
+  would be written, not the base name that was typed.
 - Progress, warnings, and the completion summary go to stderr; the console uses UTF-8.
 - Ctrl+C cancels cooperatively. Outputs that were finished stay; the output that was still open is deleted, because it
   is not a complete result. The same happens after an error. A file that `ni` refused to overwrite is never deleted.
@@ -327,7 +349,9 @@ The settings base is `NetworkInspector` in the application data folder of the us
 - **Repudiation**: Keep inputs, outputs, and the command line together for reproducibility.
 - **Information disclosure**: JSON, Text, and columnar outputs can contain payload secrets; protect them.
 - **Denial of service**: Use `--max-frames`, `--max-packets`, split options, and the settings size limits on
-  untrusted input.
+  untrusted input. The protocol settings bound the state that parsing keeps: `tcp.max_tracked_streams` and
+  `udp.max_tracked_streams` (default 10 000 streams each) and `http.max_decompressed_bytes` and
+  `ws.max_decompressed_bytes` (default 64 MiB); `ni settings list --scope profile` shows them with their ranges.
 - **Elevation of privilege**: Run `ni` with least-required file-system permissions.
 
 ## Learn More

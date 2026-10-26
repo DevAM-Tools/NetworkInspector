@@ -5,10 +5,21 @@ namespace NetworkInspector.Exporters;
 /// <summary>
 /// Abstraction for export output targets (file, stream, stdout).
 /// File outputs use a 4 MiB buffer for efficient large-block I/O.
+/// <para>
+/// Ownership: a file output and a stdout output own their stream and close it on <see cref="Dispose()"/>; an output wrapping
+/// a caller-supplied stream never disposes that stream. Exporters create the output through the builder, hand it
+/// to their writer through <see cref="GetOrCreateUnderlyingStream"/>, and dispose it exactly once on finish.
+/// </para>
+/// <para>
+/// <b>Thread safety:</b> Not thread-safe. An output belongs to one exporter, which uses it from one thread at a time.
+/// </para>
 /// </summary>
 public abstract class ExportOutput : IDisposable
 {
-    /// <summary>Default buffer size for file output (4 MiB).</summary>
+    /// <summary>
+    /// Default buffer size for file output (4 MiB). Large blocks keep the number of write system calls low for big
+    /// exports; the buffer is allocated once per file output, on the first write.
+    /// </summary>
     private const int _DefaultFileBufferSize = 4 * 1024 * 1024;
 
     /// <summary>Creates a file-backed output with a 4 MiB write buffer.
@@ -41,9 +52,13 @@ public abstract class ExportOutput : IDisposable
 
     /// <summary>Writes bytes to the output.</summary>
     /// <param name="data">The data to write.</param>
+    /// <exception cref="IOException">The underlying stream could not be written (or, for a file, created).</exception>
     public abstract void Write(ReadOnlySpan<byte> data);
 
-    /// <summary>Flushes any buffered data to the output.</summary>
+    /// <summary>
+    /// Flushes any buffered data to the output. For a file output that was never written, nothing is flushed and no file
+    /// is created.
+    /// </summary>
     public abstract void Flush();
 
     /// <summary>
@@ -62,6 +77,40 @@ public abstract class ExportOutput : IDisposable
     /// <see cref="TryGetExistingStream"/> instead.
     /// </remarks>
     internal abstract Stream? GetOrCreateUnderlyingStream();
+
+    /// <summary>
+    /// Same as <see cref="GetOrCreateUnderlyingStream"/>, but reports an open failure (missing directory, access denied, a
+    /// path the platform rejects) and a missing stream as a result instead of an exception. Exporters call this on their first
+    /// item, so a file that cannot be created ends up in the normal error path (counter and event) and never escapes
+    /// <c>OnFrame</c> or <c>OnPacket</c>.
+    /// </summary>
+    /// <param name="stream">The stream when the result is <see langword="true"/>; otherwise <see langword="null"/>.</param>
+    /// <param name="failure">Reason text when the result is <see langword="false"/>; otherwise empty.</param>
+    /// <returns><see langword="true"/> when a stream is available.</returns>
+    internal bool TryGetOrCreateUnderlyingStream([NotNullWhen(true)] out Stream? stream, out string failure)
+    {
+        try
+        {
+            stream = GetOrCreateUnderlyingStream();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException
+            or System.Security.SecurityException)
+        {
+            // Only the failures a file open can produce are expected here; anything else is a bug and still propagates.
+            stream = null;
+            failure = ex.Message;
+            return false;
+        }
+
+        if (stream is null)
+        {
+            failure = "the output has no stream to write to.";
+            return false;
+        }
+
+        failure = string.Empty;
+        return true;
+    }
 
     /// <summary>
     /// Returns the underlying stream if it has already been materialised, or <c>null</c>
@@ -90,10 +139,16 @@ public abstract class ExportOutput : IDisposable
 /// </summary>
 internal sealed class LazyFileExportOutput : ExportOutput
 {
+    /// <summary>Target file path, as given by the caller (validated for illegal characters by <see cref="ExportOutput.File"/>).</summary>
     private readonly string _Path;
+
+    /// <summary>Size of the <see cref="BufferedStream"/> wrapped around the file stream.</summary>
     private readonly int _BufferSize;
+
+    /// <summary>The buffered file stream; <c>null</c> until the first write or <see cref="GetOrCreateUnderlyingStream"/> call.</summary>
     private Stream? _Stream;
 
+    /// <inheritdoc/>
     public override long AcceptedBytes { get; protected set; }
 
     /// <summary>Creates a lazy file output.</summary>
@@ -108,6 +163,9 @@ internal sealed class LazyFileExportOutput : ExportOutput
     /// <inheritdoc/>
     public override void Write(ReadOnlySpan<byte> data)
     {
+        // Lazy create: the file appears only with the first byte. FileMode.Create truncates an existing file, and
+        // FileShare.None gives the exporter exclusive access so no other process reads or writes a half-written export.
+        // The 4 MiB BufferedStream turns many small writer calls into few large file writes.
         _Stream ??= new BufferedStream(
             new FileStream(_Path, FileMode.Create, FileAccess.Write, FileShare.None),
             _BufferSize);
@@ -119,7 +177,11 @@ internal sealed class LazyFileExportOutput : ExportOutput
     public override void Flush() => _Stream?.Flush();
 
     /// <inheritdoc/>
-    /// <remarks>Materialises the underlying <see cref="FileStream"/> on first call.</remarks>
+    /// <remarks>
+    /// Materialises the underlying <see cref="FileStream"/> on first call (same open mode and buffering as
+    /// <see cref="Write"/>). The returned stream is the <see cref="BufferedStream"/>, so a writer that writes to it directly
+    /// also benefits from the buffer; those bytes are not counted in <see cref="AcceptedBytes"/>.
+    /// </remarks>
     internal override Stream? GetOrCreateUnderlyingStream()
     {
         _Stream ??= new BufferedStream(
@@ -134,6 +196,8 @@ internal sealed class LazyFileExportOutput : ExportOutput
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
+        // Disposing the BufferedStream flushes its pending bytes and closes the file. Nothing happens when the file was
+        // never created, so an empty export leaves no file.
         if (disposing)
         {
             _Stream?.Dispose();
@@ -145,9 +209,13 @@ internal sealed class LazyFileExportOutput : ExportOutput
 /// <summary>Stream-backed <see cref="ExportOutput"/> implementation.</summary>
 internal sealed class StreamExportOutput : ExportOutput
 {
+    /// <summary>The target stream.</summary>
     private readonly Stream _Stream;
+
+    /// <summary>Whether <see cref="Dispose(bool)"/> disposes the stream (stdout) or leaves it to the caller.</summary>
     private readonly bool _OwnsStream;
 
+    /// <inheritdoc/>
     public override long AcceptedBytes { get; protected set; }
 
     /// <summary>Creates a stream-backed output.</summary>

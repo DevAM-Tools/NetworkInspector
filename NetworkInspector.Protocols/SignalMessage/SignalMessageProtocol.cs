@@ -56,12 +56,18 @@ internal sealed class SignalMessageProtocol : IProtocol
     /// Mux selectors up to this bit length get a dense <c>muxValue → signals</c> table
     /// (256 slots at 8 bits). Wider selectors keep a linear group scan — typical DBC mux
     /// is 8 bits or less, and a 2^16 pointer table would dwarf the group list.
+    /// Constant (not configurable): it is a memory/lookup-speed trade-off of the data structure, not a trust-boundary
+    /// limit, because the selector width is already bounded to 1..64 bits by the compiler.
     /// </summary>
     private const byte _DenseMuxMaxBitLength = 8;
 
     /// <summary>
     /// CustomText is precomputed for every raw value when bit length is at most this
     /// (4096 strings at 12 bits). Wider signals format on the materialize path.
+    /// Registration pays up to 4096 strings per signal once so that materializing a frame
+    /// costs one array index instead of a number-format pass and a string allocation per signal.
+    /// The table (4096 references = 32 KiB) also stays below the large-object-heap threshold. Constant, not configurable:
+    /// it only bounds a registration-time memory/speed trade-off and does not guard against untrusted input.
     /// </summary>
     private const byte _PrecomputedCustomTextMaxBitLength = 12;
 
@@ -78,8 +84,14 @@ internal sealed class SignalMessageProtocol : IProtocol
     /// <inheritdoc/>
     public string? Description { get; }
 
+    /// <summary>
+    /// Minimum payload length in bytes: the exclusive end byte of the farthest signal
+    /// (static, mux selector, and every mux-group signal). Because Parse guarantees at least this many
+    /// bytes, extraction needs no per-signal bounds check.
+    /// </summary>
     internal int RequiredByteLength { get; }
 
+    /// <summary>Dispatch-table bindings (table name and key) that route payloads to this protocol; wired by the registration type.</summary>
     internal DispatchBinding[] DispatchBindings { get; }
 
     private readonly bool _ShowRaw;
@@ -89,10 +101,15 @@ internal sealed class SignalMessageProtocol : IProtocol
 
     #region Runtime tables
 
+    // The compiled signals arrive without FieldIds because fields can only be registered once the builder
+    // and ProtocolId exist. RegisterFields turns the "pending" arrays into the registered runtime arrays
+    // below (SignalInfo is an immutable record struct, so the registered copies are made with 'with').
     private SignalInfo[] _PendingStaticSignals;
     private CompiledMuxGroup[] _PendingMuxGroups;
     private SignalInfo? _PendingMuxSignal;
 
+    // Runtime tables are written only by RegisterFields during the single-threaded stack build and are
+    // read-only afterwards, so Parse and the populator read them without synchronization.
     private SignalInfo[] _StaticSignals;
     private MuxGroupRuntime[] _MuxGroups;
     /// <summary>
@@ -101,8 +118,12 @@ internal sealed class SignalMessageProtocol : IProtocol
     /// </summary>
     private SignalInfo[]?[]? _MuxByValue;
     private SignalInfo _MuxSignal;
+
+    // False when the message has no (usable) mux selector, or when registering the mux fields failed.
     private bool _HasMux;
 
+    // Invalid until registration succeeds for the respective field; Parse checks _ContainerFieldId so that
+    // a failed registration yields "not parsed" instead of appending an unregistered field.
     private FieldId _ContainerFieldId = FieldId.Invalid;
     private FieldId _MuxFieldId = FieldId.Invalid;
     private FieldId _MuxValueFieldId = FieldId.Invalid;
@@ -129,6 +150,9 @@ internal sealed class SignalMessageProtocol : IProtocol
     /// Creates a message protocol from a compiled config. Field IDs are assigned in
     /// <see cref="RegisterFields"/>. Compiled arrays are treated as empty when null.
     /// </summary>
+    /// <param name="compiled">Validated message definition produced by the compiler (layout already checked).</param>
+    /// <param name="settings">Compile settings; only the show-raw and show-enum switches are used here.</param>
+    /// <exception cref="ArgumentException">Thrown when the compiled message name is null, empty, or whitespace.</exception>
     internal SignalMessageProtocol(CompiledSignalMessage compiled, in SignalMessageCompileSettings settings)
     {
         if (string.IsNullOrWhiteSpace(compiled.Name))
@@ -183,7 +207,9 @@ internal sealed class SignalMessageProtocol : IProtocol
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_IndexGroupId);
 
-        // Store only the bytes extractors need.
+        // Store only the bytes extractors need. Slicing a ReadOnlyMemory does not copy: the container
+        // references the frame buffer, and the signals are decoded later (only if the field tree is
+        // actually materialized) instead of for every parsed frame.
         ReadOnlyMemory<byte> stored = data[..RequiredByteLength];
         parentField.AppendLazyWithCustomText(
             _ContainerFieldId,
@@ -208,7 +234,9 @@ internal sealed class SignalMessageProtocol : IProtocol
             return ParseError.InvalidData(Name, "Container value is not of type Bytes");
         }
 
-        // Length was validated in Parse; extractors are bounds-free.
+        // Parse stored exactly RequiredByteLength bytes, which covers every static, mux and mux-group
+        // signal, so the extractors skip per-signal bounds checks. Static signals first, then the
+        // mux container: that is the child order shown in the field tree.
         ReadOnlySpan<byte> span = payload.Span;
         _AppendStaticSignals(in container, span);
         _AppendMuxSignals(in container, span);
@@ -217,6 +245,7 @@ internal sealed class SignalMessageProtocol : IProtocol
 
     /// <summary>
     /// Extracts each always-present signal and appends it under the container.
+    /// Inlined into the populator: it is the per-signal loop of the lazy materialization path.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _AppendStaticSignals(in MutField container, ReadOnlySpan<byte> span)
@@ -242,6 +271,9 @@ internal sealed class SignalMessageProtocol : IProtocol
             return;
         }
 
+        // The selector is always appended (even when no group matches) so the tree shows which
+        // multiplexer value the frame carried. Its field id is _MuxFieldId, not a SignalFieldId:
+        // _MuxSignal is stored with invalid signal ids because it is not a regular signal.
         ref readonly SignalInfo mux = ref _MuxSignal;
         ulong muxValue = SignalMessageBits.ExtractRawUnchecked(span, in mux);
         MutField muxField = container.AppendWithCustomText(
@@ -250,6 +282,8 @@ internal sealed class SignalMessageProtocol : IProtocol
             mux.UiName, ": ", muxValue);
         muxField.Append(_MuxValueFieldId, FieldValue.NewU64(muxValue));
 
+        // Only the group whose mux_value equals the selector is decoded: signals of other groups are
+        // defined to be present only for their own selector value, so decoding them would show noise.
         SignalInfo[]? groupSignals = _LookupMuxGroup(muxValue);
         if (groupSignals is null)
         {
@@ -266,6 +300,8 @@ internal sealed class SignalMessageProtocol : IProtocol
 
     /// <summary>
     /// Resolves mux-group signals for <paramref name="muxValue"/>; <see langword="null"/> when unmatched.
+    /// Dense table: O(1) index with no comparison loop. Linear scan fallback: for selectors wider than
+    /// <see cref="_DenseMuxMaxBitLength"/> bits, where a table indexed by value would be too large.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private SignalInfo[]? _LookupMuxGroup(ulong muxValue)
@@ -273,6 +309,8 @@ internal sealed class SignalMessageProtocol : IProtocol
         SignalInfo[]?[]? dense = _MuxByValue;
         if (dense is not null)
         {
+            // Defensive: the extracted selector has at most the selector bit length bits, so it is
+            // always below dense.Length; the check keeps an out-of-range index impossible by construction.
             if (muxValue >= (ulong)dense.Length)
             {
                 return null;
@@ -300,6 +338,8 @@ internal sealed class SignalMessageProtocol : IProtocol
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void _AppendSignal(in MutField parent, ulong raw, in SignalInfo signal)
     {
+        // Physical value and enum name are resolved up front because both the CustomText and the optional
+        // .enum child need the name; the enum lookup is skipped entirely for signals without value_names.
         double phys = SignalMessageBits.ToPhysical(raw, in signal);
         string? enumName = null;
         if (signal.Enums.Kind != SignalEnumKind.None)
@@ -310,6 +350,8 @@ internal sealed class SignalMessageProtocol : IProtocol
             }
         }
 
+        // CustomText is built only when a field tree stores it or a value cache records it (WantsCustomText);
+        // otherwise only the typed F64 value is appended and no text work happens at all.
         MutField signalField;
         if (parent.WantsCustomText(signal.SignalFieldId))
         {
@@ -317,10 +359,14 @@ internal sealed class SignalMessageProtocol : IProtocol
             string[]? cached = signal.CustomTextByRaw;
             if (cached is not null)
             {
+                // Precomputed table (bit length <= 12): raw < 2^BitLength is guaranteed by the extractor
+                // masking, so the index is in range. Reuses one shared string per raw value, no formatting.
                 text = new LazyString(cached[(int)raw]);
             }
             else
             {
+                // Wide signal: a table over every raw value would be too large, so the text is composed
+                // per signal through ZA.Lazy (a LazyString) instead.
                 text = _BuildCustomText(in signal, raw, phys, enumName);
             }
 
@@ -334,6 +380,8 @@ internal sealed class SignalMessageProtocol : IProtocol
             signalField = parent.Append(signal.SignalFieldId, FieldValue.NewF64(phys));
         }
 
+        // Optional children: their ids are Invalid unless the show_raw / show_enum setting was on and
+        // registration succeeded, so a disabled child costs only this check.
         if (signal.RawFieldId.IsValid)
         {
             signalField.Append(signal.RawFieldId, FieldValue.NewU64(raw));
@@ -361,6 +409,8 @@ internal sealed class SignalMessageProtocol : IProtocol
         string unit = signal.Unit;
         string uiName = signal.UiName;
 
+        // One ZA.Lazy call per shape (unit and/or enum present) instead of passing empty strings: the
+        // argument list is fixed per call, and omitting absent parts avoids stray separators in the text.
         if (enumName is not null)
         {
             if (unit.Length > 0)
@@ -393,8 +443,12 @@ internal sealed class SignalMessageProtocol : IProtocol
         }
 
         // bitLength is 1..12 → slotCount is 2..4096 (fits in int, below LOH for the string[] header).
+        // The loop below assigns every slot, so skipping the zero-fill of the uninitialized array is safe.
         int slotCount = 1 << bitLength;
         string[] table = GC.AllocateUninitializedArray<string>(slotCount);
+
+        // Formats once per possible raw value, with exactly the same text _AppendSignal would compose at
+        // parse time (physical value, unit, raw, enum name), so both paths stay interchangeable.
         for (int raw = 0; raw < slotCount; raw++)
         {
             ulong rawU = (ulong)raw;
@@ -432,6 +486,8 @@ internal sealed class SignalMessageProtocol : IProtocol
         _ProtocolId = protocolId;
         _IndexGroupId = builder.GetOrCreateIndexGroup(Name);
 
+        // Container first: without it nothing can be appended, so on failure every table is cleared and
+        // _ContainerFieldId stays Invalid, which makes Parse return "not parsed" (the no-op populator stays).
         if (!_TryRegisterField(
                 builder,
                 protocolId,
@@ -450,9 +506,12 @@ internal sealed class SignalMessageProtocol : IProtocol
             return;
         }
 
+        // Static signals: a failed signal is dropped, the others stay usable (best effort).
         _StaticSignals = _RegisterSignalArray(builder, protocolId, _PendingStaticSignals, warnings);
         _PendingStaticSignals = [];
 
+        // Mux: the selector needs both its container field and the ".value" child; if either fails the
+        // whole mux (including its groups) is disabled, because group signals hang under the mux field.
         if (_HasMux && _PendingMuxSignal is SignalInfo muxCompiled)
         {
             string muxName = muxCompiled.Name;
@@ -484,6 +543,8 @@ internal sealed class SignalMessageProtocol : IProtocol
             }
             else
             {
+                // The selector is decoded with the shared extractor, which only needs the bit layout; the
+                // signal field ids are cleared because the selector is appended under _MuxFieldId instead.
                 _MuxSignal = muxCompiled with
                 {
                     SignalFieldId = FieldId.Invalid,
@@ -510,7 +571,9 @@ internal sealed class SignalMessageProtocol : IProtocol
         _PendingMuxGroups = [];
         _PendingMuxSignal = null;
 
-        // Capture 'this' once during registration so Parse never sees a null delegate.
+        // Bind the method group to a delegate once here (it captures 'this') instead of converting it on
+        // every Parse call, which would allocate a delegate per frame. Assigned last so Parse can never
+        // see a half-registered instance with a real populator.
         _ContainerPopulator = _PopulateContainerFields;
     }
 
@@ -525,10 +588,14 @@ internal sealed class SignalMessageProtocol : IProtocol
             return null;
         }
 
+        // muxBitLength is 1..8 here, so at most 256 slots (2 KiB of references). Slots without a group stay
+        // null, which the lookup returns as "no group for this selector value".
         int slotCount = 1 << muxBitLength;
         SignalInfo[]?[] table = new SignalInfo[]?[slotCount];
         for (int g = 0; g < groups.Length; g++)
         {
+            // The compiler already rejects mux_value above the selector's maximum raw value and duplicate
+            // values; the bound check only protects the array index.
             ulong muxValue = groups[g].MuxValue;
             if (muxValue < (ulong)slotCount)
             {
@@ -549,6 +616,9 @@ internal sealed class SignalMessageProtocol : IProtocol
         SignalInfo[] compiled,
         ICollection<SettingsLoadWarning> warnings)
     {
+        // Each signal registers independently: the parent field is mandatory (skip the signal on failure),
+        // the optional .raw / .enum children are best effort (the signal stays, only the child is missing).
+        // The raw-to-text table is built here, once, so the parse path never formats small signals.
         List<SignalInfo> result = new(compiled.Length);
         for (int i = 0; i < compiled.Length; i++)
         {
@@ -627,6 +697,9 @@ internal sealed class SignalMessageProtocol : IProtocol
         ICollection<SettingsLoadWarning> warnings,
         out FieldId id)
     {
+        // Names come from a user-supplied JSON file (trust boundary). Re-validating here, right before the
+        // builder call, and pre-checking for collisions turns bad or duplicate names into per-field
+        // warnings instead of a RegistrationException that would abort the whole message.
         id = FieldId.Invalid;
         if (!NameValidation.IsValidName(name))
         {

@@ -13,16 +13,19 @@ internal static class FormatSpec
 
     /// <summary>
     /// Splits a spec into the format name and its option pairs. A bare flag without <c>=</c> (for example <c>compressed</c>)
-    /// is the same as <c>flag=true</c>.
+    /// is the same as <c>flag=true</c>. Keys and values are trimmed and taken literally: there is no escaping, so a value cannot
+    /// contain a comma. The names are not checked here; the format registration and the Core text codec judge them later.
     /// </summary>
     /// <param name="spec">The spec as typed.</param>
-    /// <param name="format">The format name in front of the first colon.</param>
+    /// <param name="format">The format name in front of the first colon (the whole spec when it has no colon).</param>
     /// <param name="pairs">The option pairs in the order given.</param>
     /// <exception cref="ArgumentException">The spec is blank.</exception>
     internal static void Split(string spec, out string format, out List<KeyValuePair<string, string>> pairs)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(spec);
 
+        // Only the first colon splits the spec; a colon at position 0 (or none) leaves the whole text as the format name, which
+        // then fails as an unknown format with the full text in the message.
         int colon = spec.IndexOf(':', StringComparison.Ordinal);
         format = colon > 0
             ? spec[..colon]
@@ -38,6 +41,7 @@ internal static class FormatSpec
 
         foreach (string part in parameters.Split(','))
         {
+            // key=value; the first '=' separates, so a value may contain further '=' characters.
             int equals = part.IndexOf('=', StringComparison.Ordinal);
             if (equals > 0)
             {
@@ -45,6 +49,7 @@ internal static class FormatSpec
                 continue;
             }
 
+            // A bare word is a boolean flag; empty parts (a trailing comma) are ignored.
             string flag = part.Trim();
             if (flag.Length > 0)
             {
@@ -71,6 +76,9 @@ internal static class FormatSpec
         [NotNullWhen(true)] out TListener? listener, [NotNullWhen(false)] out PluginError? error)
         where TListener : class
     {
+        // The option settings live only for this call (the using): the factories read their option values while they create the
+        // listener, so the read-only view handed to them is not valid afterwards. A text the codec rejects is an expected failure
+        // and returns an error value, never an exception.
         using SettingsManager options = RegistrationOptions.CreateDefaults(registration.RegisterOptions);
         if (!RegistrationOptions.TryApplyTexts(options, optionTexts, out error))
         {
@@ -78,6 +86,8 @@ internal static class FormatSpec
             return false;
         }
 
+        // The item count is 0 (unknown): the command streams the sources and cannot tell the total in advance; the field is
+        // informational for progress only, never a stop condition.
         return registration.Create(new ExportRequest(fullPath, options.ReadOnly, stack, 0, cancellationToken), out listener, out error);
     }
 

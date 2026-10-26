@@ -12,6 +12,11 @@ namespace NetworkInspector.Protocols;
 /// Usage: <c>ZA.String("prefix: ", address, ", suffix")</c> — ZeroAlloc writes each
 /// argument directly into a thread-static buffer using <c>ISpanFormattable.TryFormat</c>,
 /// returning a <see cref="TempString"/> that converts to <c>string</c> with one allocation.
+/// <para><c>ZA.Lazy(...)</c> builds a <see cref="LazyString"/> instead: it captures the (value-typed) arguments and formats
+/// them once on first access, which is what packet info and other display text that is rarely read should use. The
+/// <c>MutField</c> custom-text appenders take the format fragments directly and defer or skip formatting themselves, so
+/// <c>ZA.Lazy</c> must not be wrapped around their arguments (analyzer NIGEN015).</para>
+/// <para>The class is stateless; the generated members are static and safe to call from any thread.</para>
 /// </remarks>
 // CA1812: This class appears unused because all members are static and generated
 //         by the ZeroAlloc source generator — the analyzer cannot see generated code.

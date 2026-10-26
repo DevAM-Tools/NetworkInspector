@@ -11,9 +11,12 @@ public abstract class SettingsException : Exception
     #region Constructors
 
     /// <summary>Creates a new settings exception with the specified message.</summary>
+    /// <param name="message">Message text; must not contain secrets.</param>
     protected SettingsException(string message) : base(message) { }
 
     /// <summary>Creates a new settings exception with an inner exception.</summary>
+    /// <param name="message">Message text; must not contain secrets.</param>
+    /// <param name="innerException">The exception that caused this one.</param>
     protected SettingsException(string message, Exception innerException)
         : base(message, innerException) { }
 

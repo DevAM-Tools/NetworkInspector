@@ -22,7 +22,11 @@ internal enum FileFormat
 /// Result of format detection: identifies the file format, byte order, and timestamp resolution.
 /// </summary>
 /// <param name="Format">Detected file format.</param>
-/// <param name="ByteSwapped">Whether the file uses swapped byte order relative to the host.</param>
+/// <param name="ByteSwapped">
+/// Whether the file is big-endian. "Native" in the magic constants means little-endian: detection reads the magic as
+/// little-endian whatever the host is. The flag is passed on to <c>EndianReader</c>, which interprets it relative to the
+/// machine byte order; the two readings coincide on little-endian hosts (every supported x64 and ARM64 target).
+/// </param>
 /// <param name="NanosecondTimestamps">Whether the file uses nanosecond timestamps (legacy PCAP only).</param>
 internal readonly record struct FormatDetectionResult(
     FileFormat Format,
@@ -55,7 +59,8 @@ internal static class PcapFormatDetection
             return false;
         }
 
-        // Read first 4 bytes as LE to identify the format
+        // Read first 4 bytes as LE to identify the format. A big-endian file shows up as the "swapped" constant, so the
+        // detection itself needs no host-endianness check.
         uint magic = BinaryPrimitives.ReadUInt32LittleEndian(data);
 
         switch (magic)

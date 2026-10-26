@@ -4,7 +4,9 @@ namespace NetworkInspector.Protocols.Attributes;
 
 /// <summary>
 /// Marks a class as a protocol implementation. The source generator produces
-/// <c>RegisterFields(IStackBuilder, ProtocolId)</c> and related boilerplate.
+/// <c>RegisterFields(IStackBuilder, ProtocolId)</c> and related boilerplate: the <c>IProtocol</c> members
+/// <c>Name</c>, <c>UiName</c>, <c>OnStart</c> and <c>OnShutdown</c>, a <c>ProtocolName</c> constant and the
+/// protocol's ID field. The annotated class must be <see langword="partial"/> so the generated part can be merged in.
 /// </summary>
 /// <remarks>Initializes a new protocol marker attribute.</remarks>
 /// <param name="name">Machine-readable protocol name.</param>

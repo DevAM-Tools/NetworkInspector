@@ -30,6 +30,9 @@ internal readonly partial struct BlfBlockHeader
             return false;
         }
 
+        // Computed in long: object_length is an untrusted u32 that must not wrap into a negative or small int. The skip is
+        // the larger of header_size and object_length (header_size is already >= 16 here, the 16 keeps the formula the same
+        // as in the other readers). The cap is checked before the int conversion, so the cast below cannot truncate.
         long distance = Math.Max(Math.Max((long)header.HeaderSize.Value, BlfConstants.BlockHeaderSize), header.ObjectLength.Value);
         if (distance > BlfConstants.MaxBlockReadSize)
         {

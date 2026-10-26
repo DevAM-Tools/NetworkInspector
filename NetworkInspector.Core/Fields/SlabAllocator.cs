@@ -11,6 +11,18 @@ namespace NetworkInspector.Core.Fields;
 /// Each allocation returns a <c>(T[] buffer, int offset)</c> pair into the shared array.
 /// </para>
 /// <para>
+/// <b>Why:</b> many small, similarly sized regions (one field table per parsed packet, one buffer per captured frame) would
+/// otherwise each be a separate array: one allocation and one more object for the GC to track per packet or frame. Carving
+/// them from one large array turns that into one allocation per slab plus a pointer bump, and keeps neighbours adjacent in
+/// memory. Callers size the slab below the large-object-heap threshold (about 85 KB) where possible so a slab is an ordinary
+/// generation-0 object and does not force a full collection when it dies.
+/// </para>
+/// <para>
+/// <b>Shared source:</b> this file is link-compiled into <c>NetworkInspector.Sources</c> (for frame slabs of the sequential
+/// readers) as well as built in Core. Each assembly compiles its own internal copy, so the type stays internal in both and
+/// must not depend on other Core types.
+/// </para>
+/// <para>
 /// <b>Not an arena allocator.</b> Unlike a true arena (where all allocations share a single
 /// lifetime and are freed together via <c>Reset()</c>), this allocator has no collective
 /// deallocation. Each consumer independently references its slice of the backing array.
@@ -30,14 +42,16 @@ namespace NetworkInspector.Core.Fields;
 /// and copies its existing data — the old slots become orphaned (negligible waste).
 /// </para>
 /// <para>
-/// <b>Thread-safety:</b> Not thread-safe, and does not need to be: each thread manages its own
-/// slab instance via <c>[ThreadStatic]</c>, so concurrent parses on different threads never share
-/// a slab. Buffers already carved out stay valid for readers of the resulting packets — a slab is
-/// only ever appended to, never compacted.
+/// <b>Thread-safety:</b> Not thread-safe, and does not need to be: every instance is used by one thread only
+/// (Core keeps its slabs in <c>[ThreadStatic]</c> fields, so concurrent parses on different threads never share a slab;
+/// each sequential frame reader owns its own instance). <c>_Used</c> is therefore a plain field with no volatile or
+/// interlocked access, and sharing an instance between threads would hand out overlapping regions. Buffers already carved
+/// out stay valid for readers of the resulting packets — a slab is only ever appended to, never compacted. Other threads may
+/// read those regions concurrently because they never overlap the region a later allocation hands out.
 /// </para>
 /// </summary>
-/// <typeparam name="T">The element type stored in the slab. Must be a value or reference type.
-/// For value types, the backing array is initialized to <c>default(T)</c> by the runtime.</typeparam>
+/// <typeparam name="T">The element type stored in the slab.
+/// The backing array is zero-initialized (<c>default(T)</c>) unless the slab is created with the uninitialized policy.</typeparam>
 internal sealed class SlabAllocator<T>
 {
     /// <summary>The shared backing array from which all allocations are carved.</summary>
@@ -49,6 +63,7 @@ internal sealed class SlabAllocator<T>
     /// <summary>Creates a slab allocator with the specified slot capacity.</summary>
     /// <param name="capacity">Total number of <typeparamref name="T"/> slots in the backing array.
     /// Choose a capacity that keeps the array below the 85 KB LOH threshold for value types.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="capacity"/> is negative.</exception>
     internal SlabAllocator(int capacity)
         : this(capacity, uninitialized: false)
     {
@@ -61,9 +76,12 @@ internal sealed class SlabAllocator<T>
     /// write every slot of a region before anything reads it (frame byte copies); <c>T</c> with references is still
     /// zeroed by the runtime.
     /// </param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="capacity"/> is negative.</exception>
     /// <remarks>
-    /// This file is link-compiled into <c>NetworkInspector.Sources</c> for frame slabs, so both assemblies use the same
-    /// bump allocator. Each assembly compiles its own internal copy.
+    /// The uninitialized policy saves the zeroing pass over the whole slab (a memory-bandwidth cost proportional to the slab
+    /// size, paid once per slab). It is only safe when the consumer never reads a slot it has not written first, which is
+    /// the contract of the frame byte slabs. The field-table and lazy-populator slabs are created through the zeroing
+    /// constructor (<c>Packet.AllocateFromSlab</c>), so their unwritten slots read as <c>default</c>.
     /// </remarks>
     internal SlabAllocator(int capacity, bool uninitialized)
     {
@@ -83,6 +101,11 @@ internal sealed class SlabAllocator<T>
     /// a new <see cref="SlabAllocator{T}"/> instance and retry.
     /// </para>
     /// </summary>
+    /// <param name="count">Number of slots to reserve. Zero succeeds without consuming space.</param>
+    /// <param name="buffer">The shared backing array on success; <see langword="null"/> on failure (must not be used).</param>
+    /// <param name="offset">Start of the reserved region within <paramref name="buffer"/>; 0 on failure.</param>
+    /// <returns><see langword="true"/> if the region was reserved; <see langword="false"/> if the slab has too little space left.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is negative (a caller bug, not an expected failure).</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryAllocate(int count, out T[] buffer, out int offset)
     {
@@ -92,15 +115,20 @@ internal sealed class SlabAllocator<T>
                 "Allocation count must be non-negative.");
         }
 
+        // Out of space is an expected failure (the caller starts a new slab), so it is a false return, not an exception.
+        // Overflow reasoning: _Used never exceeds the array length, so length - used is non-negative, and count is
+        // non-negative after the check above. Comparing both as unsigned therefore decides "count fits" exactly, and the
+        // test never computes used + count, which could overflow int for a huge count.
         int used = _Used;
         int length = _Buffer.Length;
         if ((uint)count > (uint)(length - used))
         {
-            buffer = null!;
+            buffer = null!; // Invariant: callers never read buffer when false is returned.
             offset = 0;
             return false;
         }
 
+        // Bump the pointer. Plain (non-atomic) store: the allocator is single-threaded by contract.
         buffer = _Buffer;
         offset = used;
         _Used = used + count;

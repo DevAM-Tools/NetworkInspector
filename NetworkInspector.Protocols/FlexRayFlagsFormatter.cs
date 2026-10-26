@@ -26,6 +26,9 @@ internal static class FlexRayFlagsFormatter
     #region Frame indicators (4 flags)
 
     // Key packing: bit0=PPI, bit1=NFI, bit2=SFI, bit3=STFI
+    // The tables are built once in the type initializer, so the per-packet Format* calls are one array read with no
+    // string building and no allocation. The key packing in FormatIndicators and the bit tests in the builder below
+    // must stay in sync: table index i holds the text for the flag set whose bit n is flag n.
     private static readonly string[] _IndicatorFlagsTable = _BuildIndicatorFlagsTable();
 
     /// <summary>
@@ -38,6 +41,7 @@ internal static class FlexRayFlagsFormatter
         return _IndicatorFlagsTable[key];
     }
 
+    /// <summary>Builds all 2^4 indicator strings. Runs once; allocation here is irrelevant for the per-packet path.</summary>
     private static string[] _BuildIndicatorFlagsTable()
     {
         string[] table = new string[16];
@@ -67,6 +71,7 @@ internal static class FlexRayFlagsFormatter
         return _ErrorFlagsTable[key];
     }
 
+    /// <summary>Builds all 2^5 error-flag strings. Runs once.</summary>
     private static string[] _BuildErrorFlagsTable()
     {
         string[] table = new string[32];
@@ -83,6 +88,11 @@ internal static class FlexRayFlagsFormatter
 
     #region Shared string builder
 
+    /// <summary>
+    /// Builds <c>[A, B]</c> or <c>[None]</c> for the set flags. Used only while the lookup tables are built; the
+    /// string is sized exactly in a first pass and filled in place with <c>string.Create</c> (no builder).
+    /// <paramref name="active"/> and <paramref name="names"/> must have the same length.
+    /// </summary>
     private static string _BuildFlagString(bool[] active, string[] names)
     {
         int count = 0;

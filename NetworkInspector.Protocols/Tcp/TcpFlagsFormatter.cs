@@ -6,6 +6,11 @@ namespace NetworkInspector.Protocols.Tcp;
 /// Provides efficient display text formatting for TCP flag combinations.
 /// Precomputed 256-entry table eliminates per-packet string building.
 /// </summary>
+/// <remarks>
+/// Every possible flags byte maps to a fixed string built once in the static initializer, so formatting a packet's flags
+/// is one array read with no allocation. Thread safety: the table is never modified after type initialization and is safe
+/// to read from any thread.
+/// </remarks>
 internal static class TcpFlagsFormatter
 {
     // TCP flag bit positions (in the 8-bit Flags byte)
@@ -22,10 +27,13 @@ internal static class TcpFlagsFormatter
 
     /// <summary>
     /// Returns a display string for the given TCP flags byte,
-    /// listing active flag names separated by commas.
+    /// listing active flag names separated by commas (for example <c>SYN, ACK</c>), or <c>None</c> when no bit is set.
     /// </summary>
+    /// <param name="flags">The TCP flags byte (header byte 13). The NS flag lives in byte 12 and is not part of it.</param>
+    /// <returns>The shared, preformatted display string (do not mutate or rely on a new instance per call).</returns>
     internal static string Format(byte flags) => _FlagsTable[flags];
 
+    /// <summary>Builds the full 256-entry table once; entry <c>i</c> is the text for flags byte <c>i</c>.</summary>
     private static string[] _BuildFlagsTable()
     {
         string[] table = new string[256];
@@ -36,6 +44,12 @@ internal static class TcpFlagsFormatter
         return table;
     }
 
+    /// <summary>
+    /// Builds the text for one flags byte. Setup-only code (runs 256 times when the table is built), so the small
+    /// helper arrays below are acceptable here; the packet path never calls it.
+    /// </summary>
+    /// <param name="flags">Flags byte.</param>
+    /// <returns>Comma separated flag names in the order CWR, ECE, URG, ACK, PSH, RST, SYN, FIN, or <c>None</c>.</returns>
     private static string _BuildFlagString(byte flags)
     {
         if (flags == 0)
@@ -43,8 +57,9 @@ internal static class TcpFlagsFormatter
             return "None";
         }
 
-        // Build flag names in standard order using a stackalloc span,
-        // then create the result string directly without intermediate ToArray()/string.Join.
+        // Build flag names in the order of the bits from most to least significant. The final string is created
+        // directly with string.Create (exact length known up front) instead of string.Join over an intermediate list.
+        // names[i] and masks[i] must stay index-aligned.
         ReadOnlySpan<string> names =
         [
             "CWR", "ECE", "URG", "ACK", "PSH", "RST", "SYN", "FIN"

@@ -17,6 +17,8 @@ internal sealed class RandomAccessSourceTable
 {
     #region Fields
 
+    // Parallel arrays, ascending by id: _Sources[i] belongs to _Ids[i]. Never mutated after construction, which is
+    // what makes lock-free sharing between threads safe; With and Without build new arrays.
     private readonly int[] _Ids;
     private readonly IRandomAccessFrameSource[] _Sources;
 
@@ -44,7 +46,7 @@ internal sealed class RandomAccessSourceTable
 
     #region Public API
 
-    /// <summary>The source registered under <paramref name="id"/>.</summary>
+    /// <summary>The source registered under <paramref name="id"/>; false (and null) when there is none.</summary>
     internal bool TryGet(FrameSourceId id, [NotNullWhen(true)] out IRandomAccessFrameSource? source)
     {
         int index = Array.BinarySearch(_Ids, id.Value);
@@ -54,10 +56,17 @@ internal sealed class RandomAccessSourceTable
         return source is not null;
     }
 
-    /// <summary>A new table with <paramref name="source"/> under <paramref name="id"/> (replacing an existing entry).</summary>
+    /// <summary>
+    /// A new table with <paramref name="source"/> under <paramref name="id"/> (replacing an existing entry). Copies the
+    /// arrays (O(n)); acceptable because sources change rarely and n is small.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="source"/> is null.</exception>
     internal RandomAccessSourceTable With(FrameSourceId id, IRandomAccessFrameSource source)
     {
         ArgumentNullException.ThrowIfNull(source);
+
+        // BinarySearch returns the index of an existing id, or the bitwise complement of the insertion point that
+        // keeps the ids sorted. A replacement must clone, because the old table may still be in use by a reader.
         int index = Array.BinarySearch(_Ids, id.Value);
         if (index >= 0)
         {

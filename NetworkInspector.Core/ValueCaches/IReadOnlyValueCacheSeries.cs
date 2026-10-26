@@ -12,6 +12,11 @@ namespace NetworkInspector.Core.ValueCaches;
 /// of this type boxes. Hot-path APIs must take
 /// <c>TSeries where TSeries : IReadOnlyValueCacheSeries</c> (or the concrete series / struct).
 /// </para>
+/// <para>
+/// Thread safety: every member is a read that may run on any thread while the single writer appends. The live
+/// <see cref="Count"/> is the only visibility boundary: indexed reads are valid strictly below a count that was loaded
+/// first. For repeatable scans take a frozen prefix with <see cref="GetHandle"/>.
+/// </para>
 /// </summary>
 public interface IReadOnlyValueCacheSeries
 {

@@ -8,9 +8,25 @@ namespace NetworkInspector.Exporters;
 /// / custom text use <see cref="LazyString"/> equality so deferred text is not materialized
 /// solely for comparison.
 /// Distinct from <see cref="PreviousFieldValueStore"/> used by the PBF Standard block builder.
+/// <para>
+/// "Previous" means the last occurrence of the same field ID in write order, in any packet and at any tree position.
+/// Value, custom representation and custom text are tracked independently, so each can repeat on its own.
+/// </para>
+/// <para>
+/// <b>Storage choice:</b> a set of parallel arrays indexed by field ID (no hashing, no per-lookup allocation) when the
+/// ID space is small, dictionaries when it is large; IDs outside the dense range (including negative ones) fall back
+/// to overflow dictionaries so they are still compared correctly. The structure-of-arrays layout lets each of the
+/// three comparisons touch only its own array.
+/// </para>
+/// <para>
+/// <b>Thread safety:</b> Not thread-safe; owned by one JSON exporter state and used from its single caller thread.
+/// </para>
 /// </summary>
 internal sealed class PreviousFieldStore
 {
+    // Largest field count for which the dense arrays are used. Value 2048; constant. Beyond it the dictionaries only
+    // hold field IDs that actually occurred instead of six arrays sized for the whole ID space. The reason for this
+    // particular number is not recorded; PreviousFieldValueStore uses the same value.
     private const int _DenseThreshold = 2048;
 
     private readonly FieldValue[]? _DenseValues;
@@ -31,6 +47,10 @@ internal sealed class PreviousFieldStore
     private Dictionary<int, LazyString>? _OverflowValueCustomTexts;
 
     /// <summary>Creates a store optimized for the given field count.</summary>
+    /// <param name="fieldCount">
+    /// Number of field IDs expected (IDs <c>0</c> to <c>fieldCount - 1</c>); must not be negative. Selects the dense
+    /// or the dictionary representation.
+    /// </param>
     internal PreviousFieldStore(int fieldCount)
     {
         if (fieldCount <= _DenseThreshold)
@@ -54,12 +74,22 @@ internal sealed class PreviousFieldStore
     /// <summary>
     /// Computes same-as-previous flags using typed value and <see cref="LazyString"/> custom text.
     /// </summary>
+    /// <param name="fieldIdValue">The field ID.</param>
+    /// <param name="currentValue">The field's value.</param>
+    /// <param name="currentValueCustomText">The value's custom representation (deferred; not materialized here).</param>
+    /// <param name="currentCustomText">The field's custom text (deferred; not materialized here).</param>
+    /// <returns>
+    /// A combination of <see cref="SameFlags.FieldSameValue"/>, <see cref="SameFlags.FieldSameCustomRepresentation"/>
+    /// and <see cref="SameFlags.FieldSameCustomText"/>; each bit means "identical to the previous occurrence".
+    /// </returns>
     internal uint CompareAndUpdate(
         int fieldIdValue,
         FieldValue currentValue,
         LazyString currentValueCustomText,
         LazyString currentCustomText)
     {
+        // Pick the representation: dictionaries for a large ID space, overflow dictionaries for IDs outside the dense
+        // arrays, otherwise the fast array path below.
         if (_DenseValues is null)
         {
             return _CompareAndUpdateSparse(
@@ -72,6 +102,9 @@ internal sealed class PreviousFieldStore
                 fieldIdValue, currentValue, currentValueCustomText, currentCustomText);
         }
 
+        // Dense path: compare with the stored previous (only once one exists), then overwrite it with the current
+        // one so the next occurrence compares against this write. The "has" flags distinguish "never seen" from a
+        // stored default value.
         uint flags = 0;
 
         if (_DenseHasValue![fieldIdValue]
@@ -101,6 +134,10 @@ internal sealed class PreviousFieldStore
         return flags;
     }
 
+    /// <summary>
+    /// Same comparison as the dense path for field IDs outside the dense arrays; the dictionaries are created on
+    /// first use because such IDs are not expected in normal operation.
+    /// </summary>
     private uint _CompareAndUpdateOverflow(
         int fieldIdValue,
         FieldValue currentValue,
@@ -140,6 +177,7 @@ internal sealed class PreviousFieldStore
         return flags;
     }
 
+    /// <summary>Same comparison as the dense path for the dictionary representation used with a large ID space.</summary>
     private uint _CompareAndUpdateSparse(
         int fieldIdValue,
         FieldValue currentValue,
@@ -175,7 +213,7 @@ internal sealed class PreviousFieldStore
         return flags;
     }
 
-    /// <summary>Resets all stored previous values.</summary>
+    /// <summary>Resets all stored previous values, forgetting every earlier occurrence.</summary>
     internal void Reset()
     {
         if (_DenseValues is not null)

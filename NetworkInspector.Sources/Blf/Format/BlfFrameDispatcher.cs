@@ -8,7 +8,8 @@ namespace NetworkInspector.Sources.Blf.Format;
 /// </summary>
 /// <param name="FrameData">
 /// Reconstructed frame data (Ethernet, SocketCAN, DLT_LIN, or DLT_FLEXRAY).
-/// May alias a decompressed container array for Type 120/102 Ethernet frames.
+/// May alias a decompressed container array for the Ethernet types 102 and 120–123 when no frame slab is used (and the
+/// object was parsed from container memory); a held frame then keeps its whole container alive.
 /// </param>
 /// <param name="LinkType">Link type for the reconstructed frame.</param>
 /// <param name="Channel">Channel number (BLF-level, used for interface registration).</param>
@@ -192,7 +193,10 @@ internal static class BlfFrameDispatcher
             #endregion
 
             default:
-                // TODO: CAN XL error frame (type 140) not mapped to SocketCAN yet
+                // Every other object type is not a frame this reader maps. That includes the CAN XL channel error frame
+                // (type 140): its payload layout is not specified anywhere in the repository, so guessing a SocketCAN
+                // mapping would invent data. BlfConstants.IsFrameProducingType is false for it, so the readers ignore the
+                // object before it reaches this switch (an ignored non-frame object, not a counted skip).
                 return false;
         }
     }
@@ -232,6 +236,12 @@ internal static class BlfFrameDispatcher
     /// Reads only the channel field for a frame-producing object type, without reconstructing
     /// frame bytes. Uses the same minimum payload sizes as the corresponding parsers.
     /// </summary>
+    /// <remarks>
+    /// This is what lets the scanner build the frame index without allocating or copying any frame: it only checks that the
+    /// channel field can be read (an object that fails is counted as unparsable, not indexed), and the full parse happens
+    /// later, when the frame is read. The size checks must stay in step with the parsers, otherwise an indexed object
+    /// could fail to build later.
+    /// </remarks>
     internal static bool TryGetChannel(uint objectType, ReadOnlySpan<byte> payload, out ushort channel)
     {
         channel = 0;

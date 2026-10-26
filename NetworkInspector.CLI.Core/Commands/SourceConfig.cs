@@ -12,7 +12,14 @@ internal sealed class SourceConfig
 {
     #region Constants
 
-    /// <summary>Characters that could cause harm if a spec were ever forwarded to a shell; the trust-boundary check refuses them.</summary>
+    /// <summary>
+    /// Characters that could cause harm if a spec were ever forwarded to a shell; the trust-boundary check refuses them.
+    /// Security decision: the spec comes from the command line (the user's own input) and is never passed to a shell, so this
+    /// is defence in depth, not the primary protection (refusing is the chosen mitigation; nothing is escaped or rewritten).
+    /// Accepted cost: a file name that contains one of these characters (for example
+    /// <c>capture (1).pcap</c>) cannot be used as a source. Accepted residual risk: other shell-significant characters (space,
+    /// <c>$</c>, quotes) are not refused, which is why the spec must never reach a shell.
+    /// </summary>
     private static readonly char[] _Forbidden = ['|', '&', '>', '<', ';', '`', '(', ')', '{', '}'];
 
     /// <summary>
@@ -74,7 +81,8 @@ internal sealed class SourceConfig
         ArgumentNullException.ThrowIfNull(registry);
         _ValidateSourceSpec(spec);
 
-        // A colon that is not a drive letter separates the kind from its options; everything else is a bare path.
+        // A colon that is not a drive letter separates the kind from its options; everything else is a bare path. A Windows
+        // path such as C:\data\x.pcap therefore stays a path.
         int colonIndex = spec.IndexOf(':', StringComparison.Ordinal);
         if (colonIndex > 0 && !_IsDriveLetter(spec, colonIndex))
         {
@@ -115,6 +123,8 @@ internal sealed class SourceConfig
     internal bool TryCreateSource(ReadOnlySettingsManagerView sessionSettings, [NotNullWhen(true)] out IFrameSource? source,
         [NotNullWhen(false)] out PluginError? error)
     {
+        // The option settings live only for this call (the using): the factory reads its option values while it creates the
+        // source, so the read-only view handed to it is not valid afterwards. A text the codec rejects returns an error value.
         using SettingsManager options = RegistrationOptions.CreateDefaults(Registration.RegisterOptions);
         if (!RegistrationOptions.TryApplyTexts(options, OptionTexts, out error))
         {
@@ -175,6 +185,8 @@ internal sealed class SourceConfig
     /// <summary>Parses a bare path and finds the kind by the extension.</summary>
     private static SourceConfig _ParseBare(string path, PluginRegistry registry)
     {
+        // Spelled out because the property Path of this class would otherwise hide System.IO.Path. The match is by the file
+        // extensions that the source registrations declare (case-insensitive), in registration order.
         string extension = System.IO.Path.GetExtension(path);
         foreach (SourceRegistration registration in registry.Sources)
         {
@@ -198,6 +210,8 @@ internal sealed class SourceConfig
             throw new ArgumentException(problem);
         }
 
+        // Old spellings of the Random modes are rewritten to the current option values; every other pair goes to the Core
+        // codec as typed (it judges names, types, and ranges when the source is created).
         List<KeyValuePair<string, string>> pairs = _ParsePairs(parameters);
         bool isRandom = string.Equals(registration.Kind, _RandomKind, StringComparison.OrdinalIgnoreCase);
         if (isRandom)
@@ -226,7 +240,15 @@ internal sealed class SourceConfig
         return new SourceConfig(registration, path, pairs);
     }
 
-    /// <summary>Splits <c>key=value,key=value</c>; the first <c>=</c> of a pair separates key and value, a pair without it is dropped.</summary>
+    /// <summary>
+    /// Splits <c>key=value,key=value</c>; the first <c>=</c> of a pair separates key and value. Unlike the format specs, source
+    /// options have no bare flags, so a pair without a <c>=</c> or without a key is refused instead of being dropped: a dropped
+    /// pair would run the source with a default the user did not ask for. A blank pair (a doubled or trailing comma) carries no
+    /// information and is skipped. Keys and values are trimmed and taken literally, so a value cannot contain a comma.
+    /// </summary>
+    /// <param name="parameters">The text after the first colon of the spec.</param>
+    /// <returns>The pairs in the order given.</returns>
+    /// <exception cref="ArgumentException">A pair has no <c>=</c> or an empty key.</exception>
     private static List<KeyValuePair<string, string>> _ParsePairs(string parameters)
     {
         List<KeyValuePair<string, string>> result = [];
@@ -237,11 +259,19 @@ internal sealed class SourceConfig
 
         foreach (string pair in parameters.Split(','))
         {
-            int equals = pair.IndexOf('=', StringComparison.Ordinal);
-            if (equals > 0)
+            if (string.IsNullOrWhiteSpace(pair))
             {
-                result.Add(new KeyValuePair<string, string>(pair[..equals].Trim(), pair[(equals + 1)..].Trim()));
+                continue;
             }
+
+            int equals = pair.IndexOf('=', StringComparison.Ordinal);
+            if (equals < 0 || pair[..equals].Trim().Length == 0)
+            {
+                throw new ArgumentException(
+                    $"Source option '{pair.Trim()}' is not of the form key=value. Source options are written kind:key=value,key=value.");
+            }
+
+            result.Add(new KeyValuePair<string, string>(pair[..equals].Trim(), pair[(equals + 1)..].Trim()));
         }
 
         return result;

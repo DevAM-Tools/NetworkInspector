@@ -11,7 +11,7 @@ namespace NetworkInspector.Protocols;
 /// <para>SocketCAN classic/FD header format (8 bytes minimum):</para>
 /// <code>
 /// Bytes 0-3:  CAN ID (29-bit ID + EFF/RTR/ERR flags in bits 31-29)
-/// Byte  4:    Data Length Code (DLC)
+/// Byte  4:    Payload length in bytes (SocketCAN len: 0-8 classic, 0-64 CAN FD; not the 4-bit DLC code)
 /// Byte  5:    Flags (BRS=0x01, ESI=0x02, FDF=0x04 for CAN FD — Linux SocketCAN spec)
 /// Bytes 6-7:  Reserved
 /// Bytes 8+:   Data (0-8 classic, 0-64 CAN FD)
@@ -29,6 +29,7 @@ namespace NetworkInspector.Protocols;
 /// <code>
 /// can: Controller Area Network
 /// ├── can.id: 0x123
+/// ├── can.name: EngineSpeed                         [only when the configured file names this identifier]
 /// ├── can.flags
 /// │   ├── can.flags.xtd: false (Standard 11-bit)
 /// │   ├── can.flags.rtr: false
@@ -55,8 +56,10 @@ namespace NetworkInspector.Protocols;
 /// </code>
 /// </summary>
 /// <remarks>
-/// <para><b>Thread safety:</b> Not thread-safe; designed for single-threaded use within a
-/// protocol stack. Each <see cref="Stack"/> instance is owned by exactly one parsing thread.</para>
+/// <para><b>Thread safety:</b> The instance is effectively immutable once the stack is built: the field IDs, the
+/// dispatch table IDs and the frozen message-name lookup are written only in <c>RegisterFields</c> (single-threaded
+/// build phase) and are read-only afterwards, so <see cref="Parse"/> may run concurrently from several threads.
+/// <see cref="ConfigLoadWarning"/> is likewise set only during registration.</para>
 /// </remarks>
 [Protocol("can", "Controller Area Network", Description = "CAN (ISO 11898)")]
 [RegisterAtTable(FrameProtocol.LinkTypeTableName, LinkTypeSocketCAN)]
@@ -86,7 +89,8 @@ public sealed partial class CanProtocol : IProtocol
     /// </summary>
     public const string ExtendedIdTableName = "can.extended_id";
 
-    // Bit masks for CAN ID field (upper 3 bits of the 32-bit CAN ID)
+    // Bit masks for the 32-bit CAN ID word of struct can_frame (linux/can.h): the upper 3 bits carry flags, the
+    // lower 29 bits the identifier. For standard frames only the lower 11 bits are significant.
     private const uint _EFF_FLAG = 0x80000000; // Extended Frame Format
     private const uint _RTR_FLAG = 0x40000000; // Remote Transmission Request
     private const uint _ERR_FLAG = 0x20000000; // Error frame
@@ -99,7 +103,8 @@ public sealed partial class CanProtocol : IProtocol
     private const byte _FDF_FLAG = 0x04; // FD Frame
 
     // CAN XL discriminator (byte 4 bit 7) — shared discriminator used by both parse paths.
-    // Classic CAN DLC (0-8) and CAN FD DLC (0-15) never set bit 7; CAN XL always sets it.
+    // In the classic/FD layout byte 4 is the payload length (at most 64, so below 0x80) and never sets bit 7;
+    // in the CAN XL layout byte 4 is the flags byte, which always sets it.
     private const byte _XLF_FLAG = 0x80; // CAN XL Frame indicator
 
     // CAN XL header layout
@@ -255,6 +260,13 @@ public sealed partial class CanProtocol : IProtocol
 
     #region Runtime state — populated in _RegisterFieldsCustom
 
+    /// <summary>
+    /// Number of repeated identifiers named in the configuration warning (the warning text must stay bounded when the
+    /// file repeats many identifiers). A reporting detail of the message, not a protection limit: all repeated entries are
+    /// ignored regardless of this value, and the warning states how many there were.
+    /// </summary>
+    private const int _MaxReportedRepeatedIds = 8;
+
     /// <summary>Message name lookup: CAN ID → display name. Built from config file.</summary>
     private FrozenDictionary<uint, string> _MessageNames = FrozenDictionary<uint, string>.Empty;
 
@@ -277,15 +289,22 @@ public sealed partial class CanProtocol : IProtocol
     /// </summary>
     partial void _RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
+        // A missing path is not an error (no names, no warning). A load failure is reported through
+        // ConfigLoadWarning instead of throwing, so a bad config file never prevents the stack from being built.
         builder.Settings.TryLoadReferencedJsonConfig(
             "can.config_file", CanConfigContext.Default.CanConfig,
             out CanConfig? config, out SettingsLoadWarning? configLoadWarning);
         ConfigLoadWarning = configLoadWarning;
 
+        // Build the immutable name lookup. FrozenDictionary is optimized for the read-mostly, build-once pattern:
+        // Parse does one lock-free lookup per frame and the structure is safe to read from many threads.
+        // A null or empty "messages" array (including after a failed load) leaves the lookup empty.
         if (config?.Messages is { Length: > 0 })
         {
             Dictionary<uint, string> names = new(config.Messages.Length);
             int nullEntries = 0;
+            int repeatedEntries = 0;
+            List<uint> repeatedIds = [];
             foreach (CanMessageEntry? msg in config.Messages)
             {
                 // A JSON null entry names no message: skip it (reported below) instead of failing the registration.
@@ -295,20 +314,25 @@ public sealed partial class CanProtocol : IProtocol
                     continue;
                 }
 
-                // Store with the raw CAN ID — the lookup uses the masked extracted ID
-                names.TryAdd(msg.Id, msg.Name);
+                // Key is the configured ID as written; Parse looks up the ID with the EFF/RTR/ERR bits already
+                // masked off, so an entry only matches when it is given without flag bits. TryAdd keeps the first
+                // entry for a repeated ID. The later entry is reported below instead of being dropped without a sign:
+                // the lookup has one id space for standard and extended frames (the "extended" flag of an entry is not
+                // part of the key), so a standard and an extended entry with the same number also collide.
+                if (!names.TryAdd(msg.Id, msg.Name))
+                {
+                    repeatedEntries++;
+                    if (repeatedIds.Count < _MaxReportedRepeatedIds && !repeatedIds.Contains(msg.Id))
+                    {
+                        repeatedIds.Add(msg.Id);
+                    }
+                }
             }
             _MessageNames = names.ToFrozenDictionary();
 
-            if (nullEntries > 0)
+            if (nullEntries > 0 || repeatedEntries > 0)
             {
-                ConfigLoadWarning = new SettingsLoadWarning(
-                    SettingsLoadWarningKind.DeserializationError,
-                    "can",
-                    "can.config_file",
-                    string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"The CAN configuration contains {nullEntries} null entries in 'messages'. They are ignored."));
+                ConfigLoadWarning = _BuildConfigProblemWarning(nullEntries, repeatedEntries, repeatedIds);
             }
         }
         else
@@ -318,13 +342,67 @@ public sealed partial class CanProtocol : IProtocol
     }
 
     /// <summary>
+    /// Builds the single warning that reports the problems found in the message list of the configuration file:
+    /// null entries and entries that repeat an already configured identifier.
+    /// </summary>
+    /// <param name="nullEntries">Number of JSON null entries that were skipped.</param>
+    /// <param name="repeatedEntries">Number of entries ignored because an earlier entry already used their identifier.</param>
+    /// <param name="repeatedIds">The first few repeated identifiers, listed in the text.</param>
+    private static SettingsLoadWarning _BuildConfigProblemWarning(int nullEntries, int repeatedEntries, List<uint> repeatedIds)
+    {
+        // Both problems share one warning (the protocol exposes a single ConfigLoadWarning). The identifier list is
+        // cut at _MaxReportedRepeatedIds so that a hostile or generated file cannot produce an unbounded message.
+        StringBuilder text = new();
+        if (nullEntries > 0)
+        {
+            text.Append(CultureInfo.InvariantCulture, $"The CAN configuration contains {nullEntries} null entries in 'messages'. They are ignored.");
+        }
+
+        if (repeatedEntries > 0)
+        {
+            if (text.Length > 0)
+            {
+                text.Append(' ');
+            }
+
+            text.Append(
+                CultureInfo.InvariantCulture,
+                $"The CAN configuration repeats a message identifier in {repeatedEntries} entries; the first entry of an identifier is kept");
+            text.Append(" and the later ones are ignored (standard and extended entries share one identifier space). Repeated identifiers:");
+            foreach (uint id in repeatedIds)
+            {
+                text.Append(CultureInfo.InvariantCulture, $" 0x{id:X}");
+            }
+
+            if (repeatedEntries > repeatedIds.Count)
+            {
+                text.Append(" ...");
+            }
+        }
+
+        return new SettingsLoadWarning(
+            SettingsLoadWarningKind.DeserializationError,
+            "can",
+            "can.config_file",
+            text.ToString());
+    }
+
+    /// <summary>
     /// Parses a CAN frame from SocketCAN format.
     /// No lazy population — all fields are appended directly.
     /// After appending fields, dispatches data-frame payloads on <paramref name="parentField"/>
     /// so sub-protocols are siblings of the CAN container (same as Ethernet / PDU Transport).
     /// Standard frames (EFF clear) use <c>can.id</c>; extended frames (EFF set) use
     /// <c>can.extended_id</c>. The two tables are exclusive — there is no fallback.
+    /// Frames with the XLF flag are handed to the CAN XL parser.
     /// </summary>
+    /// <param name="parentField">Parent field that receives the CAN container and, for data frames, the dispatched payload.</param>
+    /// <param name="data">Raw SocketCAN frame starting at its first header byte.</param>
+    /// <param name="context">Parse context; used to record presence in the packet index and to dispatch the payload.</param>
+    /// <returns>
+    /// The frame size in bytes (header plus the possibly clamped payload), a <see cref="ParseError"/> when the data is
+    /// shorter than the header or than the payload length byte declares, or the error of the dispatched sub-protocol.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         if (data.Length < _MinHeaderSize)
@@ -335,7 +413,8 @@ public sealed partial class CanProtocol : IProtocol
         ReadOnlySpan<byte> span = data.Span;
 
         // CAN XL detection: byte 4 bit 7 (_XLF_FLAG) distinguishes CAN XL from classic/FD.
-        // Classic CAN DLC is 0-8 and CAN FD DLC is 0-15 — neither sets bit 7.
+        // The classic/FD length byte is at most 64 — it never sets bit 7. The CAN XL parser re-validates its own
+        // (longer) header, so the 8-byte check above is only the minimum needed to read byte 4.
         if ((span[4] & _XLF_FLAG) != 0)
         {
             return _ParseCanXl(in parentField, data, in context);
@@ -350,7 +429,7 @@ public sealed partial class CanProtocol : IProtocol
         bool isError = (rawId & _ERR_FLAG) != 0;
         uint canId = isExtended ? (rawId & _CAN_ID_MASK_EXT) : (rawId & _CAN_ID_MASK_STD);
 
-        // DLC and flags
+        // Length byte (named dlc after the can.len field, but it is a byte count) and the FD flags byte
         byte dlc = span[4];
         byte fdFlags = span[5];
         bool isFd = (fdFlags & _FDF_FLAG) != 0;
@@ -362,20 +441,22 @@ public sealed partial class CanProtocol : IProtocol
         // SocketCAN's struct can_frame.len / canfd_frame.len holds the actual
         // payload byte count (0..8 for classic, 0..64 for FD) — there is no
         // DLC encoding on the wire for either variant. Clamp defensively to
-        // the protocol-allowed maximum.
+        // the protocol-allowed maximum: a malformed length byte (up to 127 here) then cannot make the slice
+        // below read past the frame, and can.len still shows the raw value so the anomaly stays visible.
         int dataLen = isFd ? Math.Min(dlc, (byte)64) : Math.Min(dlc, (byte)8);
 
-        // Verify we have enough data
+        // Verify we have enough data (header plus the clamped payload). Bytes after the frame, if any, are not consumed.
         int totalLen = _MinHeaderSize + dataLen;
         if (data.Length < totalLen)
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, (ulong)totalLen, (ulong)data.Length);
         }
 
+        // Index presence is recorded only after validation so truncated frames are not indexed as CAN.
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_CanGroupId);
 
-        // Build summary
+        // Build summary. The packet info and container text are formatted lazily (only when read) from the raw values.
         // Use full 32-bit hex formatting for CAN IDs to support extended 29-bit identifiers
         string canKind = isFd
             ? "Controller Area Network FD, ID: 0x"
@@ -389,7 +470,8 @@ public sealed partial class CanProtocol : IProtocol
             _ProtocolFieldId, FieldValue.NewBytes(data[..totalLen]),
             canKind, new Hex8(canId), ", Length: ", dlc);
 
-        // CAN ID
+        // CAN ID: the value is the masked identifier; the display text distinguishes the width. The cast to ushort is
+        // lossless for standard frames because canId was masked with the 11-bit mask above.
         if (isExtended)
         {
             canField.AppendWithCustomText(
@@ -401,14 +483,14 @@ public sealed partial class CanProtocol : IProtocol
                 _IdFieldId, FieldValue.NewU64(canId), "0x", new Hex3((ushort)canId), " (Standard)");
         }
 
-        // Message name from configuration
+        // Message name from configuration (empty lookup when no file is configured; the name field is then absent)
         if (_MessageNames.TryGetValue(canId, out string? messageName))
         {
             context.RecordGroupPresence(_CanNameGroupId);
             canField.Append(_NameFieldId, FieldValue.NewString(messageName));
         }
 
-        // Flags container — precomputed display text lists active flag abbreviations.
+        // Flags container — precomputed display text lists active flag abbreviations (table lookup, no string building).
         string flagsText = isFd
             ? CanFlagsFormatter.FormatFd(isExtended, isRtr, isError, brs, esi)
             : CanFlagsFormatter.FormatClassic(isExtended, isRtr, isError);
@@ -417,7 +499,7 @@ public sealed partial class CanProtocol : IProtocol
         flagsField.Append(_FlagsRtrFieldId, FieldValue.NewBool(isRtr));
         flagsField.Append(_FlagsErrFieldId, FieldValue.NewBool(isError));
 
-        // CAN FD specific flags
+        // CAN FD specific flags (appended under the same flags container; FDF is by definition true here)
         if (isFd)
         {
             context.RecordGroupPresence(_CanFdGroupId);
@@ -426,7 +508,7 @@ public sealed partial class CanProtocol : IProtocol
             flagsField.Append(_FlagsEsiFieldId, FieldValue.NewBool(esi));
         }
 
-        // DLC
+        // Length byte as sent (unclamped)
         canField.Append(_LenFieldId, FieldValue.NewU64(dlc));
 
         // Data
@@ -469,11 +551,14 @@ public sealed partial class CanProtocol : IProtocol
     /// </remarks>
     /// <param name="parentField">Parent field that receives the decoded CAN XL container and children.</param>
     /// <param name="data">Raw frame bytes starting at offset 0 (12-byte header + payload).</param>
-    /// <param name="context">Owning stack; passed to sub-protocol dispatch.</param>
-    /// <returns>Number of bytes consumed, or a <see cref="ParseError"/>.</returns>
+    /// <param name="context">Parse context; used to record index presence and passed on to sub-protocol dispatch.</param>
+    /// <returns>
+    /// Header size plus the clamped payload length, a <see cref="ParseError"/> when the data is shorter than that,
+    /// or the error of the dispatched sub-protocol.
+    /// </returns>
     private ParseResult _ParseCanXl(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        // Validate minimum header size
+        // Validate minimum header size (the caller only guaranteed the 8-byte classic header)
         if (data.Length < _XlHeaderSize)
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, _XlHeaderSize, (ulong)data.Length);
@@ -520,11 +605,12 @@ public sealed partial class CanProtocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, (ulong)totalLen, (ulong)data.Length);
         }
 
-        // Record protocol and index group presence
+        // Record protocol and index group presence (after validation, so truncated frames are not indexed)
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_CanxlGroupId);
 
-        // Build summary text: "CAN XL, Priority: N, VCID: 0xNN, Length: N"
+        // Build summary text: packet info "CAN XL P:N VCID:0xNN", container title
+        // "CAN XL, Priority: N, VCID: 0xNN, Length: N" (Length is the raw wire value). Both are formatted lazily.
         parentField.SetPacketInfo(ZA.Lazy(
             "CAN XL P:", priority, " VCID:", Helpers.DisplayTables.FormatHexU8((byte)vcid)));
 

@@ -21,7 +21,17 @@ namespace NetworkInspector.Sources.Blf.Format.Objects;
 ///   <item>Type 66  (<c>FLEXRAY_RCVMESSAGE_EX</c>)      — extended receive message</item>
 /// </list>
 /// </summary>
-/// <remarks>Not thread-safe. Caller synchronisation required.</remarks>
+/// <remarks>
+/// <para>
+/// Stateless and thread-safe: every call works on its own arguments.
+/// </para>
+/// <para>
+/// Unlike the CAN, LIN, and Ethernet parsers there is no frame-slab overload: the result is built by
+/// <see cref="FlexRayLinkTypeFrame.BuildFrame"/>, which the protocol layer shares and which always returns its own array,
+/// so every FlexRay frame is one array allocation. Declared payload lengths come from the file and are checked against
+/// <see cref="FlexRayLinkTypeFrame.MaxPayloadBytes"/> (127 words) and the bytes actually present before they size anything.
+/// </para>
+/// </remarks>
 internal static class FlexRayParser
 {
     #region Constants
@@ -70,8 +80,16 @@ internal static class FlexRayParser
     ///   [9..12) reserved
     ///   [12..)  payload
     /// </code>
-    /// Reconstruction always sets NFI and takes the cycle nibble from <c>mux</c>.
+    /// Type 29 carries no frame-state word, so reconstruction always sets NFI (not a null frame) and takes the
+    /// 6-bit cycle from the low bits of <c>mux</c>; PPI, SFI, and STFI are cleared.
     /// </summary>
+    /// <param name="payload">BLF object payload; at least the 12-byte header.</param>
+    /// <param name="frame">LINKTYPE_FLEXRAY bytes on success; empty on failure.</param>
+    /// <param name="channel">Vector channel from the header (u16 LE at offset 0).</param>
+    /// <returns>
+    /// <see langword="false"/> when the payload is shorter than the header or the declared data length exceeds the FlexRay
+    /// maximum.
+    /// </returns>
     internal static bool TryParseFlexRayData(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
     {
@@ -92,6 +110,9 @@ internal static class FlexRayParser
 
         // Type 29 Channel B when the Vector channel field is not 0 (not only when it is 1).
         byte subChannel = channel != 0 ? (byte)1 : (byte)0;
+
+        // The data length is one byte from the file (up to 255): reject what FlexRay cannot carry, and clamp the copy to the
+        // bytes really present so a truncated object is kept at its captured length instead of over-reading.
         int available = Math.Max(0, payload.Length - _FlexRayDataMinSize);
         if (!_TryResolvePayloadLength(dataLen, available, out int actualDataLen))
         {
@@ -130,6 +151,10 @@ internal static class FlexRayParser
     ///   [32..)  data
     /// </code>
     /// </summary>
+    /// <param name="payload">BLF object payload; at least 32 bytes.</param>
+    /// <param name="frame">LINKTYPE_FLEXRAY bytes on success; empty on failure.</param>
+    /// <param name="channel">Vector channel from the header (u16 LE at offset 0).</param>
+    /// <returns><see langword="false"/> when the payload is too short or the declared data length exceeds the FlexRay maximum.</returns>
     internal static bool TryParseFlexRayMessage(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
     {
@@ -151,7 +176,8 @@ internal static class FlexRayParser
         int dataLen = payload[26];
         byte cycle = payload[27];
 
-        // ISO flags come from frameState, not headerBitMask.
+        // ISO flags come from frameState, not headerBitMask. Bit 0x08 marks a null frame, so NFI (frame carries data) is its
+        // inverse; the other three map directly onto PPI (0x01), SFI (0x02), and STFI (0x10).
         bool ppi = (frameState & 0x01) != 0;
         bool sfi = (frameState & 0x02) != 0;
         bool nfi = (frameState & 0x08) == 0;
@@ -195,6 +221,10 @@ internal static class FlexRayParser
     /// Declared ISO length comes from <c>payloadLength</c>; copied bytes come from
     /// <c>payloadLengthValid</c> and are zero-padded to the declared even length.
     /// </summary>
+    /// <param name="payload">BLF object payload; at least the 44-byte header.</param>
+    /// <param name="frame">LINKTYPE_FLEXRAY bytes on success; empty on failure.</param>
+    /// <param name="channel">Vector channel from the header (u16 LE at offset 0).</param>
+    /// <returns><see langword="false"/> when the payload is too short or a declared length exceeds the FlexRay maximum.</returns>
     internal static bool TryParseFlexRayRcvMessage(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
     {
@@ -215,6 +245,10 @@ internal static class FlexRayParser
     /// Declared ISO length comes from <c>payloadLength</c> at offset 22; copied bytes
     /// come from <c>payloadLengthValid</c> at offset 24.
     /// </summary>
+    /// <param name="payload">BLF object payload; at least 84 bytes.</param>
+    /// <param name="frame">LINKTYPE_FLEXRAY bytes on success; empty on failure.</param>
+    /// <param name="channel">Vector channel from the header (u16 LE at offset 0).</param>
+    /// <returns><see langword="false"/> when the payload is too short or a declared length exceeds the FlexRay maximum.</returns>
     internal static bool TryParseFlexRayRcvMessageEx(
         ReadOnlySpan<byte> payload, out byte[] frame, out ushort channel)
     {
@@ -231,8 +265,13 @@ internal static class FlexRayParser
 
     /// <summary>
     /// Reads only the channel field for a FlexRay object, using the same minimum sizes as the parsers.
-    /// Channel is u16 LE at offset 0 for every FlexRay object type this parser handles.
+    /// Channel is u16 LE at offset 0 for every FlexRay object type this parser handles. The index scan uses this instead
+    /// of a full parse so indexing builds no frame bytes; the size checks must match the parsers' header checks.
     /// </summary>
+    /// <param name="objectType">BLF object type.</param>
+    /// <param name="payload">BLF object payload.</param>
+    /// <param name="channel">Channel on success; zero otherwise.</param>
+    /// <returns><see langword="false"/> for a non-FlexRay object type or a payload shorter than the type's header.</returns>
     internal static bool TryGetChannel(uint objectType, ReadOnlySpan<byte> payload, out ushort channel)
     {
         channel = 0;
@@ -294,6 +333,7 @@ internal static class FlexRayParser
             return false;
         }
 
+        // Header fields (Type 50 layout; Type 66 shares offsets 0-43). The caller checked the size for the given header.
         channel = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         ushort channelMask = BinaryPrimitives.ReadUInt16LittleEndian(payload[4..]);
         ushort frameId = BinaryPrimitives.ReadUInt16LittleEndian(payload[16..]);
@@ -310,6 +350,10 @@ internal static class FlexRayParser
 
         FlexRayLinkTypeFrame.MapBlfFrameFlags(frameFlags, out bool ppi, out bool nfi, out bool sfi, out bool stfi);
 
+        // Two lengths with different meanings: payloadLength is the ISO payload size the frame declares (rounded down to
+        // whole 16-bit words, hence the even isoLen); payloadLengthValid is how many of those bytes the logger actually
+        // stored. A declared length beyond the FlexRay maximum is corrupt and rejected; the stored length is clamped to
+        // the bytes present and to the declared length, so no field can drive a read past the object.
         if (payloadLength > FlexRayLinkTypeFrame.MaxPayloadBytes)
         {
             return false;
@@ -325,6 +369,8 @@ internal static class FlexRayParser
         copyLen = Math.Min(copyLen, isoLen);
 
         // Pad truncated copies to the declared ISO word count so TryParseDataFrame sees a full buffer.
+        // stackalloc is safe here: a constant 254 bytes (the FlexRay maximum), never sized from the file. It avoids a
+        // temporary heap array; BuildFrame then copies the span into the single array that is returned.
         Span<byte> isoScratch = stackalloc byte[FlexRayLinkTypeFrame.MaxPayloadBytes];
         Span<byte> isoPayload = isoScratch[..isoLen];
         isoPayload.Clear();
@@ -339,8 +385,13 @@ internal static class FlexRayParser
 
     /// <summary>
     /// Validates a declared FlexRay payload length against the protocol maximum and
-    /// clamps the copy length to available bytes.
+    /// clamps the copy length to available bytes. A declared length above the maximum is a corrupt object and fails;
+    /// a declared length above the bytes present is a truncated object and is clamped (kept at its captured length).
     /// </summary>
+    /// <param name="declaredLength">Length field from the object (untrusted).</param>
+    /// <param name="available">Bytes present after the header.</param>
+    /// <param name="actualDataLen">Bytes to copy on success; zero on failure.</param>
+    /// <returns><see langword="false"/> when <paramref name="declaredLength"/> exceeds the FlexRay maximum.</returns>
     private static bool _TryResolvePayloadLength(int declaredLength, int available, out int actualDataLen)
     {
         actualDataLen = 0;

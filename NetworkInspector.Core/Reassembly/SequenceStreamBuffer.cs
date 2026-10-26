@@ -7,6 +7,18 @@ namespace NetworkInspector.Core.Reassembly;
 /// In-order bytes sit in one contiguous prefix. A hole holds later segments until the cursor reaches them.
 /// Retransmitted bytes at or before the cursor are dropped.
 /// <para>
+/// <b>Sequence arithmetic:</b> TCP sequence numbers are 32-bit and wrap. Every ordering test therefore uses the signed
+/// difference <c>(int)(a - b)</c> (serial number arithmetic): negative means <c>a</c> is before <c>b</c>. This is
+/// correct while the two compared numbers are less than 2^31 apart; a segment further away is classified by the sign of
+/// the difference alone (before the cursor, so dropped as a retransmission, or after it, so held behind a hole).
+/// </para>
+/// <para>
+/// <b>Memory limit:</b> the sum of the contiguous prefix and all held segments never exceeds
+/// <see cref="StreamReassemblyConfig.MaxBufferSize"/> (threat: a peer that never completes a PDU or leaves holes).
+/// An append that would exceed it returns <see langword="false"/> and the owner moves the stream to its error state;
+/// nothing is truncated silently.
+/// </para>
+/// <para>
 /// <b>Thread-safety:</b> one owner thread at a time, the same rule as
 /// <see cref="IStreamPduBoundaryDetector"/>. Not safe to share across threads without external synchronization.
 /// </para>
@@ -19,16 +31,22 @@ public sealed class SequenceStreamBuffer
     private readonly bool _CopySegments;
 
     // Right edge: sequence number of the next byte that extends the contiguous prefix.
+    // _OriginSeq is the sequence number of the first byte of the prefix while nothing has been consumed; it lets an
+    // earlier-arriving segment move the left edge backward (see _Rebase). After the first Consume it is no longer used.
     private bool _Initialized;
     private bool _EverConsumed;
     private uint _NextExpected;
     private uint _OriginSeq;
 
-    // Contiguous prefix lives in one array. _Offset is the first unread byte.
+    // Contiguous prefix lives in one array, so a boundary detector sees one span and not a chain of segments.
+    // _Offset is the first unread byte; the dead bytes before it are reclaimed lazily by _AppendContiguous.
     private byte[] _Contiguous = [];
     private int _Offset;
     private int _ContiguousLength;
 
+    // Segments behind a hole, in arrival order (kept unsorted; _IndexOfNextHeld scans for the lowest sequence, so the
+    // cost grows with the number of held segments, which only the byte cap bounds).
+    // _HeldBytes mirrors the sum of their lengths so the cap check is O(1).
     private readonly List<HeldSegment> _Held = [];
     private int _HeldBytes;
 
@@ -52,7 +70,10 @@ public sealed class SequenceStreamBuffer
     /// <summary>Bytes currently readable as one contiguous prefix (no hole in front).</summary>
     public int ContiguousLength => _ContiguousLength;
 
-    /// <summary>The contiguous prefix. Valid until the next mutating call.</summary>
+    /// <summary>
+    /// The contiguous prefix. Valid until the next mutating call (<see cref="TryAppend"/>, <see cref="Consume"/>,
+    /// <see cref="Clear"/>): an append may move the bytes into a new array or slide them to the array start.
+    /// </summary>
     public ReadOnlySpan<byte> ContiguousSpan => _Contiguous.AsSpan(_Offset, _ContiguousLength);
 
     /// <summary>
@@ -70,7 +91,8 @@ public sealed class SequenceStreamBuffer
             return true;
         }
 
-        // The first segment defines the left edge. Do not assume sequence 0.
+        // The first segment defines the left edge. Do not assume sequence 0 (the capture may start mid-connection, and
+        // the initial sequence number is random). Refuse an oversize first segment before any state changes.
         if (!_Initialized)
         {
             if (payload.Length > _MaxBufferSize)
@@ -120,11 +142,14 @@ public sealed class SequenceStreamBuffer
             throw new ArgumentOutOfRangeException(nameof(count), count, "Consume cannot pass the contiguous prefix.");
         }
 
+        // Consuming only advances the read offset (no copy). From now on the left edge is fixed, so a later segment
+        // that lies before the origin is a retransmission and is dropped instead of rebasing.
         _Offset += count;
         _ContiguousLength -= count;
         _EverConsumed = true;
 
-        // Compact when the dead prefix dominates, so the next append does not allocate.
+        // When everything was consumed, rewind the offset so the next append reuses the array from index 0 without a
+        // copy and without allocating. A partly consumed prefix is slid down lazily by _AppendContiguous.
         if (_Offset > 0 && _ContiguousLength == 0)
         {
             _Offset = 0;
@@ -148,6 +173,13 @@ public sealed class SequenceStreamBuffer
 
     #region Insert
 
+    /// <summary>
+    /// Rebuilds the buffer around an earlier left edge: a segment arrived whose sequence lies before the origin while
+    /// nothing has been consumed yet (capture started mid-stream, or the first seen segment was a reordered later one).
+    /// The old prefix and held segments are copied out, the origin moves to <paramref name="sequence"/>, and everything is
+    /// inserted again, so the old prefix becomes a held segment behind a hole, or joins the prefix when contiguous.
+    /// Cold path (copies the whole buffer), so allocation is acceptable here. Returns <see langword="false"/> on the cap.
+    /// </summary>
     private bool _Rebase(uint sequence, ReadOnlyMemory<byte> payload)
     {
         // Refuse before discarding the current prefix. Overlap can only shrink the total.
@@ -156,6 +188,7 @@ public sealed class SequenceStreamBuffer
             return false;
         }
 
+        // Snapshot the old content as owned arrays first: the buffers below are about to be reset and reused.
         List<(uint Sequence, byte[] Data)> previous = [];
         if (_ContiguousLength > 0)
         {
@@ -173,6 +206,9 @@ public sealed class SequenceStreamBuffer
         _OriginSeq = sequence;
         _NextExpected = sequence;
 
+        // Insert the new earliest segment first so it defines the cursor, then replay the old content behind it.
+        // The cap was checked up front, so a false result here is not expected; if it happens the buffer is left
+        // partially rebuilt, which is acceptable only because the owner treats any false as a fatal stream error.
         if (!_Insert(sequence, payload))
         {
             return false;
@@ -189,6 +225,11 @@ public sealed class SequenceStreamBuffer
         return true;
     }
 
+    /// <summary>
+    /// Places a segment relative to the cursor: drops already-delivered bytes, trims a partial overlap to the new tail,
+    /// appends an in-order segment to the contiguous prefix (and drains held segments it unblocks), or holds a segment
+    /// that lies behind a hole. Returns <see langword="false"/> only when the buffer cap would be exceeded.
+    /// </summary>
     private bool _Insert(uint sequence, ReadOnlyMemory<byte> payload)
     {
         uint end = sequence + (uint)payload.Length;
@@ -237,6 +278,11 @@ public sealed class SequenceStreamBuffer
     private bool _WouldExceedMax(int payloadLength) =>
         (long)_ContiguousLength + _HeldBytes + payloadLength > _MaxBufferSize;
 
+    /// <summary>
+    /// After the cursor advanced, moves every held segment that now starts at (or overlaps) the cursor into the
+    /// contiguous prefix, lowest sequence first, and discards held segments that are fully behind the cursor.
+    /// Cost: a linear scan of the held list per moved segment, so it grows with the number of held segments.
+    /// </summary>
     private void _DrainHeld()
     {
         while (_Held.Count > 0)
@@ -270,6 +316,7 @@ public sealed class SequenceStreamBuffer
         }
     }
 
+    /// <summary>Index of the held segment with the lowest sequence (wrap-safe comparison), or -1 when none is held.</summary>
     private int _IndexOfNextHeld()
     {
         int best = -1;
@@ -287,6 +334,12 @@ public sealed class SequenceStreamBuffer
         return best;
     }
 
+    /// <summary>
+    /// Stores a segment that lies behind a hole. With <c>CopySegments</c> the bytes are copied into a pooled array,
+    /// because the caller's memory (a live-capture packet buffer) may be recycled before the hole is filled; without it
+    /// the segment keeps a reference to the caller's memory (zero copy, valid for file-based sources). The pooled array
+    /// is returned in <see cref="_RemoveHeld"/> or <see cref="_ReleaseHeld"/>.
+    /// </summary>
     private void _Hold(uint sequence, ReadOnlyMemory<byte> payload)
     {
         ReadOnlyMemory<byte> stored = payload;
@@ -318,8 +371,8 @@ public sealed class SequenceStreamBuffer
     {
         for (int i = 0; i < _Held.Count; i++)
         {
-            // HeldSegment is a struct. A second property read is a new copy,
-            // so the null check above would not flow to Return.
+            // HeldSegment is a struct stored in the list: copy it once into a local, so the null check and the Return
+            // below use the same Owned reference.
             HeldSegment held = _Held[i];
             if (held.Owned is not null)
             {
@@ -331,6 +384,11 @@ public sealed class SequenceStreamBuffer
         _HeldBytes = 0;
     }
 
+    /// <summary>
+    /// Appends bytes to the contiguous prefix, in order of cheapness: (1) copy into spare capacity behind the live
+    /// tail, (2) slide the live bytes to the array start when that frees enough room (no allocation), (3) allocate a
+    /// larger array. The caller has already checked the buffer cap, so growth never exceeds it.
+    /// </summary>
     private void _AppendContiguous(ReadOnlySpan<byte> data)
     {
         if (data.IsEmpty)
@@ -363,7 +421,10 @@ public sealed class SequenceStreamBuffer
             return;
         }
 
-        // Grow by doubling, capped at the configured maximum. The caller already refused an append past that cap.
+        // Grow by doubling (amortized O(1) copies per byte), capped at the configured maximum. The caller already
+        // refused an append past that cap. The new array is a plain allocation, not a pooled rental: it stays alive as
+        // the stream's prefix and ContiguousSpan hands out views of it, so it has no point at which it could be returned.
+        // The halving test avoids overflow of cap * 2 for caps near int.MaxValue.
         int cap = _Contiguous.Length == 0 ? newLength : _Contiguous.Length;
         while (cap < newLength)
         {

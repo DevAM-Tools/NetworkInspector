@@ -10,9 +10,10 @@ public enum ScanMode
     #region Enum Values
 
     /// <summary>
-    /// Scans the entire file upfront before returning any frames.
+    /// Scans the entire file upfront, while the source is opened, before any frame is returned.
     /// Slower to open, but <see cref="IFrameSource.EstimatedFrameCount"/> is
-    /// available immediately and random access is ready after <c>Start()</c>.
+    /// available immediately and the frame index needed for random access is complete once the source is open.
+    /// A format that cannot scan lazily (for example ASC) always behaves like this mode.
     /// </summary>
     Full,
 

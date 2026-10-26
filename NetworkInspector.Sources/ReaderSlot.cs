@@ -31,23 +31,43 @@ internal sealed class ReaderSlot
 
     #region Fields
 
+    /// <summary>
+    /// The calling thread's slot. A plain thread static (no <see cref="ThreadLocal{T}"/> indirection) because
+    /// <see cref="Current"/> runs on every read section.
+    /// </summary>
     [ThreadStatic]
     private static ReaderSlot? _Current;
 
+    /// <summary>Gates of the calling thread's nested sections; null until the first nesting (no allocation on the normal path).</summary>
     [ThreadStatic]
     private static List<ReaderGate>? _Overflow;
 
+    /// <summary>Serialises writers of the slot list (registration and pruning). Readers walk the list without it.</summary>
     private static readonly Lock _RegistryLock = new();
+
+    /// <summary>
+    /// Newest slot of the process-wide list. Volatile so a lock-free walker that reads a newly published head also sees
+    /// that slot's <see cref="_Next"/>, which is assigned before the head is.
+    /// </summary>
     private static volatile ReaderSlot? _Head;
 
+    /// <summary>
+    /// The gate the owning thread is currently inside, or null. Written only by the owning thread (publish with a full
+    /// fence, clear with a release store); read by <see cref="ReaderGate.Close"/> on any thread.
+    /// </summary>
     private volatile ReaderGate? _Gate;
+
+    /// <summary>The thread this slot belongs to; <see cref="_PruneFinished"/> unlinks the slot once the thread is not alive.</summary>
     private readonly Thread _Owner;
+
+    /// <summary>Next (older) slot of the list. Changes only when a later registration prunes a finished successor.</summary>
     private volatile ReaderSlot? _Next;
 
     #endregion
 
     #region Constructors
 
+    /// <summary>Creates the unlinked slot of <paramref name="owner"/>; <see cref="_Register"/> links it.</summary>
     private ReaderSlot(Thread owner) => _Owner = owner;
 
     #endregion
@@ -78,6 +98,8 @@ internal sealed class ReaderSlot
             return false;
         }
 
+        // Interlocked.Exchange instead of a volatile store: it is a full fence, so the closed-flag read that the
+        // caller performs next cannot be reordered before the publish (store-load ordering, see ReaderGate remarks).
         _ = Interlocked.Exchange(ref _Gate, gate);
         return true;
     }
@@ -101,6 +123,9 @@ internal sealed class ReaderSlot
     /// <summary>Spins until no other thread's slot names <paramref name="gate"/>. Any thread.</summary>
     internal static void WaitWhileOtherThreadsHold(ReaderGate gate)
     {
+        // Lock-free walk over the registry. A slot registered after the walk began belongs to a thread whose first
+        // TryEnter reads the closed flag after that registration, so it sees the gate closed and never enters.
+        // The caller's own slot is skipped: Close already rejected a caller that is inside a section of this gate.
         ReaderSlot? self = _Current;
         for (ReaderSlot? slot = _Head; slot is not null; slot = slot._Next)
         {
@@ -109,6 +134,7 @@ internal sealed class ReaderSlot
                 continue;
             }
 
+            // Wait out a section that started before the flag was set; sections are short (no user code inside).
             SpinWait spin = default;
             while (ReferenceEquals(slot._Gate, gate))
             {
@@ -150,6 +176,10 @@ internal sealed class ReaderSlot
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static ReaderSlot _Register()
     {
+        // Registration happens once per thread, so the lock and the pruning walk are off the per-section path.
+        // Pruning here keeps the list (and so the Close walk) proportional to the live reader threads instead of
+        // every thread that ever read. The link is assigned before the head: a walker that sees the new head sees a
+        // complete list behind it.
         ReaderSlot slot = new(Thread.CurrentThread);
         lock (_RegistryLock)
         {

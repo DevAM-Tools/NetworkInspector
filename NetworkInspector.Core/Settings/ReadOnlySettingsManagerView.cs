@@ -15,11 +15,22 @@ namespace NetworkInspector.Core.Settings;
 /// Prefer <see cref="SettingsManager.ReadOnly"/> or <see cref="IStack.Settings"/> and keep the
 /// compile-time type as this struct (or use a generic constraint).
 /// </para>
+/// <para>
+/// "Zero-allocation" describes the view itself: it is only a reference to the owner, and the scalar accessors forward without
+/// allocating. Members that hand out collections or arrays (<see cref="AllSettings"/>, <see cref="AllGroups"/>,
+/// <see cref="GetSettingsInGroup"/>, and the array accessors) allocate a snapshot or a defensive copy, exactly like the owner.
+/// </para>
+/// <para>
+/// Thread-safe: the view is immutable and every member forwards to the thread-safe <see cref="SettingsManager"/>. A
+/// <c>default</c> instance has no owner and throws <see cref="NullReferenceException"/> on use; only the constructor and
+/// <see cref="SettingsManager.ReadOnly"/> create a usable view.
+/// </para>
 /// </summary>
 public readonly struct ReadOnlySettingsManagerView : IReadOnlySettingsManager
 {
     #region Fields
 
+    /// <summary>The manager every member forwards to. Never changes after construction; the struct stays one pointer wide.</summary>
     private readonly SettingsManager _Owner;
 
     #endregion
@@ -37,6 +48,9 @@ public readonly struct ReadOnlySettingsManagerView : IReadOnlySettingsManager
     #endregion
 
     #region Counts
+
+    // The members below forward one call to the owner so the JIT can inline them when the compile-time type is this struct.
+    // Do not add logic here: the owner is the single place that takes the locks.
 
     /// <inheritdoc/>
     public int SettingCount => _Owner.SettingCount;

@@ -11,6 +11,12 @@ namespace NetworkInspector.Sessions;
 /// packet. Pairing both values in one slot keeps the read allocation-free while still letting the
 /// caller address the packet by id.
 /// </para>
+/// <para>
+/// The slot is a struct, not a class, so a caller-owned <c>Span&lt;PacketRef&gt;</c> is the only storage a pull needs. On
+/// input a non-null <see cref="Packet"/> is that slot's recycle packet (it is re-parsed in place); on output it is the
+/// result. <see cref="LayoutKind.Auto"/> lets the runtime choose the field order; nothing depends on it (the struct
+/// is never marshalled).
+/// </para>
 /// <para><b>Thread-safety:</b> readonly struct; the referenced <see cref="Packet"/> follows its own rules.</para>
 /// </remarks>
 [StructLayout(LayoutKind.Auto)]

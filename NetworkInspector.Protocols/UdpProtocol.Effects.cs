@@ -10,7 +10,19 @@ public sealed partial class UdpProtocol
     /// Immutable UDP stream assignment recorded during the first parse of a packet so that every
     /// later parse of the same packet id can replay it without touching the stream tracker.
     /// </summary>
-    public readonly record struct StreamEffect(uint StreamIndex);
+    /// <remarks>
+    /// A full stream table (<c>udp.max_tracked_streams</c>) is recorded as <see cref="LimitReached"/>, whose index is
+    /// <see cref="uint.MaxValue"/>: the tracker caps its entries at <see cref="int.MaxValue"/>, so that value is never a real
+    /// stream index.
+    /// </remarks>
+    public readonly record struct StreamEffect(uint StreamIndex)
+    {
+        /// <summary>The effect of a datagram that got no stream index because the stream table was full.</summary>
+        public static StreamEffect LimitReached => new(uint.MaxValue);
+
+        /// <summary>Whether this effect records a full stream table instead of a stream index.</summary>
+        public bool IsLimitReached => StreamIndex == uint.MaxValue;
+    }
 
     #endregion
 
@@ -46,6 +58,12 @@ public sealed partial class UdpProtocol
     /// <summary>
     /// In-flight first-parse nesting for this protocol on the serialized ingest thread.
     /// Replay does not touch this field. The outermost finally raises the watermark.
+    /// <para>
+    /// UDP can be entered again while the same packet is still being parsed (nested layers, for example tunnels). Raising the
+    /// watermark when an inner call finishes would make any further UDP layer of the same packet id look like a replay
+    /// (and find no recorded effect), so only the outermost first-parse call raises it. A plain <see cref="int"/> is enough because only the serialized
+    /// first-parse path reads or writes it.
+    /// </para>
     /// </summary>
     private int _ParseNesting;
 

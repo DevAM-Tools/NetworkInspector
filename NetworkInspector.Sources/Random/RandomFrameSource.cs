@@ -19,14 +19,25 @@ namespace NetworkInspector.Sources.Random;
 ///     memory access sequential.
 ///   </item>
 ///   <item>
-///     <b>SIMD acceleration</b> — <see cref="Xoroshiro128PlusPlus.FillBytes"/> dispatches to
-///     AVX2 (32 bytes/cycle), SSE2/NEON (16 bytes/cycle), or a 32-byte-unrolled scalar
-///     fallback at runtime.
+///     <b>SIMD acceleration</b> — <see cref="Xoroshiro128PlusPlus.FillBytes"/> dispatches at runtime to
+///     a 256-bit vector path (AVX2, 32 bytes per iteration), a 128-bit vector path (SSE2/NEON), or a scalar
+///     fallback. All three produce the same bytes for the same seed, so a seed reproduces the same frames on every CPU.
 ///   </item>
 /// </list>
-/// All <see cref="RandomFrameMode"/> values are supported: eight Ethernet-based modes
+/// All <see cref="RandomFrameMode"/> values are supported: ten Ethernet-based modes
 /// (including TCP single-segment and TCP stream modes) and two CAN bus modes
 /// (classic CAN and CAN FD in SocketCAN format).
+/// </para>
+/// <para>
+/// <b>Reproducibility contract:</b> for a given seed and options, the bytes of frame <c>i</c> depend only on <c>i</c>.
+/// The order of the draws inside one frame (size, then the bulk fill, then the header patches) is part of that
+/// contract: reordering them changes every generated frame of an existing seed.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> <see cref="Start"/>, <see cref="NextFrame"/> and <see cref="Dispose"/> belong to one
+/// consuming thread. <see cref="FrameById"/> only reads state that <see cref="Start"/> published (the volatile started
+/// flag is written last), so it can run on any thread after <see cref="Start"/> returned; it does not wait for or
+/// disturb the sequential position.
 /// </para>
 /// </summary>
 /// <remarks>
@@ -103,10 +114,13 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// <c>PcapngSource.Open</c>.</summary>
     private readonly RandomSourceOptions _Options = _ValidateOptions(options);
 
-    /// <summary>Resolved master seed (derived from options or entropy at Start time).</summary>
+    /// <summary>
+    /// Resolved master seed (the option, or derived at Start time). Plain field: written once by <see cref="Start"/>
+    /// before the volatile <see cref="_Started"/> flag, which publishes it to <see cref="FrameById"/> readers.
+    /// </summary>
     private ulong _MasterSeed;
 
-    /// <summary>Resolved base timestamp (derived from options or wall clock at Start time).</summary>
+    /// <summary>Resolved base timestamp (the option, or the wall clock at Start time); published like <see cref="_MasterSeed"/>.</summary>
     private Timestamp _BaseTimestamp;
 
     /// <summary>User-friendly source name.</summary>
@@ -115,7 +129,10 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
 
     // ─── Runtime state ────────────────────────────────────────────────────────
 
-    /// <summary>Zero-based index of the next frame to produce.</summary>
+    /// <summary>
+    /// Zero-based index of the next frame <see cref="NextFrame"/> produces. Written by the consuming thread only;
+    /// <see cref="FrameById"/> never reads or moves it.
+    /// </summary>
     private volatile int _FrameIndex;
 
     /// <summary>Whether <see cref="Start"/> has been called.</summary>
@@ -124,8 +141,11 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// <summary>Atomic dispose latch (0 = live, 1 = disposed).</summary>
     private volatile int _Disposed;
 
-    /// <summary>Registry supplied by Start.</summary>
-    private FrameInterfaceRegistry? _Registry;
+    /// <summary>
+    /// Registry supplied by Start; cleared by <see cref="Dispose"/> (any thread) so the session can be collected, hence
+    /// volatile. Each operation reads it once into a local and uses that snapshot throughout.
+    /// </summary>
+    private volatile FrameInterfaceRegistry? _Registry;
 
     /// <summary>Source ID assigned in Start.</summary>
     private FrameSourceId _SourceId;
@@ -190,7 +210,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         _Registry = registry;
         _FrameIndex = 0;
 
-        // Resolve seed: use configured value or derive from system entropy
+        // Resolve seed: use configured value or derive one from the clock and process id (not cryptographic)
         _MasterSeed = _Options.Seed ?? _DeriveEntropySeed();
 
         // Resolve base timestamp: use configured value or current wall clock
@@ -210,6 +230,8 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
             _TcpStreamLayout = new TcpStreamLayout(_Options.TcpStreamOptions);
         }
 
+        // Last on purpose: the volatile write publishes the seed, timestamp, interface id and layout above to any thread
+        // that sees _Started set (FrameById reads them without a lock).
         _Started = true;
     }
 
@@ -220,6 +242,10 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     internal void SetFrameIndexForTests(int index) => _FrameIndex = index;
 
     /// <inheritdoc/>
+    /// <exception cref="ObjectDisposedException">The source was disposed.</exception>
+    /// <exception cref="InvalidOperationException"><see cref="Start"/> was not called, the frame id range is used up, or a
+    /// generated frame was rejected by <c>Frame.Create</c> (a bug in a generator, never an input error).</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was canceled.</exception>
     public Frame? NextFrame(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_Disposed != 0, this);
@@ -231,10 +257,15 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Read _FrameIndex so that any compiler or JIT
-        // reordering of the load relative to the _Started/_Disposed checks above is
-        // prevented.  The increment uses Volatile.Write for the same reason, and for
-        // consistency with other IFrameSource implementations in this codebase.
+        // One read of the registry: a Dispose on another thread nulls it at any time, and every helper below must see the same
+        // value or none (the same snapshot rule as FrameById). A null snapshot after the disposed check means exactly that race.
+        FrameInterfaceRegistry? registry = _Registry;
+        ObjectDisposedException.ThrowIf(registry is null, this);
+
+        // _FrameIndex is a volatile field, so this single read cannot be moved before the _Started/_Disposed checks
+        // above, and the assignment that advances it after a frame is built is a release store, consistent with the
+        // other IFrameSource implementations (SOURCE_GUIDE §13.2). The value is read once into a local: the frame is
+        // built for exactly this index. Only the consuming thread advances it.
         int currentIndex = _FrameIndex;
 
         if (_Options.FrameCount > 0 && currentIndex >= _Options.FrameCount)
@@ -242,7 +273,8 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
             return null;
         }
 
-        // TCP stream modes use stateless layout-based generation
+        // TCP stream modes use stateless layout-based generation: the layout ends the sequence (null) even when
+        // FrameCount is 0 (unlimited) or larger than the layout.
         if (_TcpStreamLayout is not null)
         {
             TcpStreamLayout layout = _TcpStreamLayout.Value;
@@ -262,14 +294,14 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
                 return null;
             }
 
-            Timestamp timestamp = new(_BaseTimestamp.AsNanos + (currentIndex * _Options.TimestampInterval));
+            Timestamp timestamp = _TimestampFor(currentIndex);
             ParseResult<Frame> streamResult = Frame.Create(
                 new FrameId(currentIndex),
                 timestamp,
                 streamData,
                 _LinkTypeForMode(_Options.Mode),
                 _InterfaceId,
-                _Registry!);
+                registry);
 
             if (!streamResult.IsSuccess)
             {
@@ -283,18 +315,29 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
 
         ArrayIndexIdRange.ThrowIfInvalidNextIndex(currentIndex, "frame");
 
-        Frame frame = _GenerateFrameByIndex(currentIndex);
+        Frame frame = _GenerateFrameByIndex(currentIndex, registry);
         _FrameIndex = currentIndex + 1;
         return frame;
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Pure function of the options, the seed and the id: no state is read or changed besides the values that
+    /// <see cref="Start"/> published, so the result equals the frame <see cref="NextFrame"/> returns for that index.
+    /// Returns <c>null</c> before <see cref="Start"/>, for a negative id, and for an id at or past the frame count (or
+    /// the end of a TCP stream layout).
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The source was disposed.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was canceled.</exception>
     public Frame? FrameById(FrameId id, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_Disposed != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (!_Started || _Registry is null)
+        // One read of the registry (Dispose may null it between a check and a use): the snapshot serves the null check and
+        // every frame built below.
+        FrameInterfaceRegistry? registry = _Registry;
+        if (!_Started || registry is null)
         {
             return null;
         }
@@ -326,14 +369,14 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
                 return null;
             }
 
-            Timestamp timestamp = new(_BaseTimestamp.AsNanos + (index * _Options.TimestampInterval));
+            Timestamp timestamp = _TimestampFor(index);
             ParseResult<Frame> streamResult = Frame.Create(
                 new FrameId(index),
                 timestamp,
                 streamData,
                 _LinkTypeForMode(_Options.Mode),
                 _InterfaceId,
-                _Registry);
+                registry);
 
             if (!streamResult.IsSuccess)
             {
@@ -343,7 +386,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
             return streamResult.Value;
         }
 
-        return _GenerateFrameByIndex(index);
+        return _GenerateFrameByIndex(index, registry);
     }
 
     /// <inheritdoc/>
@@ -377,12 +420,17 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// </para>
     /// </summary>
     /// <exception cref="InvalidOperationException">Frame creation unexpectedly failed.</exception>
-    private Frame _GenerateFrameByIndex(int index)
+    private Frame _GenerateFrameByIndex(int index, FrameInterfaceRegistry registry)
     {
+        // One generator per frame, seeded from (master seed, index): no state flows between frames, which is what makes
+        // FrameById and NextFrame agree. The index is passed as uint, so frame ids stay below 2^32; the TCP stream
+        // seeds use offsets of 2^32 and above and therefore never collide with these. The generator is a struct
+        // passed by ref to the helpers (no allocation, and the draws stay in one sequence).
         ulong frameSeed = Xoroshiro128PlusPlus.DeriveFrameSeed(_MasterSeed, (uint)index);
         Xoroshiro128PlusPlus rng = new(frameSeed);
 
-        // Determine frame size depending on mode.
+        // Determine frame size depending on mode. The size is drawn first: the draw order is part of the
+        // reproducible output (see the class remarks).
         // CAN classic is always exactly 16 bytes.
         // CAN FD picks a random DLC first, then sizes the buffer from the FD length table.
         // All other modes use the configurable [min, max] range.
@@ -407,9 +455,12 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
             frameSize = rng.NextRange(minSize, maxSize + 1); // bytes
         }
 
+        // One exact-size array per frame: the Frame keeps it, so it cannot be pooled or reused. The allocation
+        // zeroes it although the fill overwrites every byte.
         byte[] data = new byte[frameSize];
 
-        // Fill then patch — bulk-fill with random bytes, then fix protocol fields
+        // Fill then patch — bulk-fill with random bytes, then fix protocol fields. The bulk fill replaces one random
+        // draw per byte; only the few header fields that must be valid are overwritten afterwards.
         switch (_Options.Mode)
         {
             case RandomFrameMode.FullRandom:
@@ -434,7 +485,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
                 _GenerateCan(ref rng, data);
                 break;
             case RandomFrameMode.CanFd:
-                _GenerateCanFd(ref rng, data, canFdDlc);
+                _GenerateCanFd(ref rng, data);
                 break;
             case RandomFrameMode.TcpIPv4:
                 _GenerateTcpIPv4(ref rng, data);
@@ -446,8 +497,8 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
                 throw new InvalidOperationException($"Unsupported RandomFrameMode: {_Options.Mode}");
         }
 
-        // Timestamp: base + index × interval
-        Timestamp timestamp = new(_BaseTimestamp.AsNanos + (index * _Options.TimestampInterval));
+        // Timestamp: base + index × interval (saturating, see _TimestampFor)
+        Timestamp timestamp = _TimestampFor(index);
 
         ParseResult<Frame> result = Frame.Create(
             new FrameId(index),
@@ -455,7 +506,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
             data,
             _LinkTypeForMode(_Options.Mode),
             _InterfaceId,
-            _Registry!);
+            registry);
 
         if (!result.IsSuccess)
         {
@@ -496,6 +547,9 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), _EtherTypeIPv4);
 
         int ip = _EthHeaderSize;
+
+        // The IPv4 total length is a 16-bit field: the unchecked cast wraps for frames above 65 549 bytes, because the
+        // frame size option has no upper bound (the same holds for the IPv6, UDP and TCP generators below).
         ushort totalLength = (ushort)(data.Length - _EthHeaderSize); // bytes
 
         data[ip] = _IPv4VersionIhl;          // Version 4, IHL 5 (20 bytes, no options)
@@ -505,7 +559,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         data[ip + 6] = 0x40;  // DF flag, no MF, fragment offset = 0
         data[ip + 7] = 0x00;
         data[ip + 8] = 64;    // TTL = 64 hops
-        // Protocol (ip+9) already random; clamp to non-zero
+        // Protocol (ip+9) already random; clamp to non-zero (the value 0 is replaced by 1)
         if (data[ip + 9] == 0)
         {
             data[ip + 9] = 1;
@@ -676,13 +730,13 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     /// <summary>
     /// <b>CanFd</b>: generates a CAN FD frame in SocketCAN format (8-byte header + variable data).
     /// <para>
-    /// Layout: <c>[id(4 BE) | dlc(1) | fd_flags(1) | reserved(2) | data(0–64)]</c>.
+    /// Layout: <c>[id(4 BE) | len(1) | fd_flags(1) | reserved(2) | data(0–64)]</c>.
     /// A random 50/50 decision selects 11-bit (standard) or 29-bit (extended) ID.
-    /// The <paramref name="dlc"/> is pre-determined by the caller so the buffer is already
-    /// sized correctly.  FDF and BRS flags are set.
+    /// The data length is pre-determined by the caller (it sized the buffer from the random DLC code) and is stored in
+    /// byte 4 as a byte count.  FDF and BRS flags are set.
     /// </para>
     /// </summary>
-    private static void _GenerateCanFd(ref Xoroshiro128PlusPlus rng, byte[] data, byte dlc)
+    private static void _GenerateCanFd(ref Xoroshiro128PlusPlus rng, byte[] data)
     {
         // Fill entire frame with random bytes first (data area gets random content)
         rng.FillBytes(data);
@@ -700,8 +754,13 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         }
         BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(0), canId);
 
-        // ── DLC (byte 4): supplied by caller ──
-        data[4] = dlc;
+        // ── Length (byte 4): the payload byte count ──
+        // canfd_frame.len and the CAN dissector read this byte as a count of data bytes (0-64), not as the 4-bit DLC code. The
+        // generator drew a DLC code (0-15) to size the buffer, so for codes 9-15 the code (9-15) differs from the real length
+        // (12-64): storing the code made the frame contradict its own payload. The count is derived from the buffer, which
+        // the DLC code sized, so header and payload always agree. Bytes 6-7 stay zero, like the frames of the ASC and BLF
+        // readers (reserved bytes of canfd_frame).
+        data[4] = (byte)(data.Length - _SocketCanHeaderSize);
 
         // ── FD flags (byte 5): FDF + BRS set ──
         data[5] = _SocketCanFdFdf | _SocketCanFdBrs;
@@ -800,6 +859,25 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     // ─── Utility helpers ─────────────────────────────────────────────────────
 
     /// <summary>
+    /// Timestamp of frame <paramref name="index"/>: base + index × interval, saturating at <see cref="long.MaxValue"/>.
+    /// </summary>
+    /// <remarks>
+    /// The product cannot overflow: <see cref="RandomSourceOptions.Validate"/> bounds the interval by <c>long.MaxValue</c>
+    /// divided by the largest index the source can produce. Only the sum with the base can exceed the range (a base near
+    /// the end of it); it saturates, so a frame never gets a wrapped, negative time. Both operands of the addition are
+    /// non-negative offsets from the base, so the sum wrapped exactly when it ends up below the base.
+    /// </remarks>
+    private Timestamp _TimestampFor(int index)
+    {
+        long baseNanos = _BaseTimestamp.AsNanos;
+        long offset = (long)index * _Options.TimestampInterval;
+        long sum = unchecked(baseNanos + offset);
+        return new Timestamp(sum < baseNanos
+            ? long.MaxValue
+            : sum);
+    }
+
+    /// <summary>
     /// Computes the one's-complement checksum of a 20-byte IPv4 header
     /// located at <paramref name="offset"/> inside <paramref name="buffer"/>.
     /// The checksum field (bytes 10–11 of the header) must be zeroed before calling.
@@ -818,7 +896,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         {
             sum += (uint)(buffer[offset + (i * 2)] << 8 | buffer[offset + (i * 2) + 1]);
         }
-        // Fold 32-bit carry into 16 bits
+        // Fold 32-bit carry into 16 bits (end-around carry of the one's-complement sum, RFC 1071)
         while (sum >> 16 != 0)
         {
             sum = (sum & 0xFFFF) + (sum >> 16);
@@ -854,8 +932,9 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
     }
 
     /// <summary>
-    /// Derives an unpredictable 64-bit seed from system entropy:
-    /// current UTC time in nanoseconds XOR-ed with the process ID shifted to the high 32 bits.
+    /// Derives a seed that differs between runs: the current UTC time (millisecond resolution, scaled to nanoseconds)
+    /// XOR-ed with the process ID shifted to the high 32 bits. It is not cryptographic entropy and two calls within one
+    /// millisecond in one process return the same value; the seed only has to vary the generated test data.
     /// </summary>
     private static ulong _DeriveEntropySeed()
     {

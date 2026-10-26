@@ -45,8 +45,9 @@ namespace NetworkInspector.Protocols;
 /// </code>
 /// </summary>
 /// <remarks>
-/// <para><b>Thread safety:</b> Not thread-safe; designed for single-threaded use within a
-/// protocol stack. Each <see cref="Stack"/> instance is owned by exactly one parsing thread.</para>
+/// <para><b>Thread safety:</b> The instance holds no mutable state after <c>RegisterFields</c> (field, group and
+/// table IDs are assigned once during the single-threaded stack build). <see cref="Parse"/> only reads them and
+/// writes into the per-packet <see cref="MutField"/>, so it may run concurrently from several threads.</para>
 /// </remarks>
 [Protocol("flexray", "FlexRay", Description = "FlexRay (ISO 17458)")]
 [RegisterAtTable(FrameProtocol.LinkTypeTableName, LinkTypeKey)]
@@ -214,10 +215,23 @@ public sealed partial class FlexRayProtocol : IProtocol
     [BytesField("flexray.data", "Data", IndexGroup = "flexray.data")]
     private FieldId _DataFieldId;
 
+    #endregion
+
+    #region Parse
+
     /// <summary>
     /// Parses a FlexRay frame in LINKTYPE_FLEXRAY format.
-    /// Leaf protocol — no lazy population, direct Append().
+    /// No lazy population — all fields are appended directly. The payload is dispatched to sub-protocols through the
+    /// <c>flexray.id</c> table (siblings of the FlexRay container).
     /// </summary>
+    /// <param name="parentField">Parent field that receives the FlexRay container and the dispatched payload.</param>
+    /// <param name="data">Raw LINKTYPE_FLEXRAY frame starting at the measurement header.</param>
+    /// <param name="context">Parse context; records index presence and carries the stack used for payload dispatch.</param>
+    /// <returns>
+    /// 2 for symbol and other non-data frames (only the measurement and error bytes are meaningful); otherwise the
+    /// header size plus the declared payload, clamped to the available data (a truncated payload is not an error), or
+    /// a <see cref="ParseError"/> when the data is shorter than 7 bytes or the dispatched payload fails.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         if (data.Length < _MinHeaderSize)
@@ -227,13 +241,14 @@ public sealed partial class FlexRayProtocol : IProtocol
 
         ReadOnlySpan<byte> span = data.Span;
 
+        // Presence is recorded once the 7-byte minimum is known to be present. The error group is recorded for every
+        // frame, including symbol frames, because the error-flag container is emitted on both paths below.
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_FlexrayGroupId);
         context.RecordGroupPresence(_FlexrayErrGroupId);
 
-    #endregion
 
-        #region Measurement Header (byte 0)
+        // Measurement header (byte 0)
         byte measurementHeader = span[0];
         // Bit 7: Channel (0 = Channel A, 1 = Channel B)
         bool isChannelB = (measurementHeader & _ChannelBitMask) != 0;
@@ -244,9 +259,8 @@ public sealed partial class FlexRayProtocol : IProtocol
         // mis-decode garbage bytes.
         byte typeIndex = (byte)(measurementHeader & _TypeIndexMask);
 
-        #endregion
 
-        #region Error Flags (byte 1)
+        // Error flags (byte 1)
         byte errorFlags = span[1];
         bool fcrcErr = (errorFlags & _FcrcErrMask) != 0;
         bool hcrcErr = (errorFlags & _HcrcErrMask) != 0;
@@ -254,7 +268,6 @@ public sealed partial class FlexRayProtocol : IProtocol
         bool codErr = (errorFlags & _CodErrMask) != 0;
         bool tssViol = (errorFlags & _TssViolMask) != 0;
 
-        #endregion
 
         // Symbol and event frames: only the 2-byte measurement/error prefix is meaningful.
         // Skip the full frame-header decode to avoid mis-interpreting non-data bytes.
@@ -280,7 +293,7 @@ public sealed partial class FlexRayProtocol : IProtocol
             return 2;
         }
 
-        #region FlexRay Frame Header (bytes 2-6, per ISO 17458-2 Section 8)
+        // FlexRay frame header (bytes 2-6, per ISO 17458-2 Section 8)
         byte headerByte0 = span[2];
         byte headerByte1 = span[3];
 
@@ -307,12 +320,14 @@ public sealed partial class FlexRayProtocol : IProtocol
         // Cycle count: 6 bits from byte 6 bits 5-0
         byte cycle = (byte)(span[6] & 0x3F);
 
-        // Total consumed: measurement header (2) + frame header (5) + payload
+        // Total consumed: measurement header (2) + frame header (5) + payload.
+        // The payload length comes from the header (at most 254 bytes), so the sum cannot overflow. It is clamped to the
+        // available data instead of rejecting the frame: a capture that cut the payload short still shows its header
+        // fields, and the container, data field and dispatch below only ever see bytes that exist.
         int totalConsumed = Math.Min(_MinHeaderSize + payloadSize, data.Length);
 
-        #endregion
 
-        #region Build field tree
+        // Build field tree
 
         // Container with summary text
         MutField container = parentField.AppendWithCustomText(
@@ -400,5 +415,5 @@ public sealed partial class FlexRayProtocol : IProtocol
 
         return totalConsumed;
     }
-        #endregion
+    #endregion
 }

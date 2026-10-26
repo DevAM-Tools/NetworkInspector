@@ -9,9 +9,22 @@ namespace NetworkInspector.Exporters.Json;
 /// Packet keys: <c>ID</c>, <c>TS</c>, <c>IN</c>, <c>SF</c>, <c>CH</c>.
 /// Field keys: <c>FI</c>, <c>NA</c>, <c>UI</c>, <c>TY</c>, <c>VA</c>, <c>CR</c>, <c>CT</c>, <c>SF</c>, <c>CH</c>.
 /// </para>
+/// <para>
+/// <b>Size reductions (the reason for this format):</b> short keys; the field name, UI name and type only on the first
+/// occurrence of a field id (<c>NA</c>, <c>UI</c>, <c>TY</c>); and a same-as-previous mask <c>SF</c> that replaces a value,
+/// custom representation, custom text, or packet info string identical to the previous occurrence. "Previous" is the last
+/// occurrence in write order over the whole document (kept in <see cref="JsonExporterState"/>), so the output can only be
+/// decoded by replaying it from the start. The packet timestamp <c>TS</c> is nanoseconds since the Unix epoch; such values
+/// exceed 2^53, so consumers that parse JSON numbers as IEEE doubles lose precision.
+/// </para>
+/// <para>
+/// <b>Thread safety:</b> Stateless apart from the <see cref="JsonExporterState"/> passed in; not thread-safe for one state.
+/// </para>
 /// </summary>
 internal static class CompactWriter
 {
+    // Key literals are UTF-8 spans over static data, each with its leading comma (except the first key of an object), so
+    // writing a key is a single buffer append with no formatting and no allocation.
     // Packet-level keys
     private static ReadOnlySpan<byte> _KeyId => "\"ID\":"u8;
     private static ReadOnlySpan<byte> _KeyTs => ",\"TS\":"u8;
@@ -37,8 +50,15 @@ internal static class CompactWriter
     /// <param name="packet">The packet to serialize.</param>
     /// <param name="buffer">Target output buffer.</param>
     /// <param name="state">Mutable exporter state for deduplication tracking.</param>
+    /// <exception cref="InvalidOperationException">The packet has no field tree (a skip packet).</exception>
+    /// <remarks>
+    /// The state is updated while writing, before the caller knows whether the buffer reaches the output. If a later write
+    /// fails and the packet is skipped, the state still describes that packet, so following same-as-previous references
+    /// can point at a packet that is not in the file.
+    /// </remarks>
     internal static void WritePacket(Packet packet, ref PooledBuffer buffer, JsonExporterState state)
     {
+        // A skip packet has no parsed field tree to serialize: fail loudly instead of writing an empty object.
         if (!packet.HasFieldTree)
         {
             throw new InvalidOperationException("Skip packets cannot be exported (HasFieldTree is false).");
@@ -54,7 +74,9 @@ internal static class CompactWriter
         buffer.Write(_KeyTs);
         JsonHelpers.WriteI64(ref buffer, packet.Timestamp.AsNanos);
 
-        // IN — info string with same-as-previous optimization
+        // IN — info string with same-as-previous optimization. An empty info is omitted. The previous info is updated for
+        // every packet, including one with empty info, so it always equals the info of the preceding packet and a reader
+        // can mirror it by treating a missing IN (without the same-info flag) as an empty string.
         string info = packet.Info;
         uint packetSameFlags = 0;
         if (info.Length > 0)
@@ -100,7 +122,10 @@ internal static class CompactWriter
         buffer.WriteByte((byte)'}');
     }
 
-    /// <summary>Writes a single field in compact format with deduplication and same-as-previous.</summary>
+    /// <summary>
+    /// Writes a single field in compact format with deduplication and same-as-previous, then its children recursively
+    /// (recursion depth equals the nesting depth of the field tree).
+    /// </summary>
     private static void _WriteFieldCompact(Field field, ref PooledBuffer buffer, JsonExporterState state)
     {
         buffer.WriteByte((byte)'{');
@@ -111,7 +136,8 @@ internal static class CompactWriter
         buffer.Write(_FieldKeyFi);
         JsonHelpers.WriteI64(ref buffer, fieldIdValue);
 
-        // NA, UI, TY — only on first occurrence via bitmask
+        // NA, UI, TY — only on first occurrence via bitmask. Insert is a test-and-set, so the id is marked as seen even
+        // when the field has no FieldInfo (then no NA/UI/TY is ever written for that id).
         bool isFirstOccurrence = state.FieldSeen.Insert(fieldIdValue);
         if (isFirstOccurrence)
         {
@@ -128,7 +154,10 @@ internal static class CompactWriter
             }
         }
 
-        // Compute same-as-previous with typed FieldValue + LazyString (no AsString until emit).
+        // Compute same-as-previous with typed FieldValue + LazyString (no AsString until emit). CompareAndUpdate both
+        // compares with and overwrites the stored previous values, so it must run exactly once per field occurrence, for
+        // every field (also when nothing will be emitted), to keep "previous" equal to the last occurrence in write order.
+        // The LazyString values are compared without being materialized; only the text that is actually written is.
         FieldValue value = field.Value;
         LazyString valueCustomRepresentation = value.CustomRepresentation;
         LazyString customText = field.CustomText;

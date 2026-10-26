@@ -13,6 +13,7 @@ public static class ProtocolRegistration
     /// </summary>
     /// <param name="builder">The stack builder to register protocols with.</param>
     /// <returns>An empty warning list: none of these protocols reads an external configuration.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> is <see langword="null"/>.</exception>
     public static IReadOnlyList<SettingsLoadWarning> RegisterFairProfilingProtocols(this IStackBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -20,6 +21,9 @@ public static class ProtocolRegistration
         // Eagerly initialize display tables so the timed phase never pays first-use cost.
         DisplayTables.EnsureInitialized();
 
+        // Each protocol is registered and then has its fields registered right away. The dispatch tables are wired by
+        // the [RegisterAtTable] / [UsesTable] attributes (see RegisterStandardProtocols). Protocols that are not
+        // registered here (VLAN, ICMP, ARP, ...) are not part of this lean set and are therefore not dissected.
         FrameProtocol frame = new();
         ProtocolId frameId = builder.RegisterProtocol(frame);
         frame.RegisterFields(builder, frameId);
@@ -56,11 +60,15 @@ public static class ProtocolRegistration
     /// <list type="bullet">
     ///   <item><b>Meta / link:</b> Frame, Ethernet, VLAN (802.1Q), LLC/SNAP, Linux SLL, Linux SLL2.</item>
     ///   <item><b>Network:</b> IPv4 (options + fragmentation), IPv6 (extension headers + fragmentation), ARP, ICMPv4, ICMPv6.</item>
-    ///   <item><b>Transport:</b> TCP (options, stateful analysis, heuristic detection, stream reassembly for DNS-over-TCP), UDP.</item>
-    ///   <item><b>Application:</b> DNS, DHCPv4, DHCPv6, TLS, DTLS, HTTP/1.x, HTTP/2 (HPACK), WebSocket, SOME/IP, JSON, Data.</item>
-    /// <item><b>Automotive:</b> CAN (classic / FD / XL), FlexRay, LIN, PDU Transport, Signal messages (<see cref="SignalMessage.SignalMessageRegistration"/>).</item>
+    ///   <item><b>Transport:</b> TCP (options, stateful analysis, heuristic detection, stream reassembly for DNS-over-TCP and HTTP/1), UDP.</item>
+    ///   <item><b>Application:</b> DNS, DHCPv4, DHCPv6, TLS, DTLS, HTTP/1.x, HTTP/2 (HPACK), WebSocket, SOME/IP, JSON, Text.</item>
+    ///   <item><b>Automotive:</b> CAN (classic / FD / XL), FlexRay, LIN, PDU Transport,
+    ///   Signal messages (<see cref="SignalMessage.SignalMessageRegistration"/>).</item>
     ///   <item><b>Fallback:</b> Data (raw bytes when no specific dissector applies).</item>
     /// </list>
+    /// <para>Two ordering constraints are explicit in the code: HTTP/1.x before WebSocket (HTTP owns the
+    /// <c>http.upgrade</c> table WebSocket attaches to), and the TCP heuristic and reassembly setup at the end, which
+    /// needs the protocol ids of its targets.</para>
     /// <para>The frame protocol is auto-discovered by name "frame" during
     /// <see cref="StackBuilder.Build"/> and stored on the stack's <c>FrameProtocolId</c> property.</para>
     /// <para>Dispatch graph (high level):
@@ -85,11 +93,19 @@ public static class ProtocolRegistration
     /// (config load, compile skips, registration skips). Empty when both succeed with
     /// no external config.
     /// </returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> is <see langword="null"/>.</exception>
     public static IReadOnlyList<SettingsLoadWarning> RegisterStandardProtocols(this IStackBuilder builder)
     {
+        // A null builder would fail deep inside the first RegisterProtocol call with an unrelated stack trace;
+        // fail at the entry with the parameter name instead (same as RegisterFairProfilingProtocols).
+        ArgumentNullException.ThrowIfNull(builder);
+
         // Eagerly initialize all display text lookup tables so the cost is paid
         // during setup, not during the first packet parse in the timed phase.
         DisplayTables.EnsureInitialized();
+
+        // Collects the warnings of the registrations that read external JSON (PDU Transport, Signal Message); they
+        // are returned, never discarded, so the host decides how to surface a bad configuration file.
         List<SettingsLoadWarning> warnings = [];
 
         // Frame — entry point, owns the frame.link_type dispatch table
@@ -260,9 +276,17 @@ public static class ProtocolRegistration
 
         #region TCP Stream Reassembly Configurations
         // Register PDU boundary detectors for protocols that need TCP reassembly.
-        // DNS/TCP uses a 2-byte big-endian length prefix before each DNS message (RFC 1035 §4.2.2).
+        // DNS/TCP uses a 2-byte big-endian length prefix before each DNS message (RFC 1035 §4.2.2). The prefix does not
+        // count itself (lengthIncludesHeader false), so the detector adds headerSize 2 to get the total PDU length.
+        // Limit: MaxPduSize is the largest legal PDU, 65535 bytes of DNS message plus the 2-byte prefix (RFC 1035 §4.2.2).
+        // The stream buffer compares it with the total PDU length including the prefix, so the default of 65536 would
+        // refuse (and put the stream into its error state for) a maximum-size message such as a large zone transfer
+        // answer. Threat it still bounds: a detector fed hostile bytes announcing an oversized PDU; with a 16-bit length field
+        // the format itself caps a PDU at this value, so it is a constant, not a tunable. Posture: secure by default,
+        // nothing larger than the format allows is accepted. MaxBufferSize stays at its default of 1 MiB.
         builder.RegisterStreamReassemblyConfig(dnsId, new StreamReassemblyConfig
         {
+            MaxPduSize = ushort.MaxValue + 2,
             BoundaryDetector = new LengthPrefixDetector(
                 lengthOffset: 0,
                 lengthSize: 2,
@@ -272,6 +296,12 @@ public static class ProtocolRegistration
         });
 
         // HTTP/1 messages are framed by headers plus Content-Length or chunked encoding.
+        // Limits: both are raised from the defaults (64 KiB per PDU, 1 MiB buffer per direction) to 16 MiB so that HTTP
+        // messages with a larger body can complete. Threat they still bound: a peer announcing a huge body or never
+        // finishing a message, which would otherwise grow the per-stream buffer without end; exceeding either limit
+        // puts the stream into its error state (nothing is truncated silently). Constants chosen by this registration
+        // code, not user-configurable here; open by default compared with the defaults. The exact number 16 MiB has
+        // no recorded derivation.
         builder.RegisterStreamReassemblyConfig(httpId, new StreamReassemblyConfig
         {
             BoundaryDetector = new Http1MessageDetector(),

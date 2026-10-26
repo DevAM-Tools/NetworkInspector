@@ -3,15 +3,31 @@
 namespace NetworkInspector.Protocols.Dns;
 
 /// <summary>
-/// Zero-allocation DNS label decompression (RFC 1035 Section 4.1.4).
+/// Zero-allocation DNS label decompression (RFC 1035 Section 4.1.4): the name is assembled in a stack buffer,
+/// the only heap allocation is the final string returned by <see cref="ReadName"/>.
 /// Supports label pointers (0xC0xx) with cycle detection via max depth.
+/// <para>
+/// Security: names come straight from the wire, so every read is bounds checked and every loop is bounded. A
+/// compression pointer may point forward or into itself (a loop); the parser does not track visited offsets or require
+/// backward pointers, it only limits the pointer chain depth, which also bounds the recursion depth. The amount of
+/// text copied is bounded by the fixed 256-character output buffer. Residual risk: label bytes are copied as-is
+/// (Latin-1) without escaping, so a label may contain dots, spaces or control characters that make the displayed name
+/// ambiguous; callers that use the name for anything but display must not trust its structure.
+/// </para>
 /// </summary>
+/// <remarks>
+/// <para><b>Thread safety:</b> stateless; all buffers are per-call stack memory, safe for concurrent use.</para>
+/// </remarks>
 internal static class DnsNameParser
 {
-    /// <summary>Maximum pointer chain depth to prevent infinite loops.</summary>
+    /// <summary>
+    /// Maximum pointer chain depth to prevent infinite loops. Limit: 64 hops; threat: a pointer loop or a very long
+    /// chain (CPU and stack exhaustion from one hostile packet); a fixed constant in code, not configurable.
+    /// The depth check runs on entry, so up to 65 nested calls are possible.
+    /// </summary>
     private const int _MaxPointerDepth = 64;
 
-    /// <summary>Maximum label length (63 bytes per RFC 1035).</summary>
+    /// <summary>Maximum label length (63 bytes per RFC 1035: the top two bits of the length byte are the pointer flag).</summary>
     private const int _MaxLabelLength = 63;
 
     /// <summary>Pointer indicator mask (top 2 bits = 11).</summary>
@@ -21,13 +37,23 @@ internal static class DnsNameParser
     /// Reads a DNS domain name from the data at the given offset.
     /// Returns the decoded name as a string and advances <paramref name="offset"/>
     /// past the name (only at the first level — pointer offsets don't advance the caller's offset).
+    /// A name that ends in a pointer advances the offset past the two pointer bytes.
     /// </summary>
     /// <param name="fullPacket">The entire DNS packet data (needed for pointer resolution).</param>
-    /// <param name="offset">Current read position; updated to point past the name on success.</param>
-    /// <returns>The decoded domain name, or an empty string on error.</returns>
+    /// <param name="offset">
+    /// Current read position; updated to point past the name on success. On failure the value is unspecified
+    /// within the packet: it is left unchanged when a label is malformed, and otherwise points past the last
+    /// bytes that were consumed at the first level.
+    /// </param>
+    /// <returns>
+    /// The decoded domain name without trailing dot, or an empty string on error and for the root name (a single
+    /// zero byte). The two cases cannot be told apart from the result.
+    /// </returns>
     internal static string ReadName(ReadOnlySpan<byte> fullPacket, ref int offset)
     {
-        // Use stackalloc for small names (< 256 chars), fall back to StringBuilder otherwise
+        // A valid name is at most 255 bytes on the wire, which is at most 254 characters with the trailing dot, so a
+        // 512-byte stack buffer (256 chars) always fits it: no heap buffer or StringBuilder is needed, and a longer
+        // (malformed) name is rejected by the length check in _ReadNameCore rather than growing the buffer.
         Span<char> buffer = stackalloc char[256];
         int written = 0;
         bool success = _ReadNameCore(fullPacket, ref offset, buffer, ref written, depth: 0, firstLevel: true);
@@ -37,7 +63,8 @@ internal static class DnsNameParser
             return string.Empty;
         }
 
-        // Remove trailing dot if present
+        // Every label appends "label."; drop the final dot so the result reads "www.example.com". The only
+        // allocation of the whole read happens in the next statement.
         if (written > 0 && buffer[written - 1] == '.')
         {
             written--;
@@ -65,7 +92,8 @@ internal static class DnsNameParser
     }
 
     /// <summary>
-    /// Core recursive name reader. Follows pointer chains with depth limiting.
+    /// Core recursive name reader. Follows pointer chains with depth limiting. Recursion happens only at a
+    /// pointer (at most <c>_MaxPointerDepth + 1</c> nested calls), never per label, so stack use stays small.
     /// </summary>
     /// <param name="data">Full DNS packet.</param>
     /// <param name="offset">Current offset — only advanced at the first (non-pointer) level.</param>
@@ -84,8 +112,11 @@ internal static class DnsNameParser
             return false; // Probable infinite pointer loop
         }
 
+        // pos walks the labels of this level. The caller's offset is only assigned at the first level (see the
+        // comments below) because a pointer target lies elsewhere in the message and must not move the caller.
+        // A pointer returns from this method right after it is handled, so no label of this level is read after
+        // a pointer and the terminator and end-of-data branches below never need to know whether one was seen.
         int pos = offset;
-        bool pointerSeen = false;
 
         while (pos < data.Length)
         {
@@ -94,14 +125,16 @@ internal static class DnsNameParser
             // End of name (null terminator)
             if (labelLen == 0)
             {
-                if (firstLevel && !pointerSeen)
+                if (firstLevel)
                 {
                     offset = pos + 1; // Skip the null byte
                 }
                 return true;
             }
 
-            // Pointer (top 2 bits = 11)
+            // Pointer (top 2 bits = 11): a 14-bit offset from the start of the message (RFC 1035 §4.1.4). A pointer
+            // always ends the name at this level: the recursive call below is in return position and the loop never
+            // continues after it. The bit patterns 01 and 10 (extended label types) are rejected as invalid labels further down.
             if ((labelLen & _PointerMask) == _PointerMask)
             {
                 if (pos + 1 >= data.Length)
@@ -109,11 +142,10 @@ internal static class DnsNameParser
                     return false;
                 }
 
-                // Record the offset past the pointer (only on first encounter at this level)
-                if (firstLevel && !pointerSeen)
+                // Record the offset past the pointer (only at the first level: a followed pointer must not move the caller)
+                if (firstLevel)
                 {
                     offset = pos + 2;
-                    pointerSeen = true;
                 }
 
                 // Follow the pointer
@@ -127,7 +159,7 @@ internal static class DnsNameParser
                 return _ReadNameCore(data, ref ptrOffset, buffer, ref written, depth + 1, firstLevel: false);
             }
 
-            // Regular label
+            // Regular label. Lengths above 63 can only be the reserved 01 / 10 prefixes here (11 was handled above).
             if (labelLen > _MaxLabelLength)
             {
                 return false;
@@ -140,7 +172,9 @@ internal static class DnsNameParser
                 return false;
             }
 
-            // Copy label characters (ASCII) to buffer
+            // Copy label characters to the buffer (each byte becomes the char with the same code, i.e. Latin-1; no
+            // escaping). The check reserves room for the label plus its trailing dot, so the writes below can never
+            // run past the buffer. It also caps the name length, since each label adds at least two characters.
             if (written + labelLen + 1 > buffer.Length)
             {
                 return false; // Name too long for buffer
@@ -157,7 +191,7 @@ internal static class DnsNameParser
         }
 
         // Reached end of data without null terminator — update offset if at first level
-        if (firstLevel && !pointerSeen)
+        if (firstLevel)
         {
             offset = pos;
         }
@@ -167,7 +201,8 @@ internal static class DnsNameParser
 
     /// <summary>
     /// Parses a DNS resource record's RDATA section for an A record (4 bytes IPv4).
-    /// Returns the IPv4 address as a string.
+    /// Returns the IPv4 address, or the default (all-zero) address when <paramref name="rdata"/> is shorter than 4 bytes
+    /// (callers check the length first). Extra trailing bytes are ignored.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static IPv4Address ParseARecord(ReadOnlySpan<byte> rdata) =>
@@ -177,7 +212,8 @@ internal static class DnsNameParser
 
     /// <summary>
     /// Parses a DNS resource record's RDATA section for an AAAA record (16 bytes IPv6).
-    /// Returns the IPv6 address.
+    /// Returns the IPv6 address, or the default (all-zero) address when <paramref name="rdata"/> is shorter than
+    /// 16 bytes (callers check the length first). Extra trailing bytes are ignored.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static IPv6Address ParseAAAARecord(ReadOnlySpan<byte> rdata) =>

@@ -21,6 +21,8 @@ namespace NetworkInspector.Filter.Parser;
 ///                      | 'contains' String
 ///                      | 'matches' String ]
 /// operand   := Name [ '[' Integer ':' Integer ']' ] | 'len' '(' Name ')'
+/// endpoint  := [ cmpOp ] literal            (the operator defaults to '==')
+/// delta     := [ cmpOp ] Integer            (the operator defaults to '==')
 /// </code>
 /// <para>
 /// Every field, protocol and scope-anchor name is reported through
@@ -33,7 +35,15 @@ namespace NetworkInspector.Filter.Parser;
 /// and a stack overflow cannot be caught, so the tree is bounded here: at most <see cref="MaxNestingDepth"/>
 /// nested <c>(</c>, <c>!</c>, scope bodies and <c>when:</c> gates, and at most <see cref="MaxTermCount"/> terms
 /// in one expression. Both are constants; no caller needs deeper or larger trees, and long value lists belong
-/// in <c>in { … }</c>.
+/// in <c>in { … }</c>. Posture: secure by default and not configurable, because the input is untrusted; an expression
+/// that exceeds a limit fails with a positioned syntax error that names the limit. Accepted residual risk: the bounds
+/// are fixed numbers and are not derived from the stack size of the calling thread.
+/// </para>
+/// <para>
+/// Parsing is a single forward pass over the token list with one token of lookahead; there is no backtracking, so
+/// the cost is linear in the token count. The parser relies on the final <see cref="TokenKind.Eof"/> token as a
+/// sentinel: <c>_Advance</c> never moves past it and <c>_Peek</c> clamps to it, which keeps every grammar rule free of
+/// end-of-input bounds checks. Thread safety: not thread-safe; an instance is single-use (<c>Parse</c> once).
 /// </para>
 /// </summary>
 internal sealed class FilterParser
@@ -63,10 +73,26 @@ internal sealed class FilterParser
     private readonly FilterFieldNameSpanCallback? _OnFieldNameSpan;
     private readonly TimeSpan _RegexTimeout;
 
+    /// <summary>Index of the current token in <see cref="_Tokens"/>; never beyond the final Eof token.</summary>
     private int _Index;
+
+    /// <summary>
+    /// Current nesting level, checked against <see cref="MaxNestingDepth"/>. Every successful <c>_TryEnter</c> is
+    /// paired with a decrement after the nested part has been parsed.
+    /// </summary>
     private int _Depth;
+
+    /// <summary>Terms parsed so far, checked against <see cref="MaxTermCount"/>.</summary>
     private int _TermCount;
+
+    /// <summary>Language features seen so far (scope, flank), reported on the program (for example to refuse a scope in a tree-free observer).</summary>
     private FilterFeature _Features;
+
+    /// <summary>
+    /// First exception raised by the editor name-span callback, converted to an error. No further callbacks are made
+    /// after it; the parse itself is not aborted at that point, the stored error is returned at the end and takes
+    /// precedence over a syntax error (see <see cref="_Failure"/> and <see cref="Parse"/>).
+    /// </summary>
     private FilterError? _CallbackError;
 
     #endregion
@@ -99,9 +125,15 @@ internal sealed class FilterParser
 
     #region Entry point
 
-    /// <summary>Parses the token stream into a program.</summary>
+    /// <summary>
+    /// Parses the token stream into a program. Syntax errors are returned, not thrown. Call at most once per instance.
+    /// </summary>
+    /// <returns>
+    /// The program, or the first error: an editor callback failure takes precedence over a syntax error.
+    /// </returns>
     public FilterResult<FilterProgram> Parse()
     {
+        // Entry point of the grammar: parse one complete expression, then require that nothing follows it.
         FilterResult<FilterNode> root = _ParseOr();
         if (!root.TryGetValue(out FilterNode? node))
         {
@@ -143,6 +175,11 @@ internal sealed class FilterParser
 
     #region Boolean composition
 
+    /// <summary>
+    /// Parses <c>and</c>-chains separated by <c>or</c>. Both binary levels build a left-leaning tree in a loop (not by
+    /// recursion), so a long chain costs no parser stack; the term limit bounds the tree depth later phases recurse
+    /// through. <c>and</c> binds tighter than <c>or</c> because <c>or</c> sits one level higher in the grammar.
+    /// </summary>
     private FilterResult<FilterNode> _ParseOr()
     {
         FilterResult<FilterNode> left = _ParseAnd();
@@ -165,6 +202,7 @@ internal sealed class FilterParser
         return FilterResult.Ok<FilterNode>(node);
     }
 
+    /// <summary>Parses a chain of unary expressions joined by <c>and</c>; see <see cref="_ParseOr"/>.</summary>
     private FilterResult<FilterNode> _ParseAnd()
     {
         FilterResult<FilterNode> left = _ParseUnary();
@@ -187,6 +225,10 @@ internal sealed class FilterParser
         return FilterResult.Ok<FilterNode>(node);
     }
 
+    /// <summary>
+    /// Parses an optional run of <c>!</c> / <c>not</c> followed by a primary. Negation recurses (<c>!!!x</c>), so each
+    /// level counts against <see cref="MaxNestingDepth"/> to keep the parser's own stack bounded.
+    /// </summary>
     private FilterResult<FilterNode> _ParseUnary()
     {
         if (_Current.Kind == TokenKind.Not)
@@ -215,11 +257,13 @@ internal sealed class FilterParser
 
     #region Primary
 
+    /// <summary>Parses a parenthesised group, a boolean constant, a flank, a scope or a single term.</summary>
     private FilterResult<FilterNode> _ParsePrimary()
     {
         Token token = _Current;
 
-        // Every primary except a parenthesised group is one term of the expression.
+        // Every primary except a parenthesised group is one term of the expression. Counting here, before the
+        // dispatch, keeps the term limit independent of which production the term turns out to be.
         bool isTerm = token.Kind is TokenKind.True or TokenKind.False or TokenKind.Flank or TokenKind.Dollar or TokenKind.Identifier;
         if (isTerm && !_TryCountTerm(token, out FilterError? tooMany))
         {
@@ -281,11 +325,18 @@ internal sealed class FilterParser
 
     #region Terms
 
+    /// <summary>
+    /// Parses a term that starts with an identifier: a comparison, a set or range test, a string predicate, or a bare
+    /// name (presence test). The token after the operand selects the production.
+    /// </summary>
     private FilterResult<FilterNode> _ParseTerm()
     {
         Token nameToken = _Current;
         string name = nameToken.Text;
 
+        // Removed v1 constructs lex as plain identifiers (see FilterLexer). Binding words are rejected wherever a
+        // term starts. Call words are rejected only when they look like a call, so a field or protocol that happens
+        // to be named like one ("window" without parentheses) keeps working.
         if (_RemovedBindings.Contains(name))
         {
             return FilterError.UnsupportedFeature(name, nameToken.Position, nameToken.Length);
@@ -343,7 +394,9 @@ internal sealed class FilterParser
                 _Advance();
 
                 // Compile the pattern exactly once: this both validates it and yields the instance every back end
-                // and every derived filter shares.
+                // and every derived filter shares. Security: the pattern is untrusted input (ReDoS). TryBuildRegex
+                // prefers the linear-time non-backtracking engine and bounds the fallback by the regex timeout;
+                // a pattern that matches too slowly surfaces later as a runtime error, never as a stall.
                 Regex? regex = null;
                 if (stringOp == StringOp.Matches && !FilterBinder.TryBuildRegex(pattern.Text, _RegexTimeout, out regex))
                 {
@@ -356,6 +409,8 @@ internal sealed class FilterParser
             }
 
             default:
+                // No operator follows: the bare name is a presence test (protocol or field). A slice or len()
+                // is a computed value and means nothing without a comparison.
                 if (operand is not FieldOperandNode)
                 {
                     return FilterError.Syntax(
@@ -369,11 +424,19 @@ internal sealed class FilterParser
         }
     }
 
+    /// <summary>
+    /// Parses what follows <c>in</c>: either a brace-enclosed value set <c>{ a, b, c }</c> or an inclusive literal range
+    /// <c>low .. high</c>. The set list is unbounded by the grammar; it counts as one term, which is why long value
+    /// lists belong here instead of in an <c>or</c> chain (see <see cref="MaxTermCount"/>).
+    /// </summary>
     private FilterResult<FilterNode> _ParseInTail(OperandNode operand)
     {
         if (_Current.Kind == TokenKind.LeftBrace)
         {
             _Advance();
+
+            // Collect literals until no comma follows. At least one literal is required: an empty set is a
+            // syntax error from _ParseLiteral.
             List<FieldValueData> values = [];
             while (true)
             {
@@ -402,6 +465,7 @@ internal sealed class FilterParser
                 new InSetNode(operand, [.. values], operand.Position, close.End - operand.Position));
         }
 
+        // Range form: "low .. high". The lexer keeps ".." out of numbers ("1..10"), so the bounds arrive as two literals.
         FilterResult<FieldValueData> low = _ParseLiteral();
         if (!low.TryGetValue(out FieldValueData lowValue))
         {
@@ -428,10 +492,14 @@ internal sealed class FilterParser
     /// <summary>
     /// Parses a field reference, optionally with a <c>[a:b]</c> slice or wrapped in <c>len(...)</c>.
     /// The only caller reaches this after seeing an identifier, so the name token needs no check.
+    /// A slice <c>[start:end]</c> is half-open: it selects <c>end - start</c> bytes, so <c>end</c> must be greater than
+    /// <c>start</c> (an empty or reversed slice is rejected here rather than evaluating to nothing at run time).
     /// </summary>
     private FilterResult<OperandNode> _ParseOperand()
     {
         Token nameToken = _Current;
+
+        // "len" is a function only when a '(' follows, so a field that happens to be called len stays a field path.
         if (string.Equals(nameToken.Text, "len", StringComparison.OrdinalIgnoreCase)
             && _Peek(1).Kind == TokenKind.LeftParen)
         {
@@ -455,12 +523,14 @@ internal sealed class FilterParser
 
         _Advance();
 
+        // Without a '[' the operand is the whole field value.
         if (_Current.Kind != TokenKind.LeftBracket)
         {
             return FilterResult.Ok<OperandNode>(
                 new FieldOperandNode(nameToken.Text, nameToken.Position, nameToken.Length));
         }
 
+        // Byte slice "[start:end]". The lexer already lexes the bracket content as Integer ':' Integer.
         _Advance();
         FilterResult<int> start = _ParseNonNegativeInteger();
         if (!start.TryGetValue(out int startValue))
@@ -503,6 +573,11 @@ internal sealed class FilterParser
 
     #region Scope
 
+    /// <summary>
+    /// Parses <c>$Name [ [n] ] { expr }</c>: the body is evaluated against the subtree of the named anchor (optionally
+    /// its n-th occurrence). The body is a nested expression, so it counts as one nesting level. Marks the program
+    /// with <see cref="FilterFeature.Scope"/>, which needs a field tree (the tree-free observer refuses it).
+    /// </summary>
     private FilterResult<FilterNode> _ParseScope()
     {
         Token dollar = _Current;
@@ -568,6 +643,14 @@ internal sealed class FilterParser
 
     #region Flank
 
+    /// <summary>
+    /// Parses <c>flank(field, args…)</c>, a stateful detector of a value transition of one field. Arguments may
+    /// appear in any order and each later duplicate overwrites the earlier one. The cross-argument rules are checked
+    /// after the closing parenthesis so the error can cover the whole expression: a <c>within:</c> window is mandatory
+    /// (the transition must complete inside it, by time or packet count), <c>changed</c> excludes <c>from:</c> / <c>to:</c> /
+    /// <c>by:</c>, and <c>by:</c> with <c>to:</c> needs <c>from:</c>. With none of <c>from:</c>, <c>to:</c>, <c>by:</c>
+    /// the flank fires on any change. The <c>when:</c> gate is a nested expression and counts as one nesting level.
+    /// </summary>
     private FilterResult<FilterNode> _ParseFlank()
     {
         Token flankToken = _Current;
@@ -587,6 +670,7 @@ internal sealed class FilterParser
         _Advance();
         _ReportSpan(fieldToken.Position, fieldToken.Length, FilterFieldNameKind.FieldPath);
 
+        // Arguments are collected first and validated together afterwards, so their order does not matter.
         FlankEndpoint? from = null;
         FlankEndpoint? to = null;
         FlankDelta? by = null;
@@ -607,6 +691,7 @@ internal sealed class FilterParser
             string argName = argToken.Text;
             _Advance();
 
+            // "changed" is the only argument without a value; all others are "name: value".
             if (string.Equals(argName, "changed", StringComparison.OrdinalIgnoreCase))
             {
                 changed = true;
@@ -656,6 +741,7 @@ internal sealed class FilterParser
 
                 case "within":
                 {
+                    // ParseWindow validates the token without consuming it; advance only after it succeeded.
                     FilterResult<FlankWindow> parsed = LiteralParser.ParseWindow(_Current);
                     if (!parsed.TryGetValue(out FlankWindow parsedWindow))
                     {
@@ -696,6 +782,7 @@ internal sealed class FilterParser
         Token close = _Current;
         _Advance();
 
+        // Cross-argument rules, reported over the whole flank expression.
         if (window is null)
         {
             return FilterError.Syntax(
@@ -720,6 +807,7 @@ internal sealed class FilterParser
                 close.End - flankToken.Position);
         }
 
+        // A flank without any condition (or with "changed") fires on every change of the value.
         bool anyChange = changed || (from is null && to is null && by is null);
 
         _Features |= FilterFeature.Flank;
@@ -736,6 +824,7 @@ internal sealed class FilterParser
             close.End - flankToken.Position));
     }
 
+    /// <summary>Parses a <c>from:</c> / <c>to:</c> endpoint: an optional comparison operator (default <c>==</c>) and a literal.</summary>
     private FilterResult<FlankEndpoint> _ParseFlankEndpoint()
     {
         CompareOp op = CompareOp.Equal;
@@ -754,6 +843,10 @@ internal sealed class FilterParser
         return FilterResult.Ok<FlankEndpoint>(new FlankEndpoint(op, value));
     }
 
+    /// <summary>
+    /// Parses a <c>by:</c> delta: an optional comparison operator (default <c>==</c>) and an integer literal. The delta
+    /// is computed as a signed 64-bit difference at run time, so only integer literals make sense.
+    /// </summary>
     private FilterResult<FlankDelta> _ParseFlankDelta()
     {
         CompareOp op = CompareOp.Equal;
@@ -785,6 +878,10 @@ internal sealed class FilterParser
 
     #region Literals and helpers
 
+    /// <summary>
+    /// Parses and consumes one literal token. The token is consumed only when it converted successfully, so an error
+    /// is reported at the offending token.
+    /// </summary>
     private FilterResult<FieldValueData> _ParseLiteral()
     {
         Token token = _Current;
@@ -806,6 +903,11 @@ internal sealed class FilterParser
         return parsed;
     }
 
+    /// <summary>
+    /// Parses a non-negative integer used as a slice bound or scope occurrence. The literal parser yields an unsigned
+    /// value for every non-negative literal and a signed one for <c>-1</c>-style literals, so a negative value fails
+    /// the unsigned extraction below and is reported as out of range.
+    /// </summary>
     private FilterResult<int> _ParseNonNegativeInteger()
     {
         Token token = _Current;
@@ -890,10 +992,13 @@ internal sealed class FilterParser
         return true;
     }
 
+    /// <summary>The current token. Always valid: <see cref="_Index"/> never moves past the trailing Eof token.</summary>
     private Token _Current => _Tokens[_Index];
 
+    /// <summary>The token before the current one (the first token at the start); used to compute end offsets.</summary>
     private Token _Previous => _Tokens[_Index > 0 ? _Index - 1 : 0];
 
+    /// <summary>Looks <paramref name="offset"/> tokens ahead without consuming; clamps to the Eof token past the end.</summary>
     private Token _Peek(int offset)
     {
         int index = _Index + offset;
@@ -902,6 +1007,7 @@ internal sealed class FilterParser
             : _Tokens[^1];
     }
 
+    /// <summary>Consumes the current token, staying on the Eof token once the end is reached (see the class remarks).</summary>
     private void _Advance()
     {
         if (_Index < _Tokens.Count - 1)
@@ -910,9 +1016,11 @@ internal sealed class FilterParser
         }
     }
 
+    /// <summary>Failed node result for "expected <paramref name="what"/>" at the current token.</summary>
     private FilterResult<FilterNode> _Expected(string what) =>
         FilterResult.Fail<FilterNode>(_ExpectedError(what));
 
+    /// <summary>Builds the "expected X" error at the current token; at end of input it says so instead of quoting Eof.</summary>
     private FilterError _ExpectedError(string what)
     {
         Token token = _Current;
@@ -928,6 +1036,7 @@ internal sealed class FilterParser
 
     #region Name-span reporting
 
+    /// <summary>Reports the name inside <paramref name="operand"/> to the editor callback.</summary>
     private void _ReportName(OperandNode operand, FilterFieldNameKind kind)
     {
         // For len(name) and name[a:b] the operand span covers the whole syntax; report the
@@ -939,6 +1048,12 @@ internal sealed class FilterParser
         _ReportSpan(start, operand.Name.Length, kind);
     }
 
+    /// <summary>
+    /// Invokes the editor callback for one name span. The callback is caller-supplied code, so this is a
+    /// trust boundary: any exception it throws is converted into a <see cref="FilterErrorKind.CallbackFailed"/> error
+    /// (message only, no stack trace) instead of escaping the parser, and the callback is not called again afterwards.
+    /// The source is passed as a span over the original string, so no copy is made per name.
+    /// </summary>
     private void _ReportSpan(int start, int length, FilterFieldNameKind kind)
     {
         if (_OnFieldNameSpan is null || _CallbackError is not null)

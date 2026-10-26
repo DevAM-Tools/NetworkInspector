@@ -22,6 +22,12 @@ internal enum StartBehavior
 
     /// <summary>Registers a callback on its token that throws, then waits for the token.</summary>
     ThrowingCallbackThenWait,
+
+    /// <summary>Throws a <see cref="TimeoutException"/> of its own (a plugin that gave up on something it waited for).</summary>
+    ThrowTimeoutException,
+
+    /// <summary>Ignores its token and waits until the test calls <see cref="LifePlugin.ReleaseWithFailure"/>, then throws.</summary>
+    WaitForReleaseThenThrow,
 }
 
 /// <summary>How a <see cref="LifePlugin"/> behaves in <c>StopAsync</c>.</summary>
@@ -38,6 +44,12 @@ internal enum StopBehavior
 
     /// <summary>Blocks its thread for 30 s before it returns (a plugin that waits synchronously).</summary>
     BlockThread,
+
+    /// <summary>Throws a <see cref="TimeoutException"/> of its own.</summary>
+    ThrowTimeoutException,
+
+    /// <summary>Ignores its token and waits until the test calls <see cref="LifePlugin.ReleaseWithFailure"/>, then throws.</summary>
+    WaitForReleaseThenThrow,
 }
 
 /// <summary>
@@ -58,6 +70,9 @@ internal sealed class LifePlugin : IPlugin
     private readonly StopBehavior _Stop;
 
     private readonly string? _SourceKind;
+
+    // Completed by ReleaseWithFailure; asynchronous continuations so that the test thread never runs the plugin's code.
+    private readonly TaskCompletionSource _Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private IPluginContext? _Context;
 
@@ -87,6 +102,9 @@ internal sealed class LifePlugin : IPlugin
 
     /// <summary>Whether <c>Stopping</c> was already cancelled when <c>StopAsync</c> ran; <see langword="null"/> before it ran.</summary>
     internal bool? StoppingWasCancelledAtStop { get; private set; }
+
+    /// <summary>Lets a call that waits for the release finish with the exception <c>late boom</c>.</summary>
+    internal void ReleaseWithFailure() => _Release.SetException(new InvalidOperationException("late boom"));
 
     /// <inheritdoc/>
     public PluginInfo Info => new(_Name, "1.0.0", "MIT", "Lifecycle test plugin.", []);
@@ -123,6 +141,11 @@ internal sealed class LifePlugin : IPlugin
             case StartBehavior.NeverComplete:
                 await new TaskCompletionSource().Task.ConfigureAwait(false);
                 break;
+            case StartBehavior.ThrowTimeoutException:
+                throw new TimeoutException("start gave up");
+            case StartBehavior.WaitForReleaseThenThrow:
+                await _Release.Task.ConfigureAwait(false);
+                break;
             default:
                 context.Log.Info("started");
                 break;
@@ -143,6 +166,11 @@ internal sealed class LifePlugin : IPlugin
                 break;
             case StopBehavior.WaitForToken:
                 await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+                break;
+            case StopBehavior.ThrowTimeoutException:
+                throw new TimeoutException("stop gave up");
+            case StopBehavior.WaitForReleaseThenThrow:
+                await _Release.Task.ConfigureAwait(false);
                 break;
             default:
                 _Context?.Log.Info("stopped");

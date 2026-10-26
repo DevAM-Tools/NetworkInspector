@@ -123,6 +123,28 @@ internal sealed class CliPluginLifecycleTests
 
     #endregion
 
+    #region Reports of the session
+
+    [Test]
+    public async Task AProfileFileThatCannotBeLoadedIsReportedOnceByTheCommandsThatBuildAStack()
+    {
+        using CliSandbox sandbox = new();
+        Directory.CreateDirectory(Path.Combine(sandbox.Base, "default"));
+        File.WriteAllText(Path.Combine(sandbox.Base, "default", "tcp.json"), "{ this is not json");
+
+        CliResult export = await sandbox.RunAsync("export", "random:count=2", "-o", sandbox.Combine("x.json"));
+        CliResult convert = await sandbox.RunAsync("convert", "random:count=2", "-o", sandbox.Combine("x.pcapng"));
+
+        string[] exportLines = [.. export.ErrorLines.Where(static line => line.StartsWith("Warning settings:", StringComparison.Ordinal))];
+        string[] convertLines = [.. convert.ErrorLines.Where(static line => line.StartsWith("Warning settings:", StringComparison.Ordinal))];
+        await Assert.That(export.Exit).IsEqualTo(0);
+        await Assert.That(convert.Exit).IsEqualTo(0);
+        await Assert.That(exportLines.Length).IsEqualTo(1);
+        await Assert.That(convertLines.Length).IsEqualTo(1);
+    }
+
+    #endregion
+
     #region Failed open
 
     private static PluginRecord _Record(string name) =>

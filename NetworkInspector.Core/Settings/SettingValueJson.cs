@@ -25,7 +25,10 @@ public static class SettingValueJson
         ArgumentNullException.ThrowIfNull(setting);
         value = default;
 
-        // Work on the node form the persistence code understands; an undefined element has no raw text at all.
+        // Work on the node form the persistence code understands, so MCP input and settings files share one converter and one
+        // set of rules. The raw-text round trip allocates; that is accepted because this path serves edits, not reads. An
+        // undefined element has no raw text at all. This member is a trust boundary and must never throw for any element, so the
+        // parse failures that GetRawText or Parse can raise are turned into "no node" (reported as JSON null below).
         JsonNode? node;
         try
         {
@@ -44,7 +47,10 @@ public static class SettingValueJson
             return false;
         }
 
-        // An enumeration may also be given as a bare name or an allowed number, as in the text form.
+        // An enumeration may also be given as a bare name or an allowed number, as in the text form. This branch comes before
+        // the generic conversion because the persistence form of an enumeration is an object ({name, value}), which the generic
+        // conversion requires. The entry comes from the metadata, so it is allowed by construction and needs no second
+        // validation. A bare string or number that matches nothing is an unknown-enum problem, not a wrong-type one.
         if (setting.Type == SettingType.Enum && node is JsonValue enumValue && setting.EnumMetadata is { } metadata)
         {
             EnumSettingValue? entry = null;
@@ -68,6 +74,8 @@ public static class SettingValueJson
             return true;
         }
 
+        // Shape and decoding first (the same code the file loader uses), then the shared validation for bounds and allowed
+        // values, so a value is refused with the same words whether it came from a file, MCP, or the command line.
         (SettingValue? parsed, SettingLoadResult result, _) =
             FromNode(node, setting.Type, setting.EnumMetadata, setting.GroupName, setting.Name);
         if (parsed is null)
@@ -88,17 +96,28 @@ public static class SettingValueJson
         return true;
     }
 
-    /// <summary>Writes <paramref name="value"/> in the persistence form (Bytes base64, enum object, F64 round-trip).</summary>
+    /// <summary>
+    /// Writes <paramref name="value"/> in the persistence form (Bytes base64, enum object, F64 round-trip). A value whose type
+    /// is not a defined <see cref="SettingType"/> member (possible only through an invalid cast) has no JSON form; that is a
+    /// broken invariant and is reported by an exception before anything is written.
+    /// </summary>
     /// <param name="writer">Receives one JSON value.</param>
     /// <param name="setting">The setting the value belongs to (reserved for forms that depend on the setting).</param>
     /// <param name="value">The value to write.</param>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
-    /// <exception cref="InvalidOperationException">An F64 value is not finite (a broken invariant).</exception>
+    /// <exception cref="InvalidOperationException">An F64 value is not finite, or the value's type is not a defined
+    /// <see cref="SettingType"/> member (a broken invariant).</exception>
     public static void Write(Utf8JsonWriter writer, IReadOnlySetting setting, SettingValue value)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(setting);
-        ToNode(value)?.WriteTo(writer);
+
+        // Writing nothing would leave the caller's document broken (a property name without a value, or a missing array
+        // element) and the error would surface later, far from the cause. A value without a JSON form is a bug, so it fails here.
+        JsonNode node = ToNode(value)
+            ?? throw new InvalidOperationException(
+                string.Create(CultureInfo.InvariantCulture, $"The value of setting '{setting.Name}' has no JSON form (type {(int)value.Type})."));
+        node.WriteTo(writer);
     }
 
     #endregion
@@ -138,6 +157,9 @@ public static class SettingValueJson
     /// <summary>
     /// Converts a JSON node to a setting value based on the setting type.
     /// Returns a tuple of the parsed value (or null) and a <see cref="SettingLoadResult"/> discriminant.
+    /// Checks shape and decoding only; bounds and allowed values are checked by <see cref="SettingValidation"/>. Adds no size
+    /// limit of its own (arrays and strings are as large as the node): the caller bounds the input, as the file loader does
+    /// with the configured size and depth caps. Never throws for a malformed node.
     /// <list type="bullet">
     ///   <item><see cref="SettingLoadResult.Success"/> — value parsed successfully.</item>
     ///   <item><see cref="SettingLoadResult.TypeMismatch"/> — JSON node's structural type does not match the setting type.</item>
@@ -220,7 +242,10 @@ public static class SettingValueJson
     /// <summary>Tries to parse a <see cref="SettingType.U64"/> from a JSON node.</summary>
     private static SettingValue? _TryParseU64(JsonNode node)
     {
-        // Try direct numeric first, then string parsing
+        // Accepted forms, in order: a number that fits ulong; a non-negative signed number (a node may hold a CLR long rather
+        // than a parsed number); a numeric string, as documented on the class. A negative number or an overflowing one is
+        // refused (null), never wrapped. The string parse uses NumberStyles.Integer and the invariant culture so the file means
+        // the same on every machine.
         if (node is JsonValue val)
         {
             if (val.TryGetValue(out ulong u))
@@ -275,6 +300,7 @@ public static class SettingValueJson
                 return null;
             }
 
+            // A non-boolean element throws InvalidOperationException, which _JsonToSettingValue maps to a type mismatch.
             values[i] = el.GetValue<bool>();
         }
 
@@ -421,7 +447,8 @@ public static class SettingValueJson
     private static (SettingValue? Value, SettingLoadResult Result, SettingsLoadWarning? Warning) _TryParseEnumWithMetadata(
         JsonNode node, EnumSettingMetadata? enumMetadata, string groupName, string settingName)
     {
-        // Expect object with "name" and "value" properties
+        // Expect object with "name" and "value" properties. A missing or mistyped member is a shape error. An object that
+        // repeats a property name can make the indexer throw ArgumentException; the caller maps that to a decoding error.
         if (node is not JsonObject obj)
         {
             return (null, SettingLoadResult.TypeMismatch, null);
@@ -451,6 +478,9 @@ public static class SettingValueJson
             return (SettingValue.Enum(persistedName, numericValue.Value), SettingLoadResult.Success, null);
         }
 
+        // The number is authoritative, the name is a label: the entry is found by number, and a persisted name that differs
+        // only produces a warning while the canonical name is applied. A renamed enumeration label in code therefore does not
+        // invalidate existing files. A number that is not allowed is refused (the setting keeps its default).
         EnumSettingValue? canonical = enumMetadata.GetByNumeric(numericValue.Value);
         if (canonical is null)
         {
@@ -495,9 +525,14 @@ public static class SettingValueJson
         return null;
     }
 
-    /// <summary>Converts a setting value to a JSON node.</summary>
+    /// <summary>
+    /// Converts a setting value to a JSON node in the persistence form. Returns <see langword="null"/> only for a type that is
+    /// not a defined <see cref="SettingType"/> member.
+    /// </summary>
     private static JsonNode? _SettingValueToJson(SettingValue value)
     {
+        // U64 and I64 are written as JSON numbers (the reader also accepts strings); Bytes as one base64 string; arrays copy
+        // each element into a JsonArray. The TryGetAs* calls cannot fail here because the switch has just checked the type.
         switch (value.Type)
         {
             case SettingType.Bool:
@@ -538,8 +573,9 @@ public static class SettingValueJson
     private static JsonValue _SettingF64ToJson(SettingValue value)
     {
         value.TryGetAsF64(out double f64);
-        // F64 settings are guaranteed finite by Setting.F64() and Setting.ValidateF64().
-        // Guard against invariant violations that would produce invalid JSON.
+        // F64 settings are guaranteed finite by the Setting.F64() factory and by SettingValidation on every mutation.
+        // Guard against invariant violations: JSON has no NaN or infinity, so writing one would produce invalid JSON. A broken
+        // invariant is a bug, hence an exception (not an expected failure).
         if (!double.IsFinite(f64))
         {
             ThrowHelpers.ThrowNonFiniteF64(f64);

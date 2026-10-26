@@ -6,7 +6,10 @@ namespace NetworkInspector.Core.Reassembly;
 /// Identifies one IPv6 datagram being reassembled.
 /// Per RFC 8200 §4.5, an IPv6 fragment is uniquely identified by
 /// (Source Address, Destination Address, Identification).
-/// Unlike IPv4, IPv6 uses 128-bit addresses and a 32-bit identification field.
+/// Unlike IPv4, IPv6 uses 128-bit addresses and a 32-bit identification field, and the upper-layer protocol is not
+/// part of the key. Each 128-bit address is stored as two <see cref="ulong"/> halves so the key stays a flat value
+/// type (no byte array, no allocation per fragment); only equality matters, so the caller may split the address
+/// either way as long as it does so consistently.
 /// </summary>
 /// <param name="SourceHigh">Source IPv6 address high 64 bits.</param>
 /// <param name="SourceLow">Source IPv6 address low 64 bits.</param>

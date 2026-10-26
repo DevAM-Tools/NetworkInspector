@@ -15,11 +15,18 @@ namespace NetworkInspector.Core.ValueCaches;
 /// Prefer <see cref="ValueCache.ReadOnly"/> or <see cref="ValueCache.AsReadOnlyView"/> and keep
 /// the compile-time type as this struct (or use a generic constraint).
 /// </para>
+/// <para>
+/// Why a struct: a listener gets a read-only handle without an allocation per call, and without being able to reach
+/// <see cref="ValueCache.RecordPacket"/> or <see cref="ValueCache.Abandon"/>. Thread safety: the struct is immutable (one
+/// reference); every member forwards to the owning <see cref="ValueCache"/> and is as thread-safe as it is
+/// (single writer, any number of readers).
+/// </para>
 /// </summary>
 public readonly struct ReadOnlyValueCache : IReadOnlyValueCache
 {
     #region Fields
 
+    /// <summary>The cache this view reads. Non-null for any view made with the public constructor; a <c>default</c> view has none.</summary>
     private readonly ValueCache _Owner;
 
     #endregion

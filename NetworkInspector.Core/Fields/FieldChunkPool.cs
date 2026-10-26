@@ -15,6 +15,9 @@ internal sealed class FieldChunkPool
 {
     #region Constants
 
+    // Limit: 1 024 slots (1 024 × 64 B = 64 KiB) per thread. It caps the memory a thread keeps pooled after parsing
+    // large frames, so retained memory is bounded by thread count × 64 KiB; chunks beyond the cap are dropped and left
+    // to the GC (see TryReturn). A fixed constant of this internal cache, not a setting.
     /// <summary>Largest number of pooled slots per thread: 1 024 × 64 B = 64 KiB.</summary>
     internal const int MaxPooledSlots = 1024;
 
@@ -22,7 +25,10 @@ internal sealed class FieldChunkPool
 
     #region Fields
 
+    /// <summary>Stack storage: entries <c>0 … _Count − 1</c> are pooled chunks, the rest are default. Fixed size, never grows.</summary>
     private readonly FieldBodyChunk[] _Items;
+
+    /// <summary>Number of pooled chunks (the stack top).</summary>
     private int _Count;
 
     #endregion
@@ -54,6 +60,7 @@ internal sealed class FieldChunkPool
     #region Operations
 
     /// <summary>Takes the most recently returned chunk; false and a default chunk when the pool is empty.</summary>
+    /// <param name="chunk">The pooled chunk (all slots zero), or <c>default</c> when the pool is empty.</param>
     internal bool TryRent(out FieldBodyChunk chunk)
     {
         if (_Count == 0)
@@ -71,7 +78,11 @@ internal sealed class FieldChunkPool
         return true;
     }
 
-    /// <summary>Adds a zeroed chunk; false when the pool is full (the caller drops the chunk).</summary>
+    /// <summary>
+    /// Adds a zeroed chunk; false when the pool is full (the caller drops the chunk). The chunk is not cleared here:
+    /// the caller guarantees every slot is zero, which is what lets a rented chunk be used without clearing it again.
+    /// </summary>
+    /// <param name="chunk">The chunk to pool; its buffer must not be null.</param>
     /// <exception cref="ArgumentNullException">The chunk has no buffer.</exception>
     internal bool TryReturn(in FieldBodyChunk chunk)
     {

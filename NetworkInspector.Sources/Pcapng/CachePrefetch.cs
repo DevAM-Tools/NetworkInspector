@@ -21,7 +21,8 @@ internal static class CachePrefetch
 
     /// <summary>
     /// Most bytes one block prefetch requests: 4 KiB (64 lines). Constant (user decision); a larger block reads its first
-    /// 4 KiB ahead and streams the rest through the copy.
+    /// 4 KiB ahead and streams the rest through the copy. Performance tuning, not a security limit: the value caps how
+    /// much cache one hint can touch, so a huge declared block length cannot turn the hint into a large read.
     /// </summary>
     internal const int MaxBytes = 4096;
 
@@ -41,6 +42,8 @@ internal static class CachePrefetch
     /// <remarks>Caller guarantees 0 ≤ <paramref name="length"/> ≤ <see cref="MaxBytes"/> and a readable range.</remarks>
     internal static unsafe void Range(byte* start, int length)
     {
+        // Sse.IsSupported is a JIT-time constant: on x86/x64 the fallback below is compiled away, elsewhere the prefetch
+        // loop is. The instruction never faults, so a stale hint cannot crash even if the range ends up unmapped.
         if (Sse.IsSupported)
         {
             for (int offset = 0; offset < length; offset += LineSize)
@@ -51,6 +54,8 @@ internal static class CachePrefetch
             return;
         }
 
+        // Fallback: a real load per line (this one DOES fault on an unreadable address, hence the caller's readability
+        // guarantee). XOR into a local and store it to the thread-static sink so the JIT cannot discard the loads as dead.
         int sink = 0;
         for (int offset = 0; offset < length; offset += LineSize)
         {

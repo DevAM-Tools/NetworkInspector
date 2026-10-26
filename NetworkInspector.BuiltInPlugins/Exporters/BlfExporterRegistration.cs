@@ -58,6 +58,8 @@ internal static class BlfExporterRegistration
             return false;
         }
 
+        // The setting's own numbers (0 to 3, default 2 = "default") are not the zlib levels of BlfCompressionLevel (0, 1, 6, 9),
+        // so the enumeration is mapped by its registered name; an unlisted name cannot occur because Core settings reject it.
         BlfCompressionLevel level = OptionValues.GetEnumName(values, _CompressionOption) switch
         {
             "none" => BlfCompressionLevel.None,

@@ -28,9 +28,14 @@ public sealed class StackBuilder : IStackBuilder
     // Field alias groups (independent namespace; never resolves through _FieldNameMap)
     private readonly List<FieldAliasGroupInfo> _FieldAliasGroups = [];
     private readonly Dictionary<string, FieldAliasGroupId> _FieldAliasGroupNameMap = new(StringComparer.Ordinal);
-    // Snapshot cache for FieldAliasGroups property; invalidated on each RegisterFieldAliasGroup call.
+
+    // Snapshot caches for the build-phase property getters (Protocols, Fields, FieldAliasGroups, PostParsers, ...). IStack
+    // exposes these collections as ReadOnlyMemory<T>, which cannot wrap a List<T>, so a getter copies the list into an array.
+    // The copy is cached and dropped (set to null) by every registration that changes the list, so protocols that read a
+    // collection repeatedly while registering do not pay an O(n) copy per read, and a returned memory stays a stable view
+    // of the registrations made up to that moment (later registrations create a new array instead of altering it).
+    // Single-threaded like the rest of the builder; no synchronization.
     private FieldAliasGroupInfo[]? _FieldAliasGroupsSnapshot;
-    // Snapshot caches for build-phase property getters; invalidated on registration.
     private ProtocolInfo[]? _ProtocolsSnapshot;
     private FieldInfo[]? _FieldsSnapshot;
     private PostParserInfo[]? _PostParsersSnapshot;
@@ -49,10 +54,14 @@ public sealed class StackBuilder : IStackBuilder
     private readonly List<PostParserInfo> _PostParsers = [];
     private readonly SettingsManager _SettingsManager;
 
+    // Set by Build; a second Build is refused. Single-threaded like the rest of the builder.
+    private bool _Built;
+
     // Stream reassembly configs (keyed by protocol ID)
     private readonly Dictionary<ProtocolId, StreamReassemblyConfig> _ReassemblyConfigs = [];
 
-    // Index groups
+    // Index groups. Unlike the other entities there is no list: an index group is just a name with a dense ID, so the next ID
+    // is a counter and the ID-to-name direction is a linear scan of the map (build phase only).
     private readonly Dictionary<string, IndexGroupId> _IndexGroupMap = new(StringComparer.Ordinal);
     private int _NextIndexGroupId;
 
@@ -60,7 +69,9 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public FrameInterfaceRegistry FrameInterfaceRegistry { get; }
 
-    // Deferred callbacks
+    // Deferred callbacks (WhenXRegistered): callbacks waiting for a name that is not registered yet, in subscription order.
+    // An entry is removed when its name is registered and its callbacks have run, so what is left at Build time is exactly
+    // the set of callbacks that never fired (reported as warnings).
     private readonly Dictionary<string, List<Action<ProtocolId>>> _DeferredProtocol = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<Action<FieldId>>> _DeferredField = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<Action<ProtocolTableId>>> _DeferredTable = new(StringComparer.Ordinal);
@@ -73,7 +84,9 @@ public sealed class StackBuilder : IStackBuilder
 
     /// <summary>
     /// Protocol name used to auto-discover the frame protocol during <see cref="Build"/>.
-    /// Must match <c>FrameProtocol.ProtocolName</c> from <c>NetworkInspector.Protocols</c>.
+    /// Must match <c>FrameProtocol.ProtocolName</c> from <c>NetworkInspector.Protocols</c>. The name is repeated here because
+    /// that project depends on this one, so the constant cannot be referenced from Core. A mismatch is not silent: Build
+    /// then reports <see cref="BuildCallbackWarningKind.MissingFrameProtocol"/>.
     /// </summary>
     private const string _FrameProtocolName = "frame";
 
@@ -85,21 +98,33 @@ public sealed class StackBuilder : IStackBuilder
     /// <remarks>
     /// Use object initializer syntax (<c>new StackBuilder(sm, reg) { IncludeExceptionStackTrace = true }</c>)
     /// to set this flag. The value is captured by <see cref="Build"/>; mutating it after build is impossible
-    /// because the property is <see langword="init"/>-only.
+    /// because the property is <see langword="init"/>-only. When <see langword="true"/>, the error text that
+    /// a packet records for an exception thrown by a protocol during parsing also contains the exception's stack trace.
     /// </remarks>
     public bool IncludeExceptionStackTrace { get; init; }
 
     /// <summary>Creates a new stack builder with externally provided dependencies and registers built-in root and error fields.</summary>
-    /// <param name="settingsManager">The settings manager instance for managing protocol settings.</param>
-    /// <param name="frameInterfaceRegistry">The frame interface registry for managing capture interfaces.</param>
+    /// <param name="settingsManager">
+    /// The settings manager instance for managing protocol settings. It is handed on to the built
+    /// <see cref="Stack"/>, whose <see cref="Stack.Dispose"/> releases it.
+    /// </param>
+    /// <param name="frameInterfaceRegistry">The frame interface registry for managing capture interfaces (shared with the built stack).</param>
+    /// <exception cref="ArgumentNullException"><paramref name="settingsManager"/> or <paramref name="frameInterfaceRegistry"/> is <see langword="null"/>.</exception>
     public StackBuilder(SettingsManager settingsManager, FrameInterfaceRegistry frameInterfaceRegistry)
     {
+        // Both are dereferenced later (the registration of the built-in protocols, the settings of every protocol, Build); a
+        // null here would otherwise surface as a NullReferenceException far from the cause, or only after Build.
+        ArgumentNullException.ThrowIfNull(settingsManager);
+        ArgumentNullException.ThrowIfNull(frameInterfaceRegistry);
+
         _SettingsManager = settingsManager;
         FrameInterfaceRegistry = frameInterfaceRegistry;
 
         // Register built-in protocols:
         // RootProtocol is an empty dummy that owns the root field.
         // PacketProtocol is the top-level parse entry point (appends packet metadata, dispatches to frame).
+        // They are registered in the constructor, before any caller can register anything, so every stack has them and no
+        // later registration can take their names ("root", "packet.error", "packet.choice").
         RootProtocol rootProtocol = new();
         ProtocolId rootProtocolId = RegisterProtocol(
             rootProtocol,
@@ -401,17 +426,25 @@ public sealed class StackBuilder : IStackBuilder
     public ReadOnlySettingsManagerView Settings => _SettingsManager.ReadOnly;
 
     /// <inheritdoc/>
+    /// <remarks>Always empty: diagnostics are produced by <see cref="Build"/> and live on the built <see cref="Stack"/>.</remarks>
     public ReadOnlyMemory<BuildDiagnostic> BuildDiagnostics => ReadOnlyMemory<BuildDiagnostic>.Empty;
 
     #endregion
 
     #region Validation Helpers
 
+    /// <summary>
+    /// Whether <paramref name="idValue"/> is a valid index into a collection of <paramref name="count"/> entries. The
+    /// unsigned comparison covers both bounds in one branch: a negative value (such as the <c>Invalid</c> sentinel, -1)
+    /// becomes a huge unsigned number and fails the same test as a value past the end.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsValidIndex(int idValue, int count) => (uint)idValue < (uint)count;
 
     /// <summary>
-    /// Throws when <paramref name="nextIndex"/> exceeds <see cref="ArrayIndexIdRange.MaxValue"/>.
+    /// Throws when <paramref name="nextIndex"/> exceeds <see cref="ArrayIndexIdRange.MaxValue"/>. IDs are dense array indexes
+    /// of an entity list, so the number of entries is bounded by the largest array the runtime can allocate; the guard turns
+    /// that overflow into a clear error before an ID is issued. Constant by nature (a runtime fact, not a host setting).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void _GuardIndexAllocation(int nextIndex, string entityName) =>
@@ -438,6 +471,8 @@ public sealed class StackBuilder : IStackBuilder
     /// <summary>
     /// Invokes deferred registration callbacks for <paramref name="name"/>, collecting every
     /// exception so all subscribers run before surfacing an <see cref="AggregateException"/>.
+    /// The entity is already registered when this runs; an exception reports failing subscribers but does not undo the
+    /// registration.
     /// </summary>
     private static void _InvokeDeferredCallbacks<T>(
         Dictionary<string, List<Action<T>>> deferred,
@@ -445,11 +480,16 @@ public sealed class StackBuilder : IStackBuilder
         T id,
         string callbackKind)
     {
+        // Removing the entry first means each callback list fires at most once, and that a callback which subscribes to the
+        // same name again (the name is now registered) is answered immediately by WhenXRegistered instead of being
+        // appended to the list that is being iterated.
         if (!deferred.Remove(name, out List<Action<T>>? callbacks))
         {
             return;
         }
 
+        // One failing subscriber (typically a plugin) must not stop the others from learning the ID, so exceptions are
+        // collected and thrown together after all callbacks ran. The list is allocated only when something failed.
         List<Exception>? errors = null;
         foreach (Action<T> cb in callbacks)
         {
@@ -479,6 +519,8 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public ProtocolId RegisterProtocol(IProtocol protocol)
     {
+        // Validate everything before touching any list, so a rejected registration leaves the builder unchanged. The ID is
+        // the dense list index, which is what lets the built Stack resolve it by array indexing.
         string name = protocol.Name;
         _ValidateName(name);
         _ValidateUiName(protocol.UiName);
@@ -487,6 +529,8 @@ public sealed class StackBuilder : IStackBuilder
             throw DuplicateNameRegistrationException.For(name);
         }
 
+        // Commit: the info list, the instance list (same index), and the name map move together; the cached snapshot is
+        // dropped because it no longer matches the list.
         _GuardIndexAllocation(_Protocols.Count, "protocol");
         ProtocolId id = new(_Protocols.Count);
         ProtocolInfo info = new(id, name, protocol.UiName, protocol.Description);
@@ -495,6 +539,8 @@ public sealed class StackBuilder : IStackBuilder
         _ProtocolNameMap[name] = id;
         _ProtocolsSnapshot = null;
 
+        // Subscribers run after the state is committed, so they can already look the protocol up. An AggregateException from
+        // a subscriber leaves the protocol registered.
         _InvokeDeferredCallbacks(_DeferredProtocol, name, id, "Protocol");
 
         return id;
@@ -506,6 +552,8 @@ public sealed class StackBuilder : IStackBuilder
         Action<IStackBuilder, ProtocolId, TProtocol> callback)
         where TProtocol : IProtocol
     {
+        // The typed overload hands the concrete protocol instance back to the callback, so the caller needs no cast and
+        // (with a static lambda) no closure to register the protocol's fields and tables right after its ID exists.
         ProtocolId id = RegisterProtocol(protocol);
         callback(this, id, protocol);
         return id;
@@ -519,13 +567,27 @@ public sealed class StackBuilder : IStackBuilder
     public FieldId RegisterField(
         ProtocolId protocolId, string name, string uiName, FieldType fieldType, string? description = null)
     {
+        // Field names share one namespace across all protocols (by convention prefixed with the protocol name, for example
+        // "packet.error"), and the field ID is the dense list index. Validation comes first so a rejected registration
+        // changes nothing.
         _ValidateName(name);
         _ValidateUiName(uiName);
+
+        // The owning protocol must exist, or be the documented "no owner" sentinel ProtocolId.Invalid (IStackBuilder). Any other
+        // unknown ID (for example one that came from another builder) would be stored as it is and later break everything
+        // that resolves a field's protocol, such as the alias group membership check.
+        if (protocolId != ProtocolId.Invalid && !_IsValidIndex(protocolId.Value, _Protocols.Count))
+        {
+            throw NotFoundRegistrationException.For(
+                $"Field '{name}' references unknown protocol ID {protocolId.Value}");
+        }
+
         if (_FieldNameMap.ContainsKey(name))
         {
             throw DuplicateNameRegistrationException.For(name);
         }
 
+        // The index group is still null here; RegisterFieldInGroup assigns it afterwards on the stored FieldInfo.
         _GuardIndexAllocation(_Fields.Count, "field");
         FieldId id = new(_Fields.Count);
         FieldInfo info = new(id, protocolId, name, uiName, fieldType, description, null);
@@ -562,7 +624,9 @@ public sealed class StackBuilder : IStackBuilder
                 nameof(fieldIds));
         }
 
-        // Defensive copy: callers must not influence stored membership after registration.
+        // Defensive copy: callers must not influence stored membership after registration. Members are validated while they
+        // are copied, and the alias group is added to the lists only after every member passed, so a rejected group leaves
+        // no partial registration.
         FieldId[] members = new FieldId[fieldIds.Length];
         for (int i = 0; i < fieldIds.Length; i++)
         {
@@ -583,7 +647,8 @@ public sealed class StackBuilder : IStackBuilder
                     nameof(fieldIds));
             }
 
-            // Duplicate member IDs are rejected; mixed FieldType values are intentionally allowed.
+            // Duplicate member IDs are rejected; mixed FieldType values are intentionally allowed. The pairwise scan is
+            // O(n^2) but runs once per registration over a small member list, so a set would only add allocation.
             for (int j = 0; j < i; j++)
             {
                 if (members[j] == memberId)
@@ -619,11 +684,13 @@ public sealed class StackBuilder : IStackBuilder
         string indexGroup,
         string? description = null)
     {
-        // name and uiName are validated inside RegisterField
+        // name and uiName are validated inside RegisterField. The group name is validated first, so that a bad group name
+        // cannot leave behind a registered field that has no group.
         _ValidateName(indexGroup);
         FieldId id = RegisterField(protocolId, name, uiName, fieldType, description);
 
-        // Resolve or create index group
+        // Resolve or create index group. Groups are created on first use and shared by name. Fields that always appear
+        // together are registered into one group so that they share a single presence bitmap in the cross-packet index.
         if (!_IndexGroupMap.TryGetValue(indexGroup, out IndexGroupId groupId))
         {
             _GuardIndexAllocation(_NextIndexGroupId, "index group");
@@ -669,6 +736,7 @@ public sealed class StackBuilder : IStackBuilder
             throw DuplicateNameRegistrationException.For(name);
         }
 
+        // The info list and the table list advance together, so one ID indexes both (Stack finds the table by array index).
         _GuardIndexAllocation(_ProtocolTableInfos.Count, "protocol table");
         ProtocolTableId id = new(_ProtocolTableInfos.Count);
         ProtocolTableInfo info = new(id, name, uiName, keyType, description);
@@ -681,6 +749,12 @@ public sealed class StackBuilder : IStackBuilder
 
         return id;
     }
+
+    // The RegisterParserIn* members share one shape: an unknown table ID or name is a registration bug and throws
+    // NotFoundRegistrationException; the ByName variants resolve the name and delegate to the ID variant. The table itself
+    // rejects a key of the wrong type for U64, String, and Bytes tables (an InvalidOperationException from ProtocolTable)
+    // and ignores a protocol that is already registered under the same key. Several protocols under one key are allowed;
+    // they are kept in registration order and the dispatcher treats such a key as ambiguous (packet.choice).
 
     /// <inheritdoc/>
     public void RegisterParserInU64Table(ProtocolTableId tableId, ulong key, ProtocolId protocolId)
@@ -796,7 +870,9 @@ public sealed class StackBuilder : IStackBuilder
         _PostParsers.Add(info);
         // Re-sort after every registration to keep the list in the order defined by
         // IStack.PostParsers (Priority asc, then Id asc as tie-breaker). Registration
-        // lists are small so the O(n log n) cost per call is negligible.
+        // lists are small so the O(n log n) cost per call is negligible. List<T>.Sort is not a stable sort, which is
+        // why the Id tie-breaker is part of the comparison: it makes the order total and therefore deterministic. The Id
+        // is the registration number, not the list position, so it stays unique after the list is reordered.
         _PostParsers.Sort(static (a, b) =>
         {
             int cmp = a.Priority.CompareTo(b.Priority);
@@ -824,6 +900,7 @@ public sealed class StackBuilder : IStackBuilder
         _GuardIndexAllocation(_HeuristicTableInfos.Count, "heuristic protocol table");
         HeuristicProtocolTableId id = new(_HeuristicTableInfos.Count);
         HeuristicProtocolTableInfo info = new(id, name, uiName, description, owningProtocolId);
+        // As with protocol tables, the info list and the table list advance together, so one ID indexes both.
         _HeuristicTableInfos.Add(info);
         _HeuristicTables.Add(new HeuristicProtocolTable(info));
         _HeuristicTableNameMap[name] = id;
@@ -847,11 +924,22 @@ public sealed class StackBuilder : IStackBuilder
     #region Settings Registration
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Returns a new <c>SettingsRegistrar</c> value on every access. It is a <c>ref struct</c> over the shared
+    /// manager, so nothing is allocated and a protocol cannot keep a reference to the manager through it.
+    /// </remarks>
     public SettingsRegistrar SettingsRegistrar => new(_SettingsManager);
 
     #endregion
 
     #region Deferred Registration
+
+    // The WhenXRegistered members let a protocol depend on an entity of another protocol without caring about registration
+    // order. If the name is already registered the callback runs
+    // right away; otherwise it is queued under the name and runs when the entity is registered (see
+    // _InvokeDeferredCallbacks). A callback that is still queued at Build time is reported as a warning, not an error,
+    // because the other protocol may legitimately be absent. The name is validated so a typo with invalid characters fails
+    // at once instead of silently never firing.
 
     /// <inheritdoc/>
     public void WhenProtocolRegistered(string name, Action<ProtocolId> callback)
@@ -1047,9 +1135,26 @@ public sealed class StackBuilder : IStackBuilder
     /// Protocol startup exceptions from <see cref="IProtocol.OnStart(Stack)"/> are collected on
     /// the returned stack instead of being thrown. Callers should inspect
     /// <see cref="Stack.BuildDiagnostics"/> after build.
+    /// <para>
+    /// Call it once per builder. The returned stack shares the protocol instances, the (mutable) dispatch tables, the
+    /// settings manager, and the frame interface registry with this builder, and a second call would run
+    /// <see cref="IProtocol.OnStart(Stack)"/> again on the same protocol instances. The builder must not be used for
+    /// registration after Build. A second call throws <see cref="InvalidOperationException"/> and starts nothing.
+    /// </para>
     /// </summary>
+    /// <exception cref="InvalidOperationException">Build was already called on this builder.</exception>
     public Stack Build()
     {
+        // Refuse a second build before anything is touched: it would give two stacks that share the mutable dispatch tables and
+        // the protocol instances, and OnStart would run twice on the same instances. The mark is set before the work so that a
+        // build that fails midway cannot be repeated on a half-used builder either.
+        if (_Built)
+        {
+            throw new InvalidOperationException("Build was already called on this StackBuilder; create a new builder for another stack.");
+        }
+
+        _Built = true;
+
         // Collect unresolved deferred callbacks as structured warnings
         List<BuildDiagnostic> diagnostics = [];
         _CollectUnresolvedCallbacks(_DeferredProtocol, BuildCallbackWarningKind.Protocol, diagnostics);
@@ -1061,19 +1166,26 @@ public sealed class StackBuilder : IStackBuilder
         IProtocol[] protocolInstances = [.. _ProtocolInstances];
         FieldInfo[] fields = [.. _Fields];
 
-        // Concrete Parse method pointers — each targets IProtocol.Parse.
+        // Concrete Parse method pointers — each targets IProtocol.Parse. Creating a delegate from an interface-typed
+        // reference resolves the implementing method once, here, so Stack.CallProtocol later invokes the implementation
+        // through the delegate without an interface dispatch per call. The delegates are stored at the protocol's ID.
         ParseDelegate[] parseDelegates = new ParseDelegate[protocolInstances.Length];
         for (int i = 0; i < protocolInstances.Length; i++)
         {
             parseDelegates[i] = protocolInstances[i].Parse;
         }
+
+        // The arrays are fresh copies, but the table objects inside them are the builder's own (mutable) instances: the
+        // builder must not register into them after Build.
         ProtocolTable[] tables = [.. _ProtocolTables];
         ProtocolTableInfo[] tableInfos = [.. _ProtocolTableInfos];
         HeuristicProtocolTable[] heuristicTables = [.. _HeuristicTables];
         HeuristicProtocolTableInfo[] heuristicTableInfos = [.. _HeuristicTableInfos];
+
         // Sort post-parsers deterministically: ascending by Priority, then ascending by Id
         // (registration order) as a stable tie-breaker. Sorting at build time means zero
-        // overhead in the per-packet parse hot path.
+        // overhead in the per-packet parse hot path. RegisterPostParser already keeps the list in this order, so this sort
+        // changes nothing today; it keeps the stack's order independent of how the list was filled.
         PostParserInfo[] postParsers = [.. _PostParsers];
         Array.Sort(postParsers, static (a, b) =>
         {
@@ -1081,14 +1193,16 @@ public sealed class StackBuilder : IStackBuilder
             return cmp != 0 ? cmp : a.Id.Value.CompareTo(b.Id.Value);
         });
 
-        // Freeze name maps using FrozenDictionary
+        // Freeze name maps using FrozenDictionary: one-time build cost for faster lookups, and read-only data that any
+        // number of threads can read without locking. Ordinal comparison matches the builder's maps and the name rules.
         FrozenDictionary<string, ProtocolId> protocolNameMap = _ProtocolNameMap.ToFrozenDictionary(StringComparer.Ordinal);
         FrozenDictionary<string, FieldId> fieldNameMap = _FieldNameMap.ToFrozenDictionary(StringComparer.Ordinal);
         FrozenDictionary<string, ProtocolTableId> tableNameMap = _ProtocolTableNameMap.ToFrozenDictionary(StringComparer.Ordinal);
         FrozenDictionary<string, HeuristicProtocolTableId> heuristicTableNameMap = _HeuristicTableNameMap.ToFrozenDictionary(StringComparer.Ordinal);
         FrozenDictionary<string, IndexGroupId> indexGroupNameMap = _IndexGroupMap.ToFrozenDictionary(StringComparer.Ordinal);
 
-        // Build index group info array sorted by ID for direct indexing
+        // Build index group info array sorted by ID for direct indexing. The map enumerates in no useful order, so each entry
+        // is placed at its own ID; IDs are dense (0 .. count - 1), so every slot is filled exactly once.
         IndexGroupInfo[] indexGroups = new IndexGroupInfo[_IndexGroupMap.Count];
         foreach (KeyValuePair<string, IndexGroupId> kvp in _IndexGroupMap)
         {
@@ -1114,6 +1228,9 @@ public sealed class StackBuilder : IStackBuilder
                 0));
         }
 
+        // The stack exists before OnStart runs so that protocols can resolve IDs, tables, and settings in OnStart. Apart from
+        // those OnStart calls it is not shared yet, so the diagnostics can still be attached after the loop without
+        // racing a reader.
         Stack stack = new(
             protocols, protocolInstances, parseDelegates, protocolNameMap,
             fields, fieldNameMap,
@@ -1130,6 +1247,10 @@ public sealed class StackBuilder : IStackBuilder
             reassemblyConfigs,
             fieldAliasGroups, fieldAliasGroupNameMap);
 
+        // Start protocols in registration order. A failing OnStart (protocols may come from plugins) is recorded as a
+        // diagnostic and the build continues: one broken protocol must not take down the whole stack, and the host decides
+        // from BuildDiagnostics whether the failure matters. The cost is that a started stack may have a protocol whose
+        // OnStart did not complete.
         for (int i = 0; i < protocolInstances.Length; i++)
         {
             try

@@ -5,6 +5,8 @@ namespace NetworkInspector.Core.Reassembly;
 /// <summary>
 /// Identifies one IP datagram being reassembled.
 /// Per RFC 791, a datagram is uniquely identified by (Source, Destination, Identification, Protocol).
+/// A readonly record struct, so it is a dictionary key of the defragmenter without a per-fragment allocation;
+/// its generated value equality compares all four parts.
 /// </summary>
 /// <param name="Source">Source IPv4 address.</param>
 /// <param name="Destination">Destination IPv4 address.</param>

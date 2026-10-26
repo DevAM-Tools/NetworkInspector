@@ -11,6 +11,11 @@ namespace NetworkInspector.Protocols;
 /// <para>WebSocket is established via HTTP Upgrade. Registered in the <c>http.upgrade</c>
 /// dispatch table with key "websocket". When HTTP parses a <c>101 Switching Protocols</c>
 /// response with <c>Upgrade: websocket</c>, it dispatches subsequent data to this protocol.</para>
+/// <para><b>Scope and limits of the decoding:</b> the protocol keeps no per-connection state and does not reassemble.
+/// Every call sees one TCP payload, walks the frames that start inside it, and shows a frame that is cut off by the end
+/// of the payload with the bytes that are present (the declared payload length is still shown as sent). A frame or message
+/// continued in a later segment is therefore not joined, and the first bytes of that next segment are read as a frame
+/// header. The handshake headers (negotiated extensions) are not consulted: RSV1 alone selects per-message DEFLATE.</para>
 /// <para>Field tree structure:</para>
 /// <code>
 /// websocket: WebSocket
@@ -26,10 +31,18 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
-/// (single-threaded build phase) and is read-only thereafter, so <see cref="IProtocol.Parse"/> may
+/// The only instance state is the field and protocol ids (assigned by the generated registration code), the populator
+/// delegate and the cached ids of the <c>text</c> and <c>data</c> protocols (assigned in <c>_OnStartCustom</c>), all during the
+/// single-threaded build phase and read-only thereafter, so <see cref="IProtocol.Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
-/// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
+/// synchronisation. There is no cross-packet state, so there is no first-parse/replay distinction.</para>
+/// <para><b>Frame walk, two loops, one header reader:</b> the frame header decoding (RFC 6455 Section 5.2) lives in
+/// <c>_TryReadFrameHeader</c>. <see cref="Parse"/> checks the first frame's opcode only (a plausibility test). The eager
+/// <c>_DispatchWebSocketPayloads</c> (all frames) records the index groups and dispatches sub-protocols, and the lazy
+/// <c>_PopulateWebSocketFields</c> (all frames) builds the field tree. Both loops read headers through the same method and
+/// clamp payloads the same way, so they visit the same frames; the dispatch records a group under exactly the condition
+/// under which the populator emits its field, and unmasks and inflates exactly as the populator does, so the dispatched
+/// bytes equal the displayed payload.</para>
 /// </remarks>
 [Protocol("websocket", "WebSocket", Description = "WebSocket (RFC 6455)")]
 [RegisterAtStringTable(HttpProtocol.UpgradeTableName, UpgradeKey)]
@@ -40,10 +53,17 @@ public sealed partial class WebSocketProtocol : IProtocol
     /// <summary>Key for HTTP Upgrade dispatch table (lowercase per RFC 6455).</summary>
     public const string UpgradeKey = "websocket";
 
-    /// <summary>Protocol table name for WebSocket sub-protocol dispatch (by negotiated protocol name).</summary>
+    /// <summary>
+    /// Protocol table name for WebSocket sub-protocol dispatch (by negotiated protocol name). The table is declared
+    /// for extension; nothing in this protocol performs a lookup in it yet.
+    /// </summary>
     public const string ProtocolTableName = "ws.protocol";
 
-    /// <summary>Protocol table name for WebSocket port-based dispatch.</summary>
+    /// <summary>
+    /// Protocol table name for the WebSocket payload override. Text and binary payloads look up the fixed key 0 here
+    /// before falling back to the <c>text</c> / <c>data</c> protocols, so a protocol that registers at key 0 receives
+    /// every message payload. No built-in protocol registers here.
+    /// </summary>
     public const string PortTableName = "ws.port";
 
     /// <summary>Index group for always-present WebSocket fields.</summary>
@@ -157,6 +177,10 @@ public sealed partial class WebSocketProtocol : IProtocol
     [StringField("websocket.payload.decompressed.error", "Decompression Error", IndexGroup = "websocket.payload.decompressed")]
     private FieldId _DecompressedPayloadErrorFieldId;
 
+    /// <summary>Reported when per-message DEFLATE decompression stopped at <c>ws.max_decompressed_bytes</c>; names the setting.</summary>
+    [StringField("websocket.payload.decompressed.limit", "Decompression Limit Reached", IndexGroup = "websocket.payload.decompressed")]
+    private FieldId _DecompressedPayloadLimitFieldId;
+
     #endregion
 
     #region Continuation frame info
@@ -187,9 +211,18 @@ public sealed partial class WebSocketProtocol : IProtocol
     }
 
     /// <summary>
-    /// Parses WebSocket frames from the TCP payload. Uses lazy population.
-    /// Performs a heuristic check to validate the data looks like WebSocket.
+    /// Parses WebSocket frames from the TCP payload. Uses lazy population for the frame tree; the index groups and the
+    /// sub-protocol dispatch are done eagerly.
+    /// Performs a heuristic check to validate the data looks like WebSocket (the opcode of the first frame must not be
+    /// in a reserved range); only the first frame's opcode is inspected for that check.
     /// </summary>
+    /// <param name="parentField">Field that receives the lazy <c>websocket</c> container.</param>
+    /// <param name="data">TCP payload bytes starting at a frame header.</param>
+    /// <param name="context">Parse context used to record index presence and to dispatch frame payloads.</param>
+    /// <returns>
+    /// All of <paramref name="data"/> as consumed, or a <see cref="ParseError"/> when it is shorter than a frame header,
+    /// starts with a reserved opcode, or a dispatched sub-protocol reports an error.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         // Minimum WebSocket frame is 2 bytes (FIN/opcode + mask/length)
@@ -200,9 +233,10 @@ public sealed partial class WebSocketProtocol : IProtocol
 
         ReadOnlySpan<byte> span = data.Span;
 
-        // Heuristic: validate first byte looks like a valid WebSocket frame
+        // Heuristic: validate first byte looks like a valid WebSocket frame. Rejecting reserved opcodes is a cheap plausibility
+        // check: data that is not a frame start (for example payload bytes of a frame split across segments) is often refused.
+        // Valid opcodes (RFC 6455 Section 5.2): 0 (continuation), 1 (text), 2 (binary), 8 (close), 9 (ping), 10 (pong)
         byte opcode = (byte)(span[0] & 0x0F);
-        // Valid opcodes: 0 (continuation), 1 (text), 2 (binary), 8 (close), 9 (ping), 10 (pong)
         if (opcode > 2 && opcode < 8)
         {
             // Reserved opcodes 3-7 — not a valid WebSocket frame
@@ -218,59 +252,22 @@ public sealed partial class WebSocketProtocol : IProtocol
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_WebsocketGroupId);
 
+        // Summary from the first frame: the opcode text comes from a precomputed 16-entry table (no allocation); the info
+        // text is lazy.
         bool fin = (span[0] & 0x80) != 0;
         string opcodeText = WebSocketDisplayTables.GetOpcodeDisplayText(opcode);
 
-
         parentField.SetPacketInfo(ZA.Lazy("WebSocket ", opcodeText));
-
-        // Check mask and payload presence for index groups
-        bool masked = (span[1] & 0x80) != 0;
-        if (masked)
-        {
-            context.RecordGroupPresence(_WebsocketMasking_keyGroupId);
-        }
-
-        byte payloadLenByte = (byte)(span[1] & 0x7F);
-        if (payloadLenByte > 0)
-        {
-            context.RecordGroupPresence(_WebsocketPayloadGroupId);
-
-            // Record opcode-specific index groups
-            if (opcode == 1)
-            {
-                context.RecordGroupPresence(_WebsocketPayloadTextGroupId);
-            }
-            else if (opcode == 9)
-            {
-                context.RecordGroupPresence(_WebsocketPingGroupId);
-            }
-            else if (opcode == 10)
-            {
-                context.RecordGroupPresence(_WebsocketPongGroupId);
-            }
-        }
-
-        // RSV1 = PMC (per-message compressed)
-        byte rsv = (byte)((span[0] >> 4) & 0x07);
-        if ((rsv & 0x04) != 0)
-        {
-            context.RecordGroupPresence(_WebsocketPmcGroupId);
-        }
-
-        // Close frame with payload — record close index group
-        if (opcode == 8 && payloadLenByte >= 2)
-        {
-            context.RecordGroupPresence(_WebsocketCloseGroupId);
-        }
 
         MutField container = parentField.AppendLazyWithCustomText(
             _ProtocolFieldId, FieldValue.NewBytes(data), "WebSocket ", opcodeText, fin ? " [FIN]" : "", _Populator);
 
-        // Eagerly dispatch text/binary frame payloads to sub-protocols with the real context so
-        // dispatched sub-protocols record their index groups during the index phase (Q6: the
-        // index must be complete when the packet is finalized). The lazy populator builds the
-        // descriptive frame tree but no longer dispatches.
+        // Walk every frame of the segment: the walk records the index groups of all frames (the masking key, payload,
+        // compression and opcode-specific groups; exactly what the lazy populator will emit, no more and no less) and
+        // dispatches text/binary frame payloads to sub-protocols with the real context so dispatched sub-protocols
+        // record their index groups during the index phase (the index must be complete when the packet is finalized, and
+        // must not depend on the lazy populator running). The lazy populator builds the descriptive frame tree but no
+        // longer dispatches.
         ParseResult dispatchResult = _DispatchWebSocketPayloads(in container, data, in context);
         if (dispatchResult.TryPropagateError(out ParseResult error))
         {

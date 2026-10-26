@@ -43,6 +43,13 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// <summary>
     /// Compact or dense probe slot. Payload type is stored so getters and
     /// <see cref="RecordPacket"/> do not call <see cref="Stack.GetField"/> on the fill path.
+    /// <para>
+    /// A mutable struct in an array, always reached through <c>ref</c> so the writer updates the array element in place.
+    /// <c>Payload</c> is typed <see cref="object"/> because the payload series is generic over a type that depends on the
+    /// stack <see cref="FieldType"/>; the slot stores that field type next to it, and the code casts with
+    /// <c>Unsafe.As</c> only after the field type has fixed the generic argument (see
+    /// <c>_CreatePayloadSeries</c>, <c>_RecordPayload</c>, and <c>_PayloadTypeMatches</c>, which must stay in step).
+    /// </para>
     /// </summary>
     private struct ValueCacheProbeSlot
     {
@@ -78,6 +85,8 @@ public sealed class ValueCache : IReadOnlyValueCache
         {
             get
             {
+                // The index is checked against the published count, not the array length: the array may hold unpublished
+                // slots, and count-then-array order guarantees the array is long enough for the count just read.
                 int count = _Cache._AllSeriesCount;
                 if ((uint)index >= (uint)count)
                 {
@@ -91,6 +100,9 @@ public sealed class ValueCache : IReadOnlyValueCache
         /// <inheritdoc />
         public IEnumerator<ValueCacheSeries> GetEnumerator()
         {
+            // Count first, array second: the writer swaps in a larger array before it publishes a larger count, so the
+            // array read here is at least as long as the count read before it. The clamp below is a defensive guard.
+            // Entries added after this snapshot are not visited.
             int count = _Cache._AllSeriesCount;
             ValueCacheSeries[] items = _Cache._AllSeries;
             if (count > items.Length)
@@ -141,6 +153,7 @@ public sealed class ValueCache : IReadOnlyValueCache
         /// <inheritdoc />
         public IEnumerator<ReadOnlyValueCacheSeries> GetEnumerator()
         {
+            // Same count-then-array order and clamp as GrowingSeriesList.GetEnumerator.
             int count = _Cache._AllSeriesCount;
             ValueCacheSeries[] items = _Cache._AllSeries;
             if (count > items.Length)
@@ -165,11 +178,22 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// <summary>
     /// Linear-scan probe when the recorded field-id set is this size or smaller.
     /// Larger sets use a dense probe plus a bitset miss.
+    /// Internal tuning constant, not a limit on what can be recorded: a cache with more fields simply uses the dense probe
+    /// (memory proportional to the stack's field count). The compact form keeps the per-field fill path of a cache with a few
+    /// fields on a small array instead of a stack-sized one, and never uses a dictionary on that path.
     /// </summary>
     private const int _CompactRecordLimit = 16;
 
     #endregion
     #region Fields
+
+    // Probe structures, built once in the constructor and never reassigned (the slots inside are updated in place by the
+    // writer under RecordAllFields). Three shapes, chosen in the constructor:
+    //  - compact: _CompactFieldIds[i] is the field id of _Probe[i]; found by linear scan. Chosen for few explicit fields.
+    //  - dense + bitset: _Probe is indexed by field id; _RecordedBits has one bit per stack field and rejects fields that
+    //    are not recorded before the (large) slot is touched.
+    //  - dense, everything recorded (_AllSlotsRecorded, and always for RecordAllFields): no bit test; a first-seen field
+    //    grows its series in place without rebuilding anything.
     private readonly ValueCacheProbeSlot[] _Probe;
     private readonly int[] _CompactFieldIds;
     private readonly ulong[] _RecordedBits;
@@ -182,6 +206,9 @@ public sealed class ValueCache : IReadOnlyValueCache
     private readonly ValueCacheSeries<string>[] _CustomTextSeries;
     private readonly ValueCacheSeries<string>[] _CustomRepresentationSeries;
     private readonly IndexGroupId[] _MaterializeGroups;
+
+    // One flag per stack index group: whether lazily populated containers of that group must be expanded so that the
+    // configured fields exist when the cache records. Indexed by group id; read by _ShouldMaterialize.
     private readonly bool[] _MaterializeGroupMask;
 
     // Writer-grown under RecordAllFields. _AllSeries / _AllSeriesCount are published to readers
@@ -191,11 +218,15 @@ public sealed class ValueCache : IReadOnlyValueCache
     private volatile ValueCacheSeries[] _AllSeries;
     private volatile int _AllSeriesCount;
 
+    // Cache-level sticky flags, 1 = still true. Written only by the single writer, read by anyone, hence volatile ints
+    // (plain loads and stores are enough: there is no read-modify-write). They only ever go from 1 to 0 (and _Abandoned
+    // and _MaterializationIncomplete only from 0 to 1), so a reader that sees the changed value needs no further ordering.
     private volatile int _PacketIdsStrict = 1;
     private volatile int _TimestampsStrict = 1;
     private volatile int _Abandoned;
     private volatile int _MaterializationIncomplete;
 
+    // Writer-only state of the strictly-increasing flags: the previous recorded packet id and timestamp.
     private bool _MonotonicInitialized;
     private int _LastPacketId;
     private long _LastTimestampNanos;
@@ -220,6 +251,8 @@ public sealed class ValueCache : IReadOnlyValueCache
     {
         ArgumentNullException.ThrowIfNull(stack);
 
+        // Options: a null argument means the defaults. A default(ValueCacheBuildOptions) struct bypasses the parameterless
+        // constructor and has ChunkShift 0, which the range check below rejects instead of silently building tiny chunks.
         Stack = stack;
         ValueCacheBuildOptions resolved = options ?? new ValueCacheBuildOptions();
         RecordAllFields = resolved.RecordAllFields;
@@ -236,6 +269,10 @@ public sealed class ValueCache : IReadOnlyValueCache
                 nameof(fields));
         }
 
+        // Phase 1: collect what to record, keyed by field id (one payload, one custom-text, and one custom-representation
+        // series per field at most). Explicit field configs are processed first and a duplicate is an error; group
+        // expansion below uses TryAdd, so an explicit config always wins over a group for the same series. These
+        // dictionaries are construction-time only; the per-packet path never uses a dictionary.
         Dictionary<int, (FieldInfo Info, ValueCaptureMode Mode)>? payload = null;
         Dictionary<int, (FieldInfo Info, ValueCaptureMode Mode)>? customText = null;
         Dictionary<int, (FieldInfo Info, ValueCaptureMode Mode)>? customRep = null;
@@ -280,6 +317,8 @@ public sealed class ValueCache : IReadOnlyValueCache
             }
         }
 
+        // Group configs expand to every stack field whose index group matches. The stack is final, so the expansion at
+        // construction time is complete; a group that matches no field creates no series.
         ReadOnlySpan<FieldInfo> stackFields = stack.Fields.Span;
         for (int g = 0; g < groups.Length; g++)
         {
@@ -315,6 +354,9 @@ public sealed class ValueCache : IReadOnlyValueCache
             }
         }
 
+        // Phase 2: pick the probe shape. The sum of the three series counts is an upper bound of the number of distinct
+        // field ids (one field can have up to three series), so it is a safe size for the compact test. RecordAllFields
+        // never uses the compact form because its set of fields is not known up front.
         int payloadCount = payload?.Count ?? 0;
         int textCount = customText?.Count ?? 0;
         int repCount = customRep?.Count ?? 0;
@@ -330,6 +372,9 @@ public sealed class ValueCache : IReadOnlyValueCache
         int allIndex = 0;
         HashSet<int>? materializeGroups = null;
 
+        // Phase 3: create the configured series and register each in its probe slot. For explicit configs (not
+        // RecordAllFields) the index groups of the recorded fields are collected as well: those groups' lazily populated
+        // containers have to be expanded for the fields to exist when a packet is recorded.
         if (payload is not null)
         {
             int payloadIndex = 0;
@@ -378,6 +423,8 @@ public sealed class ValueCache : IReadOnlyValueCache
             }
         }
 
+        // Phase 4: publish the series arrays. The object is not shared with any other thread until the constructor returns,
+        // so plain assignments are enough here; later growth (RecordAllFields) goes through _AppendSeries.
         _PayloadSeries = payloadSeries;
         _PayloadSeriesCount = payloadCount;
         _CustomTextSeries = textSeries;
@@ -387,6 +434,10 @@ public sealed class ValueCache : IReadOnlyValueCache
         _SeriesList = new GrowingSeriesList(this);
         _ReadOnlySeriesList = new GrowingReadOnlySeriesList(this);
 
+        // Phase 5: freeze the probe. The compact form turns the construction-time dictionary into two parallel arrays
+        // (field ids and slots) in the same order. The dense form keeps the stack-sized slot array; without
+        // RecordAllFields a bitset marks the recorded fields (it is left empty when every field is recorded, see
+        // _BuildRecordedBits).
         if (compactSlots is not null)
         {
             int n = compactSlots.Count;
@@ -423,6 +474,8 @@ public sealed class ValueCache : IReadOnlyValueCache
             _AllSlotsRecorded = allRecorded;
         }
 
+        // Phase 6: the set of index groups whose lazy containers must be expanded. RecordAllFields needs every group; with
+        // explicit configs it is the groups collected in phase 3. Only the mask is read later (by _ShouldMaterialize).
         if (RecordAllFields)
         {
             ReadOnlySpan<IndexGroupInfo> groupsSpan = stack.IndexGroups.Span;
@@ -487,16 +540,19 @@ public sealed class ValueCache : IReadOnlyValueCache
 
     /// <summary>
     /// Sticky flag: recorded packet ids have been strictly increasing so far.
-    /// Starts true. The first recorded packet records the baseline. A later id less than or equal
-    /// to the previous recorded id sets this false permanently.
-    /// Equal timestamps do not affect this flag.
+    /// Starts true. The first recorded packet records the baseline. A later packet id less than the
+    /// previous recorded id sets this false permanently. Repeated records of the same packet id (one packet usually
+    /// records several fields) are one packet and never change the flag, so "less than or equal" between distinct
+    /// packets is the same as "less than".
+    /// Equal timestamps do not affect this flag. This cache-level flag is stricter and covers all series; the per-series
+    /// <see cref="ValueCacheSeries.PacketIdsMonotonic"/> (non-decreasing, per column) is what binary search uses.
     /// </summary>
     public bool PacketIdsStrictlyIncreasing => _PacketIdsStrict != 0;
 
     /// <summary>
     /// Sticky flag: recorded timestamps have been strictly increasing so far.
-    /// Starts true. A later timestamp less than or equal to the previous recorded timestamp
-    /// (including equal timestamps) sets this false permanently.
+    /// Starts true. When the packet id changes, a timestamp less than or equal to the previous recorded timestamp
+    /// (including equal timestamps) sets this false permanently. Records of the same packet id are not compared.
     /// </summary>
     public bool TimestampsStrictlyIncreasing => _TimestampsStrict != 0;
 
@@ -556,6 +612,9 @@ public sealed class ValueCache : IReadOnlyValueCache
             return false;
         }
 
+        // The requested T must be exactly the CLR type that _CreatePayloadSeries chose for this field's FieldType. That check
+        // is what makes the Unsafe.As below sound: it skips the type check of a normal cast, which would otherwise be paid on
+        // every lookup, and the slot's Payload is always a ValueCacheSeries of the matching type.
         if (!_PayloadTypeMatches(slot.PayloadType, typeof(T)))
         {
             return false;
@@ -685,6 +744,8 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// <exception cref="InvalidOperationException">This cache was evicted.</exception>
     public void RecordPacket(Packet packet)
     {
+        // Preconditions are programming errors of the caller (wrong stack, unsealed or tree-less packet), so they throw.
+        // A packet of another stack would index the probe with foreign field ids, and a skip packet has no tree to walk.
         ArgumentNullException.ThrowIfNull(packet);
         _ThrowIfAbandoned();
         if (!ReferenceEquals(packet.Stack, Stack))
@@ -702,8 +763,12 @@ public sealed class ValueCache : IReadOnlyValueCache
             throw new ArgumentException("RecordPacket requires a packet parsed with FieldTreeMode.Build.", nameof(packet));
         }
 
+        // Expand lazy containers first so the configured fields exist, then update the cache-level flags once for the packet.
         EnsureMaterialized(packet);
         _UpdateMonotonicFlags(packet.Id.Value, packet.Timestamp.AsNanos);
+
+        // RecordAllFields walks the packet in storage order and lets Record grow series on first sight. Otherwise each
+        // pre-created series looks up its own field occurrences, which touches only the configured fields.
         if (RecordAllFields)
         {
             foreach (Field field in packet.IterFieldsFlat(materialize: false))
@@ -744,6 +809,9 @@ public sealed class ValueCache : IReadOnlyValueCache
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal void Record(int packetId, long timestampNanos, FieldId fieldId, in FieldValue value, LazyString customText)
     {
+        // Called once per appended field of a parse that has this cache attached, so the miss path (field not recorded)
+        // is the common one and must stay cheap: no allocation, no dictionary, and the hit logic lives in a separate
+        // non-inlined method. 'value' is passed by reference to avoid copying the FieldValue struct per field.
         _ThrowIfAbandoned();
         _UpdateMonotonicFlags(packetId, timestampNanos);
         if (!_TryGetRecordedSlot(fieldId.Value, out int slotIndex))
@@ -804,6 +872,14 @@ public sealed class ValueCache : IReadOnlyValueCache
             throw new ArgumentOutOfRangeException(nameof(maxPasses), maxPasses, "maxPasses must be greater than zero.");
         }
 
+        // Each pass expands the lazy containers that exist right now; expanding one can create children that are lazy
+        // themselves, which the next pass picks up, so a pass descends one nesting level. Threat: a hostile or broken
+        // capture whose populators keep producing lazy fields would loop forever. Mitigation: a hard cap on passes; hitting
+        // it sets IsMaterializationIncomplete (an expected failure, so a flag and not an exception). The production cap is
+        // ushort.MaxValue, the packet's field capacity (storage indexes are ushort), so legitimate nesting cannot reach it.
+        // Constant, not configurable by users; the internal overload takes the cap as a parameter so that a caller can
+        // pass a smaller one. The check for remaining lazy fields runs at the start of a pass, so a packet that needs
+        // exactly maxPasses passes is flagged as incomplete too (conservative).
         for (int pass = 0; pass < maxPasses; pass++)
         {
             if (!packet.HasUnpopulatedLazyFields)
@@ -811,6 +887,8 @@ public sealed class ValueCache : IReadOnlyValueCache
                 return;
             }
 
+            // The field count is read once per pass, so children created by this pass are visited in the next pass, not in
+            // this loop (that is what bounds the work of one pass and makes the pass cap meaningful).
             bool materialized = false;
             int count = packet.FieldCount(materialize: false);
             for (int i = 0; i < count; i++)
@@ -878,6 +956,11 @@ public sealed class ValueCache : IReadOnlyValueCache
         return true;
     }
 
+    // The _Set*Slot helpers write into whichever probe form is being built: the compact dictionary (a struct value, so it is
+    // read, modified, and stored back) or the dense array (updated in place through a ref). A payload slot is marked
+    // PayloadGrowResolved because its series exists; a text/representation slot has no growth question.
+
+    /// <summary>Registers the payload series of one field in the probe being built.</summary>
     private static void _SetPayloadSlot(
         ValueCacheProbeSlot[] dense,
         Dictionary<int, ValueCacheProbeSlot>? compactSlots,
@@ -901,6 +984,7 @@ public sealed class ValueCache : IReadOnlyValueCache
         denseSlot.PayloadGrowResolved = true;
     }
 
+    /// <summary>Registers the custom-text series of one field in the probe being built.</summary>
     private static void _SetCustomTextSlot(
         ValueCacheProbeSlot[] dense,
         Dictionary<int, ValueCacheProbeSlot>? compactSlots,
@@ -918,6 +1002,7 @@ public sealed class ValueCache : IReadOnlyValueCache
         dense[fieldId].CustomText = series;
     }
 
+    /// <summary>Registers the custom-representation series of one field in the probe being built.</summary>
     private static void _SetCustomRepresentationSlot(
         ValueCacheProbeSlot[] dense,
         Dictionary<int, ValueCacheProbeSlot>? compactSlots,
@@ -935,6 +1020,16 @@ public sealed class ValueCache : IReadOnlyValueCache
         dense[fieldId].CustomRepresentation = series;
     }
 
+    /// <summary>
+    /// Builds the one-bit-per-stack-field set of recorded fields used by the dense probe to reject unrecorded fields before
+    /// the slot (several references plus flags) is loaded. Returns an empty array, and no bit test is needed, in two cases: nothing is
+    /// recorded, or every field is recorded (<paramref name="allRecorded"/>), where the bit test would always pass.
+    /// </summary>
+    /// <param name="fieldCount">Number of stack fields (size of the dense probe).</param>
+    /// <param name="payload">Fields with a payload series.</param>
+    /// <param name="customText">Fields with a custom-text series.</param>
+    /// <param name="customRep">Fields with a custom-representation series.</param>
+    /// <param name="allRecorded">Whether every stack field has at least one series.</param>
     private static ulong[] _BuildRecordedBits(
         int fieldCount,
         Dictionary<int, (FieldInfo Info, ValueCaptureMode Mode)>? payload,
@@ -948,6 +1043,7 @@ public sealed class ValueCache : IReadOnlyValueCache
             return [];
         }
 
+        // One bit per field id, 64 per word (rounded up).
         int bitWords = (fieldCount + 63) >> 6;
         ulong[] bits = new ulong[bitWords];
         int recordedCount = 0;
@@ -980,6 +1076,10 @@ public sealed class ValueCache : IReadOnlyValueCache
         return bits;
     }
 
+    /// <summary>
+    /// Sets the bit of every field id in <paramref name="map"/> and returns the running count of distinct set bits (a field
+    /// that appears in several maps is counted once, which is what the all-recorded test compares with the field count).
+    /// </summary>
     private static int _OrRecordedKeys(
         ulong[] bits,
         Dictionary<int, (FieldInfo Info, ValueCaptureMode Mode)> map,
@@ -1001,6 +1101,15 @@ public sealed class ValueCache : IReadOnlyValueCache
         return recordedCount;
     }
 
+    /// <summary>
+    /// Creates the payload series for a field. The mapping from <see cref="FieldType"/> to the stored CLR type is part of the
+    /// storage format of the cache and has to agree with <c>_RecordPayload</c> (what is written) and
+    /// <c>_PayloadTypeMatches</c> (what a reader may ask for): <c>None</c> and <c>Bool</c> are one byte (0 for presence,
+    /// 0 or 1 for a flag); I64 and Timestamp are <c>long</c> (a timestamp as nanoseconds); U64, MacAddress, and Eui64 are
+    /// <c>ulong</c> (addresses as their raw 64-bit value); IPv4 is the raw <c>uint</c>; the remaining types are stored as
+    /// they are. Typed series keep the columns unboxed and contiguous (SoA), which the chunk scans rely on.
+    /// </summary>
+    /// <exception cref="ArgumentException">The field type has no series representation.</exception>
     private object _CreatePayloadSeries(FieldInfo info, ValueCaptureMode mode)
     {
         FieldId id = info.Id;
@@ -1026,6 +1135,11 @@ public sealed class ValueCache : IReadOnlyValueCache
         };
     }
 
+    /// <summary>
+    /// Pull fill of the payload series (no RecordAllFields): for every configured series, visits each occurrence of its
+    /// field in the packet via the field lookup cookie. Reads fields without materializing; the lazy containers that matter
+    /// were expanded by <see cref="EnsureMaterialized(Packet)"/> before. Writer thread only.
+    /// </summary>
     private void _RecordPayloadSeries(Packet packet)
     {
         ValueCacheSeries[] series = _PayloadSeries;
@@ -1051,6 +1165,10 @@ public sealed class ValueCache : IReadOnlyValueCache
     private void _RecordCustomRepresentationSeries(Packet packet) =>
         _RecordStringSeries(_CustomRepresentationSeries, packet, customText: false);
 
+    /// <summary>
+    /// Pull fill of the custom-text or custom-representation series: records the display text of each occurrence of the
+    /// field, skipping occurrences that have none (a null text is not a row). Writer thread only.
+    /// </summary>
     private static void _RecordStringSeries(ValueCacheSeries<string>[] series, Packet packet, bool customText)
     {
         int packetId = packet.Id.Value;
@@ -1073,9 +1191,23 @@ public sealed class ValueCache : IReadOnlyValueCache
         }
     }
 
+    /// <summary>
+    /// Appends one value to the payload series <paramref name="boxed"/>, converting it to the series' stored type (see
+    /// <c>_CreatePayloadSeries</c> for the mapping). A value that does not hold the expected kind (the field was set to
+    /// another type) is skipped, not recorded as a default. The parameter is named "boxed" but is a reference to the series
+    /// object, not a boxed value.
+    /// </summary>
+    /// <param name="boxed">The series object stored in the probe slot.</param>
+    /// <param name="fieldType">The stack field type; it fixes the series' generic argument and so the cast target.</param>
+    /// <param name="packetId">Owning packet id.</param>
+    /// <param name="timestampNanos">Packet timestamp in nanoseconds.</param>
+    /// <param name="value">The field value to store.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void _RecordPayload(object boxed, FieldType fieldType, int packetId, long timestampNanos, in FieldValue value)
     {
+        // Dispatch on the stored FieldType with one switch instead of a virtual call per type. Each case casts with
+        // Unsafe.As, which is sound because the slot's series was created for exactly this FieldType and its generic
+        // argument, and skips the type check a normal cast would repeat for every recorded value.
         switch (fieldType)
         {
             case FieldType.None:
@@ -1130,6 +1262,8 @@ public sealed class ValueCache : IReadOnlyValueCache
             {
                 if (value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> bytes))
                 {
+                    // The series keeps the bytes for the lifetime of the cache, so it must own them: the value may alias the
+                    // frame or packet buffer, whose lifetime is not tied to the cache (packets are recycled).
                     byte[] copy = bytes.Length == 0 ? [] : bytes.ToArray();
                     Unsafe.As<ValueCacheSeries<byte[]>>(boxed).Record(packetId, timestampNanos, copy);
                 }
@@ -1195,6 +1329,11 @@ public sealed class ValueCache : IReadOnlyValueCache
         }
     }
 
+    /// <summary>
+    /// Whether the lazy container <paramref name="fieldId"/> has to be expanded for this cache: always under
+    /// <see cref="RecordAllFields"/>, otherwise only when its index group is one of the groups of the recorded fields.
+    /// Lazy containers outside those groups stay unexpanded, which keeps the fill cheap.
+    /// </summary>
     private bool _ShouldMaterialize(FieldId fieldId)
     {
         if (RecordAllFields)
@@ -1212,8 +1351,13 @@ public sealed class ValueCache : IReadOnlyValueCache
         return (uint)raw < (uint)_MaterializeGroupMask.Length && _MaterializeGroupMask[raw];
     }
 
+    /// <summary>
+    /// Maintains the cache-level strictly-increasing flags. Writer thread only (plain state, no synchronization); the flags
+    /// themselves are volatile ints that only ever change from 1 to 0.
+    /// </summary>
     private void _UpdateMonotonicFlags(int packetId, long timestampNanos)
     {
+        // The first record only sets the baseline.
         if (!_MonotonicInitialized)
         {
             _LastPacketId = packetId;
@@ -1222,11 +1366,15 @@ public sealed class ValueCache : IReadOnlyValueCache
             return;
         }
 
+        // The same packet id again is another field of the packet already seen (Record is called once per field), not a
+        // regression, and its timestamp is the same packet's; nothing to compare.
         if (packetId == _LastPacketId)
         {
             return;
         }
 
+        // A different id that is not larger breaks "strictly increasing"; a timestamp that is not larger does too (so equal
+        // timestamps of consecutive packets clear the timestamp flag).
         if (packetId <= _LastPacketId)
         {
             _PacketIdsStrict = 0;
@@ -1241,6 +1389,11 @@ public sealed class ValueCache : IReadOnlyValueCache
         _LastTimestampNanos = timestampNanos;
     }
 
+    /// <summary>
+    /// Records the value, the custom representation, and the custom text of a field that has a probe slot. A first-seen
+    /// field under <see cref="RecordAllFields"/> creates its payload series here (once, then the slot is resolved). Each
+    /// part is optional: a slot may hold only a custom-text series, for example. Inlined only into <c>_RecordHitCold</c>.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _RecordHit(FieldId fieldId, int packetId, long timestampNanos, in FieldValue value, LazyString customText, ref ValueCacheProbeSlot slot)
     {
@@ -1265,6 +1418,10 @@ public sealed class ValueCache : IReadOnlyValueCache
         }
     }
 
+    /// <summary>
+    /// Out-of-line wrapper around <c>_RecordHit</c>: the hit logic is compiled once into this method instead of being
+    /// inlined into <c>Record</c>, so the frequent miss path in <c>Record</c> stays small.
+    /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _RecordHitCold(FieldId fieldId, int packetId, long timestampNanos, in FieldValue value, LazyString customText, ref ValueCacheProbeSlot slot)
         => _RecordHit(fieldId, packetId, timestampNanos, in value, customText, ref slot);
@@ -1284,6 +1441,9 @@ public sealed class ValueCache : IReadOnlyValueCache
             return;
         }
 
+        // Fill the slot completely, publish the series reference last (release), then add it to the Series list. A reader
+        // that finds Payload non-null through a lookup therefore sees an initialized series; the Series list catches up one
+        // step later, so a lookup by field id can succeed slightly before the series shows up in the list.
         ValueCacheSeries series = (ValueCacheSeries)_CreatePayloadSeries(info, _DefaultCaptureMode);
         slot.PayloadType = info.FieldType;
         slot.PayloadGrowResolved = true;
@@ -1299,6 +1459,9 @@ public sealed class ValueCache : IReadOnlyValueCache
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _AppendSeries(ValueCacheSeries series)
     {
+        // Reader-visible list: when full, copy into a larger array and swap the volatile reference; a reader that still
+        // holds the old array keeps a valid (shorter) snapshot, which is why the array is replaced and never resized in
+        // place. The item is stored before the count is published (release), so a reader never sees a count past a filled slot.
         int count = _AllSeriesCount;
         ValueCacheSeries[] all = _AllSeries;
         if (count == all.Length)
@@ -1310,6 +1473,7 @@ public sealed class ValueCache : IReadOnlyValueCache
         all[count] = series;
         _AllSeriesCount = count + 1;
 
+        // Writer-only list of payload series for the pull fill: plain fields, no publication needed.
         int payloadCount = _PayloadSeriesCount;
         ValueCacheSeries[] payload = _PayloadSeries;
         if (payloadCount == payload.Length)
@@ -1322,6 +1486,7 @@ public sealed class ValueCache : IReadOnlyValueCache
         _PayloadSeriesCount = payloadCount + 1;
     }
 
+    /// <summary>Returns a copy of <paramref name="current"/> in an array of twice the length (4 when empty): amortized O(1) per append.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static ValueCacheSeries[] _GrowSeriesBuffer(ValueCacheSeries[] current)
     {
@@ -1339,9 +1504,19 @@ public sealed class ValueCache : IReadOnlyValueCache
         return next;
     }
 
+    /// <summary>
+    /// Finds the probe slot of a field id, or reports that the field is not recorded. This is the per-field gate of the fill
+    /// path, so it allocates nothing and uses no dictionary. Safe for any thread: it only reads data that is fixed after
+    /// construction (the slot contents may still change under RecordAllFields).
+    /// </summary>
+    /// <param name="fieldId">Raw field id; any value is accepted (out-of-range ids are simply not recorded).</param>
+    /// <param name="slotIndex">Index into the probe array when the method returns <see langword="true"/>.</param>
+    /// <returns><see langword="true"/> when the field has a slot.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool _TryGetRecordedSlot(int fieldId, out int slotIndex)
     {
+        // Compact probe: a linear scan over a few ids. One and two ids (the usual case) are unrolled, which avoids the loop
+        // setup for them.
         if (_UseCompactRecord)
         {
             int[] ids = _CompactFieldIds;
@@ -1385,6 +1560,9 @@ public sealed class ValueCache : IReadOnlyValueCache
             return false;
         }
 
+        // Dense probe. The unsigned compare rejects negative and too-large ids in one branch. Then, cheapest test first:
+        // the bitset (one bit per field, a far smaller memory footprint than the slot array) rejects unrecorded fields
+        // without loading the slot; when every field is recorded no test is needed; the slot check below is the fallback.
         if ((uint)fieldId >= (uint)_Probe.Length)
         {
             slotIndex = 0;
@@ -1421,6 +1599,13 @@ public sealed class ValueCache : IReadOnlyValueCache
         return true;
     }
 
+    /// <summary>
+    /// Reader-side lookup of a slot copy. Under RecordAllFields the writer may create the payload series concurrently: it
+    /// stores <c>PayloadType</c> first and then publishes <c>Payload</c> with release semantics. The reader therefore reads
+    /// <c>Payload</c> first, with acquire semantics, and copies the rest of the slot afterwards, so a non-null payload is
+    /// always paired with the <c>PayloadType</c> that was stored for it. The other series references are fixed at
+    /// construction.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool _TryGetSlot(int fieldId, out ValueCacheProbeSlot slot)
     {
@@ -1430,9 +1615,13 @@ public sealed class ValueCache : IReadOnlyValueCache
             return false;
         }
 
+        // The acquire read must come before the struct copy. Copying first could capture a stale PayloadType (still the
+        // default) and then pair it with the series the writer published in between; a reader asking for the wrong element
+        // type would pass the type check and Unsafe.As would reinterpret a series of another type (memory unsafe).
         ref ValueCacheProbeSlot live = ref _Probe[slotIndex];
+        object? payload = Volatile.Read(ref live.Payload);
         slot = live;
-        slot.Payload = Volatile.Read(ref live.Payload);
+        slot.Payload = payload;
         return true;
     }
 
@@ -1448,6 +1637,11 @@ public sealed class ValueCache : IReadOnlyValueCache
         return series is not null;
     }
 
+    /// <summary>
+    /// Guards every write path: after <see cref="Abandon"/> (Session restart) a stale writer must not keep appending to a
+    /// cache that readers were told is evicted. Reads stay allowed.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The cache was abandoned.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _ThrowIfAbandoned()
     {
@@ -1510,6 +1704,12 @@ public sealed class ValueCache : IReadOnlyValueCache
         }
     }
 
+    /// <summary>
+    /// Whether <paramref name="type"/> is the CLR type that <c>_CreatePayloadSeries</c> stores for
+    /// <paramref name="fieldType"/>. This is the gate in front of <c>Unsafe.As</c> in <see cref="TryGetSeries{T}(FieldId, out ValueCacheSeries{T})"/>: it
+    /// must list exactly the mapping of <c>_CreatePayloadSeries</c>, and any field type that is missing here (the default
+    /// arm) can never be looked up.
+    /// </summary>
     private static bool _PayloadTypeMatches(FieldType fieldType, Type type) =>
         fieldType switch
         {

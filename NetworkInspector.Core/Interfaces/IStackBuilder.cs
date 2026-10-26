@@ -5,9 +5,11 @@ namespace NetworkInspector.Core.Interfaces;
 /// <summary>
 /// Build-phase interface for registering protocols, fields, dispatch tables, and settings.
 /// <para>
-/// All registration methods throw <see cref="RegistrationException"/> on failure
-/// (e.g., duplicate names, missing tables). Errors are checked before state mutation,
-/// so the builder is never left in an inconsistent state.
+/// Registration failures such as duplicate names or missing tables throw a <see cref="RegistrationException"/>
+/// (argument errors such as a null or empty array throw the usual <see cref="ArgumentException"/> types). Errors are
+/// checked before state mutation, so a rejected registration leaves no partial entry behind and the builder is never
+/// left in an inconsistent state.
+/// <b>Thread-safety:</b> not thread-safe; see <see cref="IStack"/>.
 /// After registration is complete, call <see cref="StackBuilder.Build"/> to freeze
 /// the builder into an immutable <see cref="Stack"/>.
 /// </para>
@@ -44,7 +46,10 @@ public interface IStackBuilder : IStack
     #region Field Registration
 
     /// <summary>Registers a field definition without an index group.</summary>
-    /// <param name="protocolId">The owning protocol (use <see cref="ProtocolId.Invalid"/> for built-in fields).</param>
+    /// <param name="protocolId">
+    /// The owning protocol (use <see cref="ProtocolId.Invalid"/> for built-in fields). Any other ID must have been returned by
+    /// this builder's protocol registration.
+    /// </param>
     /// <param name="name">Machine-readable field name (e.g., "eth.dst"). Must be unique.</param>
     /// <param name="uiName">Human-readable display name (e.g., "Destination").</param>
     /// <param name="fieldType">The value type this field carries.</param>
@@ -52,6 +57,7 @@ public interface IStackBuilder : IStack
     /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
     /// <exception cref="DuplicateNameRegistrationException">Thrown when the field name is already registered.</exception>
+    /// <exception cref="NotFoundRegistrationException">Thrown when <paramref name="protocolId"/> is neither <see cref="ProtocolId.Invalid"/> nor a registered protocol.</exception>
     FieldId RegisterField(
         ProtocolId protocolId,
         string name,
@@ -62,6 +68,10 @@ public interface IStackBuilder : IStack
     /// <summary>
     /// Registers a field definition with an index group for efficient cross-packet indexing.
     /// Fields that always appear together should share the same group name.
+    /// <para>
+    /// The group name is validated before the field is registered, so a bad group name cannot leave behind a
+    /// registered field without its group.
+    /// </para>
     /// </summary>
     /// <param name="protocolId">The owning protocol.</param>
     /// <param name="name">Machine-readable field name. Must be unique.</param>
@@ -102,7 +112,8 @@ public interface IStackBuilder : IStack
     /// <para>
     /// Member fields may carry heterogeneous <see cref="FieldType"/> values; the registry
     /// performs no same-type validation. Order of <paramref name="fieldIds"/> is preserved
-    /// in <see cref="FieldAliasGroupInfo.Members"/>.
+    /// in <see cref="FieldAliasGroupInfo.Members"/>. The array is copied, so later changes by the caller do not
+    /// affect the group, and the registration is all-or-nothing: every member is checked before the group is added.
     /// </para>
     /// </summary>
     /// <param name="protocolId">The protocol that owns this alias group.</param>
@@ -210,8 +221,9 @@ public interface IStackBuilder : IStack
     /// are treated identically to normal parsers.
     /// </para>
     /// <para>
-    /// <b>Sort order:</b> Post-parsers are sorted once at build time: ascending by
-    /// <paramref name="priority"/>, then ascending by registration order as a stable tie-breaker.
+    /// <b>Sort order:</b> Post-parsers are kept in a deterministic order (and sorted again at build time, so the parse
+    /// path never sorts): ascending by <paramref name="priority"/>, then ascending by registration order as a stable
+    /// tie-breaker.
     /// A lower <paramref name="priority"/> value therefore executes earlier.
     /// </para>
     /// <para>

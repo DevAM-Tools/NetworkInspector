@@ -20,9 +20,9 @@ public enum SettingProblemKind : byte
     /// <summary>The enumeration name or number is not one of the allowed values.</summary>
     UnknownEnum,
 
-    /// <summary>A path setting names an invalid path; produced once settings carry path metadata.</summary>
+    /// <summary>A path setting names an invalid path. Reserved: no member of the library produces it yet (settings carry no path metadata).</summary>
     InvalidPath,
 
-    /// <summary>No setting with the given name is registered; produced by lookups.</summary>
+    /// <summary>No setting with the given name is registered. Reserved for lookups: no member of the library produces it yet.</summary>
     UnknownSetting,
 }

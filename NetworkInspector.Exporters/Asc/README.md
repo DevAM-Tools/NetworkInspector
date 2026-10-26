@@ -73,14 +73,18 @@ Other link types, and frames outside these limits, are skipped and reported thro
 - Classic CAN: a bus DLC of 9–15 (SocketCAN `len8_dlc`, byte 7) is written as `9`–`F` with 8 data bytes.
   Remote frames write `r {dlc}` with the requested count from byte 4.
 - LIN: the 6-bit id (`PID & 0x3F`), the checksum, and `CSM = classic` or `CSM = enhanced` from DLT_LIN byte 4
-  bits 1–0 (enhanced when the bits do not state a model).
+  bits 1–0 (enhanced when the bits do not state a model). At most 8 data bytes are written; a larger DLT_LIN length
+  field (4 bits, up to 15) is limited to 8, and to the bytes present in a truncated capture.
 - The channel is resolved once per interface: `blf.channel`, else `asc.channel`, else a trailing number ≥ 1 in the
-  interface name, else 1. An unusable channel property falls back to channel 1.
+  interface name, else 1. An unusable channel property falls back to channel 1. A negative channel cannot be written:
+  the frames of that interface are skipped (`ItemSkipped`, `SerializationError`).
 
 ## Limits And Thread-Safety Notes
 
 - Not thread-safe; call `OnFrame()` and `OnFinish()` from one thread.
 - The file is created lazily on the first frame; an empty export still writes a valid header.
+- A file that cannot be created (missing directory, access denied) is reported through `ItemSkipped` and counted as an
+  error; `OnFrame()` returns `false` and does not throw.
 
 ## Links
 

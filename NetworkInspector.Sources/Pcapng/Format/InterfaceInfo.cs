@@ -9,7 +9,10 @@ namespace NetworkInspector.Sources.Pcapng.Format;
 /// <remarks>
 /// <b>Thread-safety:</b> configured by the scanner (<see cref="SectionInfo.ParseIdbOptions"/>) before it is added to
 /// its section, and never changed afterwards; readers on any thread see a fully built instance through the section's
-/// lock-free publish.
+/// lock-free publish. The one exception is <see cref="Registered"/>, which the owning source sets once after the
+/// instance is published (a volatile field written with a compare-exchange, first writer wins). The plain
+/// <c>private set</c> properties are therefore safe without locks only because of the publish-then-read-only discipline;
+/// do not call the <c>Set…</c> methods on an interface that is already in a section.
 /// </remarks>
 internal sealed class InterfaceInfo
 {
@@ -46,7 +49,10 @@ internal sealed class InterfaceInfo
         get;
     }
 
-    /// <summary>Snapshot length — maximum captured octets per packet.</summary>
+    /// <summary>
+    /// Snapshot length — maximum captured octets per packet. An IDB value of 0 ("no limit" in the PCAPNG specification)
+    /// is stored as <see cref="uint.MaxValue"/>, so every <c>Math.Min</c> against it passes the real packet length through.
+    /// </summary>
     internal uint SnapLength
     {
         get; private set;
@@ -93,17 +99,38 @@ internal sealed class InterfaceInfo
     }
 
     /// <summary>
-    /// False when <c>if_tsresol</c> is a decimal exponent above 19.
-    /// Packets on this interface are skipped; the clock is not guessed.
+    /// False when <c>if_tsresol</c> is a decimal exponent above 19 or a binary exponent above 63 (the resolution does not
+    /// fit a <see cref="ulong"/>). Packets on this interface are skipped; the clock is not guessed, so no wrong
+    /// timestamp is ever produced.
     /// </summary>
     internal bool HasSupportedTimestampResolution
     {
         get; private set;
     } = true;
 
+    /// <summary>
+    /// True for the placeholder of an Interface Description Block that could not be parsed (see <see cref="CreateMalformed"/>).
+    /// The placeholder only holds the interface's position: packets that name it are skipped, and it is never registered.
+    /// </summary>
+    internal bool IsMalformed
+    {
+        get; private init;
+    }
+
     #endregion
 
     #region Constructors
+
+    /// <summary>
+    /// Creates the placeholder for a malformed Interface Description Block. PCAPNG packets name their interface by the
+    /// position of its IDB in the section, so a block that cannot be parsed must still take its position: leaving it out
+    /// would shift every later interface by one and attribute their packets to the wrong interface (wrong link type, wrong
+    /// clock). The placeholder carries no usable description; packets that name it are skipped.
+    /// </summary>
+    internal static InterfaceInfo CreateMalformed() => new(rawLinkType: 0, snapLength: 0)
+    {
+        IsMalformed = true,
+    };
 
     /// <summary>Creates a new InterfaceInfo with the given raw link type and snap length.</summary>
     internal InterfaceInfo(ushort rawLinkType, uint snapLength)
@@ -203,6 +230,9 @@ internal sealed class InterfaceInfo
     /// <summary>
     /// Converts a raw 64-bit PCAPNG timestamp to nanoseconds since epoch.
     /// Converts interface ticks first, then adds <see cref="TimestampOffsetSeconds"/> as whole seconds.
+    /// Called once per scanned packet, so it allocates nothing and never throws: every overflow saturates at
+    /// <see cref="long.MaxValue"/> / <see cref="long.MinValue"/> instead (a hostile timestamp or offset cannot wrap into
+    /// a plausible wrong time).
     /// </summary>
     /// <param name="rawTimestamp">Raw 64-bit timestamp from the packet block.</param>
     /// <returns>Timestamp in nanoseconds since Unix epoch.</returns>
@@ -245,6 +275,7 @@ internal sealed class InterfaceInfo
 
         const ulong nsPerSecond = 1_000_000_000UL;
 
+        // Fast paths for the two resolutions real captures use: no division, one range check, one multiply at most.
         if (resolution == PcapConstants.TsResolNanoseconds)
         {
             if (rawTimestamp > (ulong)long.MaxValue)
@@ -266,8 +297,10 @@ internal sealed class InterfaceInfo
             return (long)rawTimestamp * 1000L;
         }
 
+        // General path (other decimal resolutions and all binary ones):
         // nanos = wholeSeconds * 1e9 + (remainder * 1e9 / resolution).
-        // Remainder uses a widened product when resolution * 1e9 would wrap a ulong.
+        // Splitting into whole seconds and a remainder keeps the first product bounded by a checked comparison; the
+        // remainder uses a widened product when resolution * 1e9 would wrap a ulong.
         ulong wholeSeconds = rawTimestamp / resolution;
         ulong remainder = rawTimestamp % resolution;
         if (wholeSeconds > (ulong)(long.MaxValue / (long)nsPerSecond))

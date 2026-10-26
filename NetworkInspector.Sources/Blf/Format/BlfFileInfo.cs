@@ -5,9 +5,10 @@ namespace NetworkInspector.Sources.Blf.Format;
 /// <summary>
 /// Parsed BLF file header information.
 /// Extracts and stores the critical fields from the variable-length file header:
-/// header size (determines where objects start), measurement start time
-/// (anchor for absolute timestamps), and API version.
+/// header size (determines where objects start) and measurement start time
+/// (anchor for absolute timestamps). The API version of the prefix is parsed but not kept.
 /// </summary>
+/// <remarks>Immutable after <see cref="TryParse"/> (private setters); thread-safe.</remarks>
 internal sealed class BlfFileInfo
 {
     #region Properties
@@ -68,7 +69,9 @@ internal sealed class BlfFileInfo
 
         uint headerSize = prefix.HeaderSize.Value;
 
-        // Header size must be at least the minimum and not exceed data length
+        // Header size must be at least the minimum. An upper bound is not checked here: callers hold only the first
+        // FileHeaderMinSize bytes, so the size is validated against what they can read (a file source starts its scan at
+        // this offset; the stream source reads and discards the extra bytes through a bounded buffer).
         if (headerSize < BlfConstants.FileHeaderMinSize)
         {
             return false;

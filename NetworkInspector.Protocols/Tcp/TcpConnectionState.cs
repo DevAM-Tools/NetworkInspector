@@ -7,6 +7,11 @@ namespace NetworkInspector.Protocols.Tcp;
 /// Tracks sequence numbers, acknowledgment numbers, window sizes,
 /// and duplicate ACK counters for one direction of a TCP connection.
 /// </summary>
+/// <remarks>
+/// Mutable analysis state, written by <c>TcpConnectionTracker.Analyze</c> during the ordered first parse of each packet.
+/// <b>Thread safety:</b> not thread-safe; it is never read or written by replays (they use recorded effects). All
+/// sequence numbers are raw 32-bit wire values that wrap; comparisons use serial-number arithmetic in the tracker.
+/// </remarks>
 internal sealed class TcpFlowState
 {
     #region ISN Tracking
@@ -109,6 +114,13 @@ internal sealed class TcpFlowState
     /// Fixed 256-slot ring for ACK RTT. Index is <c>endSeq &amp; 255</c>.
     /// A collision overwrites the older entry. One allocation per flow, not per segment.
     /// </summary>
+    /// <remarks>
+    /// Why a fixed ring: the RTT of a data segment is measured when the matching ACK (ack number equals the segment's
+    /// end sequence) arrives, so the sender's timestamps must be remembered. A dictionary or list would grow with
+    /// unacknowledged data; the ring caps memory per flow (about 3 KB across the three parallel arrays) at the price
+    /// that a colliding or very old unacknowledged segment simply yields no RTT sample. The three arrays are
+    /// parallel (structure of arrays) and are only valid together with <see cref="AckRttSlotUsed"/>.
+    /// </remarks>
     internal uint[] AckRttSeq { get; } = new uint[256];
 
     /// <summary>Timestamp nanoseconds paired with <see cref="AckRttSeq"/>.</summary>
@@ -136,6 +148,11 @@ internal sealed class TcpFlowState
 /// Per-TCP-connection state containing both direction flow states
 /// and connection-level metadata (stream index, completeness, etc.).
 /// </summary>
+/// <remarks>
+/// <b>Thread safety:</b> not thread-safe; mutated by the tracker during the ordered first parse and never touched by
+/// replays. Directions are named relative to the normalized connection key (lower endpoint first), not by who opened
+/// the connection; <see cref="TcpFlowState.IsInitiator"/> marks the sender of the first pure SYN.
+/// </remarks>
 internal sealed class TcpConnectionState
 {
     /// <summary>Unique index for this TCP stream (0-based, monotonically increasing).</summary>
@@ -200,7 +217,8 @@ internal sealed class TcpConnectionState
         get; set;
     }
 
-    // Completeness flag constants
+    // Completeness flag constants (bit positions of Completeness). Bit 2 (ACK) is documented above but has no
+    // constant because nothing sets or reads it.
     internal const byte SynSeen = 1 << 0;
     internal const byte SynAckSeen = 1 << 1;
     internal const byte DataSeen = 1 << 3;
@@ -240,9 +258,17 @@ internal sealed class TcpConnectionState
 /// TCP connection state machine phases, tracking the lifecycle of a connection.
 /// Based on RFC 793 TCP state diagram.
 /// </summary>
+/// <remarks>
+/// A passive capture sees both endpoints, so this is one simplified connection-level phase (advanced by the segments of
+/// either direction), not the real state of either host. It only leaves <see cref="Closed"/> when a pure SYN is seen, so
+/// a connection joined mid-stream stays in <see cref="Closed"/> and its FIN/ACK segments do not change the phase
+/// (only an RST does). The names are for display; see <c>TcpConnectionTracker</c> for the exact transitions.
+/// </remarks>
 internal enum TcpConnectionPhase : byte
 {
-    /// <summary>No SYN seen yet.</summary>
+    /// <summary>
+    /// No pure SYN seen yet (initial phase), or the connection finished the last-ACK exchange and is closed again.
+    /// </summary>
     Closed,
 
     /// <summary>SYN sent by initiator, waiting for SYN-ACK.</summary>
@@ -269,7 +295,10 @@ internal enum TcpConnectionPhase : byte
     /// <summary>Received FIN after our FIN was ACKed — TIME_WAIT timer running.</summary>
     TimeWait,
 
-    /// <summary>Our FIN ACKed after peer's FIN — connection fully closed.</summary>
+    /// <summary>
+    /// Second FIN seen after the first side was in <see cref="CloseWait"/>; the final ACK is awaited. The next ACK moves
+    /// the phase to <see cref="Closed"/>.
+    /// </summary>
     LastAck,
 
     /// <summary>RST received — connection aborted.</summary>

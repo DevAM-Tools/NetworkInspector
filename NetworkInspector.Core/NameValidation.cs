@@ -24,6 +24,10 @@ public static class NameValidation
             return false;
         }
 
+        // Single pass over the span with a two-state machine (no allocation, no regex, no culture): either the next
+        // character must start a segment (letter or underscore) or it continues one (letter, digit, underscore) or
+        // separates segments ('.'). Starting in "expect segment start" rejects a leading dot and a leading digit,
+        // and a dot switches back to it, which rejects ".." and a segment that starts with a digit.
         bool expectIdentStart = true;
         for (int i = 0; i < name.Length; i++)
         {
@@ -48,7 +52,7 @@ public static class NameValidation
             }
         }
 
-        // Must not end with a dot
+        // Must not end with a dot: after a trailing '.' the state is still "expect segment start".
         return !expectIdentStart;
     }
 
@@ -60,6 +64,8 @@ public static class NameValidation
     /// The empty string is a valid group name (the default/root group). The name <c>default</c> is reserved: the
     /// default group is saved as <c>default.json</c>, so a group of that name would share its file.
     /// </summary>
+    /// <param name="name">The group name to validate.</param>
+    /// <returns><see langword="true"/> for the empty string or a lowercase, dot-separated ASCII identifier other than <c>default</c>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsValidGroupName(ReadOnlySpan<char> name)
     {
@@ -94,8 +100,12 @@ public static class NameValidation
     }
 
     /// <summary>
-    /// Checks whether the given UI name is valid (no control characters or line breaks).
+    /// Checks whether the given UI name is valid: non-empty and free of control characters (<see cref="char.IsControl(char)"/>,
+    /// which includes line breaks and tabs). Unlike <see cref="IsValidName"/>, any other Unicode text is allowed because
+    /// a UI name is human-readable display text, not an identifier.
     /// </summary>
+    /// <param name="name">The display name to validate.</param>
+    /// <returns><see langword="true"/> when the name is non-empty and contains no control character.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsValidUiName(ReadOnlySpan<char> name)
     {

@@ -32,8 +32,10 @@ public sealed class FieldAliasGroupInfo
     /// <param name="name">The alias name (machine-readable, dot-separated identifier).</param>
     /// <param name="description">Optional description text.</param>
     /// <param name="members">
-    /// The canonical member field IDs in registration order. The array is taken by reference;
-    /// the caller must not mutate it after construction.
+    /// The canonical member field IDs in registration order. The array is taken by reference
+    /// (no copy here, because the only caller, <see cref="StackBuilder"/>, already passes a private validated copy);
+    /// the caller must not mutate it after construction. Not validated here: non-empty, unique and owned by
+    /// <paramref name="protocolId"/> are guaranteed by the builder's registration checks.
     /// </param>
     internal FieldAliasGroupInfo(
         FieldAliasGroupId id,
@@ -81,6 +83,10 @@ public sealed class FieldAliasGroupInfo
     /// Canonical member field IDs in the order in which they were supplied at registration.
     /// Members may have heterogeneous <see cref="FieldType"/> values.
     /// </summary>
+    /// <remarks>
+    /// Exposed as <see cref="ReadOnlyMemory{T}"/> over the stored array so reading needs no copy and callers cannot
+    /// write through the property.
+    /// </remarks>
     public ReadOnlyMemory<FieldId> Members { get; }
 
     /// <summary>Number of canonical member fields in this alias group.</summary>

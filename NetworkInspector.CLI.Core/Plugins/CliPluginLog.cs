@@ -46,8 +46,17 @@ internal sealed class CliPluginLog : IPluginLog
     public void Warning(string text) => _Write("Warning", text);
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The exception contributes its type name and message to the line, never its stack trace; the line stays one line.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="text"/> is <see langword="null"/> (a bug of the calling plugin).</exception>
     public void Error(string text, Exception? exception = null)
     {
+        // The text is checked before it is looked at: with an exception the next statements read the text, and a missing text
+        // would otherwise surface as a NullReferenceException that hides which argument was wrong.
+        ArgumentNullException.ThrowIfNull(text);
+
+
         // The start and stop lifecycle already names the exception in its text; a second copy would only repeat it.
         string description = exception is null
             ? string.Empty
@@ -62,12 +71,19 @@ internal sealed class CliPluginLog : IPluginLog
     #region Private Helpers
 
     /// <summary>Writes one line to the error writer and the file.</summary>
+    /// <param name="level">The level word (<c>Info</c>, <c>Warning</c>, or <c>Error</c>).</param>
+    /// <param name="text">The message.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="text"/> is <see langword="null"/> (a bug of the calling plugin).</exception>
     private void _Write(string level, string text)
     {
         ArgumentNullException.ThrowIfNull(text);
 
         // The same cleaned text goes to both sinks: a line break or a terminal sequence in a plugin's text must not forge an entry.
         string clean = CliLogFile.SingleLine(text);
+
+        // Console first. The lock object is the error writer itself, the same one the session locks for its own lines (a text
+        // writer is not thread-safe and plugins log from any thread). Only the write happens under the lock; the file append below
+        // has its own lock and is never called while the writer is held.
         try
         {
             lock (_Error)

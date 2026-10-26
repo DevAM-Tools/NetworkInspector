@@ -290,6 +290,55 @@ internal sealed class SettingsProfilesTests
         await Assert.That(Directory.EnumerateFileSystemEntries(folder.Path).Count()).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task TwoThreadsDeletingTheLastTwoProfilesNeverLeaveNone()
+    {
+        // The last-profile check and the delete are separate steps: without care both deleters count two profiles and both
+        // delete. The round repeats because the interleaving cannot be controlled; it can only fail, never hang.
+        int emptyRounds = 0;
+        for (int round = 0; round < 25; round++)
+        {
+            using SettingsTempFolder folder = new();
+            _Create(folder.Path, "A");
+            _Create(folder.Path, "B");
+            using Barrier barrier = new(2);
+
+            Task first = Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                _ = SettingsProfiles.TryDelete(folder.Path, "A", out _);
+            });
+            Task second = Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                _ = SettingsProfiles.TryDelete(folder.Path, "B", out _);
+            });
+            await Task.WhenAll(first, second);
+
+            if (SettingsProfiles.List(folder.Path).Count == 0)
+            {
+                emptyRounds++;
+            }
+        }
+
+        await Assert.That(emptyRounds).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task ARenameRollbackThatCannotPutTheFolderBackReportsFailureInsteadOfThrowing()
+    {
+        using SettingsTempFolder folder = new();
+        string work = folder.Combine(".work-moved");
+        string occupied = folder.Combine("old");
+        Directory.CreateDirectory(work);
+        File.WriteAllText(occupied, "a file occupies the old path");
+
+        bool restored = SettingsProfiles.TryRestoreFolder(work, occupied);
+
+        await Assert.That(restored).IsFalse();
+        await Assert.That(Directory.Exists(work)).IsTrue();
+    }
+
     #endregion
 
     #region Arguments

@@ -6,12 +6,18 @@ namespace NetworkInspector.CLI.Commands;
 /// Parse and export command.
 /// Reads frames from sources, parses them into packets with the full protocol stack, and exports to an analysis format
 /// (CSV, JSON, PBF, text, Parquet, DuckDB, or a plugin's format). Sources and formats come from the plugin registry.
+/// Unlike <see cref="ConvertCommand"/> every frame is parsed, because the exporters write packets. Stateless; each run owns its
+/// sources, listener, and plugin session, and its packet loop is single-threaded.
 /// </summary>
 internal static class ExportCommand
 {
     #region Types
 
-    /// <summary>The parsed arguments of one run.</summary>
+    /// <summary>
+    /// The parsed arguments of one run. Units: <c>MaxPackets</c> and <c>SplitCount</c> count packets and <c>ProgressInterval</c>
+    /// is a packet interval (zero disables each); <c>SplitSizeBytes</c> and <c>BlfCacheBudgetBytes</c> are bytes, already
+    /// converted from the MiB the user typed (zero disables the split / leaves the BLF default).
+    /// </summary>
     private sealed record ExportArguments(
         List<string> SourceSpecs,
         string OutputPath,
@@ -51,30 +57,59 @@ internal static class ExportCommand
     /// Drives the frame-read → parse → export loop across all active sources,
     /// rotating outputs when <paramref name="splitManager"/> requests a split.
     /// </summary>
+    /// <remarks>
+    /// Performance: the loop parses every frame into one reused <see cref="Packet"/> (a recycle), which keeps the field storage
+    /// and the packet object out of the allocator for the whole run; a new packet is created only when a recycle is refused.
+    /// The assumption is that a listener is finished with the packet when <c>OnPacket</c> returns (it must copy what it keeps),
+    /// because the next iteration overwrites it in place. A filter is judged on the parsed packet before any output is opened,
+    /// so a filter that matches nothing leaves no file behind. Thread safety: single-threaded; the sources, the filter, the
+    /// recycled packet, and the listeners are driven from the calling thread only.
+    /// </remarks>
     /// <param name="sources">Active, already-started frame sources in round-robin order.</param>
     /// <param name="createExporter">Factory that opens a new file/directory exporter for a path.</param>
     /// <param name="splitManager">Split policy (size and/or packet count); may disable splitting.</param>
     /// <param name="stack">Protocol stack that owns parsed packets.</param>
     /// <param name="filter">
-    /// Optional packet filter. When set, packets it rejects are counted as read but never handed
-    /// to the exporter; an evaluation failure aborts the loop with an
+    /// Optional packet filter. When set, packets it rejects consume a packet id (every parsed frame does) but are never handed
+    /// to the exporter and do not count towards <paramref name="maxPackets"/>; an evaluation failure aborts the loop with an
     /// <see cref="InvalidOperationException"/> because a filter that cannot decide must not
     /// silently keep or drop data.
     /// </param>
-    /// <param name="maxPackets">Stop after this many packets (0 = unlimited).</param>
-    /// <param name="progressInterval">Print progress every N packets to stderr (0 = silent).</param>
-    /// <param name="tolerant">When <see langword="true"/>, log and skip frames that throw.</param>
+    /// <param name="maxPackets">Stop after this many packets were handed to the exporter (0 = unlimited).</param>
+    /// <param name="progressInterval">Print progress every N exported packets to the error writer (0 = silent).</param>
+    /// <param name="tolerant">
+    /// When <see langword="true"/>, an exception from reading a frame is reported as a warning and the loop moves on to the next
+    /// source. A source that fails again before it delivered a frame is dropped with a warning that names it, so a source that
+    /// fails on every read cannot keep the loop running forever. It does not cover parse or filter errors, and a failing exporter
+    /// always aborts.
+    /// </param>
     /// <param name="error">Receives progress lines and warnings (the error writer of the command).</param>
     /// <param name="packetIdCounter">
     /// Monotonic packet-id allocator. Pass 0 for a fresh loop; each frame consumes the current
-    /// value and then increments, so first-parse ids are dense <c>0, 1, 2, …</c>.
+    /// value and then increments, so first-parse ids are dense <c>0, 1, 2, …</c>. Ids must be dense and in order because the
+    /// stack accepts a first parse of an id only when it does not jump past the next expected one.
     /// </param>
     /// <param name="cancellationToken">
     /// Cooperative cancellation. A cancelled loop stops, discards the output that was still open (it is not finished, so it must
-    /// not stay behind), and returns the packets written to the outputs that were completed before.
+    /// not stay behind), and returns normally; the returned count still includes the packets of the discarded output. A source
+    /// that observes the token may instead throw <see cref="OperationCanceledException"/>, which discards the output the same way.
     /// </param>
     /// <param name="outputsWritten">Number of output files or dataset directories finalized.</param>
-    /// <returns>Number of packets exported successfully.</returns>
+    /// <param name="listenerStopped">
+    /// <see langword="true"/> when the loop ended early because a listener returned <see langword="false"/> from <c>OnPacket</c>
+    /// (it unsubscribed itself, for example after an error); the open output was finished normally, but the input was not
+    /// exported completely. A listener that stops because of a cancellation is not reported here.
+    /// </param>
+    /// <returns>
+    /// Number of packets handed to the exporter. The loop also ends early, without an exception, when a listener returns
+    /// <see langword="false"/> from <c>OnPacket</c> (it unsubscribed itself); <paramref name="listenerStopped"/> tells the caller,
+    /// which reports it as a failure.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// A parse or the filter failed, size splitting is requested for an exporter without byte progress, or an output could not be
+    /// prepared; the unfinished output was discarded.
+    /// </exception>
+    /// <exception cref="CliUsageException"><paramref name="createExporter"/> found an invalid option text; the unfinished output was discarded.</exception>
     internal static int RunExportLoop(
         List<IFrameSource> sources,
         Func<string, IPacketListener> createExporter,
@@ -87,25 +122,37 @@ internal static class ExportCommand
         TextWriter error,
         ref int packetIdCounter,
         CancellationToken cancellationToken,
-        out int outputsWritten)
+        out int outputsWritten,
+        out bool listenerStopped)
     {
+        // Loop state. exporter and currentPath describe the output that is open right now (and only that one): they are cleared
+        // as soon as an output is finished, so the cleanup in the catch block can never delete a finished output.
+        // recyclePacket is the one packet object that every frame is parsed into (see the remarks).
         int packetCount = 0;
         int filePackets = 0;
         outputsWritten = 0;
+        listenerStopped = false;
         Packet? recyclePacket = null;
         IPacketListener? exporter = null;
         string? currentPath = null;
         IExportByteProgress? byteProgress = null;
+
+        // The index exists only for a filter. One index serves the whole run: the filter reads protocol presence from it in O(1)
+        // instead of walking the field tree of each packet, and the parse fills it. Without a filter no index is kept.
         PacketIndex? filterIndex = filter is not null ? new PacketIndex(stack) : null;
 
         RoundRobinSourceIterator iterator = new(sources);
 
         try
         {
+            // The cancellation token is checked here and not only inside the sources: a source that ignores the token must not
+            // be able to keep the loop running after Ctrl+C.
             while (iterator.HasActive
                 && !cancellationToken.IsCancellationRequested
                 && (maxPackets == 0 || packetCount < maxPackets))
             {
+                // Read the next frame of the current source. A cancelled read must reach the catch block below; any other read
+                // error is skipped only in tolerant mode.
                 IFrameSource source = iterator.Current;
                 Frame? frame;
                 try
@@ -116,21 +163,32 @@ internal static class ExportCommand
                 {
                     if (tolerant)
                     {
-                        error.WriteLine(
-                            $"Warning: Skipping frame from {source.UiName}: {ex.Message}");
-                        iterator.Advance();
+                        // A source that fails again before it delivered a frame cannot move past the problem: it is dropped, so
+                        // that a source which throws on every read cannot keep the run alive forever.
+                        bool dropped = iterator.RecordReadFailureAndAdvance();
+                        error.WriteLine(dropped
+                            ? Invariant($"Warning: Giving up on {source.UiName}: it failed again without delivering a frame: {ex.Message}")
+                            : Invariant($"Warning: Skipping frame from {source.UiName}: {ex.Message}"));
                         continue;
                     }
 
                     throw;
                 }
 
+                // A null frame is the end of that source: it leaves the rotation and the others carry on.
                 if (frame is null)
                 {
                     iterator.MarkCurrentExhaustedAndAdvance();
                     continue;
                 }
 
+                iterator.RecordFrameRead();
+
+                // Parse the frame. The id is taken (and the counter advanced) before the capacity check, so the id of a frame is
+                // never reused; the check runs before the id is used and names the packets in its error. A recycle reuses the
+                // storage of the previous packet in place (no allocation per packet); when the stack refuses the recycle (for
+                // example a materializer still holds the packet) the same frame is parsed into a new packet, which then becomes
+                // the next recycle target. A parse that fails in both ways aborts the run.
                 int idValue = packetIdCounter++;
                 ArrayIndexIdRange.ThrowIfInvalidNextIndex(idValue, "packet");
 
@@ -154,7 +212,8 @@ internal static class ExportCommand
                 recyclePacket = packet;
 
                 // Judged before an output is opened, so a filter that matches nothing leaves no
-                // empty file or dataset directory behind.
+                // empty file or dataset directory behind. A rejected packet still consumes the source's turn, so a selective
+                // filter does not let one source starve the others.
                 if (filter is not null)
                 {
                     if (!CliFilter.TryMatch(filter, packet, filterIndex, error, out bool matched))
@@ -170,11 +229,14 @@ internal static class ExportCommand
                     }
                 }
 
+                // Open the first output, or rotate to the next one when the split policy asks for it. The size comes from an
+                // in-memory counter of the exporter (no file-system probe), which is cheap enough to read for every packet.
                 long estimatedBytes = byteProgress?.EstimatedOutputBytes ?? 0;
                 if (exporter is null
                     || (splitManager.IsSplitting
                         && splitManager.NeedsSplit(estimatedBytes, filePackets)))
                 {
+                    // Finish the previous output first: OnFinish completes it, Dispose releases the file handle.
                     if (exporter is not null)
                     {
                         exporter.OnFinish();
@@ -186,9 +248,14 @@ internal static class ExportCommand
                         currentPath = null;
                     }
 
+                    // currentPath is set only after the factory returned, so a factory that fails leaves nothing to discard here
+                    // (the factory used by the command removes what its own attempt left behind).
                     string nextPath = splitManager.NextPath();
                     exporter = createExporter(nextPath);
                     currentPath = nextPath;
+
+                    // Size splitting reads the exporter's live byte counter; an exporter without one cannot be split by size, which
+                    // is refused here instead of silently never splitting.
                     byteProgress = exporter as IExportByteProgress;
                     if (splitManager.IsSizeSplitting && byteProgress is null)
                     {
@@ -200,6 +267,10 @@ internal static class ExportCommand
                     filePackets = 0;
                 }
 
+                // Hand the packet over. false means the listener unsubscribed itself (for example an exporter in strict mode after
+                // its first recoverable error): the loop ends after this packet and the output is finished normally below. The
+                // caller learns of it through listenerStopped and reports a failure, because the input was not exported completely
+                // (a cancellation also makes exporters return false; that case is the cancelled run, not a failure).
                 bool continueExport = exporter.OnPacket(packet);
                 packetCount++;
                 filePackets++;
@@ -213,6 +284,7 @@ internal static class ExportCommand
 
                 if (!continueExport)
                 {
+                    listenerStopped = !cancellationToken.IsCancellationRequested;
                     break;
                 }
 
@@ -222,13 +294,16 @@ internal static class ExportCommand
                 }
             }
 
-            // A cancelled export is unfinished: the open output goes away instead of looking like a complete result.
+            // A cancelled export is unfinished: the open output goes away instead of looking like a complete result. The loop
+            // condition above ended the run on the cancelled token, so this is a return, not an exception.
             if (cancellationToken.IsCancellationRequested && exporter is not null)
             {
                 CliCommandSupport.DiscardUnfinished(ref exporter, ref currentPath, splitManager.IsDirectoryOutput, error);
                 return packetCount;
             }
 
+            // Normal end (sources exhausted, limit reached, or the listener unsubscribed): finish the last output. This is the
+            // only path that finalizes the output that is still open; every other exit discards it.
             if (exporter is not null)
             {
                 exporter.OnFinish();
@@ -252,9 +327,17 @@ internal static class ExportCommand
 
     #region Private Helpers
 
-    /// <summary>Parses arguments and executes export; throws <see cref="ArgumentException"/> on bad args.</summary>
+    /// <summary>
+    /// Parses arguments and executes export; throws <see cref="ArgumentException"/> on bad args (the caller maps it to exit
+    /// code 1).
+    /// </summary>
+    /// <param name="args">The arguments after the command name.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="cancellationToken">Cancels the run.</param>
+    /// <returns>The exit code.</returns>
     private static async Task<int> _RunCoreAsync(string[] args, CliIo io, CancellationToken cancellationToken)
     {
+        // Help is only recognized as the first argument; no arguments at all is an error with the same usage text.
         if (args.Length == 0 || CliArgumentParsing.IsHelpFlag(args[0]))
         {
             _PrintUsage(io.Error);
@@ -279,6 +362,9 @@ internal static class ExportCommand
         bool tolerant = false;
         bool overwrite = false;
 
+        // One pass over the arguments. Settings options are offered first so that they behave the same in every command; a
+        // value-taking option consumes the next argument (GetNextArg advances i). Everything that is not an option is a source
+        // spec, including a mistyped option such as "--outptu": it is then rejected by the source parsing with its own message.
         for (int i = 0; i < args.Length; i++)
         {
             if (CliArgumentParsing.ParseSettingsOption(args, ref i, settings))
@@ -332,6 +418,8 @@ internal static class ExportCommand
             }
         }
 
+        // Required parts, checked before anything is opened. "-" (standard output) is refused as a target: every output is a
+        // path (file or dataset folder) that the run prepares, finishes, and, when the run does not complete, deletes or restores.
         if (sourceSpecs.Count == 0)
         {
             io.Error.WriteLine("Error: No source files specified.");
@@ -345,6 +433,7 @@ internal static class ExportCommand
             return (int)ExitCode.ArgumentError;
         }
 
+        // MiB to bytes with overflow checks, so a typo such as 99999999999 is a usage error here and not a wrapped negative size.
         int blfCacheBudgetBytes = 0;
         if (blfCacheSize > 0)
         {
@@ -361,10 +450,19 @@ internal static class ExportCommand
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Executes the export pipeline inside a plugin session.</summary>
+    /// <summary>
+    /// Executes the export pipeline inside a plugin session. The session (plugins started, settings loaded) is open for the whole
+    /// run and disposed after it, so the plugins are stopped even when the run fails or is cancelled; Ctrl+C cancels the token
+    /// for both the plugin start and the packet loop.
+    /// </summary>
+    /// <param name="arguments">The parsed arguments.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="cancellationToken">The outer token; linked with Ctrl+C.</param>
+    /// <returns>The exit code.</returns>
     private static Task<int> _ExecuteAsync(ExportArguments arguments, CliIo io, CancellationToken cancellationToken) =>
         CliCommandSupport.RunCancellableAsync(io, async token =>
         {
+            // A session that cannot open has already printed its error line; its exit code ends the command.
             (CliPluginSession? opened, int openExit) = await CliPluginSession.OpenAsync(arguments.Settings, io, token)
                 .ConfigureAwait(false);
             if (opened is null)
@@ -372,13 +470,23 @@ internal static class ExportCommand
                 return openExit;
             }
 
+            // The export itself is synchronous (sources and listeners are blocking APIs); only the session open and close are
+            // asynchronous.
             await using (opened.ConfigureAwait(false))
             {
                 return _Run(opened, arguments, io, token);
             }
         }, cancellationToken);
 
-    /// <summary>Resolves the specs, builds the stack, opens the sources, and runs the loop.</summary>
+    /// <summary>
+    /// Resolves the specs, builds the stack, opens the sources, and runs the loop. The steps are ordered from cheap to
+    /// expensive so that a mistake of the user is reported before any source is opened or any file is touched.
+    /// </summary>
+    /// <param name="session">The open plugin session.</param>
+    /// <param name="arguments">The parsed arguments.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="token">Cancels the run (Ctrl+C).</param>
+    /// <returns>The exit code.</returns>
     private static int _Run(CliPluginSession session, ExportArguments arguments, CliIo io, CancellationToken token)
     {
         // Specs resolve through the registry, so plugin kinds and formats work exactly like built-in ones.
@@ -404,13 +512,17 @@ internal static class ExportCommand
             return (int)ExitCode.ArgumentError;
         }
 
-        // An existing output is refused (or accepted with --overwrite) before a long run starts; nothing is deleted yet.
+        // An existing output is refused (or accepted with --overwrite) before a long run starts; nothing is deleted yet. The
+        // check uses a manager of its own, so the manager of the run still starts at its first path. Only the first path is
+        // checked here; a later split path that exists is refused when its output is opened.
         SplitOutputManager firstPathManager = new(arguments.OutputPath, arguments.SplitSizeBytes, arguments.SplitCount,
             format.IsDirectoryOutput);
-        if (!ExportTargets.TryCheck(firstPathManager.NextPath(), format.IsDirectoryOutput, arguments.Overwrite, out _,
-            out PluginError? targetError))
+        // The refusal names the path that was checked. In a split run that is the first split file (base_00001.ext), not the base
+        // name the user typed, which is never written: naming the typed path would point at a file that does not exist.
+        string firstPath = firstPathManager.NextPath();
+        if (!ExportTargets.TryCheck(firstPath, format.IsDirectoryOutput, arguments.Overwrite, out _, out PluginError? targetError))
         {
-            io.Error.WriteLine("Error: " + CliCommandSupport.TargetText(targetError, arguments.OutputPath));
+            io.Error.WriteLine("Error: " + CliCommandSupport.TargetText(targetError, firstPath));
             return (int)ExitCode.ArgumentError;
         }
 
@@ -420,6 +532,8 @@ internal static class ExportCommand
             return stackExit;
         }
 
+        // The stack outlives the sources: sources are disposed in the inner finally, the stack by the using around it. The filter
+        // is compiled before the first source opens, so an invalid expression ends the command without touching any input.
         List<IFrameSource> sources = [];
         using (stack)
         {
@@ -432,6 +546,8 @@ internal static class ExportCommand
                     return (int)ExitCode.ArgumentError;
                 }
 
+                // Sources are plugin code: a failure to open one ends the command with the exit code of OpenSources; the sources
+                // opened so far are in the list and are disposed below.
                 int sourceExit = CliCommandSupport.OpenSources(configs, stack, frames, sources, io);
                 if (sourceExit != (int)ExitCode.Success)
                 {
@@ -447,7 +563,19 @@ internal static class ExportCommand
         }
     }
 
-    /// <summary>Runs the export loop and prints the summary.</summary>
+    /// <summary>
+    /// Runs the export loop and prints the summary on the error writer (the export has no result for standard output). The
+    /// exceptions of the loop become exit codes here: a cancellation is a success (0) because it is the user's decision, a
+    /// <see cref="CliUsageException"/> is a usage error (1), everything else a runtime failure (3).
+    /// </summary>
+    /// <param name="arguments">The parsed arguments.</param>
+    /// <param name="format">The output format.</param>
+    /// <param name="sources">The opened sources.</param>
+    /// <param name="stack">The stack of the session.</param>
+    /// <param name="filter">The compiled filter, or <see langword="null"/>.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="token">Cancels the run (Ctrl+C).</param>
+    /// <returns>The exit code.</returns>
     private static int _RunLoop(ExportArguments arguments, PacketFormatConfig format, List<IFrameSource> sources, Stack stack, IFilter? filter,
         CliIo io, CancellationToken token)
     {
@@ -470,12 +598,24 @@ internal static class ExportCommand
                 io.Error,
                 ref packetIdCounter,
                 token,
-                out int outputsWritten);
+                out int outputsWritten,
+                out bool listenerStopped);
 
+            // The loop returns normally on a cancelled token (it has already discarded the open output), so the token is
+            // checked here to report the cancellation instead of a summary.
             if (token.IsCancellationRequested)
             {
                 io.Error.WriteLine("Export cancelled.");
                 return (int)ExitCode.Success;
+            }
+
+            // The loop ended early because the exporter stopped taking packets: that is a failure, not a complete export, and a
+            // script must not read "Export complete" and exit code 0 for an output that lacks the rest of the input.
+            if (listenerStopped)
+            {
+                io.Error.WriteLine(Invariant(
+                    $"Error during export: the exporter stopped after {packetCount} packets, before the input was exported completely."));
+                return (int)ExitCode.RuntimeError;
             }
 
             string outputUnit = format.IsDirectoryOutput ? "dataset(s)" : "file(s)";
@@ -506,6 +646,9 @@ internal static class ExportCommand
     }
 
     /// <summary>Checks the option texts of the format against its option settings, without creating anything.</summary>
+    /// <param name="format">The output format with its option texts.</param>
+    /// <param name="io">Receives the error line.</param>
+    /// <returns><see langword="true"/> when every text is accepted.</returns>
     private static bool _OptionTextsAreValid(PacketFormatConfig format, CliIo io)
     {
         using SettingsManager options = RegistrationOptions.CreateDefaults(format.Registration.RegisterOptions);
@@ -522,8 +665,17 @@ internal static class ExportCommand
     /// Prepares the target (an existing output is replaced only with <c>--overwrite</c>: it is moved aside and added to
     /// <paramref name="replacements"/>) and creates the listener. Problems of the user's input become a
     /// <see cref="CliUsageException"/>; the rest are errors of the run. A listener that cannot be created gives the old output
-    /// back before the error is reported.
+    /// back after the run.
     /// </summary>
+    /// <param name="format">The output format.</param>
+    /// <param name="path">The path of the output (a split path when splitting).</param>
+    /// <param name="stack">The stack that parsed the packets.</param>
+    /// <param name="overwrite">Whether an existing output may be replaced.</param>
+    /// <param name="replacements">Collects the old outputs that were moved aside; settled after the run.</param>
+    /// <param name="token">Cancels the export.</param>
+    /// <returns>The listener.</returns>
+    /// <exception cref="InvalidOperationException">The target cannot be used or the listener cannot be created.</exception>
+    /// <exception cref="CliUsageException">An option text of the format is invalid.</exception>
     private static IPacketListener _CreateListener(PacketFormatConfig format, string path, Stack stack, bool overwrite,
         List<TargetReplacement> replacements, CancellationToken token)
     {
@@ -547,7 +699,9 @@ internal static class ExportCommand
                 : new InvalidOperationException(message);
         }
 
-        // A dataset folder is marked, so that a later --overwrite may replace it and nothing else.
+        // A dataset folder is marked, so that a later --overwrite may replace it and nothing else. The mark comes right after the
+        // listener exists and before the first packet; when it cannot be written the listener is disposed and the folder removed,
+        // so no unmarked half-dataset stays behind.
         if (format.IsDirectoryOutput)
         {
             string? markProblem = ExportTargets.MarkDataset(fullPath);
@@ -603,6 +757,9 @@ internal static class ExportCommand
         error.WriteLine("  csv                   Comma-separated values (default for .csv); No., Time, Info, Length");
         error.WriteLine("  csv:columns=ip.src;udp.dstport,delimiter=;,header=false,bom=false");
         error.WriteLine("                        Field columns, delimiter, header row, and byte order mark");
+        error.WriteLine("  csv:neutralizeFormulas=false");
+        error.WriteLine("                        Write text cells unchanged (default: a text cell that starts with = + - @ tab or CR gets a");
+        error.WriteLine("                        leading ' so that a spreadsheet does not run it as a formula)");
         error.WriteLine("  json                  Compact JSON (default for .json)");
         error.WriteLine("  json:style=compact    Compact JSON");
         error.WriteLine("  json:style=pretty     Pretty-printed JSON");

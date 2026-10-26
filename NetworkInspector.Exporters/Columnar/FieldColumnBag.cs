@@ -12,11 +12,27 @@ namespace NetworkInspector.Exporters.Columnar;
 /// others stay empty. Values are taken from <see cref="FieldValueData"/> (and optional custom
 /// strings) — the same Core types used by the protocol stack.
 /// </para>
+/// <para>
+/// <b>Retention:</b> a bag keeps its rows until the batch is flushed, while the packet buffers behind the values may be
+/// recycled. Scalars, strings and the fixed-size addresses are self-contained (inline or immutable), but a
+/// <see cref="FieldType.Bytes"/> value can alias a caller's array, so it is copied on <see cref="Add"/>.
+/// </para>
+/// <para>
+/// <b>Size estimate:</b> <see cref="EstimatedSizeBytes"/> is a deliberately cheap approximation used only to decide when
+/// a block is full: 8 bytes for the two id columns plus the payload size (strings count 2 bytes per char plus 4 bytes
+/// of overhead). It ignores list growth slack and object headers, so it is neither exact nor a limit.
+/// </para>
+/// <para>
+/// <b>Thread safety:</b> Not thread-safe; the owning <see cref="ColumnarPacketBatch"/> is single-threaded.
+/// </para>
 /// </summary>
 internal sealed class FieldColumnBag
 {
     #region Fields
 
+    // Parallel row lists: row i of every populated list belongs together (packet id, node id, value, custom strings).
+    // Only the value list of the bag's FieldType grows; the others stay empty. The 256 initial capacity of the id lists is
+    // a sizing hint, not a limit.
     private readonly List<int> _PacketIds = new(256);
     private readonly List<int> _NodeIds = new(256);
 
@@ -42,6 +58,7 @@ internal sealed class FieldColumnBag
     private readonly List<string?> _CustomRepresentations = new();
     private readonly List<string?> _CustomTexts = new();
 
+    /// <summary>Running size estimate in bytes (see the class remarks); updated by <see cref="Add"/>, cleared by <see cref="Reset"/>.</summary>
     private long _EstimatedSizeAccumulator { get; set; }
 
     #endregion
@@ -130,6 +147,14 @@ internal sealed class FieldColumnBag
     /// <param name="data">Payload; <see cref="FieldValueData.Type"/> must match <see cref="FieldType"/>.</param>
     /// <param name="customRepresentation">Optional custom representation (already filtered by detail flags).</param>
     /// <param name="customText">Optional custom text (already filtered by detail flags).</param>
+    /// <exception cref="InvalidOperationException">
+    /// The value type of <paramref name="data"/> does not match <see cref="FieldType"/>, or the bag's type has no column.
+    /// Nothing is added in that case.
+    /// </exception>
+    /// <remarks>
+    /// <paramref name="data"/> is passed by <c>in</c> reference because <see cref="FieldValueData"/> is a
+    /// 24-byte struct; this avoids a copy per value on the export path.
+    /// </remarks>
     internal void Add(
         int packetId,
         int nodeId,
@@ -208,6 +233,7 @@ internal sealed class FieldColumnBag
                 break;
             case FieldType.Bytes:
             {
+                // Owned copy: the value may alias a recycled packet buffer, and the bag outlives the packet until flush.
                 byte[]? bytes = FieldValueMaterializer.ToBytesArray(in data);
                 if (bytes is null)
                 {
@@ -220,6 +246,10 @@ internal sealed class FieldColumnBag
                 _EstimatedSizeAccumulator += 8 + bytes.Length;
                 break;
             }
+            // Fixed-size address types (MAC, IPv4, IPv6, EUI-64, UUID): the type is validated here, but the value is kept
+            // as the inline FieldValueData and turned into a byte[] only when a sink reads BytesValues. This avoids one
+            // heap array per value while accumulating; the struct holds the address inline (no reference to a packet
+            // buffer), so retaining it after the packet is recycled is safe. Estimates are 8 (ids) + address size.
             case FieldType.MacAddress:
                 if (!data.TryGetAsMacAddress(out _))
                 {
@@ -280,10 +310,43 @@ internal sealed class FieldColumnBag
                     $"Field {FieldIdValue} has unsupported column type {FieldType}.");
         }
 
+        // The custom string columns always get one entry per row (null when absent) so every column has the same row
+        // count and row i lines up across all lists.
         _CustomRepresentations.Add(customRepresentation);
         _CustomTexts.Add(customText);
         _EstimatedSizeAccumulator += _EstimateStringBytes(customRepresentation);
         _EstimatedSizeAccumulator += _EstimateStringBytes(customText);
+    }
+
+    /// <summary>
+    /// Removes the rows after the first <paramref name="rowCount"/> rows and restores the size estimate. Used by
+    /// <see cref="ColumnarPacketBatch"/> to undo the rows of a packet that could not be added completely, so a rejected
+    /// packet leaves no partial rows behind.
+    /// </summary>
+    /// <param name="rowCount">Number of rows to keep; must be between 0 and <see cref="RowCount"/>.</param>
+    /// <param name="estimatedSizeBytes">The value of <see cref="EstimatedSizeBytes"/> when the bag held exactly those rows.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="rowCount"/> is negative or larger than <see cref="RowCount"/>.</exception>
+    internal void TruncateTo(int rowCount, long estimatedSizeBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(rowCount);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(rowCount, RowCount);
+
+        // Every parallel list is cut back to the kept row count; a list that never received a row is shorter and stays as
+        // it is. The deferred fixed-size payloads are the pending tail of the address rows (rows already turned into
+        // byte arrays came earlier and are never removed here), so they keep rowCount minus the materialized rows.
+        _TrimTo(_PacketIds, rowCount);
+        _TrimTo(_NodeIds, rowCount);
+        _TrimTo(_BoolValues, rowCount);
+        _TrimTo(_I64Values, rowCount);
+        _TrimTo(_U64Values, rowCount);
+        _TrimTo(_F64Values, rowCount);
+        _TrimTo(_TimestampValues, rowCount);
+        _TrimTo(_StringValues, rowCount);
+        _TrimTo(_BytesValues, rowCount);
+        _TrimTo(_FixedBytePayloads, Math.Max(0, rowCount - _BytesValues.Count));
+        _TrimTo(_CustomRepresentations, rowCount);
+        _TrimTo(_CustomTexts, rowCount);
+        _EstimatedSizeAccumulator = estimatedSizeBytes;
     }
 
     /// <summary>Resets all accumulated rows for reuse in the next block.</summary>
@@ -308,6 +371,12 @@ internal sealed class FieldColumnBag
 
     #region Private Helpers
 
+    /// <summary>
+    /// Converts the deferred fixed-size address payloads into <c>byte[]</c> rows and appends them to
+    /// <see cref="_BytesValues"/>. Idempotent: the deferred list is emptied, so a second call does nothing. A bag holds
+    /// either deferred payloads or Bytes rows (never both), because its <see cref="FieldType"/> is fixed, so the append
+    /// order matches the row order.
+    /// </summary>
     private void _MaterializeFixedBytePayloads()
     {
         if (_FixedBytePayloads.Count == 0)
@@ -322,6 +391,15 @@ internal sealed class FieldColumnBag
         }
 
         _FixedBytePayloads.Clear();
+    }
+
+    /// <summary>Shortens <paramref name="list"/> to at most <paramref name="count"/> elements.</summary>
+    private static void _TrimTo<T>(List<T> list, int count)
+    {
+        if (list.Count > count)
+        {
+            list.RemoveRange(count, list.Count - count);
+        }
     }
 
     private static long _EstimateStringBytes(string? value) =>

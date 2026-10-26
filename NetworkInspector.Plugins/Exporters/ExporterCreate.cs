@@ -4,7 +4,8 @@ namespace NetworkInspector.Plugins;
 
 /// <summary>
 /// Creates the Core listener for one export. The target was prepared by the application (existence and overwrite are decided
-/// before this call); returns <see langword="false"/> with an error for every expected failure and never throws for them.
+/// before this call); returns <see langword="false"/> with an error for every expected failure and never throws for them
+/// (returned errors let callers show one precise line; a throw signals a bug in the plugin).
 /// </summary>
 /// <typeparam name="TListener">The Core listener type.</typeparam>
 /// <param name="request">The request: target, applied options, stack, expected item count, cancellation.</param>

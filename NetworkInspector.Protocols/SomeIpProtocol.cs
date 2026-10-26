@@ -22,10 +22,12 @@ namespace NetworkInspector.Protocols;
 /// │   ├── someip.msgtype.ack: false
 /// │   └── someip.msgtype.tp: false
 /// ├── someip.returncode: E_OK (0x00)
+/// ├── someip.service.name / someip.method.name                 [only when the service is in the config file]
 /// ├── someip.tp: SOME/IP-TP, Offset: 0 bytes, More Segments  [only when TP flag set]
 /// │   ├── someip.tp.offset: 0 bytes
 /// │   ├── someip.tp.more: true
-/// │   └── someip.tp.reserved: 0x0
+/// │   ├── someip.tp.reserved: 0x0
+/// │   └── someip.tp.dropped                                    [only when reassembly dropped or evicted a session]
 /// ├── someip_sd: SOME/IP-SD                                    [only when msgid=0xFFFF8100]
 /// │   ├── someip_sd.flags: 0xC0
 /// │   │   ├── someip_sd.flags.reboot: true
@@ -50,7 +52,7 @@ namespace NetworkInspector.Protocols;
 /// │           ├── someip_sd.option.ipv4: 192.168.1.100
 /// │           ├── someip_sd.option.proto: UDP (17)
 /// │           └── someip_sd.option.port: 30490
-/// └── someip.payload: (N bytes)
+/// └── someip.payload: (N bytes)                                [unless TP, SD, or a sub-protocol consumed it]
 /// </code>
 /// </summary>
 /// <remarks>
@@ -61,6 +63,13 @@ namespace NetworkInspector.Protocols;
 /// reassembler, and is safe to run on any number of threads concurrently. The watermark
 /// <see cref="_IngestWatermark"/> separates both paths without any caller-supplied mode
 /// flag.</para>
+/// <para><b>Why stateful:</b> a SOME/IP-TP message spans several segments, so the reassembler (see
+/// <c>SomeIpTpReassembler</c>) must see every segment exactly once and in capture order. A re-parse (UI, filter,
+/// export) of an earlier packet therefore must not feed it again: it reads the result recorded by the first parse
+/// (<see cref="EffectStore{TEffect}"/>, keyed by packet id and layer) and rebuilds the same field
+/// tree from it.</para>
+/// <para><b>Eager field tree:</b> unlike most protocols this one builds its fields during <see cref="Parse"/> instead of
+/// through a lazy populator; the reason is documented at the construction site in <c>_ParseBody</c>.</para>
 /// </remarks>
 [Protocol("someip", "SOME/IP", Description = "SOME/IP (AUTOSAR)")]
 [RegisterAtTable(UdpProtocol.PortTableName, UdpPortKey)]
@@ -69,17 +78,31 @@ public sealed partial class SomeIpProtocol : IProtocol
 {
     #region Constants
 
-    /// <summary>Default UDP port for SOME/IP.</summary>
+    /// <summary>
+    /// Default UDP port for SOME/IP (30490, the port used for SOME/IP Service Discovery). Services announced by SD
+    /// normally use other ports, which have to be bound to this protocol separately.
+    /// </summary>
     public const ulong UdpPortKey = 30490;
 
-    /// <summary>Default TCP port for SOME/IP.</summary>
+    /// <summary>Default TCP port for SOME/IP (30490, same well-known port as <see cref="UdpPortKey"/>).</summary>
     public const ulong TcpPortKey = 30490;
 
-    /// <summary>Protocol table name for SOME/IP message ID dispatch.</summary>
+    /// <summary>
+    /// Protocol table name for SOME/IP message ID dispatch. Keys are the 32-bit message id
+    /// (<c>ServiceId &lt;&lt; 16 | MethodId</c>); payload deserializers register here to receive the SOME/IP payload.
+    /// </summary>
     public const string MessageIdTableName = "someip.messageid";
 
     /// <summary>Index group for always-present SOME/IP fields.</summary>
     private const string _SomeIpIndexGroup = "someip";
+
+    /// <summary>
+    /// Error text for a reassembled TP message that cannot be handed on because the packet's table of bound buffers is
+    /// full. Limit: 255 additional buffers per packet (a constant of the packet's effect keys, not configurable);
+    /// secure by default. Exceeding it is an expected failure that is named, not a silent drop.
+    /// </summary>
+    private const string _BoundBufferLimitMessage =
+        "Reassembled SOME/IP-TP message cannot be parsed further: a packet can hold at most 255 additional buffers";
 
     #endregion
 
@@ -281,19 +304,26 @@ public sealed partial class SomeIpProtocol : IProtocol
     [StringSetting("someip.config_file", "Configuration File", "someip", Default = "")]
     private string? _ConfigFile;
 
-    /// <summary>SOME/IP-TP fragment reassembly tracker (stateful).</summary>
+    /// <summary>
+    /// SOME/IP-TP fragment reassembly tracker (stateful). Not thread-safe: touched only by the ordered first parse of
+    /// a packet, never by a replay (see <see cref="_IngestWatermark"/>).
+    /// </summary>
     private readonly SomeIpTpReassembler _TpReassembler = new();
-
-    /// <summary>Cached TP field IDs struct passed to TP parsing.</summary>
-    private SomeIpTpFieldIds _TpFieldIds;
 
     /// <summary>Cached SD field IDs struct passed to SD parsing.</summary>
     private SomeIpSdFieldIds _SdFieldIds;
 
-    /// <summary>Service ID → display name lookup, built from config.</summary>
+    /// <summary>
+    /// Service ID → display name lookup, built from config. Built once at registration and read-only afterwards,
+    /// so concurrent readers (replays on several threads) need no lock; a frozen dictionary is optimized for
+    /// lookups at the cost of a slower build, which is the right trade for a table built once and read per packet.
+    /// </summary>
     private FrozenDictionary<ushort, string> _ServiceNames = FrozenDictionary<ushort, string>.Empty;
 
-    /// <summary>Message ID (serviceId &lt;&lt; 16 | methodId) → method name lookup.</summary>
+    /// <summary>
+    /// Message ID (serviceId &lt;&lt; 16 | methodId) → method name lookup. Same build-once, lock-free-read design
+    /// as <see cref="_ServiceNames"/>.
+    /// </summary>
     private FrozenDictionary<uint, string> _MethodNames = FrozenDictionary<uint, string>.Empty;
 
     /// <summary>
@@ -306,18 +336,15 @@ public sealed partial class SomeIpProtocol : IProtocol
         get; private set;
     }
 
+    /// <summary>
+    /// Registration hook (called by the generated registration code after the attribute fields exist): resets the
+    /// reassembler, snapshots the field ids into the grouped structs, and loads the optional name configuration.
+    /// Runs once during the single-threaded stack build.
+    /// </summary>
     partial void _RegisterFieldsCustom(IStackBuilder builder, ProtocolId protocolId)
     {
+        // Start every stack build with empty reassembly state.
         _TpReassembler.Clear();
-
-        // Populate TP field IDs struct
-        _TpFieldIds = new SomeIpTpFieldIds
-        {
-            Container = _TpContainerFieldId,
-            Offset = _TpOffsetFieldId,
-            MoreSegments = _TpMoreFieldId,
-            Reserved = _TpReservedFieldId,
-        };
 
         // Populate SD field IDs struct
         _SdFieldIds = new SomeIpSdFieldIds
@@ -353,7 +380,9 @@ public sealed partial class SomeIpProtocol : IProtocol
             OptionLbWeight = _SdOptionLbWeightFieldId,
         };
 
-        // Load SOME/IP configuration for service/method name resolution
+        // Load SOME/IP configuration for service/method name resolution.
+        // The return value is not needed: on failure config is null and the warning is exposed through
+        // ConfigLoadWarning, so a missing or broken file leaves names unresolved but never blocks the protocol.
         builder.Settings.TryLoadReferencedJsonConfig(
             "someip.config_file", SomeIpConfigContext.Default.SomeIpConfig,
             out SomeIpConfig? config, out SettingsLoadWarning? configLoadWarning);
@@ -361,6 +390,9 @@ public sealed partial class SomeIpProtocol : IProtocol
 
         if (config?.Services is { Length: > 0 })
         {
+            // Build mutable dictionaries first, then freeze them once. TryAdd keeps the first definition when a
+            // service or message id appears twice in the file. The method key is the message id, so a method name
+            // is only found for the exact (service, method) pair.
             Dictionary<ushort, string> serviceNames = new(config.Services.Length);
             Dictionary<uint, string> methodNames = new();
 
@@ -392,13 +424,28 @@ public sealed partial class SomeIpProtocol : IProtocol
     /// result and leaves the reassembly sessions untouched. See <see cref="_IsReplay"/>.
     /// </para>
     /// </summary>
+    /// <param name="parentField">Field that receives the SOME/IP container.</param>
+    /// <param name="data">Message bytes; must be a slice of the packet's frame or bound buffers (needed for the layer key).</param>
+    /// <param name="context">Parse context used to dispatch the payload and record index presence.</param>
+    /// <returns>
+    /// The bytes covered by the declared SOME/IP length (clamped to the available data), or a <see cref="ParseError"/>.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        // The layer key identifies this invocation inside the packet (buffer index plus offset), so the effect recorded
+        // by the first parse can be found again on replay. A slice that is not part of the packet's buffers cannot be
+        // keyed, so it is rejected instead of risking a replay of the wrong layer.
         Packet packet = parentField.Packet;
         if (!parentField.TryGetEffectLayerKey(data, out int layerKey))
         {
             return ParseError.Custom(ProtocolName, "Parse data is not a slice of this packet's buffers.");
         }
+
+        // First parse versus replay: decided only by the watermark of already ingested packet ids, so no caller
+        // flag is needed. Only the first parse may touch the reassembler (single ordered writer).
+        // The watermark is raised only when the OUTERMOST first parse of this packet ends: a nested SOME/IP parse
+        // of the same packet (for example inside a reassembled payload) must still be treated as a first parse, and
+        // it would be mistaken for a replay if an inner parse raised the watermark to this packet id early.
         bool isReplay = _IsReplay(packet.Id);
         bool raiseWatermark = !isReplay && _ParseNesting == 0;
         if (!isReplay)
@@ -406,6 +453,8 @@ public sealed partial class SomeIpProtocol : IProtocol
             _ParseNesting++;
         }
 
+        // try/finally so the nesting counter and the watermark stay consistent even when the body returns an error
+        // or throws; a first parse that failed still counts as "ingested" (its effects, if any, were recorded).
         try
         {
             return _ParseBody(in parentField, data, in context, layerKey, isReplay);
@@ -435,6 +484,7 @@ public sealed partial class SomeIpProtocol : IProtocol
         int layerKey,
         bool isReplay)
     {
+        // Fixed 16-byte header (the explicit length check and TryParse's own check both guard the same bound).
         if (data.Length < SomeIpHeader.Size)
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, SomeIpHeader.Size, (ulong)data.Length);
@@ -459,11 +509,14 @@ public sealed partial class SomeIpProtocol : IProtocol
         // Guard against integer overflow when adding the 8-byte fixed prefix to produce the declared total.
         // header.Length is uint; if it exceeds int.MaxValue - 8 the addition overflows when cast to int.
         // In that case the declared size exceeds any representable buffer, so clamp directly to available data.
+        // The declared length is also clamped to what was captured (a truncated capture or a TCP segment that ends
+        // mid-message is shown as far as it goes); a shorter declared length leaves the rest of the data unconsumed.
         int totalLen = header.Length > (uint)(int.MaxValue - 8)
             ? data.Length
             : Math.Min(8 + (int)header.Length, data.Length);
 
-        // Determine TP flag and SD message to record index presence eagerly
+        // Determine TP flag and SD message to record index presence eagerly. Presence is recorded from the header alone,
+        // before the field tree is built, so the index sees these groups even when a later step reports an error.
         bool isTp = (header.MessageType & 0x20) != 0;
         bool isSd = header.MessageId == SomeIpSdParser.SdMessageId;
 
@@ -477,14 +530,33 @@ public sealed partial class SomeIpProtocol : IProtocol
             context.RecordGroupPresence(_SomeipTpGroupId);
         }
 
+        // The SD groups follow what the SD parser will emit for these bytes (same length rules, see DetectGroups): a message
+        // without payload, without options, or with a length that points past the payload has no such fields, and
+        // recording the groups from the message ID alone would announce fields that do not exist.
         if (isSd)
         {
-            context.RecordGroupPresence(_SomeipSdGroupId);
-            context.RecordGroupPresence(_SomeipSdEntriesGroupId);
-            context.RecordGroupPresence(_SomeipSdOptionsGroupId);
+            ReadOnlySpan<byte> sdPayload = totalLen > SomeIpHeader.Size
+                ? data.Span[SomeIpHeader.Size..totalLen]
+                : default;
+            SomeIpSdParser.DetectGroups(sdPayload, out bool hasSdContainer, out bool hasSdEntries, out bool hasSdOptions);
+            if (hasSdContainer)
+            {
+                context.RecordGroupPresence(_SomeipSdGroupId);
+            }
+
+            if (hasSdEntries)
+            {
+                context.RecordGroupPresence(_SomeipSdEntriesGroupId);
+            }
+
+            if (hasSdOptions)
+            {
+                context.RecordGroupPresence(_SomeipSdOptionsGroupId);
+            }
         }
 
-        // Build summary
+        // Build summary: the packet-list text and the container summary both use the cached display strings
+        // (table lookups) so no number formatting happens here.
         string msgTypeText = SomeIpDisplayTables.GetMsgTypeDisplayText(header.MessageType);
 
         parentField.SetPacketInfo(ZA.Lazy(
@@ -523,6 +595,8 @@ public sealed partial class SomeIpProtocol : IProtocol
     private ParseResult _BuildSomeIpFields(
         in MutField container, in ParseContext context, int layerKey, bool isReplay)
     {
+        // The header is decoded again from the bytes stored on the container (rather than passed in), so this method
+        // depends only on the container; the header decode is a handful of span reads.
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> someipData))
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
@@ -545,7 +619,8 @@ public sealed partial class SomeIpProtocol : IProtocol
             FieldValue.NewU64(header.MethodId),
             Helpers.DisplayTables.FormatHexU16(header.MethodId));
 
-        // Service/Method names from configuration
+        // Service/Method names from configuration. The method name is looked up only for known services: the
+        // name fields (and their index group presence) exist only when the config knows the service.
         if (_ServiceNames.TryGetValue(header.ServiceId, out string? serviceName))
         {
             context.RecordGroupPresence(_SomeipNameGroupId);
@@ -576,7 +651,7 @@ public sealed partial class SomeIpProtocol : IProtocol
             FieldValue.NewU64(header.MessageType),
             SomeIpDisplayTables.GetMsgTypeDisplayText(header.MessageType));
 
-        // Decompose message type into ACK and TP flags
+        // Decompose message type into ACK (bit 6, 0x40) and TP (bit 5, 0x20) flags
         bool isAck = (header.MessageType & 0x40) != 0;
         bool isTp = (header.MessageType & 0x20) != 0;
         container.Append(_MsgTypeAckFieldId, FieldValue.NewBool(isAck));
@@ -595,13 +670,15 @@ public sealed partial class SomeIpProtocol : IProtocol
         // When true, the normal tail-payload dispatch below is skipped.
         bool tpHandled = false;
 
+        // A TP-flagged message too short to hold the 4-byte TP header skips this block entirely and its remaining
+        // bytes are treated as an ordinary payload below.
         if (isTp && someipData.Length >= payloadStart + SomeIpTpHeader.Size)
         {
             if (SomeIpTpHeader.TryParse(someipData.Span[payloadStart..], out SomeIpTpHeader tpHeader))
             {
                 // Build TP summary text
                 string moreSuffix = tpHeader.MoreSegments ? ", More Segments" : ", Last Segment";
-                
+
 
                 MutField tpField = container.AppendWithCustomText(
                     _TpContainerFieldId, FieldValue.None, "SOME/IP-TP, Offset: ", tpHeader.ByteOffset, " bytes", moreSuffix);
@@ -615,18 +692,25 @@ public sealed partial class SomeIpProtocol : IProtocol
                     FieldValue.NewU64(tpHeader.Reserved),
                     Helpers.DisplayTables.FormatHexU8(tpHeader.Reserved));
 
+                // Reassembly: first parse feeds the shared reassembler and records the outcome; replay only reads
+                // that recorded outcome. Both paths yield the same SomeIpTpReassemblyResult, so everything below
+                // (payload dispatch, diagnostics) is identical and the replayed tree equals the first-parse tree.
                 SomeIpTpReassemblyResult tpResult;
                 if (isReplay)
                 {
                     // Replay: never touch the shared reassembly sessions from what may be a reader
                     // thread. A missing effect means the first parse never reached the reassembler,
-                    // so the segment is reported without reassembly.
+                    // so the segment is reported without reassembly. The bool result is intentionally
+                    // not used: on a miss tpResult is the default (InProgress, no payload).
                     _TryGetTpEffect(container.Packet.Id, layerKey, out tpResult);
                 }
                 else
                 {
                     // Wire the TP fragment into the reassembler.
                     // The fragment payload follows immediately after the 4-byte TP header.
+                    // AddSegment copies the bytes (the span points into the frame buffer), and the result is recorded
+                    // straight away so a later replay finds it; the effect store requires non-decreasing packet ids,
+                    // which the ordered first parse guarantees.
                     ReadOnlySpan<byte> fragmentPayload = someipData.Span[(payloadStart + SomeIpTpHeader.Size)..];
                     SomeIpTpReassemblyKey tpKey = new(header.ServiceId, header.MethodId, header.ClientId, header.SessionId);
                     tpResult = _TpReassembler.AddSegment(
@@ -637,8 +721,19 @@ public sealed partial class SomeIpProtocol : IProtocol
                 if (tpResult.Outcome == SomeIpTpOutcome.Complete && tpResult.Payload is not null)
                 {
                     // All TP segments received — dispatch the reassembled payload to any
-                    // registered sub-protocol, or fall back to raw bytes.
+                    // registered sub-protocol, or fall back to raw bytes. The reassembled array is not a slice of
+                    // the frame, so it is registered as an additional packet buffer first: nested parsers need a
+                    // buffer the packet knows about to compute their layer key (BindParseBuffer returns an empty
+                    // slice if the packet cannot take another buffer). The same array is replayed from the effect store.
                     ReadOnlyMemory<byte> reassembledMemory = container.BindParseBuffer(tpResult.Payload);
+                    if (reassembledMemory.IsEmpty && tpResult.Payload.Length > 0)
+                    {
+                        // The packet holds at most 255 bound buffers. An empty slice would reach the sub-protocol as "no
+                        // data" (or be attached as an empty someip.payload) without any sign of why, so the limit is named.
+                        // A reassembled payload that is really empty binds to an empty slice and is not an error.
+                        return ParseError.Custom(ProtocolName, _BoundBufferLimitMessage);
+                    }
+
                     if (header.MessageId != SomeIpSdParser.SdMessageId)
                     {
                         ParseResult dispatchResult = container.TryCallNextProtocolU64(
@@ -655,10 +750,12 @@ public sealed partial class SomeIpProtocol : IProtocol
                 }
                 else if (tpResult.Outcome == SomeIpTpOutcome.Dropped)
                 {
-                    // Session was evicted (cap hit or size overflow) — surface a diagnostic so
-                    // callers can detect the failure rather than silently receiving no output.
+                    // This segment's session was dropped (size limit exceeded, a malformed segment, or a segment beyond the
+                    // end of the message). Reaching the session cap does not drop anything: the oldest session is evicted
+                    // (see LruEvicted below). A diagnostic is surfaced so callers can detect the failure rather than
+                    // silently receiving no output.
                     tpField.Append(_TpDroppedFieldId,
-                        FieldValue.NewString("Reassembly session dropped (cap or size limit exceeded)"));
+                        FieldValue.NewString("Reassembly session dropped (malformed segment or size limit exceeded)"));
                 }
 
                 // When an LRU eviction displaced an older session to make room for this one,
@@ -681,6 +778,11 @@ public sealed partial class SomeIpProtocol : IProtocol
         }
 
         // ── SOME/IP-SD (Service Discovery, message ID = 0xFFFF8100) ──
+        // The SD payload is taken directly after the 16-byte SOME/IP header (not after payloadStart). SOME/IP-SD is not
+        // segmented by SOME/IP-TP, so a well-formed SD message never has the TP flag. For a TP-flagged SD message the TP
+        // header above is decoded and its segment is fed to the reassembler (the reassembled payload is not dispatched
+        // for SD), and the SD parser then reads the four TP header bytes as SD flags and reserved bytes, which shows
+        // meaningless SD fields. That behavior is kept here; what to show for such a message is an open decision.
         if (header.MessageId == SomeIpSdParser.SdMessageId && someipData.Length > SomeIpHeader.Size)
         {
             ReadOnlySpan<byte> sdPayload = someipData.Span[SomeIpHeader.Size..];

@@ -4,14 +4,21 @@ namespace NetworkInspector.Protocols.SignalMessage;
 
 /// <summary>
 /// Compact, immutable description of one signal for the parse hot path.
-/// Layout keeps extraction/scaling members first for cache locality.
+/// The members are declared with extraction and scaling first, then ids and text; the runtime is free to reorder the
+/// fields of a struct that contains references, so the order is documentation, not a layout guarantee.
 /// </summary>
 /// <remarks>
-/// Raw bits are always interpreted as an unsigned <see cref="ulong"/>.
-/// Physical value is <c>raw × factor + offset</c>.
-/// Thread safety: immutable value type; safe for concurrent reads.
+/// Raw bits are always interpreted as an unsigned <see cref="ulong"/>; signed signals are not represented.
+/// Physical value is <c>raw × factor + offset</c>, computed in <see cref="double"/>, so raw values above 2^53 lose
+/// precision in the conversion (the raw value itself stays exact).
+/// The struct is large, so the extraction and conversion helpers take it by <see langword="in"/> reference.
+/// Thread safety: immutable value type; safe for concurrent reads (the referenced array and table are never
+/// modified after compilation).
 /// </remarks>
-/// <param name="StartBit">Bit position of the signal start (MSB for big-endian, LSB for little-endian).</param>
+/// <param name="StartBit">
+/// Bit position of the signal start (MSB for big-endian, LSB for little-endian). Bits are numbered inside a byte with
+/// 0 as the least significant bit and the byte index is <c>StartBit / 8</c>, as in DBC files.
+/// </param>
 /// <param name="BitLength">Number of bits to extract (1–64).</param>
 /// <param name="BigEndian"><see langword="true"/> for Motorola (big-endian) order; otherwise Intel (little-endian).</param>
 /// <param name="Factor">Linear scaling factor: physical = raw × factor + offset.</param>

@@ -661,6 +661,19 @@ internal sealed class Lz4CodecTests
     }
 
     [Test]
+    public async Task Compress_InputShorterThanTheMatchWindow_ReturnsMinusOneWithoutWritingOutput()
+    {
+        byte[] input = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B];
+        byte[] output = new byte[Lz4Codec.MaxCompressedSize(input.Length)];
+        Array.Fill(output, (byte)0xEE);
+
+        int result = Lz4Codec.Compress(input, output);
+
+        await Assert.That(result).IsEqualTo(-1);
+        await Assert.That(output.AsSpan().IndexOfAnyExcept((byte)0xEE)).IsEqualTo(-1);
+    }
+
+    [Test]
     public async Task Compress_ShortInputWithinOutputBounds_ReturnsMinusOneWhenNotSmaller()
     {
         byte[] input = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B];

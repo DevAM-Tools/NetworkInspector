@@ -10,6 +10,9 @@ internal sealed class HeuristicParserEntry
 {
     #region Constructors
 
+    /// <summary>Wraps a registered heuristic parser. The table keeps entries in registration order, which decides ties.</summary>
+    /// <param name="parser">The parser to wrap.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="parser"/> is null.</exception>
     internal HeuristicParserEntry(IHeuristicParser parser)
     {
         ArgumentNullException.ThrowIfNull(parser);

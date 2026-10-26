@@ -14,6 +14,8 @@ packet exporter (`IPacketListener`): packets must be parsed with a field tree (`
 
 - **Pick your columns:** packet number, time, info, frame length, plus any protocol field by name.
 - **Correct quoting.** Values that contain the delimiter, a quote, CR, or LF are quoted and escaped.
+- **Safe to open in a spreadsheet.** Text cells that start with `=`, `+`, `-`, `@`, TAB, or CR get a leading
+  apostrophe (CSV injection protection, on by default, see below).
 - **Any ASCII delimiter**, so TSV and semicolon-separated files for European spreadsheet locales work too.
 - **Spreadsheet friendly by default:** UTF-8 BOM, header row, CRLF line endings.
 
@@ -90,6 +92,7 @@ using CsvExporter exporter = CsvExporter.CreateBuilder()
 | `WithBom(bool)` | UTF-8 byte order mark | `true` |
 | `WithDelimiter(char)` | Column delimiter | `,` |
 | `WithHeader(bool)` | Header row | `true` |
+| `WithFormulaNeutralization(bool)` | Prefix text cells that start with a formula character with `'` | `true` |
 | `WithColumn(kind, header?)` | Built-in column (`PacketNumber`, `Timestamp`, `Info`, `FrameLength`) | — |
 | `WithFieldColumn(name, fieldId, header?)` | Column from a protocol field | — |
 | `WithDefaultColumns()` | `No.`, `Time`, `Info`, `Length` | used when none set |
@@ -97,6 +100,20 @@ using CsvExporter exporter = CsvExporter.CreateBuilder()
 | `WithCancellationToken` | Cooperative cancellation | none |
 
 `name` in `WithFieldColumn` is only the default header; the lookup uses the `FieldId`.
+
+## Formula Neutralization (CSV Injection)
+
+Capture text is untrusted: a DNS name or an info line can start with `=`, `+`, `-`, or `@`, and a spreadsheet reads
+such a cell as a formula when the file is opened. By default the exporter writes a single quote in front of any text
+cell whose first character is `=`, `+`, `-`, `@`, TAB, or CR (the quote goes inside the CSV quotes when the cell is
+quoted). Example: the text `=SUM(A1,A2)` is written as `"'=SUM(A1,A2)"`.
+
+- **What is changed:** the `Info` column and field columns whose value is a string. Numbers, timestamps, addresses,
+  byte values, and the header row are written as they are, so a negative number keeps its minus sign.
+- **Posture:** secure by default. Turn it off with `WithFormulaNeutralization(false)` when a program reads the file
+  and must see the exact text (the added quote is data for it).
+- **Residual risk:** with the option off, any text cell can run as a formula in a spreadsheet. With it on, a formula
+  that starts after leading white space is not covered, and tools that do not treat the quote as a text marker show it.
 
 ## Limits And Thread-Safety Notes
 

@@ -709,6 +709,23 @@ internal sealed class ChunkedGrowOnlyStoreTests
     }
 
     [Test]
+    [Arguments(int.MaxValue - 8)] // above Array.MaxLength - 1 on current runtimes
+    [Arguments(int.MaxValue)]
+    public async Task ReadRange_FromIndexAboveMaxValue_StopsWithoutWriting(int fromIndex)
+    {
+        Collections.ChunkedGrowOnlyStore<object> store = new(chunkShift: 4);
+        object marker = new();
+        store.Append(marker);
+        object?[] buffer = [marker, marker, marker];
+
+        int read = store.ReadRange(fromIndex, buffer);
+
+        await Assert.That(read).IsEqualTo(0);
+        await Assert.That(buffer[0]).IsSameReferenceAs(marker);
+        await Assert.That(buffer[2]).IsSameReferenceAs(marker);
+    }
+
+    [Test]
     public async Task ReadRange_NullStore_Throws()
     {
         Collections.ChunkedGrowOnlyStore<object>? store = null;

@@ -5,6 +5,9 @@ namespace NetworkInspector.Protocols.Attributes;
 /// <summary>
 /// Registers this protocol in a U64 dispatch table at build time.
 /// Multiple instances allowed for multiple dispatch keys.
+/// The generator emits a registration by table <em>name</em> in <c>RegisterFields</c>; the table itself is created by
+/// the protocol that owns it, whose name constant is normally used here (for example
+/// <see cref="EthernetProtocol.EtherTypeTableName"/>).
 /// </summary>
 /// <remarks>Initializes a new table registration attribute.</remarks>
 /// <param name="table">Name of the dispatch table.</param>

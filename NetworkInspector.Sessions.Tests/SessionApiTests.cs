@@ -126,7 +126,7 @@ internal sealed class SessionApiTests
     }
 
     [Test]
-    public async Task TryRemoveJob_RunningJob_ThrowsSessionException()
+    public async Task TryRemoveJobOfRunningJobReturnsFailureAndKeepsTheJob()
     {
         using Stack stack = TestHarness.CreateStack();
         using BlockingTestFrameSource source = new(5);
@@ -140,12 +140,11 @@ internal sealed class SessionApiTests
 
         try
         {
-            session.TryRemoveJob(sourceJob, out _);
-            throw new InvalidOperationException("Expected SessionException was not thrown.");
-        }
-        catch (SessionException ex)
-        {
-            await Assert.That(ex.Code).IsEqualTo(SessionErrorCode.JobStillRunning);
+            bool removed = session.TryRemoveJob(sourceJob, out SessionFailure? failure);
+
+            await Assert.That(removed).IsFalse();
+            await Assert.That(failure!.Value.Code).IsEqualTo(SessionErrorCode.JobStillRunning);
+            await Assert.That(session.GetJobs().Contains(sourceJob)).IsTrue();
         }
         finally
         {

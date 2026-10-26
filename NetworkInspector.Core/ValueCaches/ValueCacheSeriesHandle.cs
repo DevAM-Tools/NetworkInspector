@@ -27,13 +27,26 @@ public readonly struct ValueCacheSeriesHandle
 {
     #region Fields
 
-    /// <summary>Live series. Reads are clipped to <see cref="Count"/>; columns are not copied.</summary>
+    /// <summary>
+    /// Live series. Reads are clipped to <see cref="Count"/>; columns are not copied. The handle is a small readonly struct
+    /// (series reference, count, two flags), so taking a snapshot allocates nothing. Rows below the frozen count are never
+    /// moved or changed by the writer (grow-only chunks), which is why the unchecked reads below are safe.
+    /// </summary>
     private readonly ValueCacheSeries _Series;
 
     #endregion
 
     #region Constructors
 
+    /// <summary>
+    /// Freezes a prefix of <paramref name="series"/>. The caller must have loaded <paramref name="observedCount"/> before the
+    /// two flags (see the flag fields of <see cref="ValueCacheSeries"/>): the writer clears a flag before it publishes the
+    /// row that breaks the order, so this order can only report a flag as too pessimistic, never too optimistic.
+    /// </summary>
+    /// <param name="series">The live series.</param>
+    /// <param name="observedCount">Published row count at snapshot time; the exclusive upper bound of every read.</param>
+    /// <param name="packetIdsMonotonic">Whether packet ids in the prefix are non-decreasing.</param>
+    /// <param name="timestampsMonotonic">Whether timestamps in the prefix are non-decreasing.</param>
     internal ValueCacheSeriesHandle(ValueCacheSeries series, int observedCount, bool packetIdsMonotonic, bool timestampsMonotonic)
     {
         _Series = series;
@@ -67,6 +80,9 @@ public readonly struct ValueCacheSeriesHandle
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int GetPacketId(int index)
     {
+        // Bounds are checked against the frozen Count (a plain readonly field) and the read then skips the series' own
+        // volatile Count check: every index below the frozen Count was published before the handle was created. The
+        // unsigned compare rejects negative and too-large indexes in one branch.
         if ((uint)index >= (uint)Count)
         {
             _ThrowIndexOutOfRange(index);
@@ -179,6 +195,7 @@ public readonly struct ValueCacheSeriesHandle
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Enumerator Enumerate(ValueCacheSeriesRange range)
     {
+        // Only End is checked: the range constructor already guarantees 0 <= Start <= End, so End <= Count bounds both ends.
         if ((uint)range.End > (uint)Count)
         {
             _ThrowIndexOutOfRange(range.End);
@@ -275,7 +292,11 @@ public readonly struct ValueCacheSeriesHandle
         #endregion
     }
 
-    /// <summary>Ref enumerator over <see cref="Chunk"/> slices for SIMD / bulk scans.</summary>
+    /// <summary>
+    /// Ref enumerator over <see cref="Chunk"/> slices for SIMD / bulk scans. It is a <c>ref struct</c> because it holds
+    /// spans straight into the series' inner chunk arrays: no copy and no allocation, at the price that it cannot cross an
+    /// <c>await</c> or be stored in a field. Not thread-safe (one enumerator per thread); the underlying data is stable.
+    /// </summary>
     public ref struct ChunkEnumerator
     {
         #region Fields
@@ -293,8 +314,10 @@ public readonly struct ValueCacheSeriesHandle
 
         #region Constructors
 
+        /// <summary>Starts at row <paramref name="startIndex"/>; callers have already validated the bounds against the frozen count.</summary>
         internal ChunkEnumerator(ValueCacheSeries series, int startIndex, int endExclusive)
         {
+            // The chunk size is a power of two (1 << ChunkShift), so row -> (chunk, slot) is a shift and a mask.
             _Series = series;
             _EndExclusive = endExclusive;
             _ChunkShift = series.ChunkShift;
@@ -332,6 +355,9 @@ public readonly struct ValueCacheSeriesHandle
                 return false;
             }
 
+            // Fetch the chunk that holds 'next'. The snapshot end is passed as the clip bound, so the span never reaches
+            // past the frozen prefix. A failed lookup (the chunk is not published, or the series was cleared underneath
+            // this enumerator) ends the walk instead of throwing: the scan simply stops early.
             int chunkIndex = next >> _ChunkShift;
             if (!_Series.TryGetPacketIdChunk(chunkIndex, _EndExclusive, out ReadOnlySpan<int> packetIds)
                 || !_Series.TryGetTimestampChunk(chunkIndex, _EndExclusive, out ReadOnlySpan<long> timestamps))
@@ -339,6 +365,8 @@ public readonly struct ValueCacheSeriesHandle
                 return false;
             }
 
+            // Slice from the watermark slot (only non-zero for the first chunk), and continue at the first row after the
+            // clipped chunk. The clipped length, not the full chunk size, is used so the last chunk ends at the snapshot end.
             int slot = next & _ChunkMask;
             _PacketIds = packetIds[slot..];
             _Timestamps = timestamps[slot..];
@@ -351,7 +379,11 @@ public readonly struct ValueCacheSeriesHandle
         #endregion
     }
 
-    /// <summary>Ref enumerator over packet-id and timestamp columns for one index span.</summary>
+    /// <summary>
+    /// Ref enumerator over packet-id and timestamp columns for one index span. A <c>ref struct</c> that keeps the current
+    /// chunk's spans, so per row it costs two span reads; the chunk lookup (and its volatile loads) happens once per chunk,
+    /// not once per row. Cannot cross an <c>await</c>. Not thread-safe; the underlying data is stable.
+    /// </summary>
     public ref struct Enumerator
     {
         #region Fields
@@ -371,12 +403,15 @@ public readonly struct ValueCacheSeriesHandle
 
         #region Constructors
 
+        /// <summary>Starts before row <paramref name="startIndex"/>; callers have already validated the bounds against the frozen count.</summary>
         internal Enumerator(ValueCacheSeries series, int startIndex, int endExclusive)
         {
             _Series = series;
             _EndExclusive = endExclusive;
             _ChunkShift = series.ChunkShift;
             _ChunkMask = (1 << _ChunkShift) - 1;
+
+            // Index is the last row returned; the first MoveNext advances to startIndex. LoadedChunk -1 forces the first load.
             _Index = startIndex - 1;
             _LoadedChunk = -1;
             _PacketIds = [];
@@ -421,6 +456,8 @@ public readonly struct ValueCacheSeriesHandle
                 return false;
             }
 
+            // Reload the column spans only when the walk crosses into another chunk. A failed lookup ends the walk early
+            // (see ChunkEnumerator.MoveNext).
             int chunkIndex = next >> _ChunkShift;
             if (chunkIndex != _LoadedChunk)
             {
@@ -433,6 +470,7 @@ public readonly struct ValueCacheSeriesHandle
                 _LoadedChunk = chunkIndex;
             }
 
+            // Read the row from the cached spans; the spans are clipped to the snapshot, so no further bounds work is needed.
             int slot = next & _ChunkMask;
             _PacketId = _PacketIds[slot];
             _TimestampNanos = _Timestamps[slot];
@@ -447,6 +485,14 @@ public readonly struct ValueCacheSeriesHandle
 
     #region Private helpers
 
+    // The four bound searches below are classic binary searches over the frozen prefix [0, Count). They read through the
+    // unchecked PacketIdAt / TimestampAt (the index is always below the frozen count) and rely on the column being
+    // non-decreasing, which the callers establish through the monotonic flag; on an unsorted column the result would be
+    // meaningless, which is why TryFind* refuses to search then. Lower bound = first row with value >= target; upper bound =
+    // first row with value > target. Together they give the half-open span of all duplicates (AllOccurrences can repeat an
+    // id). The midpoint lo + ((hi - lo) >> 1) cannot overflow for any int count.
+
+    /// <summary>Half-open row span of packet ids in the closed interval; empty for an empty prefix or inverted bounds.</summary>
     private ValueCacheSeriesRange _FindPacketIdsMonotonic(int minInclusive, int maxInclusive)
     {
         if (Count == 0 || minInclusive > maxInclusive)
@@ -459,6 +505,7 @@ public readonly struct ValueCacheSeriesHandle
         return new ValueCacheSeriesRange(start, end);
     }
 
+    /// <summary>Half-open row span of timestamps in the closed interval; empty for an empty prefix or inverted bounds.</summary>
     private ValueCacheSeriesRange _FindTimestampsMonotonic(long minInclusive, long maxInclusive)
     {
         if (Count == 0 || minInclusive > maxInclusive)
@@ -551,6 +598,8 @@ public readonly struct ValueCacheSeriesHandle
         return lo;
     }
 
+    /// <summary>Kept out of line (NoInlining) so the inlined index getters and enumerator factories stay small.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">Always.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void _ThrowIndexOutOfRange(int index) =>
         throw new ArgumentOutOfRangeException(nameof(index), index, "Index must be in the published snapshot range.");

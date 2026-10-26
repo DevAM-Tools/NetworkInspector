@@ -4,6 +4,9 @@ namespace NetworkInspector.Core;
 
 /// <summary>
 /// Compact 4-byte tagged union for protocol parse and dispatch outcomes.
+/// Parse errors are values, not exceptions, and the error details (a <see cref="ParseError"/> with its message) live
+/// in a thread-local slot instead of the value, so every parse call returns and copies only four bytes. The trade-off
+/// is the same-thread rule described below.
 /// Public variants are <b>Ok</b> (consumed byte count), <see cref="NotDispatched"/>, and <b>Error</b>.
 /// The internal <see cref="int"/> discriminant is private.
 /// Callers consume results with exactly two methods:
@@ -33,9 +36,9 @@ namespace NetworkInspector.Core;
 /// </list>
 /// Archetypes:
 /// <list type="bullet">
-/// <item>K3 fire-and-propagate: <c>if (r.TryPropagateError(out ParseResult error)) return error;</c></item>
-/// <item>K2 consumed-or-zero: K3, then <c>_ = r.TryGetConsumed(out int consumed);</c></item>
-/// <item>K1 miss-fallback: K3, then <c>if (!r.TryGetConsumed(out _)) { /* try another key */ }</c></item>
+/// <item>Fire-and-propagate: <c>if (r.TryPropagateError(out ParseResult error)) return error;</c></item>
+/// <item>Consumed-or-zero: fire-and-propagate, then <c>_ = r.TryGetConsumed(out int consumed);</c></item>
+/// <item>Miss-fallback: fire-and-propagate, then <c>if (!r.TryGetConsumed(out _)) { /* try another key */ }</c></item>
 /// </list>
 /// After a false <see cref="TryPropagateError"/>, a false <see cref="TryGetConsumed"/> is exactly
 /// <see cref="NotDispatched"/>. Ok(0) returns <see langword="true"/> from <see cref="TryGetConsumed"/>
@@ -217,6 +220,8 @@ public readonly struct ParseResult
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static implicit operator ParseResult(ParseError error)
     {
+        // The error path is the cold path; keeping it out of line keeps the inlined success path of every parse method
+        // small. The slot is written before the value is returned, so a caller that sees encoding -1 can read it.
         ParseError.SetLastError(error);
         return new(-1);
     }
@@ -266,6 +271,9 @@ public readonly struct ParseResult
 /// <summary>
 /// Discriminated result type for parsing operations.
 /// Avoids exception overhead on the hot path.
+/// Unlike the non-generic <see cref="ParseResult"/>, the <see cref="ParseError"/> travels inside the value (no
+/// thread-local slot), so the result stays valid across <c>await</c> and thread hops, at the price of a larger struct.
+/// <para>Thread-safety: a readonly struct; safe to copy and read from any thread.</para>
 /// </summary>
 /// <typeparam name="T">The success value type.</typeparam>
 [StructLayout(LayoutKind.Auto)]
@@ -299,7 +307,8 @@ public readonly struct ParseResult<T>
         get => !IsSuccess;
     }
 
-    /// <summary>The success value. Throws if this is an error result.</summary>
+    /// <summary>The success value. Throws if this is an error result; use <see cref="TryGetValue"/> to avoid the throw.</summary>
+    /// <exception cref="InvalidOperationException">This is an error result.</exception>
     public T Value
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -313,7 +322,8 @@ public readonly struct ParseResult<T>
         }
     }
 
-    /// <summary>The parse error. Throws if this is a success result.</summary>
+    /// <summary>The parse error. Throws if this is a success result; use <see cref="TryGetError"/> to avoid the throw.</summary>
+    /// <exception cref="InvalidOperationException">This is a success result.</exception>
     public ParseError Error
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

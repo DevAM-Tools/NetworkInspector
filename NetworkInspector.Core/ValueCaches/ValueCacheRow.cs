@@ -10,5 +10,8 @@ namespace NetworkInspector.Core.ValueCaches;
 /// <typeparam name="T">Payload type for this series.</typeparam>
 /// <param name="PacketId">Owning packet id.</param>
 /// <param name="TimestampNanos">Packet timestamp in nanoseconds.</param>
-/// <param name="Value">Typed payload.</param>
+/// <param name="Value">
+/// Typed payload. For reference types (<c>string</c>, <c>byte[]</c>) this is the instance stored in the cache, not a copy:
+/// callers must not modify a <c>byte[]</c> payload, because other readers see the same array.
+/// </param>
 public readonly record struct ValueCacheRow<T>(int PacketId, long TimestampNanos, T Value);

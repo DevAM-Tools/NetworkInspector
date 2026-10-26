@@ -16,8 +16,13 @@ namespace NetworkInspector.Sessions.Listeners;
 ///
 /// <para>
 /// <b>Threading:</b>
-/// All methods are called on the dedicated <see cref="ListenerSlot"/> thread.
+/// All methods are called on the dedicated <see cref="ListenerSlot"/> thread, one at a time (never concurrently with
+/// each other), with one exception: <see cref="OnUnsubscribed"/> may instead run on the thread that unsubscribed or
+/// shut down the session when the listener thread could not be started.
 /// Do not block for extended periods — it stalls notification processing.
+/// An exception thrown by any callback ends the listener's thread and marks its job
+/// <see cref="JobStatus.Failed"/>; <see cref="OnUnsubscribed"/> is still invoked, and the session and other
+/// listeners continue unaffected.
 /// </para>
 ///
 /// <para>
@@ -85,12 +90,18 @@ public interface ISessionListener
     {
     }
 
-    /// <summary>Session is shutting down. Last callback before <see cref="OnUnsubscribed"/>.</summary>
+    /// <summary>
+    /// Session is shutting down. Normally the last notification before <see cref="OnUnsubscribed"/>; it is delivered
+    /// on a best-effort basis, because a notification that races with the cancellation of the listener may be dropped.
+    /// </summary>
     void OnShuttingDown()
     {
     }
 
-    /// <summary>Listener was unsubscribed. No further callbacks will follow.</summary>
+    /// <summary>
+    /// Listener was unsubscribed (explicitly, or because the session ended). Invoked at most once per listener, and also
+    /// when an earlier callback threw. No further callbacks will follow.
+    /// </summary>
     void OnUnsubscribed()
     {
     }

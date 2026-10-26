@@ -78,6 +78,75 @@ internal sealed class FilterFailureTests
 
     #endregion
 
+    #region Regex timeout option
+
+    [Test]
+    [Arguments(0L, "(?=a)a")]
+    [Arguments(-20_000L, "(?=a)a")]
+    [Arguments(21_474_836_470_000L, "(?=a)a")]
+    [Arguments(0L, "a+")]
+    public async Task CompileRejectsOutOfRangeRegexTimeoutAsOptionError(long ticks, string pattern)
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        FilterCompileOptions options = new() { RegexTimeout = TimeSpan.FromTicks(ticks) };
+
+        FilterResult<Filter> compiled = Filter.Compile($"dns.qry.name matches \"{pattern}\"", stack, options);
+
+        await Assert.That(compiled.IsSuccess).IsFalse();
+        await Assert.That(compiled.Error.Kind).IsEqualTo(FilterErrorKind.InvalidValue);
+        await Assert.That(compiled.Error.Message).Contains("RegexTimeout");
+        await Assert.That(compiled.Error.Message).Contains("2147483646");
+        await Assert.That(compiled.Error.Message).DoesNotContain("Invalid regular expression");
+    }
+
+    [Test]
+    public async Task TryParseRejectsOutOfRangeRegexTimeoutAsOptionError()
+    {
+        FilterCompileOptions options = new() { RegexTimeout = TimeSpan.Zero };
+
+        bool parsed = Filter.TryParse("dns.qry.name matches \"(?=a)a\"", options, out FilterError? failure);
+
+        await Assert.That(parsed).IsFalse();
+        await Assert.That(failure!.Kind).IsEqualTo(FilterErrorKind.InvalidValue);
+        await Assert.That(failure.Message).Contains("RegexTimeout");
+    }
+
+    [Test]
+    public async Task ObserverCompileRejectsOutOfRangeRegexTimeoutAsOptionError()
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        FilterObserverOptions options = new() { Compile = new FilterCompileOptions { RegexTimeout = TimeSpan.Zero } };
+
+        bool compiled = Filter.TryCompile("dns.qry.name matches \"(?=a)a\"", stack, in options, out _, out FilterError? failure);
+
+        await Assert.That(compiled).IsFalse();
+        await Assert.That(failure!.Kind).IsEqualTo(FilterErrorKind.InvalidValue);
+        await Assert.That(failure.Message).Contains("RegexTimeout");
+    }
+
+    [Test]
+    [Arguments(1L)]
+    [Arguments(-10_000L)]
+    [Arguments(21_474_836_460_000L)]
+    public async Task CompileAcceptsBoundaryRegexTimeouts(long ticks)
+    {
+        using Stack stack = FilterTestHelper.BuildStack();
+        FilterCompileOptions options = new() { RegexTimeout = TimeSpan.FromTicks(ticks) };
+
+        FilterResult<Filter> compiled = Filter.Compile("dns.qry.name matches \"(?=a)a\"", stack, options);
+
+        await Assert.That(compiled.IsSuccess).IsTrue();
+    }
+
+    [Test]
+    public async Task TryBuildRegexRejectsOutOfRangeTimeoutAsCallerBug()
+    {
+        await Assert.That(() => FilterBinder.TryBuildRegex("(?=a)a", TimeSpan.Zero, out _))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    #endregion
+
     #region Throwing backend
 
     [Test]

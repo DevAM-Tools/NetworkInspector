@@ -5,8 +5,10 @@ namespace NetworkInspector.Sources.Pcapng.Format.Blocks;
 /// <summary>
 /// Simple Packet Block (SPB) — 12 bytes.
 /// Minimal packet format without interface ID, timestamps, or options.
-/// Only valid when a single interface is defined in the section.
+/// Only valid when a single interface is defined in the section; the reader always uses interface 0 of the section.
 /// Fields are read as little-endian; byte-swapping applied externally.
+/// There is no captured-length field: the stored length is the smaller of the original length and the interface's
+/// snap length (see <c>PcapngPacketBlocks.TryReadSpb</c>), followed by padding to 4 bytes and the trailing block length.
 /// </summary>
 [BinaryParsable]
 internal readonly partial struct SimplePacketBlock

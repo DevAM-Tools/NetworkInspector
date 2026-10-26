@@ -4,11 +4,13 @@ namespace NetworkInspector.Core.Fields;
 
 /// <summary>
 /// Thin-cursor mutable field wrapper for protocol parsers to build the field tree.
-/// Occupies exactly 16 bytes (Packet ref 8 B + Index 2 B + FieldId 4 B + 2 B padding),
-/// enabling register-return on x64 (≤ 16 B) and eliminating the hidden-pointer roundtrip
-/// on every <c>Append</c> / <c>Prepend</c> / <c>InsertAfter</c> call.
+/// Occupies exactly 16 bytes (Packet ref 8 B + Index 2 B + FieldId 4 B + 2 B padding).
+/// Keeping it at 16 bytes or less lets ABIs that return 16-byte structs in two registers (System V x64, Arm64) return a
+/// cursor from every <c>Append</c> / <c>Prepend</c> / <c>InsertAfter</c> call without a hidden return buffer; Windows x64 returns only
+/// up to 8 bytes in registers and still uses a return buffer there. The <see cref="FieldId"/> is cached in the cursor so that
+/// building a child does not have to look it up again in the packet's field storage.
 /// <para>
-/// The <see cref="ParseContext"/> is no longer embedded; it is threaded explicitly as an
+/// The <see cref="ParseContext"/> is not embedded in the cursor; it is threaded explicitly as an
 /// <c>in</c> parameter only on the dispatch methods (<c>TryCallNextProtocol*</c>). The
 /// field-building methods (Append/Prepend/InsertAfter variants) do not take a context —
 /// presence recording happens eagerly via <see cref="ParseContext"/> in <c>Parse</c>, never
@@ -17,13 +19,32 @@ namespace NetworkInspector.Core.Fields;
 /// dispatch) and lazy population (in a <see cref="LazyPopulator"/>, where no context is
 /// available, so dispatch and index mutation are structurally impossible).
 /// </para>
-/// <para>This is a ref struct — cannot be stored in collections.</para>
+/// <para>
+/// This is a ref struct — cannot be stored in collections or captured by a closure, so a lazy populator receives its
+/// parent cursor as a parameter; it cannot capture one.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> a cursor is a stack-only value used by the thread that parses the packet (or, after the packet is
+/// sealed, by the thread running a lazy populator, which the packet guarantees is exclusive per container). It adds no
+/// synchronization of its own; the packet's append and materialization paths provide it.
+/// </para>
+/// <para>
+/// <b>Misuse:</b> <c>default(MutField)</c> has a null packet; <see cref="IsValid"/> is false and most members throw
+/// <see cref="NullReferenceException"/> on it. Check <see cref="IsValid"/> when a cursor may come from a <c>default</c>.
+/// </para>
 /// </summary>
 public readonly ref struct MutField
 {
     /// <summary>The owning packet.</summary>
     public readonly Packet Packet { get; }
+
+    /// <summary>
+    /// Index of this field in the packet's field storage (a <see cref="ushort"/>, like every tree link in the storage).
+    /// <c>0</c> is the synthetic root. <see cref="FieldBody.SkipStorageIndex"/> is returned by appends on a
+    /// <see cref="FieldTreeMode.Skip"/> packet, where no tree exists. <see cref="FieldBody.NullIndex"/> means "no field".
+    /// </summary>
     internal readonly ushort StorageIndex { get; }
+
     /// <summary>Cached field identifier — fits in the 4-byte slot between StorageIndex (2 B) and alignment padding.</summary>
     public readonly FieldId FieldId { get; }
 
@@ -38,7 +59,10 @@ public readonly ref struct MutField
 
     #region Read Accessors
 
-    /// <summary>Whether this field reference points to a valid packet and index.</summary>
+    /// <summary>
+    /// Whether this field reference points to a valid packet and index. False only for <c>default(MutField)</c> or a cursor
+    /// whose index is <see cref="FieldBody.NullIndex"/>; the skip-tree index counts as valid.
+    /// </summary>
     public readonly bool IsValid
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -52,15 +76,21 @@ public readonly ref struct MutField
         get => Packet.HasFieldTree;
     }
 
-    /// <summary>Gets the field's metadata from the stack registry.</summary>
+    /// <summary>Gets the field's metadata from the stack registry (a registry lookup by <see cref="FieldId"/>, not a stored reference).</summary>
     public readonly FieldInfo? FieldInfo => Packet.Stack.GetField(FieldId);
 
     /// <summary>The field's value.</summary>
+    /// <exception cref="InvalidOperationException">
+    /// The packet was parsed with <see cref="FieldTreeMode.Skip"/> and this cursor is neither the root nor the field currently
+    /// being populated by a skip-tree lazy populator: a skip parse keeps no stored values to read back.
+    /// </exception>
     public readonly FieldValue Value
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
+            // On a skip packet only the root (index 0) and the in-flight scratch slot (SkipStorageIndex) have a body;
+            // any other index would not map to stored data, so fail loudly instead of returning an unrelated slot.
             if (!HasFieldTree && StorageIndex != 0 && StorageIndex != FieldBody.SkipStorageIndex)
             {
                 ThrowHelpers.ThrowSkipFieldTreeValue();
@@ -74,11 +104,19 @@ public readonly ref struct MutField
     /// Optional custom display text (check <see cref="LazyString.IsNull"/> for absence).
     /// Accesses <see cref="FieldBody.CustomText"/> through a mutable ref for in-place caching.
     /// </summary>
+    /// <remarks>
+    /// Reading this property forces a lazy text to be evaluated. <see cref="FieldBody.CustomText"/> evaluates the text in the
+    /// packet's own storage (the packet hands out a mutable reference to the stored body) and only then returns a copy, so the
+    /// evaluated string is cached for every later reader and the returned copy is already evaluated. Evaluating a copy taken
+    /// earlier would cache only in that copy.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">Same condition as <see cref="Value"/>.</exception>
     public readonly LazyString CustomText
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
+            // Same skip-packet guard as Value.
             if (!HasFieldTree && StorageIndex != 0 && StorageIndex != FieldBody.SkipStorageIndex)
             {
                 ThrowHelpers.ThrowSkipFieldTreeValue();
@@ -94,6 +132,12 @@ public readonly ref struct MutField
     /// uses bits 31–24. A full table returns <see cref="ReadOnlyMemory{T}.Empty"/> and does not store.
     /// After Seal this returns <see cref="ReadOnlyMemory{T}.Empty"/> and does not store.
     /// </summary>
+    /// <remarks>
+    /// The packet keeps the memory itself (no copy) so a nested parser can be handed the returned slice and a later
+    /// <see cref="TryGetEffectLayerKey"/> can still recognize it as a packet buffer. The memory must therefore stay valid for
+    /// the packet's lifetime (owned bytes such as reassembled data, not a pooled or stack buffer). An empty return is the
+    /// caller's signal that nothing was stored; treat it as "do not nest-parse this slice".
+    /// </remarks>
     public readonly ReadOnlyMemory<byte> BindParseBuffer(ReadOnlyMemory<byte> buffer)
         => Packet.BindParseBuffer(buffer);
 
@@ -124,11 +168,14 @@ public readonly ref struct MutField
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly bool HasChildren(bool materialize)
     {
+        // A skip packet keeps no tree, so there is never a child to report.
         if (!HasFieldTree)
         {
             return false;
         }
 
+        // Populate a lazy container first when asked; otherwise its link list is still empty and the answer would be a
+        // false "no children". The cheap NeedsMaterialization test keeps ordinary fields from entering the materializer.
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
@@ -149,11 +196,13 @@ public readonly ref struct MutField
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly ushort ChildCount(bool materialize)
     {
+        // A skip packet keeps no tree.
         if (!HasFieldTree)
         {
             return 0;
         }
 
+        // Same materialize-before-read rule as HasChildren: a lazy container counts zero until it is populated.
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
@@ -178,19 +227,26 @@ public readonly ref struct MutField
 
     #region Value Setters
 
-    /// <summary>Sets the field value.</summary>
+    /// <summary>
+    /// Replaces the stored field value in place. This is a plain store into the field body: the value cache and any field
+    /// observers recorded or saw the value when the field was appended and are not told about this change. The store is
+    /// unsynchronized (a multi-word struct write), so use it only while the packet is still being built by one thread.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly void SetValue(FieldValue value) => Packet.GetFieldRef(StorageIndex).Value = value;
 
-    /// <summary>Sets custom display text.</summary>
+    /// <summary>
+    /// Sets custom display text. Goes through the packet (not a direct store) so an attached value cache that records
+    /// display text sees the change.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly void SetCustomText(LazyString text) => Packet.SetFieldCustomText(StorageIndex, FieldId, text);
 
-    /// <summary>Clears custom display text.</summary>
+    /// <summary>Clears custom display text. Goes through the packet so an attached value cache is updated as well.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly void ClearCustomText() => Packet.ClearFieldCustomText(StorageIndex, FieldId);
 
-    /// <summary>Appends to custom display text.</summary>
+    /// <summary>Appends to custom display text. Goes through the packet so an attached value cache is updated as well.</summary>
     public readonly void AppendCustomText(LazyString suffix) => Packet.AppendFieldCustomText(StorageIndex, FieldId, suffix);
 
     #endregion
@@ -246,6 +302,18 @@ public readonly ref struct MutField
 
     #region Generic custom text
 
+    // The generic AppendWithCustomText / PrependWithCustomText / InsertAfterWithCustomText / AppendLazyWithCustomText
+    // overloads below all follow one pattern:
+    //  1. Ask the packet whether anyone will read custom text for this field (a field tree stores it, or an attached value
+    //     cache records display text). If not (a Skip parse without a display-text cache), append WITHOUT text and return;
+    //     the arguments are never captured, so nothing is allocated for text nobody reads.
+    //  2. Otherwise capture the arguments as a value tuple and defer the formatting with LazyString.FormatLazy, so the text
+    //     is built only when it is first read. The formatter is a static lambda (no closure over locals, so no per-call
+    //     delegate allocation); the arguments are joined without separators using the invariant culture.
+    // The arity ladders (one overload per argument count) exist instead of a params array or a string.Format call because a
+    // params array allocates on every call and boxes value-type arguments before formatting is even needed, which would
+    // defeat step 1 on the hot path. If a new arity is added, copy the whole pattern and keep the tuple items in order.
+
     /// <summary>
     /// Whether custom display text or custom representation should be built for
     /// <paramref name="fieldId"/>. True when a field tree will store it or an attached
@@ -253,7 +321,11 @@ public readonly ref struct MutField
     /// </summary>
     public readonly bool WantsCustomText(FieldId fieldId) => Packet.WantsCustomText(fieldId);
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendWithCustomText<T0>(
         FieldId fieldId, FieldValue value, T0 arg0)
     {
@@ -268,7 +340,11 @@ public readonly ref struct MutField
         return AppendWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendWithCustomText<T0, T1>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1)
     {
@@ -283,7 +359,11 @@ public readonly ref struct MutField
         return AppendWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendWithCustomText<T0, T1, T2>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2)
     {
@@ -298,7 +378,11 @@ public readonly ref struct MutField
         return AppendWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendWithCustomText<T0, T1, T2, T3>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3)
     {
@@ -313,7 +397,11 @@ public readonly ref struct MutField
         return AppendWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendWithCustomText<T0, T1, T2, T3, T4>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4)
     {
@@ -328,7 +416,11 @@ public readonly ref struct MutField
         return AppendWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendWithCustomText<T0, T1, T2, T3, T4, T5>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5)
     {
@@ -343,7 +435,11 @@ public readonly ref struct MutField
         return AppendWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendWithCustomText<T0, T1, T2, T3, T4, T5, T6>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6)
     {
@@ -358,7 +454,11 @@ public readonly ref struct MutField
         return AppendWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7)
     {
@@ -373,7 +473,11 @@ public readonly ref struct MutField
         return AppendWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField PrependWithCustomText<T0>(
         FieldId fieldId, FieldValue value, T0 arg0)
     {
@@ -388,7 +492,11 @@ public readonly ref struct MutField
         return PrependWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField PrependWithCustomText<T0, T1>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1)
     {
@@ -403,7 +511,11 @@ public readonly ref struct MutField
         return PrependWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField PrependWithCustomText<T0, T1, T2>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2)
     {
@@ -418,7 +530,11 @@ public readonly ref struct MutField
         return PrependWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField PrependWithCustomText<T0, T1, T2, T3>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3)
     {
@@ -433,7 +549,11 @@ public readonly ref struct MutField
         return PrependWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField PrependWithCustomText<T0, T1, T2, T3, T4>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4)
     {
@@ -448,7 +568,11 @@ public readonly ref struct MutField
         return PrependWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField PrependWithCustomText<T0, T1, T2, T3, T4, T5>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5)
     {
@@ -463,7 +587,11 @@ public readonly ref struct MutField
         return PrependWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField PrependWithCustomText<T0, T1, T2, T3, T4, T5, T6>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6)
     {
@@ -478,7 +606,11 @@ public readonly ref struct MutField
         return PrependWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField PrependWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7)
     {
@@ -493,7 +625,11 @@ public readonly ref struct MutField
         return PrependWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField InsertAfterWithCustomText<T0>(
         FieldId fieldId, FieldValue value, T0 arg0)
     {
@@ -508,7 +644,11 @@ public readonly ref struct MutField
         return InsertAfterWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField InsertAfterWithCustomText<T0, T1>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1)
     {
@@ -523,7 +663,11 @@ public readonly ref struct MutField
         return InsertAfterWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField InsertAfterWithCustomText<T0, T1, T2>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2)
     {
@@ -538,7 +682,11 @@ public readonly ref struct MutField
         return InsertAfterWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField InsertAfterWithCustomText<T0, T1, T2, T3>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3)
     {
@@ -553,7 +701,11 @@ public readonly ref struct MutField
         return InsertAfterWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField InsertAfterWithCustomText<T0, T1, T2, T3, T4>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4)
     {
@@ -568,7 +720,11 @@ public readonly ref struct MutField
         return InsertAfterWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField InsertAfterWithCustomText<T0, T1, T2, T3, T4, T5>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5)
     {
@@ -583,7 +739,11 @@ public readonly ref struct MutField
         return InsertAfterWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField InsertAfterWithCustomText<T0, T1, T2, T3, T4, T5, T6>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6)
     {
@@ -598,7 +758,11 @@ public readonly ref struct MutField
         return InsertAfterWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField InsertAfterWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7)
     {
@@ -613,7 +777,11 @@ public readonly ref struct MutField
         return InsertAfterWithCustomText(fieldId, value, text);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendLazyWithCustomText<T0>(
         FieldId fieldId, FieldValue value, T0 arg0, LazyPopulator populator)
     {
@@ -628,7 +796,11 @@ public readonly ref struct MutField
         return AppendLazyWithCustomText(fieldId, value, text, populator);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendLazyWithCustomText<T0, T1>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, LazyPopulator populator)
     {
@@ -643,7 +815,11 @@ public readonly ref struct MutField
         return AppendLazyWithCustomText(fieldId, value, text, populator);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendLazyWithCustomText<T0, T1, T2>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, LazyPopulator populator)
     {
@@ -658,7 +834,11 @@ public readonly ref struct MutField
         return AppendLazyWithCustomText(fieldId, value, text, populator);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendLazyWithCustomText<T0, T1, T2, T3>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, LazyPopulator populator)
     {
@@ -673,7 +853,11 @@ public readonly ref struct MutField
         return AppendLazyWithCustomText(fieldId, value, text, populator);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendLazyWithCustomText<T0, T1, T2, T3, T4>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, LazyPopulator populator)
     {
@@ -688,7 +872,11 @@ public readonly ref struct MutField
         return AppendLazyWithCustomText(fieldId, value, text, populator);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendLazyWithCustomText<T0, T1, T2, T3, T4, T5>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, LazyPopulator populator)
     {
@@ -703,7 +891,11 @@ public readonly ref struct MutField
         return AppendLazyWithCustomText(fieldId, value, text, populator);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendLazyWithCustomText<T0, T1, T2, T3, T4, T5, T6>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, LazyPopulator populator)
     {
@@ -718,7 +910,11 @@ public readonly ref struct MutField
         return AppendLazyWithCustomText(fieldId, value, text, populator);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendLazyWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, LazyPopulator populator)
     {
@@ -733,7 +929,11 @@ public readonly ref struct MutField
         return AppendLazyWithCustomText(fieldId, value, text, populator);
     }
 
-    /// <summary>Builds custom display text only when <see cref="Packet.WantsCustomText"/> is true.</summary>
+    /// <summary>
+    /// Overload of the matching <c>...WithCustomText</c> method that takes the text parts as arguments. The parts are joined
+    /// without separators (invariant culture) and formatted lazily on first read, but only when
+    /// <see cref="Packet.WantsCustomText"/> is true; otherwise the field is appended without text and the arguments are ignored.
+    /// </summary>
     public readonly MutField AppendLazyWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7, T8>(
         FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8, LazyPopulator populator)
     {
@@ -760,15 +960,23 @@ public readonly ref struct MutField
 
     /// <summary>
     /// Appends a lazy container field whose children will be populated on first access.
-    /// The <paramref name="populator"/> closure is called exactly once when children are first accessed.
+    /// The <paramref name="populator"/> closure is called at most once: when children are first accessed, or right away
+    /// when a field watch (or, on a skip parse, the value cache) needs the children; a container nobody reads is never
+    /// populated. See <see cref="LazyPopulator"/> for what a populator may and may not do.
     /// Throws <see cref="Errors.FieldAppendException"/> on failure.
     /// </summary>
+    /// <remarks>
+    /// Lazy containers exist so that a sub-tree costs nothing for parses that never look inside it. The container field
+    /// itself is appended eagerly so its position in the tree is fixed.
+    /// </remarks>
     /// <param name="fieldId">The field ID for the container.</param>
     /// <param name="value">The container's value (typically <see cref="FieldValue.None"/>).</param>
     /// <param name="populator">A closure that creates child fields on demand.</param>
     public readonly MutField AppendLazy(
         FieldId fieldId, FieldValue value, LazyPopulator populator)
     {
+        // Append the container first (it gets its final place in the tree), then register the populator against its index.
+        // Registration may materialize immediately when a watch needs the children, so the order matters.
         ushort newIndex = Packet.AppendChild(StorageIndex, fieldId, value);
         Packet.RegisterLazyPopulator(fieldId, newIndex, in value, default, populator);
         // The populator is invoked later via MaterializeLazyField without a ParseContext
@@ -841,6 +1049,7 @@ public readonly ref struct MutField
     /// Useful for selective materialization during parsing when a downstream protocol needs to access
     /// specific fields from an upstream protocol (e.g., UDP reading IP addresses for checksum).
     /// Returns true if materialization was performed, false if already populated or not lazy.
+    /// Runs the populator synchronously on the calling thread; after Seal the packet makes sure only one thread runs it.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly bool MaterializeIfLazy() => Packet.MaterializeLazyField(StorageIndex);
@@ -848,6 +1057,16 @@ public readonly ref struct MutField
     #endregion
 
     #region Protocol Dispatch
+
+    // Shared shape of the TryCallNextProtocol* methods (they differ only in the key type and table lookup):
+    //  1. Resolve the dispatch table; configuration faults become Error results.
+    //  2. Look up ALL protocols registered for the key (a table can map one key to several protocols).
+    //  3. Fast path, 0 or 1 match: 0 is NotDispatched (a miss, not an error); 1 is a direct CallProtocol on this cursor,
+    //     so the common case adds no container field and allocates nothing.
+    //  4. Rare path, 2 or more matches: _DispatchMultipleProtocols wraps the alternatives in a packet.choice container.
+    //     The display text of the key (key.ToString) is built only on that path, so the fast path never formats the key.
+    // The ParseContext is copied once via WithDispatch to record which table, key and caller led to the callee (readable
+    // by the callee through its DispatchContext; only Core can write it); it is passed by 'in' everywhere else.
 
     /// <summary>Error when <see cref="ParseContext.Stack"/> is null (configuration fault, not a key miss).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -872,6 +1091,8 @@ public readonly ref struct MutField
     public readonly ParseResult TryCallNextProtocolU64(
         ProtocolTableId tableId, ulong key, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        // Configuration faults (no stack in the context, invalid or unregistered table id) are returned as Error results,
+        // never thrown, so the calling dissector propagates them like any other parse error.
         Stack? stack = context.Stack;
         if (stack is null)
         {
@@ -912,6 +1133,8 @@ public readonly ref struct MutField
     public readonly ParseResult TryCallNextProtocolString(
         ProtocolTableId tableId, string key, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        // Configuration faults (no stack in the context, invalid or unregistered table id) are returned as Error results,
+        // never thrown, so the calling dissector propagates them like any other parse error.
         Stack? stack = context.Stack;
         if (stack is null)
         {
@@ -952,6 +1175,8 @@ public readonly ref struct MutField
     public readonly ParseResult TryCallNextProtocolBytes(
         ProtocolTableId tableId, BytesKey key, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        // Configuration faults (no stack in the context, invalid or unregistered table id) are returned as Error results,
+        // never thrown, so the calling dissector propagates them like any other parse error.
         Stack? stack = context.Stack;
         if (stack is null)
         {
@@ -992,6 +1217,8 @@ public readonly ref struct MutField
     public readonly ParseResult TryCallNextProtocolBool(
         ProtocolTableId tableId, bool key, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        // Configuration faults (no stack in the context, invalid or unregistered table id) are returned as Error results,
+        // never thrown, so the calling dissector propagates them like any other parse error.
         Stack? stack = context.Stack;
         if (stack is null)
         {
@@ -1032,6 +1259,8 @@ public readonly ref struct MutField
     public readonly ParseResult TryCallNextProtocolAny(
         ProtocolTableId tableId, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        // Configuration faults (no stack in the context, invalid or unregistered table id) are returned as Error results,
+        // never thrown, so the calling dissector propagates them like any other parse error.
         Stack? stack = context.Stack;
         if (stack is null)
         {
@@ -1104,6 +1333,8 @@ public readonly ref struct MutField
             return _MissingTable();
         }
 
+        // A heuristic table inspects the payload itself and yields at most one protocol (the first that matches), so there is
+        // no choice container here; no DispatchContext is recorded because there is no table key to report.
         ProtocolId? match = table.TryMatch(data);
         if (match is null)
         {
@@ -1122,6 +1353,11 @@ public readonly ref struct MutField
     /// Creates a <c>packet.choice</c> container field, dispatches ALL protocols as children,
     /// and returns the maximum consumed bytes.
     /// <para>Callers must pre-check for 0/1 matches (fast path) before calling this method.</para>
+    /// <para>
+    /// Every alternative receives the same <c>data</c> and is parsed independently; the result is Ok with the largest
+    /// consumed count. If every alternative fails (or none consumed anything) the result is still Ok(0), not an error, because
+    /// a failing alternative only means that protocol did not fit. Each alternative's own error is not propagated.
+    /// </para>
     /// </summary>
     private readonly ParseResult _DispatchMultipleProtocols(
         ReadOnlySpan<ProtocolId> protocols, ReadOnlyMemory<byte> data, in ParseContext context,
@@ -1306,7 +1542,11 @@ public readonly ref struct MutField
 
     #region Equality
 
-    /// <summary>Value equality by packet identity and storage index.</summary>
+    /// <summary>
+    /// Value equality by packet identity (reference) and storage index. The cached <see cref="FieldId"/> is not compared.
+    /// There is no <see cref="object.Equals(object)"/> override or operator
+    /// because a ref struct cannot be boxed.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly bool Equals(MutField other) => ReferenceEquals(Packet, other.Packet) && StorageIndex == other.StorageIndex;
 

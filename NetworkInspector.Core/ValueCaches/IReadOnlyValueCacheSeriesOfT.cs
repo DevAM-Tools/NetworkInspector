@@ -10,6 +10,10 @@ namespace NetworkInspector.Core.ValueCaches;
 /// is a struct; do not store it as <see cref="IReadOnlyValueCacheSeries{T}"/>. Prefer
 /// <c>TSeries where TSeries : IReadOnlyValueCacheSeries{T}</c>.
 /// </para>
+/// <para>
+/// Thread safety: as for <see cref="IReadOnlyValueCacheSeries"/>; the value column is covered by the same published
+/// <see cref="IReadOnlyValueCacheSeries.Count"/> (a row is visible only when all three columns hold it).
+/// </para>
 /// </summary>
 /// <typeparam name="T">Payload type selected from the stack <see cref="FieldType"/>.</typeparam>
 public interface IReadOnlyValueCacheSeries<T> : IReadOnlyValueCacheSeries

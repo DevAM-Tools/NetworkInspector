@@ -72,7 +72,22 @@ internal readonly ref struct IdbFields
 /// Shared PCAPNG field parsing for the file scanner and the stream reader.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Stateless helpers; all methods are thread-safe. Returned spans alias the caller's buffer.
+/// </para>
+/// <para>
+/// Every length and id in a block comes from the file and is untrusted. The readers validate before they slice: the
+/// declared block length against the fixed size of the block type, the captured length against the block length with
+/// the 4-byte padding and the trailing length included (<see cref="PcapngBlockLayout.TryPacketDataBounds"/>), and the
+/// interface id against the interfaces the section really declared. A failed check yields a
+/// <see cref="ScanPacketResult"/> skip value, not an exception, because a corrupt block is an expected condition for a
+/// capture file; it is the caller that reports the skip and decides whether the read continues.
+/// </para>
+/// <para>
+/// The <c>bodyOmits8ByteHeader</c> parameter exists because the file scanner passes the whole block (type and length
+/// included) while the stream reader has already consumed those 8 bytes; one implementation serves both so the two
+/// readers cannot accept different packets.
+/// </para>
 /// </remarks>
 internal static class PcapngPacketBlocks
 {
@@ -98,6 +113,10 @@ internal static class PcapngPacketBlocks
     /// <param name="blockLength">Declared <c>block_total_length</c>.</param>
     /// <param name="section">Section that owns the referenced interface.</param>
     /// <param name="fields">Parsed fields when the result is <see cref="ScanPacketResult.Frame"/>.</param>
+    /// <returns>
+    /// <see cref="ScanPacketResult.Frame"/> on success; a skip value (malformed block, undeclared interface, or
+    /// unsupported timestamp resolution) otherwise.
+    /// </returns>
     internal static ScanPacketResult TryReadEpb(
         ReadOnlySpan<byte> blockOrBody,
         bool bodyOmits8ByteHeader,
@@ -171,6 +190,12 @@ internal static class PcapngPacketBlocks
         if (iface is null)
         {
             return ScanPacketResult.SkipNoInterface;
+        }
+
+        // The placeholder of a malformed IDB holds only the position of the interface: nothing about it can be trusted.
+        if (iface.IsMalformed)
+        {
+            return ScanPacketResult.SkipMalformedInterface;
         }
 
         if (!iface.HasSupportedTimestampResolution)
@@ -406,8 +431,9 @@ internal static class PcapngPacketBlocks
     {
         fields = default;
 
-        // A section holds at most MaxInterfaceCount interfaces (frame entries store the index as ushort),
-        // so a larger id can never name a declared interface.
+        // Resolve the interface first: the id comes from the file. A section holds at most MaxInterfaceCount interfaces
+        // (frame entries store the index as ushort), so a larger id can never name a declared interface. The explicit
+        // range check also keeps the (int) cast below exact.
         if (interfaceId >= SectionInfo.MaxInterfaceCount)
         {
             return ScanPacketResult.SkipNoInterface;
@@ -419,11 +445,19 @@ internal static class PcapngPacketBlocks
             return ScanPacketResult.SkipNoInterface;
         }
 
+        // A packet whose clock cannot be represented is skipped rather than given a guessed timestamp.
+        // The placeholder of a malformed IDB holds only the position of the interface: nothing about it can be trusted.
+        if (iface.IsMalformed)
+        {
+            return ScanPacketResult.SkipMalformedInterface;
+        }
+
         if (!iface.HasSupportedTimestampResolution)
         {
             return ScanPacketResult.SkipUnsupportedTimestampResolution;
         }
 
+        // Bounds before any slice: the declared captured length must fit the block together with its padding.
         if (!_TrySlicePacket(
                 blockOrBody,
                 headerBytesBeforeData,
@@ -486,7 +520,11 @@ internal static class PcapngPacketBlocks
         return true;
     }
 
-    /// <summary>Option bytes between the fixed header and the trailing 4-byte length.</summary>
+    /// <summary>
+    /// Option bytes between the fixed header and the trailing 4-byte length. Returns false (and an empty span) when the
+    /// block has no option area or the declared block length does not fit the bytes the caller holds; the options of
+    /// a block are metadata, so callers treat that as "no options", not as a corrupt block.
+    /// </summary>
     private static bool _TryGetOptionsSpan(
         ReadOnlySpan<byte> blockOrBody,
         bool bodyOmits8ByteHeader,

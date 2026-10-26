@@ -29,8 +29,9 @@ public sealed class ListenerInfo
     // Cross-thread status. Plain volatile read/write; the session is the only writer.
     private volatile int _Status;
 
-    // Callback set by the session to implement the Unsubscribe convenience API.
-    // Invoked at most once; null-guarded for safety.
+    // Callback set by the session to implement the Unsubscribe convenience API. Null-guarded for safety.
+    // Repeat calls are not suppressed here: the session callback forwards to TryUnsubscribe, which reports the
+    // already-terminal job as a failure and does nothing a second time.
     internal Action? UnsubscribeCallback
     {
         get; set;
@@ -62,6 +63,12 @@ public sealed class ListenerInfo
     /// The actual unsubscription is performed by the session. The listener's
     /// <see cref="ISessionListener.OnUnsubscribed"/> callback is guaranteed to be called
     /// before the listener thread exits.
+    /// </para>
+    ///
+    /// <para>
+    /// The call blocks until the listener thread has exited, so it must not be made from a callback of this same
+    /// listener (the thread would wait for itself). Failures are not reported: unsubscribing an already unsubscribed
+    /// listener is a no-op. Use <see cref="ISession.TryUnsubscribe"/> when the outcome matters.
     /// </para>
     /// </summary>
     public void Unsubscribe() => UnsubscribeCallback?.Invoke();

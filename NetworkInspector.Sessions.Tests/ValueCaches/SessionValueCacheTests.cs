@@ -636,7 +636,7 @@ internal sealed class SessionValueCacheTests
 
         await Assert.That(restartError).IsNull();
         await Assert.That(beforeRestart.Length).IsEqualTo(1);
-        await Assert.That(beforeRestart[0]).IsEqualTo((0, 3));
+        await Assert.That(beforeRestart[0]).IsEqualTo((0, 2));
         await Assert.That(listener.UnsubscribedCount).IsEqualTo(0);
         await Assert.That(info.Job!.Status).IsEqualTo(JobStatus.Running);
         await Assert.That(listener.StackChangedCount).IsEqualTo(1);
@@ -648,7 +648,8 @@ internal sealed class SessionValueCacheTests
     /// <summary>
     /// Pins the slot inside id 2 of its first window, starts a restart that disables queries but cannot take
     /// the parse lock held here (so it cannot abandon the writer yet), then lets the slot run into the refused
-    /// read at id 3. Runs on one thread without <c>await</c>: the parse lock is a monitor.
+    /// stack lease at id 2 (the lease check after the frame read is the authoritative queries check).
+    /// Runs on one thread without <c>await</c>: the parse lock is a monitor.
     /// </summary>
     private static (ValueCacheInfo Info, (int From, int To)[] BeforeRestart, Exception? RestartError) _RestartWhileSlotFills(
         Session session,
@@ -704,7 +705,8 @@ internal sealed class SessionValueCacheTests
                 restart.Start();
                 WaitHelper.WaitUntil(() => !session.QueriesEnabled);
 
-                // The slot finishes id 2, then finds queries disabled at id 3.
+                // The slot read the frame of id 2 before queries went off; the stack lease it needs for the parse is
+                // refused now, so it stops at id 2 (before the lease check existed it parsed id 2 and stopped at id 3).
                 releaseSlot.Set();
                 WaitHelper.WaitUntil(() => listener.Windows.Length > 0 || listener.UnsubscribedCount > 0);
                 beforeRestart = listener.Windows;

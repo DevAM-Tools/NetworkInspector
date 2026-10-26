@@ -16,13 +16,17 @@ internal readonly record struct ExporterReleaseStep(string What, Action? Release
 /// The finish sequence every exporter shares, so a fix to tolerant-mode cleanup applies to all of them at once:
 /// <list type="number">
 /// <item>Finalize: the format trailer and the final flush. A failure is reported
-/// (<c>"{format} finalization failed: …"</c>) and not rethrown — the output may already be unusable.</item>
+/// (<c>"{format} finalization failed: …"</c>, <see cref="ExportErrorKind.IoError"/> for an <see cref="IOException"/>,
+/// otherwise <see cref="ExportErrorKind.SerializationError"/>) and not rethrown — the output may already be unusable,
+/// and the release steps must still run.</item>
 /// <item>Release, in the given order: pooled buffers, builders, and last the output (which closes the stream unless the
 /// caller owns it). Every step runs even when an earlier one failed; each failure is reported
 /// (<c>"{format} {what} failed: …"</c>, <see cref="ExportErrorKind.IoError"/>).</item>
 /// <item>When any release step failed, one <see cref="AggregateException"/> (<c>"{format} exporter cleanup failed."</c>)
 /// carries all release failures, thrown after every step has run.</item>
 /// </list>
+/// Rejected alternative: letting the first failing step propagate. That would skip the later steps and leak pooled
+/// buffers or leave the output stream open, so the failures are collected and rethrown together instead.
 /// </summary>
 /// <remarks>Stateless; thread-safe. Exporters call it from <c>OnFinish</c> after setting their own finished latch.</remarks>
 internal static class ExporterFinish
@@ -53,7 +57,8 @@ internal static class ExporterFinish
                 $"{format} finalization failed: {ex.Message}");
         }
 
-        // Release: every step runs; failures are collected and thrown together afterwards.
+        // Release: every step runs; failures are collected and thrown together afterwards. The list is created lazily so the
+        // normal (no failure) path allocates nothing.
         List<Exception>? failures = null;
         foreach (ExporterReleaseStep step in releases)
         {

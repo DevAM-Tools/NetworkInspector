@@ -7,6 +7,13 @@ namespace NetworkInspector.Core.Ids;
 /// Valid indices are <c>0 … Array.MaxLength - 1</c>; <see cref="InvalidValue"/> is the only
 /// permitted negative value for sentinel IDs.
 /// </summary>
+/// <remarks>
+/// The id structs (<see cref="FieldId"/>, <see cref="IndexGroupId"/>, <see cref="PacketId"/>, and the others in this
+/// namespace that wrap an <see cref="int"/>) are used directly as indexes into arrays and slabs. Their valid range is therefore
+/// bounded by what a single .NET array can address, and that bound lives here once instead of being repeated in each id type.
+/// The range check is a single unsigned comparison, so the id constructors and <c>IsValid</c> can run it on every creation.
+/// Stateless static class, safe to call from any thread.
+/// </remarks>
 public static class ArrayIndexIdRange
 {
     #region Constants
@@ -20,7 +27,7 @@ public static class ArrayIndexIdRange
 
     /// <summary>
     /// Largest valid array index for a single <see cref="Array"/> in the current runtime
-    /// (<c>Array.MaxLength - 1</c>).
+    /// (<c>Array.MaxLength - 1</c>). Read from the runtime rather than hard-coded, so it follows the runtime's own limit.
     /// </summary>
     public static int MaxValue => Array.MaxLength - 1;
 
@@ -45,7 +52,7 @@ public static class ArrayIndexIdRange
     /// are rejected in one branch.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsValidIndex(int value) => (uint)value <= (uint)MaxValue;
+    public static bool IsValidIndex(int value) => (uint)value <= (uint)MaxValue; // MaxValue is positive, so the cast is exact.
 
     /// <summary>
     /// Throws <see cref="ArgumentOutOfRangeException"/> when <paramref name="value"/> is not a valid index.
@@ -68,7 +75,9 @@ public static class ArrayIndexIdRange
     /// <summary>
     /// Primary capacity guard for frame/packet allocation paths.
     /// Throws when <paramref name="nextIndex"/> is not a valid array-index ID.
-    /// ID constructors remain the secondary fangnetz via <see cref="ValidateIndexOrThrow"/>.
+    /// ID constructors remain the secondary safety net via <see cref="ValidateIndexOrThrow"/>.
+    /// Checking before the id is issued lets the caller report a capacity error that names the entity
+    /// instead of the generic out-of-range error an id constructor would raise.
     /// </summary>
     /// <param name="nextIndex">Next ID that would be issued (0 … <see cref="MaxValue"/>).</param>
     /// <param name="entityName">Singular noun for the message (e.g. <c>frame</c>, <c>packet</c>).</param>
@@ -88,6 +97,8 @@ public static class ArrayIndexIdRange
 
     #region Private helpers
 
+    // The throw helpers are NoInlining and take the already-validated inputs so the exception construction and message
+    // formatting stay out of the inlined validation methods above (keeps the inlined fast path small).
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void _ThrowIndexOutOfRange(int value, string paramName) =>
         throw new ArgumentOutOfRangeException(

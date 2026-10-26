@@ -4,6 +4,10 @@ namespace NetworkInspector.Filter.Jit;
 
 /// <summary>
 /// The output of code generation: the root delegate plus the mutable runtime state it closes over.
+/// <para>
+/// <b>Thread-safety:</b> not thread-safe. The flank trackers hold per-filter state, so one program belongs to exactly one
+/// <see cref="Filter"/> instance (a derived filter compiles its own program).
+/// </para>
 /// </summary>
 internal sealed class CompiledFilterProgram(FilterEvalFn root, FlankRuntime[] flanks)
 {
@@ -15,7 +19,10 @@ internal sealed class CompiledFilterProgram(FilterEvalFn root, FlankRuntime[] fl
     /// <summary>Every flank tracker in the program, in emission order.</summary>
     public FlankRuntime[] Flanks { get; } = flanks;
 
-    /// <summary>Whether evaluation carries state across packets.</summary>
+    /// <summary>
+    /// Whether evaluation carries state across packets: exactly when the program contains a flank tracker. This is the
+    /// source of <see cref="Filter.IsStateful"/> and decides ordering checks, caching and pruning.
+    /// </summary>
     public bool IsStateful => Flanks.Length != 0;
 
     #endregion

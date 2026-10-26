@@ -18,8 +18,10 @@ public sealed class MixedEthernetRecipe : TraceRecipe
     /// <summary>Payload length of the UDP datagrams in bytes.</summary>
     public const int DatagramPayloadBytes = 32;
 
+    /// <summary>Frames between two cancellation checks.</summary>
     private const int _CancellationCheckInterval = 1024;
 
+    /// <summary>Distance of two frame timestamps: 1 ms in nanoseconds.</summary>
     private const long _FrameIntervalNanos = 1_000_000;
 
     #endregion
@@ -90,6 +92,9 @@ public sealed class MixedEthernetRecipe : TraceRecipe
                         string.Create(CultureInfo.InvariantCulture, $"host{random.Next(1000)}.example.com"));
                     break;
                 case 1:
+                    // 20 to 200 payload bytes. The sequence number advances by 200 per packet index whatever the segment
+                    // length is: the frames are valid on their own but do not form a coherent stream. i * 200 stays below
+                    // int.MaxValue because the packet count is at most 10,000,000 (TraceRecipe.MaxFrames).
                     byte[] segment = new byte[20 + random.Next(181)];
                     random.NextBytes(segment);
                     frame = EthernetFrames.TcpAck(49152, 80, (uint)(1 + (i * 200)), segment);

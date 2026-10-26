@@ -9,6 +9,9 @@ namespace NetworkInspector.Exporters;
 /// Numeric enum values are reserved for compact, machine-oriented encodings
 /// such as <see cref="Json.JsonExportFormat.Compact"/> and PBF.
 /// </para>
+/// <para>
+/// <b>Thread safety:</b> Stateless; safe to call from multiple threads.
+/// </para>
 /// </summary>
 internal static class FieldTypeFormatter
 {
@@ -18,6 +21,11 @@ internal static class FieldTypeFormatter
     /// </summary>
     /// <param name="type">The field type to format.</param>
     /// <returns>The enum member name, or <c>"Unknown"</c> for undefined values.</returns>
+    /// <remarks>
+    /// The names are string literals returned as a span instead of coming from <c>Enum.ToString()</c>: the literals are
+    /// static data (no allocation per call, which matters because writers call this per field), and the exported text does
+    /// not silently change if a C# enum member is ever renamed. A new <see cref="FieldType"/> member must be added here.
+    /// </remarks>
     internal static ReadOnlySpan<char> GetName(FieldType type) => type switch
     {
         FieldType.None => "None",

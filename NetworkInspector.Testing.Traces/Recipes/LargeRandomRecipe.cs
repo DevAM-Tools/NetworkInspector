@@ -11,11 +11,16 @@ public sealed class LargeRandomRecipe : TraceRecipe
 {
     #region Constants
 
+    // Limit: frames, 1 to 200,000,000. Test support only, so no threat from input: it exists for the performance suites
+    // that need very large captures and is still a bound against a typo. Constant, not configurable; the general recipe
+    // bound (TraceRecipe.MaxFrames) is raised for this recipe only because it streams (below) and needs no memory per frame.
     /// <summary>Largest frame count of this recipe.</summary>
     public const int MaxLargeFrames = 200_000_000;
 
+    /// <summary>Distance of two frame timestamps: 1 microsecond in nanoseconds.</summary>
     private const long _IntervalNanos = 1_000;
 
+    /// <summary>Frames between two cancellation checks.</summary>
     private const int _CancellationCheckInterval = 4096;
 
     #endregion
@@ -77,6 +82,9 @@ public sealed class LargeRandomRecipe : TraceRecipe
     protected internal override IReadOnlyDictionary<string, string> Write(string tracePath, string sideFileDirectory,
         CancellationToken cancellationToken)
     {
+        // Determinism: the explicit seed, base time, and interval fix every byte and timestamp (the Core source guarantees the
+        // same bytes on every CPU for an explicit seed). The source and the exporter are chained frame by frame instead of
+        // collecting frames, because a trace of up to 200 million frames cannot be held in memory.
         FrameInterfaceRegistry registry = new();
         using RandomFrameSource source = new(new RandomSourceOptions
         {

@@ -14,20 +14,28 @@ namespace NetworkInspector.Core.Index;
 /// <para>
 /// <b>Thread-safety:</b> Not thread-safe for concurrent mutation. After all mutations
 /// happen-before publication, concurrent reads of <see cref="Contains"/> and
-/// <see cref="Cardinality"/> are safe.
+/// <see cref="Cardinality"/> are safe. Unlike <see cref="RoaringBitmap"/>, the treemap has no seqlock: a reader
+/// must never overlap an <see cref="Add"/>, because the key dictionary itself is not safe for a concurrent writer.
+/// </para>
+/// <para>
+/// Not used by the packet index (which is keyed by 32-bit packet ids); no other production code in this repository
+/// references it. It is the 64-bit counterpart of <see cref="RoaringBitmap"/> in the public API.
 /// </para>
 /// </summary>
 public sealed class RoaringTreemap
 {
     #region Fields
 
+    // High 32 bits -> bitmap of the low 32 bits. Sorted so that iteration (Entries and the set operations) is in ascending
+    // key order and results are deterministic. Only non-empty buckets are stored: And / AndNot / Xor drop buckets whose
+    // result is empty, and Add creates a bucket on first use.
     private readonly SortedDictionary<uint, RoaringBitmap> _Map = [];
 
     #endregion
 
     #region Properties
 
-    /// <summary>Total number of values stored.</summary>
+    /// <summary>Total number of values stored. O(number of buckets): sums the bucket cardinalities, no cached total.</summary>
     public long Cardinality
     {
         get
@@ -48,9 +56,11 @@ public sealed class RoaringTreemap
 
     #region Public API
 
-    /// <summary>Adds a 64-bit value.</summary>
+    /// <summary>Adds a 64-bit value. Not thread-safe.</summary>
+    /// <param name="value">The value to add.</param>
     public void Add(ulong value)
     {
+        // Split into bucket key (high 32 bits) and the value inside the bucket (low 32 bits).
         uint high = (uint)(value >> 32);
         uint low = (uint)(value & 0xFFFFFFFF);
 
@@ -63,6 +73,7 @@ public sealed class RoaringTreemap
     }
 
     /// <summary>Checks if a 64-bit value is present.</summary>
+    /// <param name="value">The value to look up.</param>
     public bool Contains(ulong value)
     {
         uint high = (uint)(value >> 32);
@@ -84,10 +95,12 @@ public sealed class RoaringTreemap
         return result;
     }
 
-    /// <summary>AND (intersection) with another treemap.</summary>
+    /// <summary>AND (intersection) with another treemap. Neither operand is modified.</summary>
+    /// <param name="other">The other operand.</param>
     public RoaringTreemap And(RoaringTreemap other)
     {
-        // Fast-path: x AND x == clone(x). Skip the per-bitmap intersection cost.
+        // Fast-path: x AND x == clone(x). Skip the per-bitmap intersection cost. The result is still a clone, never `this`,
+        // so the caller can mutate it without touching the operand.
         if (ReferenceEquals(this, other))
         {
             return Clone();
@@ -107,7 +120,8 @@ public sealed class RoaringTreemap
         return result;
     }
 
-    /// <summary>OR (union) with another treemap.</summary>
+    /// <summary>OR (union) with another treemap. Neither operand is modified.</summary>
+    /// <param name="other">The other operand.</param>
     public RoaringTreemap Or(RoaringTreemap other)
     {
         // Fast-path: x OR x == clone(x).
@@ -137,7 +151,8 @@ public sealed class RoaringTreemap
         return result;
     }
 
-    /// <summary>ANDNOT (difference) with another treemap.</summary>
+    /// <summary>ANDNOT (difference, this AND NOT other) with another treemap. Neither operand is modified.</summary>
+    /// <param name="other">The other operand.</param>
     public RoaringTreemap AndNot(RoaringTreemap other)
     {
         // Fast-path: x ANDNOT x == empty.
@@ -164,7 +179,8 @@ public sealed class RoaringTreemap
         return result;
     }
 
-    /// <summary>XOR (symmetric difference) with another treemap.</summary>
+    /// <summary>XOR (symmetric difference) with another treemap. Neither operand is modified.</summary>
+    /// <param name="other">The other operand.</param>
     public RoaringTreemap Xor(RoaringTreemap other)
     {
         // Fast-path: x XOR x == empty.
@@ -202,7 +218,10 @@ public sealed class RoaringTreemap
 
     #region Private Helpers
 
-    /// <summary>Internal: provides access to the map for iteration during upgrade.</summary>
+    /// <summary>
+    /// Internal read access to the buckets (high 32 bits to bitmap) in ascending key order. Callers must not mutate the
+    /// bitmaps. Currently used only by tests to inspect the bucket layout.
+    /// </summary>
     internal IEnumerable<KeyValuePair<uint, RoaringBitmap>> Entries => _Map;
 
     #endregion

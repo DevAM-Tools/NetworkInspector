@@ -43,6 +43,9 @@ public sealed partial class SettingsManager
         ArgumentNullException.ThrowIfNull(name);
         ArgumentOutOfRangeException.ThrowIfLessThan(max, 1);
 
+        // Copy the names under the read lock and do the ranking after releasing it: the edit-distance work is proportional to
+        // the number of settings and must not hold the lock. This runs on error paths ("did you mean"), not per packet, so the
+        // copies and the per-candidate row arrays in _EditDistance are accepted.
         string[] names;
         _Lock.EnterReadLock();
         try
@@ -80,6 +83,8 @@ public sealed partial class SettingsManager
             }
         }
 
+        // Sort by the full key, ending in the ordinal name: List.Sort is not stable, and the tie-break makes the result the same
+        // on every run and platform (callers print the list and tests compare it).
         ranked.Sort(static (left, right) =>
         {
             int byTier = left.Tier.CompareTo(right.Tier);
@@ -122,11 +127,14 @@ public sealed partial class SettingsManager
     /// </summary>
     private static int _EditDistance(string left, string right, int limit)
     {
+        // The distance is at least the difference of the lengths, so such a pair is rejected without touching a character.
         if (Math.Abs(left.Length - right.Length) > limit)
         {
             return limit + 1;
         }
 
+        // Classic two-row dynamic programming (memory O(right.Length) instead of a full matrix); the rows swap each iteration.
+        // Case is ignored per character with the invariant lower-case mapping; no strings are allocated for the comparison.
         int[] previous = new int[right.Length + 1];
         int[] current = new int[right.Length + 1];
         for (int j = 0; j <= right.Length; j++)

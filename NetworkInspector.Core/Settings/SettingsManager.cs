@@ -26,18 +26,38 @@ namespace NetworkInspector.Core.Settings;
 /// <see cref="MaxConfigFileBytes"/> and <see cref="MaxJsonDepth"/> are assigned in the
 /// constructor and never change; readers do not take the instance reader-writer lock for those fields.
 /// </para>
+/// <para>
+/// <b>Locking:</b> the instance lock guards the registries (settings, groups, orphans, preloads). The order is always instance
+/// lock first, then the lock of a <see cref="Setting"/> or <see cref="SettingGroup"/>; those never call back into the manager
+/// while holding their own lock. No file I/O happens under the instance lock: <see cref="Load"/> reads and parses a file first
+/// and only then takes the write lock to apply the parsed values, and <see cref="Save"/> copies what it needs under the read
+/// lock and writes afterwards. Events
+/// (<see cref="SettingsApplied"/>, <see cref="PendingChanged"/>) are raised after every lock is released, so a handler may call
+/// back into the manager. Cross-process safety of the storage folder comes from the lock file used by <see cref="Save"/> and
+/// <see cref="SaveChanged"/>, not from the instance lock.
+/// </para>
 /// </summary>
 public sealed partial class SettingsManager : IDisposable
 {
     /// <summary>
     /// Default maximum size in bytes for persisted settings JSON and referenced protocol config files (1 GiB).
     /// A 1 GiB load fully deserializes JSON and can exhaust memory. Values <c>&lt;= 0</c> disable the size check.
+    /// Limit record: value 1 GiB · threat: a hostile or runaway file exhausting memory, because each file is parsed into a
+    /// complete in-memory document · configurable per manager at construction by code or by the operator (the CLI options
+    /// <c>--settings-max-config-file-bytes</c>), never by end users at run time, and fixed afterwards · posture: open by
+    /// default (a loose default so that large legitimate configuration files load; lowering it is opt-in). A file above the
+    /// cap is skipped with a warning naming the cap, never truncated silently. Residual risk: a file just under the cap can
+    /// still use a large amount of memory on a small host.
     /// </summary>
     public const long DefaultMaxConfigFileBytes = 1_073_741_824;
 
     /// <summary>
     /// Default maximum JSON nesting depth for persisted settings JSON and referenced protocol config files.
     /// Values <c>&lt;= 0</c> disable the depth check (System.Text.Json still has a library ceiling).
+    /// Limit record: value 1024 · threat: deeply nested JSON exhausting the stack or time of the parser and of recursive walks
+    /// over the parsed tree · configurable at construction (code, operator via <c>--settings-max-json-depth</c>), fixed
+    /// afterwards · posture: open by default (far above any real settings file; lowering is opt-in). A file that nests deeper
+    /// is skipped with a syntax warning.
     /// </summary>
     public const int DefaultMaxJsonDepth = 1024;
 
@@ -47,11 +67,19 @@ public sealed partial class SettingsManager : IDisposable
     /// </summary>
     internal const int UnboundedJsonMaxDepth = 1_000_000;
 
-    /// <summary>Reusable JSON serializer options for saving settings.</summary>
+    /// <summary>
+    /// Reusable JSON serializer options for saving settings: indented, because the files are meant to be read and edited by
+    /// people. One shared instance that is never modified after the type initializer, so concurrent saves can use it.
+    /// </summary>
     private static readonly JsonSerializerOptions _WriteOptions = new()
     {
         WriteIndented = true
     };
+
+    // Guards _SettingsByName, _SettingsList, _GroupsByName, _GroupsList, _OrphanedValues, and _PreloadedValues. Reads (lookups,
+    // snapshots, counts) are frequent and overlap; writes (registration, load, bulk apply/reset, orphan changes) are rare, which
+    // is why a reader-writer lock was chosen over a plain lock. Names are ordinal (case-sensitive).
+    // Not guarded by it: _KnownGroupFiles (copy on write), _Disposed and _IsLoading (atomic flags).
     private readonly ReaderWriterLockSlim _Lock = new();
     private readonly Dictionary<string, Setting> _SettingsByName = new(StringComparer.Ordinal);
     private readonly List<Setting> _SettingsList = [];
@@ -74,7 +102,7 @@ public sealed partial class SettingsManager : IDisposable
     // Pre-loaded typed values keyed by setting name. Populated via PreloadValue
     // before the corresponding setting is registered. Consumed in RegisterSetting and
     // applied to the registered setting at registration time. This is the in-process
-    // counterpart to <see cref="_OrphanedValues"/> and avoids round-tripping through JSON
+    // counterpart to _OrphanedValues and avoids round-tripping through JSON
     // when a caller (e.g., a test harness) wants to override a setting before the protocol
     // that owns it has registered it.
     private readonly Dictionary<string, SettingValue> _PreloadedValues = new(StringComparer.Ordinal);
@@ -100,14 +128,29 @@ public sealed partial class SettingsManager : IDisposable
     /// <see cref="MaxConfigFileBytes"/> is <see cref="DefaultMaxConfigFileBytes"/>.
     /// <see cref="MaxJsonDepth"/> is <see cref="DefaultMaxJsonDepth"/>.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="storagePath"/> is <see langword="null"/>. A manager that does not
+    /// persist is created with the parameterless constructor.</exception>
     public SettingsManager(string storagePath)
-        : this(storagePath, DefaultMaxConfigFileBytes, DefaultMaxJsonDepth)
+        : this(_RequireStoragePath(storagePath), DefaultMaxConfigFileBytes, DefaultMaxJsonDepth)
     {
+    }
+
+    /// <summary>
+    /// Checks the argument of the path constructor. A null path would otherwise turn the manager into one that cannot persist
+    /// without any sign, and the first <see cref="Save"/> would report "No storage path configured" far from the cause.
+    /// </summary>
+    private static string _RequireStoragePath(string storagePath)
+    {
+        ArgumentNullException.ThrowIfNull(storagePath);
+        return storagePath;
     }
 
     /// <summary>
     /// Creates a new settings manager with a storage path, file-size cap, and JSON depth cap.
     /// Both caps are fixed for the lifetime of the instance. Values <c>&lt;= 0</c> disable that check.
+    /// Omitted validation: no argument is validated here. Every <see cref="long"/> and <see cref="int"/> value is meaningful
+    /// (<c>&lt;= 0</c> means "no cap"), and <paramref name="storagePath"/> is neither checked nor created; a path that cannot
+    /// be used shows up when <see cref="Load"/> or <see cref="Save"/> touches the file system.
     /// </summary>
     /// <param name="storagePath">
     /// Directory for JSON persistence, or <see langword="null"/> when this manager does not persist.
@@ -300,9 +343,13 @@ public sealed partial class SettingsManager : IDisposable
             throw InvalidNameSettingsException.ForUiName(setting.UiName);
         }
 
+        // The whole registration runs under the write lock so that the duplicate check, the group creation, the application of a
+        // stored value, and the insertion into both registries are one atomic step: a concurrent Load or registration sees the
+        // setting either completely or not at all. The setting lock taken inside (ApplyFromPersistence) comes second, as always.
         _Lock.EnterWriteLock();
         try
         {
+            // The duplicate check comes first so that a rejected registration changes nothing (no group, no preload consumed).
             if (_SettingsByName.ContainsKey(name))
             {
                 throw DuplicateNameSettingsException.ForSetting(name);
@@ -311,6 +358,7 @@ public sealed partial class SettingsManager : IDisposable
             // Ensure group exists
             _EnsureGroupExistsLocked(groupName);
 
+            // Bind before applying a stored value so that the setting coordinates with Load from now on.
             setting.BindToManager(this);
 
             // Apply any pre-loaded typed value (set via PreloadValue before the setting
@@ -326,8 +374,16 @@ public sealed partial class SettingsManager : IDisposable
                     setting.ApplyFromPersistence(preloaded);
                     loadResult = SettingLoadResult.Success;
                 }
+                catch (TypeMismatchSettingsException)
+                {
+                    // A refused preload never fails the registration: the setting keeps its default and the result says why.
+                    // A value of the wrong type is a type mismatch, not a range problem; reporting OutOfRange would send the
+                    // caller looking for a bound that does not exist. The preload is consumed either way.
+                    loadResult = SettingLoadResult.TypeMismatch;
+                }
                 catch (SettingsException)
                 {
+                    // Out of range (or another constraint of the setting): the setting keeps its default.
                     loadResult = SettingLoadResult.OutOfRange;
                 }
             }
@@ -337,6 +393,7 @@ public sealed partial class SettingsManager : IDisposable
                 loadResult = _TryLoadPersistedValueLocked(setting);
             }
 
+            // Read after the stored value was applied, so the result reports what the setting holds now.
             SettingValue currentValue = setting.Value;
 
             // Add to group
@@ -374,7 +431,11 @@ public sealed partial class SettingsManager : IDisposable
         _GroupsList.Add(groupName);
     }
 
-    /// <summary>Tries to load a persisted value for a setting from orphaned values.</summary>
+    /// <summary>
+    /// Tries to load a persisted value for a setting from orphaned values; the caller holds the write lock. Only a value that was
+    /// applied successfully is removed from the orphan table; a refused one (shape, decoding, or constraints) stays there and the
+    /// setting keeps its default.
+    /// </summary>
     private SettingLoadResult _TryLoadPersistedValueLocked(Setting setting)
     {
         if (!_OrphanedValues.TryGetValue(setting.GroupName, out Dictionary<string, JsonNode>? groupValues))
@@ -491,6 +552,10 @@ public sealed partial class SettingsManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// Snapshot of all settings as read-only views. <c>Wrap</c> copies the list into a new array while the read lock is held, so
+    /// the returned array is private to the caller and later registrations do not appear in it.
+    /// </summary>
     private IReadOnlyList<ReadOnlySettingView> _AllSettings
     {
         get
@@ -570,6 +635,11 @@ public sealed partial class SettingsManager : IDisposable
     #endregion
 
     #region Typed Accessors
+
+    // Each accessor looks the setting up under the manager read lock (GetSetting) and then reads the value lock-free from the
+    // setting's snapshot. They return null both for an unknown name and for a setting of another type, so callers that must tell
+    // the two apart use GetSetting. A caller that reads the same setting repeatedly should keep the Setting and use its own
+    // members, which take no lock at all. The array accessors return defensive copies.
 
     /// <summary>Convenience: gets a boolean setting value by name. Returns null if not found or not a Bool setting.</summary>
     public bool? GetBoolSetting(string name)
@@ -738,10 +808,15 @@ public sealed partial class SettingsManager : IDisposable
     #region Bulk Operations
 
     /// <summary>Applies all pending changes, returns list of changed setting names,
-    /// and fires <see cref="SettingsApplied"/> if at least one setting changed.</summary>
+    /// and fires <see cref="SettingsApplied"/> if at least one setting changed. The returned list is the same instance that the
+    /// event carries.</summary>
+    /// <exception cref="InvalidOperationException">A <see cref="Load"/> is in progress (raised by the setting).</exception>
     public IReadOnlyList<string> ApplyChanges()
     {
         List<string> changed;
+
+        // Write lock: the batch is one step with respect to registration and other bulk operations, so subscribers see a
+        // consistent set of changed names. IsDirty is a lock-free pre-check; clean settings never take their own lock.
         _Lock.EnterWriteLock();
         try
         {
@@ -771,6 +846,8 @@ public sealed partial class SettingsManager : IDisposable
     /// <summary>Resets all pending changes to current values and raises <see cref="PendingChanged"/> for each changed setting.</summary>
     public void ResetChanges()
     {
+        // The settings are reset without events while the lock is held and the events are raised for the collected names after
+        // the lock is released (see _RaisePendingChanged): a handler may call back into the manager.
         List<string> changed = [];
         _Lock.EnterWriteLock();
         try
@@ -791,7 +868,11 @@ public sealed partial class SettingsManager : IDisposable
         _RaisePendingChanged(changed);
     }
 
-    /// <summary>Resets all settings to their default values and raises <see cref="PendingChanged"/> for each setting whose pending value changed.</summary>
+    /// <summary>
+    /// Resets all settings to their default values (current and pending) and raises <see cref="PendingChanged"/> for each
+    /// setting whose pending value changed. A setting whose current value changed but whose pending value already was the
+    /// default raises no event, and <see cref="SettingsApplied"/> is not raised by this member.
+    /// </summary>
     public void ResetAllToDefaults()
     {
         List<string> changed = [];
@@ -898,6 +979,10 @@ public sealed partial class SettingsManager : IDisposable
             return [];
         }
 
+        // Claim the loading flag atomically: a second overlapping Load fails fast instead of waiting, because two loads would
+        // apply files in an interleaved order. While the flag is set the settings refuse their own mutators (see Setting),
+        // so a concurrent edit cannot be overwritten half way by a persisted value. Taken only after the folder check so
+        // that a missing folder never leaves the flag set.
         List<SettingsLoadWarning> warnings = [];
         if (Interlocked.CompareExchange(ref _IsLoading, 1, 0) != 0)
         {
@@ -906,6 +991,7 @@ public sealed partial class SettingsManager : IDisposable
         List<string> seen = [];
         try
         {
+            // Each group file is independent: a bad file produces a warning and is skipped, only I/O errors abort the load.
             foreach (string filePath in Directory.EnumerateFiles(StoragePath, "*.json"))
             {
                 _LoadGroupFile(filePath, warnings);
@@ -958,7 +1044,10 @@ public sealed partial class SettingsManager : IDisposable
             }
 
             // Size cap on the reported length first, then on the bytes actually read: the file can grow between the
-            // length check and the parse, and a non-regular file reports no useful length.
+            // length check and the parse, and a non-regular file reports no useful length. The cheap length check avoids
+            // starting a parse of an obviously oversized file. The file is parsed into a complete JsonNode tree (not streamed)
+            // because unknown keys must be kept verbatim as orphans; that is why the size and depth caps matter. This
+            // happens before the manager lock is taken so no file I/O runs under it.
             JsonNode? root;
             using (FileStream stream = SettingsFileAccess.OpenSharedRead(filePath))
             {
@@ -1017,7 +1106,10 @@ public sealed partial class SettingsManager : IDisposable
                 return;
             }
 
-            // Collect what to apply and what to orphan
+            // Collect what to apply and what to orphan. Conversion (shape and decoding) runs for the whole file first; only then are
+            // the values applied, so every conversion warning is known before the first setting changes. The write lock covers
+            // both the collection and the application (pure memory work, no I/O): registrations and bulk operations cannot
+            // interleave with it, and each setting still swaps its snapshot atomically under its own lock.
             List<(Setting Setting, SettingValue Value)> toApply = [];
             List<(string Name, JsonNode Value)> toOrphan = [];
 
@@ -1026,6 +1118,7 @@ public sealed partial class SettingsManager : IDisposable
             {
                 foreach (KeyValuePair<string, JsonNode?> prop in obj)
                 {
+                    // A JSON null means "no value stored": the setting keeps its default and nothing becomes an orphan.
                     if (prop.Value is null)
                     {
                         continue;
@@ -1085,7 +1178,8 @@ public sealed partial class SettingsManager : IDisposable
                     }
                 }
 
-                // Store orphaned values for later resolution when the setting is registered.
+                // Store orphaned values for later resolution when the setting is registered (for example a plugin that loads
+                // later). They are also what Save writes back, so keys of settings that are not registered in this run survive.
                 if (toOrphan.Count > 0)
                 {
                     if (!_OrphanedValues.TryGetValue(groupName, out Dictionary<string, JsonNode>? orphans))
@@ -1165,10 +1259,15 @@ public sealed partial class SettingsManager : IDisposable
 
         try
         {
-            Directory.CreateDirectory(StoragePath);
+            // The folder lock serializes every writer of the folder across processes (Save and SaveChanged), so the sequence
+            // below (write group files, read manifest, delete stale files, rewrite manifest) cannot interleave with another
+            // writer's. It is taken before the instance lock and is not held during Load, which only reads.
+            _CreateStorageFolder(StoragePath);
             using FolderLock folderLock = FolderLock.Acquire(StoragePath);
 
-            // Group the content by file name: non-default values and orphans only.
+            // Group the content by file name: non-default values and orphans only. The JSON is built under the read lock into
+            // private objects, and all file I/O below runs after the lock is released, so slow disks never block readers of
+            // the manager.
             Dictionary<string, JsonObject> groups = [];
 
             _Lock.EnterReadLock();
@@ -1185,13 +1284,23 @@ public sealed partial class SettingsManager : IDisposable
                     _GroupObject(groups, setting.GroupName)[setting.Name] = SettingValueJson.ToNode(setting.Value);
                 }
 
-                // Orphans are written back; their group files therefore stay "current" and are not deleted.
+                // Orphans are written back; their group files therefore stay "current" and are not deleted. A stored value whose
+                // setting is registered by now (the registration refused it, so it stayed in the orphan table) is not an orphan
+                // of this run: the registered setting decides the key, like in SaveChanged. Without the skip the stale value
+                // would be written after the setting's value and replace it, and a value the user corrected would come back.
+                // The group object is created only when something is written, so a group whose orphans were all skipped gets
+                // no empty file.
                 foreach (KeyValuePair<string, Dictionary<string, JsonNode>> orphanGroup in _OrphanedValues)
                 {
-                    JsonObject obj = _GroupObject(groups, orphanGroup.Key);
                     foreach (KeyValuePair<string, JsonNode> orphan in orphanGroup.Value)
                     {
-                        obj[orphan.Key] = orphan.Value.DeepClone();
+                        if (_SettingsByName.TryGetValue(orphan.Key, out Setting? owner)
+                            && string.Equals(owner.GroupName, orphanGroup.Key, StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+
+                        _GroupObject(groups, orphanGroup.Key)[orphan.Key] = orphan.Value.DeepClone();
                     }
                 }
             }
@@ -1200,7 +1309,9 @@ public sealed partial class SettingsManager : IDisposable
                 _Lock.ExitReadLock();
             }
 
-            // Write each group atomically via temp file + replace
+            // Write each group atomically via temp file + replace: a reader sees the old file or the new one, never half of
+            // one (the temp file is not flushed to disk before the move, so this protects against concurrent readers and
+            // interrupted processes, not against power loss). The temp file lives in the same folder, so the move is a rename within one volume.
             HashSet<string> currentGroupFiles = new(StringComparer.OrdinalIgnoreCase);
             foreach (KeyValuePair<string, JsonObject> group in groups)
             {
@@ -1210,10 +1321,13 @@ public sealed partial class SettingsManager : IDisposable
                 string tempPath = filePath + ".tmp";
                 string json = group.Value.ToJsonString(_WriteOptions);
                 File.WriteAllText(tempPath, json);
-                File.Move(tempPath, filePath, overwrite: true);
+                SettingsFileAccess.ReplaceFile(tempPath, filePath);
             }
 
             // Remove stale group files this manager knows, never unrelated JSON and never what another process created since Load.
+            // A file is deleted only when all three hold: the manifest lists it (it is a group file of ours, not foreign JSON),
+            // this manager saw it at Load or wrote it itself (or never loaded at all), and this save does not write it. The
+            // manifest is the allow-list that keeps an unrelated "notes.json" in the folder safe from the cleanup.
             string manifestPath = Path.Combine(StoragePath, SettingsFileAccess.OwnedGroupManifestFileName);
             HashSet<string> previouslyOwned = _ReadOwnedGroupFiles(manifestPath);
             KnownGroupFiles known = Volatile.Read(ref _KnownGroupFiles);
@@ -1235,7 +1349,8 @@ public sealed partial class SettingsManager : IDisposable
             _WriteOwnedGroupFiles(manifestPath, previouslyOwned);
             _RecordKnownGroupFiles(loaded: false, currentGroupFiles, deleted);
 
-            // Clean up leftover temp files from interrupted saves
+            // Clean up leftover temp files from interrupted saves. Safe to delete every "*.json.tmp": all writers hold the folder
+            // lock while they create one, so none can be in flight now.
             foreach (string tempFile in Directory.EnumerateFiles(StoragePath, "*.json.tmp"))
             {
                 File.Delete(tempFile);
@@ -1258,6 +1373,10 @@ public sealed partial class SettingsManager : IDisposable
     /// <summary>
     /// Reads the owned-group manifest. Missing or oversized files yield an empty set
     /// so unrelated JSON is never deleted.
+    /// Security/safety decision: every failure mode (missing, over the cap, unreadable, malformed line) fails toward "own less",
+    /// because an empty or smaller set can only cause a stale file to stay, whereas a wrongly large set would delete a file
+    /// the user keeps in the folder. Entries must be plain <c>*.json</c> file names; anything that looks like a path is
+    /// ignored, so a tampered manifest cannot make <see cref="Save"/> delete files outside the folder.
     /// </summary>
     private HashSet<string> _ReadOwnedGroupFiles(string manifestPath)
     {
@@ -1316,7 +1435,12 @@ public sealed partial class SettingsManager : IDisposable
         return owned;
     }
 
-    /// <summary>Writes the owned-group manifest as one file name per line.</summary>
+    /// <summary>
+    /// Writes the owned-group manifest as one file name per line (UTF-8 with a byte-order mark, which the reader detects).
+    /// The file is rewritten in place under the folder lock (unlike the group files, there is no temp file and move). An
+    /// interrupted write can only leave a manifest that lists fewer files (see <c>_ReadOwnedGroupFiles</c>), and the worst
+    /// outcome of that is a stale group file that is not cleaned up.
+    /// </summary>
     private static void _WriteOwnedGroupFiles(string manifestPath, HashSet<string> currentGroupFiles)
     {
         using FileStream stream = new(
@@ -1344,6 +1468,9 @@ public sealed partial class SettingsManager : IDisposable
     /// </summary>
     public void Dispose()
     {
+        // Exchange makes the first caller the only one that disposes, even when two threads race. The group dictionary is
+        // read without the instance lock: the contract is that nobody uses the manager during or after Dispose, so no
+        // registration can modify it concurrently.
         if (Interlocked.Exchange(ref _Disposed, 1) == 0)
         {
             // Dispose all group-owned ReaderWriterLockSlim instances before the manager lock.

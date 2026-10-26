@@ -6,7 +6,8 @@ namespace NetworkInspector.Core.Errors;
 /// Thrown when a machine-readable name or human-readable UI name is invalid
 /// (e.g., contains illegal characters or is empty).
 /// </summary>
-/// <remarks>Creates a new invalid-name settings exception.</remarks>
+/// <param name="name">The rejected name.</param>
+/// <param name="message">Message text; built by the factory methods so machine and UI name failures read differently.</param>
 public sealed class InvalidNameSettingsException(string name, string message)
     : SettingsException(message)
 {
@@ -20,10 +21,12 @@ public sealed class InvalidNameSettingsException(string name, string message)
     #region Factory Methods
 
     /// <summary>Creates an exception for an invalid machine-readable name.</summary>
+    /// <param name="name">The rejected name.</param>
     internal static InvalidNameSettingsException ForName(string name) =>
         new(name, $"Invalid name: {name}");
 
     /// <summary>Creates an exception for an invalid human-readable UI name.</summary>
+    /// <param name="name">The rejected UI name.</param>
     internal static InvalidNameSettingsException ForUiName(string name) =>
         new(name, $"Invalid UI name: {name}");
 

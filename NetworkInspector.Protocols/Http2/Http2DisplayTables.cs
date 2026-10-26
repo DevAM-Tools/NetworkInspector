@@ -5,6 +5,13 @@ namespace NetworkInspector.Protocols.Http2;
 /// <summary>
 /// Precomputed display text tables for HTTP/2 frame types, error codes, and settings.
 /// All tables use zero-allocation static lookups.
+/// <para>
+/// Design: the display text is read for every parsed HTTP/2 frame, so the strings are built once by the type
+/// initializer and the parse path only indexes an array. A value outside a table (an error code or settings
+/// identifier above the table size) is rare and takes a formatting fallback that allocates.
+/// </para>
+/// <para><b>Thread-safety:</b> the tables are built by the type initializer and never modified, so all members are safe for
+/// concurrent use.</para>
 /// </summary>
 internal static class Http2DisplayTables
 {
@@ -36,7 +43,8 @@ internal static class Http2DisplayTables
         return table;
     }
 
-    /// <summary>Returns precomputed display text for an HTTP/2 frame type.</summary>
+    /// <summary>Returns precomputed display text for an HTTP/2 frame type; unnamed types print as the number.</summary>
+    /// <param name="frameType">The 8-bit frame type; the table covers the whole byte range, so no range check is needed.</param>
     public static string GetFrameTypeDisplayText(byte frameType) =>
         _FrameTypeDisplayText[frameType];
 
@@ -79,6 +87,10 @@ internal static class Http2DisplayTables
     /// Returns display text for an HTTP/2 error code.
     /// Only values 0-255 use the fast table; larger values fall back to formatting.
     /// </summary>
+    /// <param name="errorCode">
+    /// The 32-bit error code of a RST_STREAM or GOAWAY frame. The defined codes are 0-13; unnamed codes print as lower-case hex
+    /// ("0x" + digits, no padding), matching the name format "NAME (0xN)".
+    /// </param>
     public static string GetErrorCodeDisplayText(uint errorCode)
     {
         if (errorCode < 256)
@@ -97,6 +109,8 @@ internal static class Http2DisplayTables
 
     private static string[] _GenerateSettingsTable()
     {
+        // Identifiers 1-6 are defined by RFC 7540; the table has room for 16 and names the rest "Unknown" so the common
+        // case (a small identifier) never formats. Larger identifiers use the fallback in GetSettingsDisplayText.
         string[] table = new string[16];
         for (int i = 0; i < 16; i++)
         {
@@ -116,6 +130,7 @@ internal static class Http2DisplayTables
     }
 
     /// <summary>Returns display text for an HTTP/2 settings identifier.</summary>
+    /// <param name="settingsId">The 16-bit settings identifier of a SETTINGS entry; identifiers outside 1-6 print as "Unknown (0x..)".</param>
     public static string GetSettingsDisplayText(ushort settingsId)
     {
         if (settingsId < 16)

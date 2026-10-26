@@ -109,6 +109,32 @@ internal sealed class SourceConfigTests
     }
 
     [Test]
+    public async Task BlankPairsBetweenCommasAreIgnored()
+    {
+        using BuiltInRegistry registry = new();
+
+        SourceConfig config = SourceConfig.Parse("random:count=5,, seed=7,", registry.Registry);
+
+        await Assert.That(_OptionText(config)).IsEqualTo("count=5,seed=7");
+    }
+
+    [Test]
+    [Arguments("random:count=5,flag", "flag")]
+    [Arguments("random:count", "count")]
+    [Arguments("random:=5", "=5")]
+    [Arguments("random:count=5,=7", "=7")]
+    public async Task APairWithoutANameOrAnEqualsSignIsRefusedAndNamed(string spec, string pair)
+    {
+        using BuiltInRegistry registry = new();
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(() => SourceConfig.Parse(spec, registry.Registry));
+
+        // A dropped pair would silently run the source with a default the user did not ask for.
+        await Assert.That(exception.Message).Contains($"'{pair}'");
+        await Assert.That(exception.Message).Contains("key=value");
+    }
+
+    [Test]
     public async Task WithDefaultOptionAddsAnOptionOnlyWhenTheSpecDoesNotSetIt()
     {
         using BuiltInRegistry registry = new();

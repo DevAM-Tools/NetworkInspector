@@ -2,7 +2,10 @@
 
 namespace NetworkInspector.Plugins.Loader;
 
-/// <summary>Result of one load: the pre-scan summary and one record per plugin, in load order.</summary>
+/// <summary>
+/// Result of one load: the pre-scan summary and one record per plugin, in load order. Immutable by use: the lifecycle returns a
+/// new report in which a plugin that failed to start is Failed, and never edits this one.
+/// </summary>
 /// <param name="Prescan">Counters and time of the pre-scan.</param>
 /// <param name="Plugins">Built-in plugins first, then configured paths that were not found, then plugin assemblies in path order.</param>
 public sealed record PluginLoadReport(PrescanSummary Prescan, IReadOnlyList<PluginRecord> Plugins);

@@ -52,9 +52,15 @@ public sealed class BlfSourceOptions : IFileSourceOptions
     /// Files smaller than or equal to this value are read into a byte array at open time
     /// (zero-copy random access). Files larger than this value are memory-mapped, which
     /// avoids pinning large LOH allocations at the cost of additional I/O syscalls.
+    /// <see langword="null"/> never preloads (always memory-mapped); a file larger than <see cref="Array.MaxLength"/> is
+    /// memory-mapped even with a larger budget (<c>PreloadDecision.ShouldPreload</c>).
     /// Must be non-negative.
     /// Default is 256 MiB on 64-bit processes and 64 MiB on 32-bit processes.
     /// </summary>
+    /// <remarks>
+    /// Configurable by the caller of <c>BlfSource.Open</c> only (init-only). The budget is the resident memory a source may
+    /// take for the file; it is not a trust limit on untrusted input, because a larger file is mapped, not rejected.
+    /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">Value is negative.</exception>
     public long? PreloadBudget
     {
@@ -111,7 +117,9 @@ public sealed class BlfSourceOptions : IFileSourceOptions
     /// With 0, Ethernet frames of object types 102 and 120–123 alias the decompressed container (no copy), so a held
     /// Ethernet frame keeps its whole container (up to <see cref="MaxUncompressedContainerSize"/>) alive. With a slab
     /// size set, they are copied into the slab as well, which bounds that retention to one slab.
-    /// <see cref="BlfSource.FrameById"/> always allocates one array per frame.
+    /// <see cref="BlfSource.FrameById"/> never uses slabs and allocates one array per frame, with one exception: an
+    /// Ethernet frame of object types 102 and 120–123 that sits inside a container aliases the cached container
+    /// memory (as with 0 here), so a held frame keeps that container alive whatever this option says.
     /// </para>
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value is neither 0 nor in 1 024 … 16 777 216.</exception>
@@ -141,15 +149,20 @@ public sealed class BlfSourceOptions : IFileSourceOptions
     /// </para>
     /// <para>
     /// <b>Security recommendation:</b> When processing BLF files from untrusted sources,
-    /// set this to a realistic upper bound for your capture equipment (e.g. 128 MiB).
+    /// keep this at a realistic upper bound for your capture equipment (the default is 128 MiB).
     /// Without a limit, a malicious BLF file can declare
     /// <c>uncompressedSize = 4 294 967 295</c> (uint max), causing a ~4 GiB single
-    /// allocation attempt. All three call sites catch <see cref="OutOfMemoryException"/>
+    /// allocation attempt. The decompression call sites catch <see cref="OutOfMemoryException"/>
     /// with clean rollback, so the process remains stable — but the allocation attempt
     /// itself may trigger GC pressure. A configured limit rejects the container before
     /// any allocation occurs.
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// Limit record: range 0 (off) or 1 … <see cref="long.MaxValue"/> bytes; threat: memory exhaustion by an untrusted
+    /// <c>uncompressedSize</c> field (and by the carry stitch, which obeys the same cap); configurable by the caller of
+    /// <c>BlfSource.Open</c> (init-only, no end-user setting); secure by default (128 MiB), disabling it is opt-in.
+    /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">Value is negative.</exception>
     public long MaxUncompressedContainerSize
     {
@@ -181,6 +194,11 @@ public sealed class BlfSourceOptions : IFileSourceOptions
     /// Must be at least 1.
     /// Default: <see cref="Environment.ProcessorCount"/>.
     /// </summary>
+    /// <remarks>
+    /// Limit record: range 1 … <see cref="int.MaxValue"/>; threat: unbounded transient memory when many reader threads
+    /// miss the container cache at once; configurable by the caller of <c>BlfSource.Open</c> (init-only); the default is
+    /// derived from the host (core count) instead of a fixed number.
+    /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">Value is less than 1.</exception>
     public int MaxDecompressionConcurrency
     {

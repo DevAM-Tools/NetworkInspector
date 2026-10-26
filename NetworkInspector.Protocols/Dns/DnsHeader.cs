@@ -3,7 +3,9 @@
 namespace NetworkInspector.Protocols.Dns;
 
 /// <summary>
-/// DNS header (12 bytes, RFC 1035 Section 4.1.1).
+/// DNS header (12 bytes, RFC 1035 Section 4.1.1), all fields big-endian on the wire. Immutable value type; the
+/// flag accessors decode bits from <see cref="Flags"/> on demand. The diagram below uses the RFC's bit numbering
+/// (bit 0 = most significant); the accessors use ordinary masks on the 16-bit value read as big-endian.
 /// <code>
 ///  0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15
 /// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
@@ -37,7 +39,7 @@ internal readonly record struct DnsHeader(
 {
     #region Constants
 
-    /// <summary>Minimum header size in bytes.</summary>
+    /// <summary>Header size in bytes: the DNS header has a fixed length of 12 bytes.</summary>
     internal const int Size = 12;
 
     #endregion
@@ -93,7 +95,11 @@ internal readonly record struct DnsHeader(
     /// <summary>
     /// Tries to parse a DNS header from the given span.
     /// Returns false if the data is shorter than <see cref="Size"/> bytes.
+    /// The counts are taken as declared and are not checked against the data: they are untrusted, and callers must
+    /// bound their section walks by the message length instead.
     /// </summary>
+    /// <param name="data">The DNS message starting at the header; bytes after the first 12 are ignored.</param>
+    /// <param name="header">The decoded header, or <see langword="default"/> when the method returns <see langword="false"/>.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static bool TryParse(ReadOnlySpan<byte> data, out DnsHeader header)
     {

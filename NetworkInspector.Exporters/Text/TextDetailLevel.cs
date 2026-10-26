@@ -9,7 +9,9 @@ public enum TextDetailLevel : byte
 {
     /// <summary>
     /// Only protocol container fields (<see cref="FieldType.None"/>) are shown.
-    /// Value fields are omitted. Provides a structural protocol overview: one line per protocol layer.
+    /// Value fields are omitted. Provides a structural protocol overview: one line per container.
+    /// Only the direct children of the packet root are visited: the exporter does not descend into the children of a
+    /// container at this level, so protocol layers nested inside another container are not listed.
     /// </summary>
     Summary = 0,
 
@@ -22,7 +24,8 @@ public enum TextDetailLevel : byte
 
     /// <summary>
     /// All fields including raw byte buffers are shown.
-    /// Byte fields are rendered as space-separated lowercase hex.
+    /// Byte fields are rendered as space-separated lowercase hex (two digits per byte, one space between bytes; as many
+    /// whole bytes as fit the maximum text length are shown).
     /// All values are still subject to the configured maximum text length.
     /// </summary>
     Full = 2,

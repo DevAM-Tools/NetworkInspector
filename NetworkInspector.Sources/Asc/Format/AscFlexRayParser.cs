@@ -14,14 +14,39 @@ namespace NetworkInspector.Sources.Asc.Format;
 ///
 /// LINKTYPE_FLEXRAY frame layout (7-byte header + data):
 ///   Measurement header + error flags + ISO 17458-2 frame header + payload.
+/// The frame itself is built by <c>FlexRayLinkTypeFrame.BuildFrame</c>, which pads the payload with a zero byte to an even
+/// length (FlexRay payloads are whole 16-bit words) and throws for a slot above 2047 or a cycle above 63; the parser checks
+/// both limits first, so such a line is rejected (the method returns <c>false</c>) and never throws.
+/// Unlike the CAN, LIN and Ethernet parsers there is no slab overload: every FlexRay frame is its own array.
+/// Stateless; safe to call from multiple threads.
 /// </summary>
 internal static class AscFlexRayParser
 {
+    #region Constants
+
+    /// <summary>
+    /// Largest slot the frame builder accepts (the ISO frame ID is 11 bits). A fact of the format, so a constant. A line
+    /// with a larger slot is rejected here: <c>FlexRayLinkTypeFrame.BuildFrame</c> throws for it, and a hostile ASC line
+    /// must end as a counted parse failure, never as an exception out of a <c>Try</c> parser.
+    /// </summary>
+    private const int _MaxSlot = (int)FlexRayLinkTypeFrame.FrameIdKeyMask;
+
+    #endregion
+
     #region Public API
 
     /// <summary>
     /// Parses an ASC FlexRay line from raw ASCII bytes.
     /// </summary>
+    /// <param name="line">The full trimmed ASC line (including timestamp).</param>
+    /// <param name="numericBase">16 for hex, 10 for dec — from the file header; applies to every numeric column.</param>
+    /// <param name="timestamp">Parsed line timestamp. Not scaled to Unix time.</param>
+    /// <param name="channel">
+    /// Old format: the channel after <c>Fr</c> (1 = A, 2 = B). New format: the application channel (interface id), which
+    /// is not the same as the bus channel stored in the frame.
+    /// </param>
+    /// <param name="frame">The LINKTYPE_FLEXRAY frame. Empty when this method returns <c>false</c>.</param>
+    /// <returns><c>true</c> if parsing succeeded.</returns>
     internal static bool TryParse(
         ReadOnlySpan<byte> line, int numericBase,
         out AscTimestamp timestamp, out int channel, out byte[] frame)
@@ -49,6 +74,7 @@ internal static class AscFlexRayParser
             return false;
         }
 
+        // The token after "Fr" tells the generation of the format: RMSG or PDU is the new layout, a channel number the old one.
         bool isHex = numericBase == 16;
         if (_TokenIs(kindOrChannel, "RMSG"u8) || _TokenIs(kindOrChannel, "PDU"u8))
         {
@@ -83,7 +109,7 @@ internal static class AscFlexRayParser
 
         if (!_TryParseFlexInt(ref tokenizer, isHex, out int frameIdValue)
             || frameIdValue < 0
-            || frameIdValue > ushort.MaxValue)
+            || frameIdValue > _MaxSlot)
         {
             return false;
         }
@@ -118,6 +144,9 @@ internal static class AscFlexRayParser
             return false;
         }
 
+        // dataLen is at most MaxPayloadBytes (254), so the rental is small and bounded. The pooled scratch avoids a
+        // throwaway array per line; BuildFrame copies the payload into the frame, so the rental is returned right after.
+        // Fewer data tokens than the declared count give a shorter payload (parsedCount), not zero-filled bytes.
         byte[] dataBytes = ArrayPool<byte>.Shared.Rent(dataLen);
         try
         {
@@ -171,7 +200,7 @@ internal static class AscFlexRayParser
 
         if (!_TryParseFlexInt(ref tokenizer, isHex, out int slot)
             || slot < 0
-            || slot > ushort.MaxValue)
+            || slot > _MaxSlot)
         {
             return false;
         }
@@ -221,6 +250,9 @@ internal static class AscFlexRayParser
             return false;
         }
 
+        // payloadLength is the frame's payload size and bufferLength the bytes the line actually lists (the rest of a longer
+        // payload is not logged): the payload array has the full length with the unlisted tail left zero. Both are
+        // bounded by MaxPayloadBytes above, so the allocation is at most 254 bytes. A missing or invalid listed byte fails the line.
         byte[] data = new byte[payloadLength];
         for (int i = 0; i < bufferLength; i++)
         {
@@ -248,6 +280,11 @@ internal static class AscFlexRayParser
 
     #region Private Helpers
 
+    /// <summary>
+    /// Parses up to <paramref name="dataLen"/> data byte tokens into <paramref name="dataBytes"/> and returns how many were
+    /// read; stops at the first missing or invalid token. The caller guarantees <paramref name="dataBytes"/> holds at least
+    /// <paramref name="dataLen"/> bytes.
+    /// </summary>
     private static int _ParseByteDataTokens(
         ref AscTokenizerBytes tokenizer, int dataLen, bool isHex, byte[] dataBytes)
     {
@@ -271,6 +308,10 @@ internal static class AscFlexRayParser
         return parsedCount;
     }
 
+    /// <summary>
+    /// Reads the next token as a number in the file base (hexadecimal or decimal); the whole token must be consumed. The
+    /// result is a non-negative <see cref="int"/> for hex; a decimal token may be negative, so callers range-check it.
+    /// </summary>
     private static bool _TryParseFlexInt(ref AscTokenizerBytes tokenizer, bool isHex, out int value)
     {
         value = 0;

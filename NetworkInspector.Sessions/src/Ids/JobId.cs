@@ -5,7 +5,16 @@ namespace NetworkInspector.Sessions.Ids;
 /// <summary>
 /// Strongly-typed identifier for a session job.
 /// Wraps an <see cref="int"/> with value semantics.
+/// <para>
+/// The session issues job ids densely from zero, and ids are used as array indexes, so the valid range is the one
+/// defined by <see cref="Core.Ids.ArrayIndexIdRange"/>. The only negative value accepted is <see cref="Invalid"/>.
+/// Caution: <c>default(JobId)</c> has value 0, which is a <b>valid</b> id, not <see cref="Invalid"/>; compare
+/// against <see cref="Invalid"/> or test <see cref="IsValid"/> instead of relying on <see langword="default"/>.
+/// </para>
+/// <para>Immutable value type; thread safety is not applicable.</para>
 /// </summary>
+/// <param name="value">The raw id; <c>-1</c> or an index in <c>0 … ArrayIndexIdRange.MaxValue</c>.</param>
+/// <exception cref="ArgumentOutOfRangeException"><paramref name="value"/> is negative but not <c>-1</c>, or above the maximum index.</exception>
 [StructLayout(LayoutKind.Sequential)]
 [method: MethodImpl(MethodImplOptions.AggressiveInlining)]
 public readonly struct JobId(int value) : IEquatable<JobId>, IComparable<JobId>
@@ -72,6 +81,11 @@ public readonly struct JobId(int value) : IEquatable<JobId>, IComparable<JobId>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >=(JobId left, JobId right) => left.Value >= right.Value;
 
+    /// <summary>
+    /// Constructor guard: lets the <see cref="Invalid"/> sentinel through and rejects every other out-of-range value, so
+    /// an id that exists is always either the sentinel or a usable array index. Inlined because it runs on every
+    /// construction; the throw path is out of line in <see cref="Core.Ids.ArrayIndexIdRange"/>.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int _StoreValidated(int value)
     {

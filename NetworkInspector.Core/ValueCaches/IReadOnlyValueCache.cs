@@ -17,6 +17,11 @@ namespace NetworkInspector.Core.ValueCaches;
 /// writer-only members. Keep that compile-time type; assigning to
 /// <see cref="IReadOnlyValueCacheSeries{T}"/> boxes.
 /// </para>
+/// <para>
+/// Thread safety: every member is a read and may be called from any thread while the single writer fills the cache;
+/// the cache can still grow under <see cref="RecordAllFields"/> and the sticky flags can change, so re-read rather than cache
+/// them. See <see cref="ValueCache"/> for the single-writer / multi-reader contract.
+/// </para>
 /// </summary>
 public interface IReadOnlyValueCache
 {
@@ -46,19 +51,28 @@ public interface IReadOnlyValueCache
         get;
     }
 
-    /// <summary>Sticky strictly-increasing packet-id flag.</summary>
+    /// <summary>
+    /// Sticky strictly-increasing packet-id flag: true until a recorded packet id is lower than the one before it.
+    /// Never returns to true.
+    /// </summary>
     bool PacketIdsStrictlyIncreasing
     {
         get;
     }
 
-    /// <summary>Sticky strictly-increasing timestamp flag.</summary>
+    /// <summary>
+    /// Sticky strictly-increasing timestamp flag: true until a recorded packet has a timestamp that is not later than the
+    /// previous packet's. Never returns to true.
+    /// </summary>
     bool TimestampsStrictlyIncreasing
     {
         get;
     }
 
-    /// <summary>Sticky materialization-cap flag.</summary>
+    /// <summary>
+    /// Sticky materialization-cap flag: set when expanding lazy containers hit the pass cap, so some columns may be
+    /// incomplete. Never reset.
+    /// </summary>
     bool IsMaterializationIncomplete
     {
         get;
@@ -82,12 +96,24 @@ public interface IReadOnlyValueCache
     /// Returns the payload series for <paramref name="fieldId"/>.
     /// Keep the compile-time type as <see cref="ReadOnlyValueCacheSeries{T}"/>.
     /// </summary>
+    /// <typeparam name="T">
+    /// The CLR type the cache stores for the field's <see cref="FieldType"/> (for example <c>ulong</c> for U64, MAC, and EUI-64
+    /// fields, <c>uint</c> for IPv4); a different <typeparamref name="T"/> finds no series.
+    /// </typeparam>
+    /// <param name="fieldId">The recorded field.</param>
+    /// <exception cref="ArgumentException">No series, or <typeparamref name="T"/> does not match the stack field type.</exception>
     ReadOnlyValueCacheSeries<T> GetSeries<T>(FieldId fieldId);
 
     /// <summary>Try-get counterpart of <see cref="GetSeries{T}(FieldId)"/>.</summary>
+    /// <typeparam name="T">See <see cref="GetSeries{T}(FieldId)"/>.</typeparam>
+    /// <param name="fieldId">The recorded field.</param>
+    /// <param name="series">The view when found; otherwise <c>default</c>.</param>
     bool TryGetSeries<T>(FieldId fieldId, out ReadOnlyValueCacheSeries<T> series);
 
     /// <summary>Looks up a field by ordinal name, then <see cref="TryGetSeries{T}(FieldId, out ReadOnlyValueCacheSeries{T})"/>.</summary>
+    /// <typeparam name="T">See <see cref="GetSeries{T}(FieldId)"/>.</typeparam>
+    /// <param name="fieldName">The ordinal (case-sensitive) field name; <see langword="null"/> or unknown finds nothing.</param>
+    /// <param name="series">The view when found; otherwise <c>default</c>.</param>
     bool TryGetSeries<T>(string fieldName, out ReadOnlyValueCacheSeries<T> series);
 
     /// <summary>Custom-text series for <paramref name="fieldId"/>.</summary>

@@ -24,14 +24,26 @@ internal sealed class PackedWordStore
     /// <summary>Words per chunk: 8 192 words = 64 KiB.</summary>
     internal const int ChunkWords = 1 << ChunkShift;
 
+    /// <summary>Mask of the word position inside a chunk (the chunk size is a power of two, so no division is needed).</summary>
     private const long _ChunkMask = ChunkWords - 1;
 
     #endregion
 
     #region Fields
 
+    /// <summary>
+    /// Chunk factory as a cached static delegate, so <see cref="Reserve"/> (once per sealed group of a sequence) does not
+    /// allocate a delegate per call.
+    /// </summary>
     private static readonly Func<ulong[]> _NewChunk = static () => new ulong[ChunkWords];
+
+    /// <summary>
+    /// The chunks. <see cref="Reserve"/> is the only allocating caller, which is exactly the single-allocator contract of
+    /// <see cref="ChunkedOuterArray{TChunk}"/>; readers only call its lock-free <c>GetChunk</c>.
+    /// </summary>
     private readonly ChunkedOuterArray<ulong[]> _Chunks = new(ChunkShift);
+
+    /// <summary>Next free word index; writer thread only (readers never see it, they use indexes the owner published).</summary>
     private long _Used;
 
     #endregion
@@ -55,7 +67,9 @@ internal sealed class PackedWordStore
         ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(count, ChunkWords);
 
-        // Skip to the next chunk when the reservation would straddle; the skipped tail stays unused.
+        // Skip to the next chunk when the reservation would straddle; the skipped tail stays unused. The cost is bounded
+        // waste (less than one reservation per chunk) in exchange for readers always getting one contiguous span.
+        // Chunks are 64 KiB each, so none is a large-object-heap allocation.
         long start = _Used;
         int inChunk = (int)(start & _ChunkMask);
         if (inChunk + count > ChunkWords)

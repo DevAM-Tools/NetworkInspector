@@ -49,14 +49,32 @@ internal sealed class PcapInterfaceTable
     /// </summary>
     /// <returns>False when the entry already exists (a repeated <c>Start</c>); nothing is changed then.</returns>
     /// <exception cref="InvalidOperationException">An interface index was skipped.</exception>
-    internal bool TryAdd(ushort sectionIndex, ushort interfaceIndex, PcapInterfaceEntry entry)
+    internal bool TryAdd(ushort sectionIndex, ushort interfaceIndex, PcapInterfaceEntry entry) =>
+        _TryAppend(sectionIndex, interfaceIndex, entry);
+
+    /// <summary>
+    /// Reserves the index of an interface that cannot be used (a malformed Interface Description Block) without
+    /// registering anything: the slot stays empty, so <see cref="TryGet"/> and <see cref="Contains"/> report it as missing,
+    /// while the interfaces after it keep the positions the file gives them. Same ordering rule and result as
+    /// <see cref="TryAdd"/>.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">An interface index was skipped.</exception>
+    internal bool TryAddGap(ushort sectionIndex, ushort interfaceIndex) =>
+        _TryAppend(sectionIndex, interfaceIndex, null);
+
+    /// <summary>Appends the entry (or, for null, an empty slot) at the next position of the section's list.</summary>
+    private bool _TryAppend(ushort sectionIndex, ushort interfaceIndex, PcapInterfaceEntry? entry)
     {
-        // Sections without IDBs still get an (empty) list so the indexes stay aligned.
+        // Sections without IDBs still get an (empty) list so the indexes stay aligned. A section list is complete and
+        // empty before it is appended, so a reader never finds a half-built list.
         while (_Sections.Count <= sectionIndex)
         {
             _Sections.Append(new ChunkedGrowOnlyStore<PcapInterfaceEntry>(_ChunkShift));
         }
 
+        // An index below the count is a repeat (for example Start called again): idempotent, nothing changes. An index
+        // above it can only be a caller bug, because interface ids are
+        // the IDB order and the store is append-only, so a gap would shift every later id: that throws.
         ChunkedGrowOnlyStore<PcapInterfaceEntry> interfaces = _Sections.Get(sectionIndex)!;
         if (interfaceIndex < interfaces.Count)
         {
@@ -69,14 +87,19 @@ internal sealed class PcapInterfaceTable
                 $"Interface {interfaceIndex} of section {sectionIndex} added out of order (next is {interfaces.Count}).");
         }
 
-        interfaces.Append(in entry);
+        // A null entry is an empty slot (a gap): readers treat a null slot as unresolved, as they do an unpublished one.
+        PcapInterfaceEntry slot = entry!; // null is deliberate here: it is the empty slot of a gap, see TryAddGap
+        interfaces.Append(in slot);
         return true;
     }
 
     /// <summary>True when the entry exists. Safe from any thread.</summary>
     internal bool Contains(ushort sectionIndex, ushort interfaceIndex) => TryGet(sectionIndex, interfaceIndex, out _);
 
-    /// <summary>Resolves an interface. Safe from any thread, concurrently with <see cref="TryAdd"/>.</summary>
+    /// <summary>
+    /// Resolves an interface. Safe from any thread, concurrently with <see cref="TryAdd"/>. False for an entry that is
+    /// not published yet. Inlined because the sequential path calls it for every frame.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryGet(ushort sectionIndex, ushort interfaceIndex, [NotNullWhen(true)] out PcapInterfaceEntry? entry)
     {

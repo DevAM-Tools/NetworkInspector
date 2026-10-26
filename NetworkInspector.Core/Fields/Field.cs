@@ -9,6 +9,17 @@ namespace NetworkInspector.Core.Fields;
 /// A default-constructed <see cref="Field"/> is invalid — check <see cref="IsValid"/>
 /// before accessing properties that depend on the underlying packet.
 /// </para>
+/// <para>
+/// <b>Design:</b> a field is addressed by a packet reference plus a 16-bit storage index instead of a heap object per
+/// field, so walking or storing fields allocates nothing; the data stays in the packet's slab (see
+/// <see cref="FieldBody"/>). The struct is 16 bytes: the packet reference (8), the storage index (2), and the cached
+/// field id (4), with padding.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> an immutable handle that can be copied freely. Reads follow the packet's concurrency
+/// contract: tree links are read with volatile loads and only indices below the packet's published field count are
+/// followed (see the navigation methods), so a sealed packet can be walked from several threads.
+/// </para>
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public readonly struct Field : IEquatable<Field>
@@ -19,10 +30,15 @@ public readonly struct Field : IEquatable<Field>
     /// <summary>Index into the packet's flat field list.</summary>
     internal ushort StorageIndex { get; }
 
-    /// <summary>Cached field identifier — fits in the padding between StorageIndex (2 bytes) and the next 8-byte slot.</summary>
+    /// <summary>
+    /// Cached field identifier. Stored so <see cref="FieldInfo"/> and id comparisons need no slab lookup; the 4-byte id
+    /// sits in the padding that follows the 2-byte <see cref="StorageIndex"/>, so caching it adds no size.
+    /// </summary>
     public FieldId FieldId { get; }
 
-    /// <summary>Creates a field wrapper for the given packet and index.</summary>
+    /// <summary>Creates a field wrapper for the given packet and index (reads the field id from the slab once).</summary>
+    /// <param name="packet">The owning packet.</param>
+    /// <param name="index">Storage index of a published field.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Field(Packet packet, ushort index)
     {
@@ -31,7 +47,10 @@ public readonly struct Field : IEquatable<Field>
         FieldId = packet.GetFieldRef(index).FieldId;
     }
 
-    /// <summary>Creates a field wrapper when the caller already knows <paramref name="fieldId"/>.</summary>
+    /// <summary>Creates a field wrapper when the caller already knows <paramref name="fieldId"/> (skips the slab read).</summary>
+    /// <param name="packet">The owning packet.</param>
+    /// <param name="index">Storage index of a published field.</param>
+    /// <param name="fieldId">The id stored in that slot; not re-checked.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Field(Packet packet, ushort index, FieldId fieldId)
     {
@@ -64,11 +83,17 @@ public readonly struct Field : IEquatable<Field>
     public FieldInfo? FieldInfo => Packet.Stack.GetField(FieldId);
 
     /// <summary>The field's value.</summary>
+    /// <exception cref="InvalidOperationException">
+    /// The packet was parsed with <see cref="FieldTreeMode.Skip"/> and this is not its root (such packets keep no field
+    /// slab); use <see cref="TryGetValue"/> when that is expected.
+    /// </exception>
     public FieldValue Value
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
+            // A Skip-mode packet has no field slab: only the synthetic root (index 0) can be read. Anything else would
+            // read memory that does not exist, so it is rejected up front instead of inside the hot GetFieldRef.
             // SkipStorageIndex is readable only while a skip-tree lazy populator is in flight
             // (GetFieldRef returns the scratch top, or throws when the stack is empty).
             if (!HasFieldTree && StorageIndex != 0 && StorageIndex != FieldBody.SkipStorageIndex)
@@ -90,6 +115,7 @@ public readonly struct Field : IEquatable<Field>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetValue(out FieldValue value)
     {
+        // Same Skip-mode rule as Value, reported as a miss instead of an exception.
         if (!HasFieldTree && StorageIndex != 0 && StorageIndex != FieldBody.SkipStorageIndex)
         {
             value = FieldValue.None;
@@ -127,6 +153,10 @@ public readonly struct Field : IEquatable<Field>
     /// in-place and the result is atomically cached for all future reads.
     /// </para>
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The packet was parsed with <see cref="FieldTreeMode.Skip"/> and this is not its root; use
+    /// <see cref="TryGetCustomText"/> when that is expected.
+    /// </exception>
     public LazyString CustomText
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -137,6 +167,8 @@ public readonly struct Field : IEquatable<Field>
                 ThrowHelpers.ThrowSkipFieldTreeValue();
             }
 
+            // GetFieldRef yields a mutable ref (no defensive copy) so the lazy text is evaluated and cached in the slab
+            // slot itself; see FieldBody.CustomText.
             return Packet.GetFieldRef(StorageIndex).CustomText;
         }
     }
@@ -165,6 +197,8 @@ public readonly struct Field : IEquatable<Field>
             return false;
         }
 
+        // Lazy containers (children created on first access) are populated only on request, so a caller that merely
+        // counts or checks children does not pay for parsing it never shows.
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
@@ -213,7 +247,10 @@ public readonly struct Field : IEquatable<Field>
 
     #region Tree Navigation
 
-    /// <summary>Tries to get the parent field. Returns false if this is a root field.</summary>
+    /// <summary>
+    /// Tries to get the parent field. Returns false if this is a root field (or the packet has no field tree).
+    /// The parent was published before its children, so no wait on the published count is needed here.
+    /// </summary>
     public bool TryGetParent(out Field parent)
     {
         if (!HasFieldTree)
@@ -255,6 +292,9 @@ public readonly struct Field : IEquatable<Field>
                 Packet.MaterializeLazyField(StorageIndex);
             }
         }
+        // The child link is read with a volatile load; WaitUntilFieldPublished then makes sure the slot it points to is
+        // covered by the packet's published field count (a concurrent materializer may have linked it a moment earlier),
+        // so a default FieldBody is never observed. The same pattern guards every link read below.
         ushort idx = Packet.WaitUntilFieldPublished(Packet.GetFieldRef(StorageIndex).FirstChildIndex);
         if (idx != FieldBody.NullIndex)
         {
@@ -358,6 +398,7 @@ public readonly struct Field : IEquatable<Field>
     #region Equality
 
     /// <inheritdoc />
+    /// <remarks>Two handles are equal when they address the same slot of the same packet instance (reference identity of the packet).</remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(Field other) => ReferenceEquals(Packet, other.Packet) && StorageIndex == other.StorageIndex;
 
@@ -365,6 +406,7 @@ public readonly struct Field : IEquatable<Field>
     public override bool Equals(object? obj) => obj is Field other && Equals(other);
 
     /// <inheritdoc />
+    /// <remarks>Uses the packet's identity hash so the hash matches the reference-identity <see cref="Equals(Field)"/>.</remarks>
     public override int GetHashCode() => HashCode.Combine(RuntimeHelpers.GetHashCode(Packet), StorageIndex);
 
     /// <summary>Equality operator.</summary>

@@ -18,12 +18,17 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
 {
     #region Fields
 
+    // Value column of the structure-of-arrays row; the packet-id and timestamp columns live on the base type. Chunked
+    // storage grows without copying already published values, so readers keep spans into old chunks valid while the
+    // writer appends (a single contiguous array would have to be reallocated and copied under concurrent readers).
     private readonly ChunkedGrowOnlyStore<T> _Values;
 
     /// <summary>
     /// Cheap CAS gate (not <see cref="Monitor"/>) around the three column appends and published
     /// <see cref="ValueCacheSeries.Count"/>. Contended <see cref="Record"/> spins until the gate is free
     /// (serialized, no throw). Without it a second writer can interleave packet-id, timestamp, and value slots.
+    /// 0 = free, 1 = held. The contract is a single writer, so the gate is uncontended in normal operation and costs
+    /// one compare-exchange; a Monitor would add an object and kernel waits for a case that should not happen.
     /// </summary>
     private volatile int _AppendGate;
 
@@ -54,6 +59,9 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
     {
         get
         {
+            // Count first, flags second: the writer clears a monotonic flag before it publishes the row that breaks the order,
+            // so loading the count first can only make a flag too pessimistic for the prefix, never too optimistic (see the
+            // flag fields in ValueCacheSeries). Reversing these two loads would let a handle claim a sorted prefix that is not.
             int observed = Count;
             ValueCacheSeriesHandle keys = new ValueCacheSeriesHandle(
                 this,
@@ -77,6 +85,8 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
                 throw new ArgumentOutOfRangeException(nameof(index), index, "Index must be in the published range.");
             }
 
+            // The value is non-null for a published index: the value column is appended before Count is published, and
+            // Get only returns its unset default for an unpublished index (excluded by the range check above).
             return new ValueCacheRow<T>(GetPacketId(index), GetTimestamp(index), _Values.Get(index)!);
         }
     }
@@ -98,10 +108,13 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
         return ValueAt(index);
     }
 
-    /// <summary>Payload with no live-count check. Caller proved <paramref name="index"/> is in a snapshot prefix.</summary>
+    /// <summary>
+    /// Payload with no live-count check. Caller proved <paramref name="index"/> is in a snapshot prefix (a frozen handle
+    /// count), which skips the volatile <see cref="ValueCacheSeries.Count"/> load per element in scan loops.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal T ValueAt(int index) =>
-        _Values.Get(index)!;
+        _Values.Get(index)!; // Non-null for a published index: the value column is appended before Count is published.
 
     /// <summary>
     /// Returns the published value chunk at <paramref name="chunkIndex"/> clipped to
@@ -136,22 +149,31 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
         _EnterAppendGate();
         try
         {
+            // FirstOccurrence: a repeat within the same packet is dropped. LastPacketId is writer state, so it is only
+            // read under the gate. The skip happens before any column is touched, so nothing is half-appended.
             if (CaptureMode == ValueCaptureMode.FirstOccurrence && packetId == LastPacketId)
             {
                 return;
             }
 
+            // Order matters: key columns first, value column second, Count last. Count is the only thing readers trust,
+            // so a row is invisible until all three slots are written. All three stores share one row index, so an
+            // index-limit failure surfaces from the first append before any column has changed.
             AppendKeys(packetId, timestampNanos);
             _Values.AppendOwned(in value);
             PublishCount();
         }
         finally
         {
+            // Release the gate on every exit, including the FirstOccurrence skip and an exception from a column append.
             _ = Interlocked.Exchange(ref _AppendGate, 0);
         }
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Drops all published rows. Takes the same gate as <see cref="Record"/>, which is the precondition of the column
+    /// stores' <c>Clear</c> (serialized with every append). Count and monotonic flags are reset by the key-column clear.
+    /// </summary>
     internal override void ClearRows()
     {
         _EnterAppendGate();
@@ -170,7 +192,10 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
 
     #region Private helpers
 
-    /// <summary>Takes the series write gate. Uncontended: one CAS. Contended: spin until free.</summary>
+    /// <summary>
+    /// Takes the series write gate. Uncontended: one CAS. Contended: spin until free. Only the uncontended CAS is
+    /// inlined into <see cref="Record"/>; the spin loop is split into a NoInlining slow path to keep the hot caller small.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _EnterAppendGate()
     {

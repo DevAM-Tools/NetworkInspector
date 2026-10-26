@@ -5,7 +5,13 @@ namespace NetworkInspector.Exporters.Json;
 /// <summary>
 /// Zero-allocation JSON formatting helpers.
 /// All methods write directly to a <see cref="PooledBuffer"/> using stack-allocated
-/// scratch buffers for numeric formatting, avoiding heap allocations on the hot path.
+/// scratch buffers for numeric formatting, avoiding heap allocations on the hot path
+/// (these helpers run once per exported field value). Only strings and base-64 payloads whose
+/// worst-case encoded size exceeds 512 bytes fall back to <see cref="ArrayPool{T}.Shared"/>.
+/// <para>
+/// All formatting uses <see cref="CultureInfo.InvariantCulture"/> so the output never depends on the host culture.
+/// Thread safety: stateless; safe from any thread as long as each thread uses its own <see cref="PooledBuffer"/>.
+/// </para>
 /// </summary>
 internal static class JsonHelpers
 {
@@ -14,7 +20,9 @@ internal static class JsonHelpers
     /// <param name="value">The value to format.</param>
     internal static void WriteI64(ref PooledBuffer buffer, long value)
     {
-        Span<byte> scratch = stackalloc byte[20]; // max i64 decimal digits + sign
+        // Format into a stack buffer instead of value.ToString() to avoid a string allocation per number.
+        // "-9223372036854775808" is the longest i64 text: 19 digits plus the sign = 20 bytes.
+        Span<byte> scratch = stackalloc byte[20];
         if (!value.TryFormat(scratch, out int bytesWritten, default, CultureInfo.InvariantCulture))
         {
             // TryFormat cannot fail for a 20-byte buffer and a 64-bit integer; guard
@@ -31,7 +39,9 @@ internal static class JsonHelpers
     /// <param name="value">The value to format.</param>
     internal static void WriteU64(ref PooledBuffer buffer, ulong value)
     {
-        Span<byte> scratch = stackalloc byte[20]; // max u64 decimal digits
+        // Stack buffer instead of ToString() to avoid a per-number string allocation.
+        // "18446744073709551615" is the longest u64 text: 20 digits, no sign.
+        Span<byte> scratch = stackalloc byte[20];
         if (!value.TryFormat(scratch, out int bytesWritten, default, CultureInfo.InvariantCulture))
         {
             buffer.Write("null"u8);
@@ -41,17 +51,23 @@ internal static class JsonHelpers
     }
 
     /// <summary>
-    /// Writes a 64-bit float as a decimal string. NaN and Infinity are written as JSON <c>null</c>.
+    /// Writes a 64-bit float as a decimal string in the shortest round-trippable form.
+    /// NaN and Infinity are written as JSON <c>null</c>.
     /// </summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="value">The value to format.</param>
     internal static void WriteF64(ref PooledBuffer buffer, double value)
     {
+        // JSON (RFC 8259) has no token for NaN or Infinity; emitting "NaN" would make the whole document unparsable,
+        // so these degrade to null.
         if (!double.IsFinite(value))
         {
             buffer.Write("null"u8);
             return;
         }
+
+        // The default shortest round-trip text is at most 24 characters (for example "-1.7976931348623157E+308");
+        // 32 bytes leave headroom, so TryFormat cannot run out of space here.
         Span<byte> scratch = stackalloc byte[32];
         value.TryFormat(scratch, out int bytesWritten, default, CultureInfo.InvariantCulture);
         buffer.Write(scratch[..bytesWritten]);
@@ -66,7 +82,8 @@ internal static class JsonHelpers
 
     /// <summary>
     /// Writes a JSON string with surrounding double quotes and SIMD-accelerated escaping.
-    /// Short strings (≤512 encoded bytes) use stack allocation; longer ones rent from the pool.
+    /// Strings whose worst-case UTF-8 size is at most 512 bytes (at most 170 UTF-16 code units) use stack allocation;
+    /// longer ones rent from the pool. Invalid UTF-16 (lone surrogates) is replaced with U+FFFD by the UTF-8 encoder.
     /// </summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="value">The string to write.</param>
@@ -79,6 +96,10 @@ internal static class JsonHelpers
             return;
         }
 
+        // The escaper works on UTF-8 bytes, so the string is transcoded first. The scratch buffer is sized for the
+        // worst case (GetMaxByteCount is (length + 1) * 3), which avoids a second counting pass over the string.
+        // The 512-byte cap keeps the stackalloc small and bounded no matter how long the string is (stack overflow
+        // is not recoverable); longer strings use a pooled array instead of a fresh heap allocation.
         int maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
         if (maxBytes <= 512)
         {
@@ -98,6 +119,8 @@ internal static class JsonHelpers
 
     /// <summary>
     /// Writes a JSON string from UTF-8 bytes with surrounding quotes and escaping.
+    /// The bytes are copied through without UTF-8 validation (only quote, backslash and control bytes are escaped),
+    /// so the caller must supply well-formed UTF-8 to obtain valid JSON.
     /// </summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="utf8">UTF-8 encoded bytes.</param>
@@ -118,6 +141,10 @@ internal static class JsonHelpers
         buffer.WriteByte((byte)'"');
         if (!data.IsEmpty)
         {
+            // Encode into a scratch buffer sized exactly for the output (so the OperationStatus result cannot be
+            // DestinationTooSmall) rather than Convert.ToBase64String, which allocates a string per value.
+            // Same 512-byte stack cap as WriteJsonString; larger payloads use the pool. Base-64 output contains no
+            // character that needs JSON escaping, so it is appended without passing through SimdEscape.
             int maxLen = Base64.GetMaxEncodedToUtf8Length(data.Length);
             if (maxLen <= 512)
             {
@@ -143,7 +170,7 @@ internal static class JsonHelpers
     /// <param name="mac">The MAC address value.</param>
     internal static void WriteMacAddress(ref PooledBuffer buffer, MacAddress mac)
     {
-        // MAC address formatted string
+        // Fixed-size text (FormattedLength bytes), so the stack buffer always fits and needs no escaping.
         buffer.WriteByte((byte)'"');
         Span<byte> scratch = stackalloc byte[MacAddress.FormattedLength];
         mac.TryFormat(scratch, out int written, default, CultureInfo.InvariantCulture);
@@ -166,7 +193,8 @@ internal static class JsonHelpers
     }
 
     /// <summary>
-    /// Writes a timestamp as a quoted ISO 8601 string.
+    /// Writes a timestamp as a quoted string using the <see cref="Timestamp"/> text form
+    /// (at most <see cref="Timestamp.MaxFormattedLength"/> bytes, so it never needs escaping).
     /// </summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="ts">The timestamp value.</param>
@@ -197,6 +225,9 @@ internal static class JsonHelpers
 
     /// <summary>
     /// Writes a field value to the buffer in the appropriate JSON representation.
+    /// Mapping: integers and floats become JSON numbers, <see cref="FieldType.Bool"/> becomes <c>true</c>/<c>false</c>,
+    /// <see cref="FieldType.Bytes"/> becomes a base-64 string, and every address, UUID and timestamp type becomes a
+    /// quoted text form. <see cref="FieldType.None"/> and unknown types become <c>null</c>.
     /// </summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="value">The field value to serialize.</param>
@@ -261,6 +292,8 @@ internal static class JsonHelpers
                 {
                     break;
                 }
+                // Scratch sizes below exceed the maximum text length of each type (IPv6 39, EUI-64 23, UUID 36);
+                // none of these texts contains a character that needs JSON escaping.
                 buffer.WriteByte((byte)'"');
                 Span<byte> ipv6Scratch = stackalloc byte[64];
                 ipv6.TryFormat(ipv6Scratch, out int ipv6Written, default, CultureInfo.InvariantCulture);

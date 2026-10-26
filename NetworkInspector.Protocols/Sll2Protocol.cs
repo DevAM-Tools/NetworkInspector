@@ -32,10 +32,10 @@ public sealed partial class Sll2Protocol : IProtocol
     public const ulong LinkTypeKey = (ulong)LinkType.LinuxSll2;
 
     /// <summary>
-    /// Minimum value for a real EtherType in Linux Cooked Capture v2.
-    /// Values strictly greater than 0x0600 are IEEE 802.3 EtherTypes; 0x0600 itself is
-    /// reserved as a Linux-internal type, so only <c>etherType &gt; _MinEtherType</c>
-    /// should trigger protocol dispatch.
+    /// Dispatch threshold for the SLL2 protocol field. In IEEE 802.3 a value of 1536 (0x0600) or more is an EtherType
+    /// and a smaller value is a frame length; the Linux cooked header also uses small values for Linux-internal
+    /// pseudo protocols that are not EtherTypes. Only <c>etherType &gt;= _MinEtherType</c> triggers protocol dispatch, the same
+    /// boundary as in <c>EthernetProtocol</c> (IEEE 802.3 clause 3.2.6: 0x0600 itself is an EtherType).
     /// </summary>
     private const ushort _MinEtherType = 0x0600;
 
@@ -72,11 +72,15 @@ public sealed partial class Sll2Protocol : IProtocol
     [MacField("sll2.src.eth", "Source", IndexGroup = _Sll2IndexGroup)]
     private FieldId _SrcEthFieldId;
 
-    // Reuse Ethernet's EtherType table for dispatch
+    // SLL2 carries a genuine EtherType, so it shares Ethernet's EtherType table instead of defining its own:
+    // every protocol registered for an EtherType is reachable from both link layers.
     [UsesTable(EthernetProtocol.EtherTypeTableName)]
     private ProtocolTableId _EtherTypeTableId;
 
-    // Sparse dispatch cache (typically 4–6 EtherType entries)
+    // Sparse dispatch cache built once at stack start (typically 4–6 EtherType entries). It maps an
+    // EtherType to its single registered protocol so the per-frame path scans a tiny array instead of
+    // doing a table lookup. Keys with several (or no) protocols are not in the cache and take the table path.
+    // Written once in _OnStartCustom before parsing begins, read-only afterwards (no synchronization needed).
     private (ulong Key, ProtocolId Id)[] _EtherTypeSparseCache = [];
 
     partial void _OnStartCustom(Stack stack) =>
@@ -90,9 +94,13 @@ public sealed partial class Sll2Protocol : IProtocol
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
     /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
     /// <param name="context">Owning stack used to dispatch the next-protocol payload (when applicable).</param>
-    /// <returns>Number of bytes consumed, or a <see cref="ParseError"/> describing the failure.</returns>
+    /// <returns>
+    /// The whole <paramref name="data"/> length (the payload is attributed to this protocol even when no next protocol is
+    /// dispatched), or a <see cref="ParseError"/> describing the failure.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        // Fixed 20-byte header: shorter input cannot be decoded at all, so fail before any field is appended.
         if (data.Length < _HeaderSize)
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, _HeaderSize, (ulong)data.Length);
@@ -101,6 +109,8 @@ public sealed partial class Sll2Protocol : IProtocol
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_Sll2GroupId);
 
+        // Decode the header with span reads (no allocation). All multi-byte header fields are read as
+        // big-endian (network order), including the interface index.
         ReadOnlySpan<byte> span = data.Span;
 
         // SLL2 header layout: Protocol(2) + Reserved(2) + InterfaceIndex(4) +
@@ -111,14 +121,17 @@ public sealed partial class Sll2Protocol : IProtocol
         ushort haType = BinaryPrimitives.ReadUInt16BigEndian(span[8..]);
         byte pktType = span[10];
         byte haLen = span[11];
-        // Address field: 8 bytes starting at offset 12, only haLen bytes meaningful
+
+        // Address field: 8 bytes starting at offset 12, only haLen bytes meaningful. It is shown as a MAC
+        // only when at least 6 address bytes are valid (Ethernet-like link layers); otherwise the field is
+        // still appended with the default all-zero MAC. The span slice is within the 20-byte header checked above.
         MacAddress srcMac = haLen >= 6
             ? MacAddress.FromBytes(span[12..18])
             : default;
 
-        // Build lazy summary
-
-        // Append all fields eagerly (only 7 fields, no lazy needed)
+        // Append all fields eagerly (only 7 fields, no lazy container needed). The container stores the
+        // header bytes by reference (a ReadOnlyMemory slice, no copy) and its summary text embeds the
+        // EtherType display text.
         FieldValue headerValue = FieldValue.NewBytes(data[.._HeaderSize]);
         MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, headerValue, "Linux cooked capture v2, Protocol: ",
             DisplayTables.GetEtherTypeDisplayText(etherType));
@@ -138,10 +151,15 @@ public sealed partial class Sll2Protocol : IProtocol
         container.Append(_HaLenFieldId, FieldValue.NewU64(haLen));
         container.Append(_SrcEthFieldId, FieldValue.NewMacAddress(srcMac));
 
-        // Dispatch to next protocol via EtherType.
-        // Only values strictly greater than 0x0600 are genuine Ethernet II EtherTypes.
+        // Dispatch to next protocol via EtherType. The payload is dispatched under parentField (a sibling of
+        // this container), like Ethernet does. Values below _MinEtherType are not EtherTypes (see
+        // _MinEtherType), so nothing is dispatched for them. Either way the whole frame is reported as consumed.
+        // "No protocol registered for this EtherType" (NotDispatched) is not an error; only real callee errors
+        // propagate.
         ReadOnlyMemory<byte> payload = data[_HeaderSize..];
-        if (etherType > _MinEtherType)
+        // >= and not >: 0x0600 is the first value that is an EtherType (IEEE 802.3), as Ethernet treats it; a strict
+        // comparison would silently skip a protocol registered for exactly that EtherType.
+        if (etherType >= _MinEtherType)
         {
             ParseResult dispatchResult = _DispatchEtherType(in parentField, etherType, payload, in context);
             if (dispatchResult.TryPropagateError(out ParseResult error))
@@ -157,9 +175,16 @@ public sealed partial class Sll2Protocol : IProtocol
     /// Dispatches to the next protocol by EtherType using the sparse cache.
     /// Falls back to full table dispatch for unknown EtherTypes.
     /// </summary>
+    /// <param name="parentField">Field under which the next protocol appends its container.</param>
+    /// <param name="etherType">EtherType key (only values of at least <see cref="_MinEtherType"/> reach this method).</param>
+    /// <param name="payload">Bytes after the SLL2 header.</param>
+    /// <param name="context">Parse context forwarded to the next protocol.</param>
+    /// <returns>The callee result, or <see cref="ParseResult.NotDispatched"/> when no protocol is registered for the key.</returns>
     private ParseResult _DispatchEtherType(
         in MutField parentField, ulong etherType, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
+        // Fast path: key with exactly one registered protocol. The linear scan over a handful of entries
+        // beats a dictionary lookup and avoids touching the table.
         foreach ((ulong key, ProtocolId id) in _EtherTypeSparseCache)
         {
             if (key == etherType)
@@ -168,6 +193,7 @@ public sealed partial class Sll2Protocol : IProtocol
             }
         }
 
+        // Slow path: multi-protocol EtherType key or EtherType not in the cache; the table resolves it.
         return parentField.TryCallNextProtocolU64(_EtherTypeTableId, etherType, payload, in context);
     }
     #endregion

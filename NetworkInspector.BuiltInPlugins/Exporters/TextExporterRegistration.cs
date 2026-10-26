@@ -43,6 +43,9 @@ internal static class TextExporterRegistration
         options.RegisterEnumSetting(_LevelOption, "Detail level", "", 1,
             EnumSettingMetadata.FromPairs([("summary", 0), ("standard", 1), ("full", 2)]),
             description: "summary: protocol containers only; standard: all fields except raw bytes; full: all fields including raw bytes.");
+        // Limit: characters per string or byte value, 0 to int.MaxValue (the builder takes an int). Threat: with 0 (unlimited) one
+        // very large value is formatted completely and the exporter's scratch buffer grows to its size. Secure by default:
+        // 256 truncates; unlimited is opt-in and only advisable for trusted input.
         options.RegisterI64Setting(_TruncateOption, "Value length limit", "", 256, min: 0, max: int.MaxValue,
             description: "Maximum characters of a string or byte value; 0 writes values in full.");
     }

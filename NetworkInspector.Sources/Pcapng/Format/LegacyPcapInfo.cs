@@ -39,7 +39,8 @@ internal sealed class LegacyPcapInfo
 
     /// <summary>
     /// Snapshot length — maximum captured octets per packet. A header value of 0 becomes
-    /// <see cref="PcapConstants.DefaultSnapLength"/>.
+    /// <see cref="PcapConstants.DefaultSnapLength"/>. Record validation starts from <see cref="DeclaredSnapLength"/> and applies the same
+    /// default itself (<see cref="PcapngBlockLayout.TryValidateLegacyInclLen"/>).
     /// </summary>
     internal uint SnapLength
     {
@@ -73,6 +74,9 @@ internal sealed class LegacyPcapInfo
 
     /// <summary>
     /// Converts legacy PCAP timestamp fields to nanoseconds since epoch.
+    /// Cannot overflow: both inputs are 32-bit, so the result stays below 4.3 × 10^18, inside <see cref="long"/>, and no
+    /// checked arithmetic is needed on this per-packet path. A fractional part that is out of its nominal range (a
+    /// microsecond value of one million or more) is not rejected; it simply adds that many extra time units.
     /// </summary>
     /// <param name="seconds">Seconds since Unix epoch.</param>
     /// <param name="fractional">Microseconds or nanoseconds fraction.</param>

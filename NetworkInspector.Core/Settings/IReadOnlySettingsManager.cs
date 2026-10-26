@@ -10,6 +10,11 @@ namespace NetworkInspector.Core.Settings;
 /// Exposed by <see cref="IStack"/> so consumers can query settings
 /// without coupling to <see cref="SettingsManager"/>.
 /// </para>
+/// <para>
+/// Thread-safety: the implementation (<see cref="SettingsManager"/>) is thread-safe; value reads are lock-free (see
+/// <see cref="IReadOnlySetting"/>). The collection properties and the group and setting lookups return snapshots or
+/// struct views over live settings, so a result does not change size when settings are registered later.
+/// </para>
 /// </summary>
 public interface IReadOnlySettingsManager
 {
@@ -39,6 +44,8 @@ public interface IReadOnlySettingsManager
     /// <summary>
     /// Maximum accepted size in bytes for persisted settings JSON and referenced protocol config files.
     /// Values <c>&lt;= 0</c> disable the size check. Fixed at <see cref="SettingsManager"/> construction.
+    /// This is a security limit against memory exhaustion by a hostile file; see
+    /// <see cref="SettingsManager.DefaultMaxConfigFileBytes"/> for the default, the threat, and the posture (open by default).
     /// </summary>
     long MaxConfigFileBytes
     {
@@ -48,6 +55,8 @@ public interface IReadOnlySettingsManager
     /// <summary>
     /// Maximum JSON nesting depth for persisted settings JSON and referenced protocol config files.
     /// Values <c>&lt;= 0</c> disable the depth check. Fixed at <see cref="SettingsManager"/> construction.
+    /// This is a security limit against deeply nested JSON; see <see cref="SettingsManager.DefaultMaxJsonDepth"/> for the
+    /// default, the threat, and the posture (open by default).
     /// </summary>
     int MaxJsonDepth
     {

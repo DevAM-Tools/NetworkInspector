@@ -6,7 +6,10 @@ namespace NetworkInspector.Protocols;
 /// Transport Layer Security (TLS) protocol parser (RFC 8446).
 /// Parses TLS record layer and handshake messages including Client/Server Hello.
 /// No decryption — only handshake metadata and record structure are parsed.
-/// <para>Field tree structure:</para>
+/// Only records that lie completely inside the TCP segment handed to <see cref="Parse"/> are decoded; a record that
+/// continues in a later segment ends the walk (this protocol does not reassemble records).
+/// <para>Field tree structure (alert fields <c>tls.alert.level</c> / <c>tls.alert.description</c> sit directly under
+/// <c>tls</c>, like the handshake containers):</para>
 /// <code>
 /// tls: Transport Layer Security
 /// ├── tls.record: TLS Record Layer
@@ -35,10 +38,19 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
-/// (single-threaded build phase) and is read-only thereafter, so <see cref="IProtocol.Parse"/> may
-/// be invoked concurrently from any number of threads on the same instance without external
-/// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
+/// The only instance state is the field and protocol ids (assigned by the generated registration code) and the
+/// populator delegate (assigned in <c>_OnStartCustom</c>), all during the single-threaded build phase and read-only
+/// thereafter, so <see cref="IProtocol.Parse"/> may be invoked concurrently from any number of threads on the same
+/// instance without external synchronisation. The protocol keeps no cross-packet state (no trackers, no reassembly),
+/// so it has no first-parse/replay distinction.</para>
+/// <para><b>Index consistency:</b> the lazy populator (<c>_PopulateTls</c> and the <c>_Parse*</c> methods) decides which
+/// fields exist; the <c>_Detect*</c> methods repeat those decisions eagerly so the packet index can record the
+/// content-dependent groups without materialising the tree. The two sets of methods mirror each other and must be
+/// changed together.</para>
+/// <para><b>Input bounds:</b> every length read from the wire (record, handshake, extension, list and name lengths) is
+/// checked against the remaining span before it is used for slicing, and a failed check ends the walk instead of
+/// throwing, so malformed or truncated data cannot read out of range. The number of fields a segment can produce is
+/// bounded by the segment length; no further limit is applied.</para>
 /// </remarks>
 [Protocol("tls", "Transport Layer Security", Description = "TLS (RFC 8446)")]
 [RegisterAtTable(TcpProtocol.PortTableName, TcpPortKey)]
@@ -219,8 +231,14 @@ public sealed partial class TlsProtocol : IProtocol
 
     /// <summary>
     /// Parses TLS records from the given data. Supports multiple records per segment.
-    /// Record-level summary is eager; handshake/alert content is lazy via the protocol container.
+    /// The summary (packet info, container title) and the index groups are produced eagerly; the record, handshake and
+    /// alert fields are lazy via the protocol container. The content type of the first record is not validated here (the
+    /// protocol is dispatched by TCP port, 443 by default), so non-TLS data on that port is summarised by its first byte.
     /// </summary>
+    /// <param name="parentField">Field that receives the lazy <c>tls</c> container.</param>
+    /// <param name="data">Bytes of the TCP payload, starting at the first record header.</param>
+    /// <param name="context">Parse context used to record index presence.</param>
+    /// <returns>All of <paramref name="data"/> as consumed, or a <see cref="ParseError"/> when it is shorter than a record header.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         if (data.Length < TlsRecordHeader.Size)
@@ -231,7 +249,7 @@ public sealed partial class TlsProtocol : IProtocol
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_TlsGroupId);
 
-        // Read first record header for summary
+        // Read first record header for summary (content type only; later records are not needed for the title).
         if (!TlsRecordHeader.TryParse(data.Span, out TlsRecordHeader firstRecord))
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, TlsRecordHeader.Size, (ulong)data.Length);
@@ -244,6 +262,8 @@ public sealed partial class TlsProtocol : IProtocol
         // record — so a first-record check would both miss groups in later records and falsely
         // record handshake groups for truncated messages. This repeats the record walk to keep the
         // presence index content-consistent with materialization and free of false positives.
+        // The cost is a second, allocation-free pass over the segment (spans only, flags in one struct on the stack);
+        // the rejected alternative is materializing the lazy tree here, which would allocate every field per packet.
         TlsGroupFlags flags = default;
         _DetectTlsGroups(data.Span, ref flags);
 
@@ -292,13 +312,13 @@ public sealed partial class TlsProtocol : IProtocol
             context.RecordGroupPresence(_TlsAlertGroupId);
         }
 
-        // Build summary text from first record
+        // Build summary text from first record. The name comes from a switch over constants (no allocation for known types).
         string contentTypeName = TlsDisplayTables.GetContentTypeName(firstRecord.ContentType);
 
-        // Set packet info
+        // Set packet info (a LazyString: formatted only if the info column is read)
         parentField.SetPacketInfo(ZA.Lazy("TLS ", contentTypeName));
 
-        // Store entire TLS data in container for lazy parsing
+        // Store entire TLS data (a slice of the packet buffer, no copy) in the container; _PopulateTls re-walks it on first access.
         FieldValue containerValue = FieldValue.NewBytes(data);
         parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, "Transport Layer Security, ", contentTypeName, _Populator);
 
@@ -310,6 +330,7 @@ public sealed partial class TlsProtocol : IProtocol
     /// messages, extensions, and alerts for all TLS records in the segment. Fires on
     /// first access of the TLS container's children. The <c>tls.record</c> containers
     /// and the handshake/alert sub-fields are siblings under the <c>tls</c> container.
+    /// The decisions about which fields exist are mirrored by <c>_DetectTlsGroups</c>; change both together.
     /// </summary>
     private ParseResult _PopulateTls(in MutField container)
     {
@@ -318,6 +339,9 @@ public sealed partial class TlsProtocol : IProtocol
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
         }
 
+        // Record walk. Each iteration consumes one complete record (5-byte header + Length payload bytes). Length is a
+        // 16-bit wire value, so the int arithmetic below cannot overflow; it is still checked against the remaining
+        // span before slicing.
         ReadOnlySpan<byte> span = tlsData.Span;
         int offset = 0;
 
@@ -331,7 +355,7 @@ public sealed partial class TlsProtocol : IProtocol
             int recordPayloadEnd = offset + TlsRecordHeader.Size + record.Length;
             if (recordPayloadEnd > span.Length)
             {
-                break; // Incomplete record — stop parsing
+                break; // Incomplete record (continues in a later TCP segment, or truncated) — stop parsing
             }
 
             string ctText = TlsDisplayTables.GetContentTypeDisplayText(record.ContentType);
@@ -346,9 +370,13 @@ public sealed partial class TlsProtocol : IProtocol
                 FieldValue.NewU64(record.Version), versionText);
             recordField.Append(_RecordLengthFieldId, FieldValue.NewU64(record.Length));
 
+            // The payload span is used for parsing; the Memory plus base offset is passed along so that byte fields (random,
+            // session id, certificates, key exchange) can reference the packet memory directly instead of copying it.
             int payloadOffset = offset + TlsRecordHeader.Size;
             ReadOnlySpan<byte> payload = span[payloadOffset..recordPayloadEnd];
 
+            // Only handshake and alert records have decoded content. Application data, change_cipher_spec and heartbeat
+            // payloads are opaque (encrypted or irrelevant to the metadata) and only get their record header fields.
             switch (record.ContentType)
             {
                 case 22: // Handshake
@@ -366,8 +394,16 @@ public sealed partial class TlsProtocol : IProtocol
     }
 
     /// <summary>
-    /// Parses one or more handshake messages within a single TLS record.
+    /// Parses one or more handshake messages within a single TLS record. A message that does not fit completely into the
+    /// record payload (for example a large Certificate message fragmented over several records) is not decoded.
     /// </summary>
+    /// <param name="recordField">
+    /// The <c>tls</c> container. The handshake fields are appended here, as siblings of the <c>tls.record</c> nodes
+    /// (despite the parameter name, this is not the record node).
+    /// </param>
+    /// <param name="payload">Payload of one handshake record (the bytes after the record header).</param>
+    /// <param name="fullData">The whole TLS segment, used to slice byte fields without copying.</param>
+    /// <param name="payloadBaseOffset">Offset of <paramref name="payload"/> inside <paramref name="fullData"/>.</param>
     private void _ParseHandshakeRecords(
         in MutField recordField, ReadOnlySpan<byte> payload,
         ReadOnlyMemory<byte> fullData, int payloadBaseOffset)
@@ -378,7 +414,7 @@ public sealed partial class TlsProtocol : IProtocol
         {
             byte hsType = payload[offset];
 
-            // Handshake length is 3 bytes big-endian
+            // Handshake length is 3 bytes big-endian (RFC 8446 Section 4: uint24), so at most 2^24-1; fits an int.
             int hsLength = (payload[offset + 1] << 16) | (payload[offset + 2] << 8) | payload[offset + 3];
             offset += 4;
 
@@ -418,8 +454,15 @@ public sealed partial class TlsProtocol : IProtocol
     }
 
     /// <summary>
-    /// Parses a TLS Client Hello handshake message.
+    /// Parses a TLS Client Hello handshake message (RFC 8446 Section 4.1.2; the same prefix layout as TLS 1.2):
+    /// version(2) random(32) session_id(1+N) cipher_suites(2+N) compression_methods(1+N) extensions(2+N).
+    /// Fields are appended as they are reached; a truncated message keeps the fields decoded so far and stops at the
+    /// first length that does not fit (the <c>_DetectClientHello</c> mirror stops at the same points).
     /// </summary>
+    /// <param name="hsField">The handshake message node that receives the fields.</param>
+    /// <param name="body">Handshake body (after the 4-byte handshake header).</param>
+    /// <param name="fullData">The whole TLS segment, used to slice byte fields without copying.</param>
+    /// <param name="bodyBaseOffset">Offset of <paramref name="body"/> inside <paramref name="fullData"/>.</param>
     private void _ParseClientHello(
         in MutField hsField, ReadOnlySpan<byte> body,
         ReadOnlyMemory<byte> fullData, int bodyBaseOffset)
@@ -475,6 +518,9 @@ public sealed partial class TlsProtocol : IProtocol
         {
             return;
         }
+        // One field per 2-byte suite (a trailing odd byte is ignored). The list length is a 16-bit wire value, so a crafted
+        // message can carry up to 32767 suites; the display text therefore comes from the precomputed table lookup, which
+        // does not allocate for known suites, instead of per-suite formatting.
         int cipherSuitesEnd = pos + cipherSuitesLen;
         while (pos + 2 <= cipherSuitesEnd)
         {
@@ -494,6 +540,7 @@ public sealed partial class TlsProtocol : IProtocol
         byte compMethodsLen = body[pos++];
         hsField.Append(_CompMethodsLengthFieldId, FieldValue.NewU64(compMethodsLen));
 
+        // Compression methods: one byte each (TLS 1.3 requires exactly one, null; TLS 1.2 clients may offer several).
         int compMethodsEnd = pos + compMethodsLen;
         if (compMethodsEnd > body.Length)
         {
@@ -520,7 +567,9 @@ public sealed partial class TlsProtocol : IProtocol
     }
 
     /// <summary>
-    /// Parses a TLS Server Hello handshake message.
+    /// Parses a TLS Server Hello handshake message (RFC 8446 Section 4.1.3):
+    /// version(2) random(32) session_id(1+N) cipher_suite(2) compression_method(1) [extensions(2+N)].
+    /// Parameters as for <c>_ParseClientHello</c>. A HelloRetryRequest has the same layout and is shown as a Server Hello.
     /// </summary>
     private void _ParseServerHello(
         in MutField hsField, ReadOnlySpan<byte> body,
@@ -599,6 +648,9 @@ public sealed partial class TlsProtocol : IProtocol
     /// <summary>
     /// Parses a TLS Certificate handshake message (type 11).
     /// Format: CertificatesLength(3) → [ CertLength(3) CertData(N) ]*
+    /// This is the TLS 1.2 layout (RFC 5246 Section 7.4.2). In TLS 1.3 the Certificate message is encrypted, and its
+    /// layout (request context, per-certificate extensions) differs, so only unencrypted TLS 1.2 chains are decoded.
+    /// The certificate bytes are referenced in place, not parsed.
     /// </summary>
     private void _ParseCertificate(
         in MutField hsField, ReadOnlySpan<byte> body,
@@ -613,6 +665,7 @@ public sealed partial class TlsProtocol : IProtocol
         int certsLength = (body[0] << 16) | (body[1] << 8) | body[2];
         hsField.Append(_CertificatesLengthFieldId, FieldValue.NewU64((ulong)certsLength));
 
+        // The declared chain length is attacker-controlled: clamp it to the body so a lying length cannot run past the message.
         int pos = 3;
         int end = Math.Min(pos + certsLength, body.Length);
         int certIndex = 0;
@@ -646,7 +699,10 @@ public sealed partial class TlsProtocol : IProtocol
     }
 
     /// <summary>
-    /// Parses TLS extensions from a Client Hello or Server Hello.
+    /// Parses TLS extensions from a Client Hello or Server Hello (RFC 8446 Section 4.2): each extension is
+    /// type(2) length(2) data(length). <paramref name="pos"/> is advanced past the extensions that were consumed.
+    /// An extensions block that is longer than the message, or an extension that is longer than the block, ends the walk
+    /// without decoding that extension.
     /// </summary>
     private void _ParseExtensions(
         in MutField parent, ReadOnlySpan<byte> body, ref int pos, ushort extensionsLen,
@@ -691,7 +747,9 @@ public sealed partial class TlsProtocol : IProtocol
     }
 
     /// <summary>
-    /// Parses data for known TLS extension types (SNI, ALPN).
+    /// Parses data for the decoded TLS extension types (server_name, supported_groups, signature_algorithms, ALPN,
+    /// supported_versions, key_share); every other extension keeps its raw bytes. The set of types here must match
+    /// <c>_DetectExtensionData</c>, which records the corresponding index groups.
     /// </summary>
     private void _ParseExtensionData(
         in MutField extField, ushort extType, ReadOnlySpan<byte> extData,
@@ -718,7 +776,7 @@ public sealed partial class TlsProtocol : IProtocol
                 _ParseKeyShare(in extField, extData, fullData, dataBaseOffset);
                 break;
             default:
-                // Store raw extension data for unknown types
+                // Store raw extension data for unknown types, as a slice of the packet memory (no copy).
                 if (extData.Length > 0)
                 {
                     extField.Append(_ExtensionDataFieldId,
@@ -739,7 +797,8 @@ public sealed partial class TlsProtocol : IProtocol
             return;
         }
 
-        // ServerNameList length (2 bytes)
+        // ServerNameList length (2 bytes). The prefix is skipped, not used for bounding: the enclosing extension length
+        // already bounds the data and the loop checks every name length against it.
         int pos = 2;
         while (pos + 3 <= data.Length)
         {
@@ -752,7 +811,8 @@ public sealed partial class TlsProtocol : IProtocol
                 break;
             }
 
-            // nameType 0 = host_name
+            // nameType 0 = host_name (RFC 6066 Section 3, the only defined type). Host names are ASCII on the wire (IDNs
+            // as A-labels), so ASCII decoding is exact for valid data; other bytes decode to '?' and never throw.
             if (nameType == 0)
             {
                 string serverName = Encoding.ASCII.GetString(data[pos..(pos + nameLen)]);
@@ -774,7 +834,9 @@ public sealed partial class TlsProtocol : IProtocol
             return;
         }
 
-        // ALPN Protocol List length (2 bytes)
+        // ALPN Protocol List length (2 bytes), skipped for the same reason as in _ParseSni (the extension length bounds
+        // the data). Protocol names are opaque byte strings in RFC 7301 but in practice ASCII ("h2", "http/1.1"), so ASCII
+        // decoding is used; other bytes decode to '?'.
         int pos = 2;
         while (pos + 1 <= data.Length)
         {
@@ -790,7 +852,11 @@ public sealed partial class TlsProtocol : IProtocol
         }
     }
 
-    /// <summary>Parses a TLS Alert record (2 bytes: level + description).</summary>
+    /// <summary>
+    /// Parses a TLS Alert record (2 bytes: level + description, RFC 8446 Section 6). Only the first two payload bytes are
+    /// read and a payload shorter than two bytes produces no fields. There is no decryption: for an alert record
+    /// protected by TLS 1.2 keys the bytes are ciphertext, so the decoded values are only meaningful for plaintext alerts.
+    /// </summary>
     private void _ParseAlert(in MutField recordField, ReadOnlySpan<byte> payload)
     {
         if (payload.Length < 2)
@@ -820,6 +886,7 @@ public sealed partial class TlsProtocol : IProtocol
             return;
         }
 
+        // The list length is clamped to the extension data so a lying prefix cannot run past it.
         int listLen = BinaryPrimitives.ReadUInt16BigEndian(data);
         int pos = 2;
         int end = Math.Min(pos + listLen, data.Length);
@@ -845,6 +912,7 @@ public sealed partial class TlsProtocol : IProtocol
             return;
         }
 
+        // The list length is clamped to the extension data so a lying prefix cannot run past it.
         int listLen = BinaryPrimitives.ReadUInt16BigEndian(data);
         int pos = 2;
         int end = Math.Min(pos + listLen, data.Length);
@@ -866,6 +934,8 @@ public sealed partial class TlsProtocol : IProtocol
     /// </summary>
     private void _ParseSupportedVersions(in MutField extField, ReadOnlySpan<byte> data)
     {
+        // The two forms are told apart by length alone: the Client Hello form is 1 length byte plus 2 bytes per version
+        // (always an odd total), so exactly 2 bytes can only be the Server Hello form.
         if (data.Length == 2)
         {
             // Server Hello: single version selected
@@ -909,6 +979,9 @@ public sealed partial class TlsProtocol : IProtocol
 
         // Detect Client Hello vs Server Hello by checking if data starts with a u16 list length
         // consistent with remaining data. If listLen == data.Length - 2, it's Client Hello.
+        // Heuristic: this method does not know the handshake type. A Server Hello entry starts with the group number, which
+        // would be mistaken for a list length only if the number happened to equal the data size minus 2.
+        // _DetectKeyShare repeats the same test and must keep it identical.
         if (data.Length >= 2)
         {
             ushort potentialListLen = BinaryPrimitives.ReadUInt16BigEndian(data);
@@ -975,8 +1048,12 @@ public sealed partial class TlsProtocol : IProtocol
     /// <summary>
     /// Eagerly walks all TLS records, mirroring <see cref="_PopulateTls"/>'s record loop, and sets the
     /// content-dependent group flags. Duplicates the record/handshake/extension walk so the index is
-    /// complete and content-consistent without forcing field materialization.
+    /// complete and content-consistent without forcing field materialization. All <c>_Detect*</c> methods are
+    /// static, work on spans only and write into the caller's flags struct (passed by reference), so the pass
+    /// allocates nothing and runs on every packet.
     /// </summary>
+    /// <param name="span">The whole TLS segment.</param>
+    /// <param name="flags">Receives the groups that the lazy populator would emit fields for.</param>
     private static void _DetectTlsGroups(ReadOnlySpan<byte> span, ref TlsGroupFlags flags)
     {
         int offset = 0;

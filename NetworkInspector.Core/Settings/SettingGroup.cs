@@ -9,6 +9,11 @@ namespace NetworkInspector.Core.Settings;
 /// <para>
 /// Disposal of the internal lock is handled by <see cref="SettingsManager"/> ownership.
 /// </para>
+/// <para>
+/// The lock is not recursive: a callback that runs under the read lock (<c>ForEachSetting</c>) must not register a setting in
+/// the same group, because that needs the write lock and a read-to-write upgrade throws
+/// <see cref="LockRecursionException"/>.
+/// </para>
 /// </summary>
 // Suppression approved: CA1001 — ReaderWriterLockSlim lifetime is owned by SettingsManager.DisposeResources(), not SettingGroup callers.
 [SuppressMessage("Microsoft.Design", "CA1001:TypesThatOwnDisposableFieldsShouldBeDisposable",
@@ -27,6 +32,9 @@ public sealed class SettingGroup : IReadOnlySettingGroup
 
     #region Fields
 
+    // Guards _Settings only. Reads (count, snapshot copy, iteration) are frequent and may overlap; the only write is the
+    // registration of a setting, which is rare. The owning manager calls in while it holds its own lock (manager lock first,
+    // group lock second); the group's own code never requests the manager's lock, so the order cannot invert.
     private readonly ReaderWriterLockSlim _Lock = new();
     private readonly List<Setting> _Settings = [];
 
@@ -89,7 +97,10 @@ public sealed class SettingGroup : IReadOnlySettingGroup
         }
     }
 
-    /// <summary>Adds a setting to this group.</summary>
+    /// <summary>
+    /// Adds a setting to this group. Does not check for duplicates or for a matching group name: <see cref="SettingsManager"/>
+    /// does both under its own lock before it calls this member.
+    /// </summary>
     internal void AddSetting(Setting setting)
     {
         _Lock.EnterWriteLock();
@@ -113,7 +124,10 @@ public sealed class SettingGroup : IReadOnlySettingGroup
     /// </summary>
     public ReadOnlySettingGroupView AsReadOnlyView() => new(this);
 
-    /// <summary>Gets a snapshot of the mutable setting instances for manager-internal use.</summary>
+    /// <summary>
+    /// Gets a snapshot of the mutable setting instances for manager-internal use. The list is copied under the read lock, so the
+    /// caller can iterate it without any lock while registrations continue; the cost is one allocation per call.
+    /// </summary>
     internal IReadOnlyList<Setting> CopySettings()
     {
         _Lock.EnterReadLock();
@@ -134,7 +148,11 @@ public sealed class SettingGroup : IReadOnlySettingGroup
     /// <summary>
     /// Iterates over settings without allocating a copy.
     /// <para><b>Thread-safety:</b> The callback is invoked while holding the read lock.
-    /// Do not perform long-running operations inside the callback.</para>
+    /// Do not perform long-running operations inside the callback, and do not register settings from it: the write lock cannot
+    /// be taken while the read lock is held by the same thread (<see cref="LockRecursionException"/>), and a writer waiting
+    /// on other readers would stall behind a slow callback.</para>
+    /// <para>This is the allocation-free alternative to <see cref="CopySettings"/>: nothing is copied, and the price is that
+    /// the lock is held for the whole iteration.</para>
     /// </summary>
     internal void ForEachSetting(Action<Setting> action)
     {

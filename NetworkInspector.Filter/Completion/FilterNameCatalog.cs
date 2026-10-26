@@ -51,6 +51,9 @@ internal sealed class FilterNameCatalog
     {
         ArgumentNullException.ThrowIfNull(stack);
 
+        // GetValue is lock-free for hits. On a first-use race two threads may both build a catalog and one result is
+        // discarded; that is harmless because the catalog is immutable and the build is cheap next to taking a lock.
+        // The static lambda captures nothing, so no closure is allocated per call.
         return _ByStack.GetValue(stack, static target => new FilterNameCatalog(_Build(target)));
     }
 
@@ -148,7 +151,8 @@ internal sealed class FilterNameCatalog
 
     /// <summary>
     /// Returns the known name closest to <paramref name="name"/> by edit distance (insert, delete, substitute,
-    /// swap of two neighbours; ignoring case), or <see langword="null"/> when nothing is near enough. The allowed
+    /// swap of two neighbours; ignoring case), or <see langword="null"/> when nothing is near enough. A name that equals
+    /// an entry exactly (ordinal) is never suggested, but one that differs only in case is. The allowed
     /// distance grows with the length — 1 up to 4 characters, 2 up to 10, else 3 — so short names are not
     /// "corrected" into unrelated ones. Ties go to the alphabetically first name. Runs only on the error path.
     /// </summary>
@@ -186,11 +190,14 @@ internal sealed class FilterNameCatalog
 
     /// <summary>
     /// Optimal-string-alignment distance between two names, ignoring case. Returns <paramref name="cutoff"/> as
-    /// soon as every cell of a row reaches it, because the caller only wants distances below the cutoff.
+    /// soon as two consecutive rows have all cells at or above it, because the caller only wants distances below the
+    /// cutoff. Allocation-free while <paramref name="right"/> has at most 127 characters (stack rows), pooled rows beyond.
     /// </summary>
     private static int _Distance(string left, string right, int cutoff)
     {
-        // Three rolling rows: two-back (for the swap), previous, current. Names are short; rent for long ones.
+        // Three rolling rows instead of the full matrix: two-back (for the swap), previous, current. Names are short, so the
+        // rows live on the stack (at most 384 ints = 1.5 KB); longer names rent from the pool to keep the stack frame
+        // bounded. A rented array holds stale values, which is fine: every cell is written before it is read.
         int width = right.Length + 1;
         int[]? rented = width * 3 > 384 ? System.Buffers.ArrayPool<int>.Shared.Rent(width * 3) : null;
         Span<int> rows = rented is null ? stackalloc int[width * 3] : rented.AsSpan(0, width * 3);

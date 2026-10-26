@@ -18,6 +18,11 @@ internal static class PreloadDecision
     /// </summary>
     /// <param name="fileSize">File size in bytes.</param>
     /// <param name="preloadBudget">The <c>PreloadBudget</c> option; null means "never preload".</param>
+    /// <remarks>
+    /// The <see cref="Array.MaxLength"/> cap is a hard limit of the format of the in-memory path (one <c>byte[]</c> holds
+    /// the file and offsets into it are <c>int</c>), not a tuning value: no budget can lift it. The budget itself is a
+    /// caller-chosen memory trade-off (see the options of each source). Callers pass the size of the file they hold open.
+    /// </remarks>
     internal static bool ShouldPreload(long fileSize, long? preloadBudget) =>
         preloadBudget.HasValue && fileSize <= Math.Min(preloadBudget.Value, Array.MaxLength);
 

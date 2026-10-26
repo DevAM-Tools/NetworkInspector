@@ -41,6 +41,12 @@ internal static class PcapPadding
     /// Rounds a length up to the next 4-byte boundary.
     /// For example: PaddedLength(5) → 8, PaddedLength(4) → 4, PaddedLength(0) → 0.
     /// </summary>
+    /// <remarks>
+    /// Not overflow-checked (hot path): a length above <c>int.MaxValue − 3</c> wraps negative. Every caller passes a value
+    /// that is already bounded (an option length is a u16; a captured length is checked against the block length, which
+    /// is capped at <c>PcapConstants.MaxBlockSize</c>), and the one caller that handles arbitrary values
+    /// (<c>PcapngBlockLayout.TryValidatePcapngBlockLength</c>) range-checks first.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static int PaddedLength(int length) => (length + 3) & ~3;
 

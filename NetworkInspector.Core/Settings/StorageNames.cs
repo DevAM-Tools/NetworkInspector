@@ -30,13 +30,19 @@ public static class StorageNames
     /// <summary>Number of hex digits of the hash.</summary>
     private const int _HashDigits = 16;
 
-    /// <summary>Most bytes read from a sidecar; a larger file is not a name file.</summary>
+    /// <summary>
+    /// Most bytes read from a sidecar; a larger file is not a name file. Threat: the sidecar sits in a folder the user (or
+    /// another program) can write, so a replaced or garbage file must not make the reader load an unbounded amount. A name
+    /// has at most <see cref="MaxNameLength"/> UTF-16 code units and every code unit takes at most 3 UTF-8 bytes (a surrogate
+    /// pair takes 4 bytes for 2 units), so the longest valid sidecar is 768 bytes and 1,024 leaves a margin. Constant, not
+    /// configurable: it follows from the format fact above, not from the host. Secure by default; nothing to loosen.
+    /// </summary>
     private const int _MaxSidecarBytes = 1024;
 
-    /// <summary>FNV-1a 64-bit offset basis.</summary>
+    /// <summary>FNV-1a 64-bit offset basis (a constant of the hash definition).</summary>
     private const ulong _FnvOffsetBasis = 14695981039346656037UL;
 
-    /// <summary>FNV-1a 64-bit prime.</summary>
+    /// <summary>FNV-1a 64-bit prime (a constant of the hash definition).</summary>
     private const ulong _FnvPrime = 1099511628211UL;
 
     #endregion
@@ -62,8 +68,18 @@ public static class StorageNames
             return name;
         }
 
-        // Prefix: readable start of the name in lower case, so that names differing only in case share one storage name.
+        // Prefix: readable start of the name in lower case, so that names differing only in case share one storage name. The
+        // trailing spaces and dots are cut because Windows strips them from a file or folder name, which would silently
+        // change the storage name the caller asked for.
         string prefix = name[..Math.Min(name.Length, _MappedPrefixLength)].ToLowerInvariant().TrimEnd(' ', '.');
+
+        // Hash of the whole name in upper-invariant form, so that the case-insensitive uniqueness of names also holds for the
+        // storage name. FNV-1a has a fixed definition, so the storage name of a name is the same in every run, on every
+        // platform, and in every runtime version (string.GetHashCode is randomized per process and could not be used). It is
+        // not collision resistant: a crafted pair of names can collide. That is accepted because the sidecar comparison in
+        // TryWriteNameFile refuses a colliding name instead of letting it share the folder. Each UTF-16 code unit is fed as
+        // two bytes, low byte first; changing the byte order or the case form would orphan every existing mapped entry.
+        // Residual risk: a deliberately colliding name cannot be created.
         ulong hash = _FnvOffsetBasis;
         foreach (char c in name.ToUpperInvariant())
         {
@@ -135,10 +151,17 @@ public static class StorageNames
         TryWriteNameFile(parentDirectory, name, ToStorageName, out problem);
 
     /// <summary>The mapping is a parameter so that tests can force two names onto one storage name.</summary>
+    /// <param name="parentDirectory">The folder that holds the entry and its sidecar; it must exist.</param>
+    /// <param name="name">The full name.</param>
+    /// <param name="toStorageName">The name-to-storage-name mapping; production code passes <see cref="ToStorageName"/>.</param>
+    /// <param name="problem">Why the sidecar was not written; <see langword="null"/> on success.</param>
+    /// <returns><see langword="false"/> on a collision or when the file cannot be written.</returns>
     internal static bool TryWriteNameFile(string parentDirectory, string name, Func<string, string> toStorageName,
         [NotNullWhen(false)] out string? problem)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(parentDirectory);
+
+        // A direct name is its own storage name and needs no sidecar.
         string storageName = toStorageName(name);
         problem = null;
         if (!IsMapped(storageName))
@@ -146,7 +169,9 @@ public static class StorageNames
             return true;
         }
 
-        // A sidecar that holds another name for the same storage name is a hash collision; refusing is the only safe answer.
+        // A sidecar that holds another name for the same storage name is a hash collision (FNV-1a is not collision resistant,
+        // see ToStorageName). Sharing the folder would mix the data of two entries, so refusing is the only safe answer. A
+        // sidecar that differs only in case is the same name and is overwritten (a case-only rename).
         if (TryReadName(parentDirectory, storageName, toStorageName, out string? existing)
             && !string.Equals(existing, name, StringComparison.OrdinalIgnoreCase))
         {
@@ -155,6 +180,9 @@ public static class StorageNames
             return false;
         }
 
+        // Write to a uniquely named temporary file and move it over the sidecar, so a reader sees the old or the new complete
+        // name, never a half-written one, and a crash leaves only a stray .tmp file. The unique name keeps two writers from
+        // sharing a temporary file. No byte-order mark: the reader decodes strictly and a mark would be part of the name.
         string path = Path.Combine(parentDirectory, storageName + NameFileExtension);
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
@@ -183,6 +211,11 @@ public static class StorageNames
         TryReadName(parentDirectory, storageName, ToStorageName, out name);
 
     /// <summary>The mapping is a parameter so that tests can force two names onto one storage name.</summary>
+    /// <param name="parentDirectory">The folder that holds the entry and its sidecar.</param>
+    /// <param name="storageName">The storage name of the entry.</param>
+    /// <param name="toStorageName">The name-to-storage-name mapping; production code passes <see cref="ToStorageName"/>.</param>
+    /// <param name="name">The full name; <see langword="null"/> when there is no usable sidecar.</param>
+    /// <returns><see langword="true"/> when <paramref name="name"/> is set.</returns>
     internal static bool TryReadName(string parentDirectory, string storageName, Func<string, string> toStorageName,
         [NotNullWhen(true)] out string? name)
     {
@@ -192,7 +225,13 @@ public static class StorageNames
         string path = Path.Combine(parentDirectory, storageName + NameFileExtension);
         try
         {
+            // Full sharing (including delete), so that a concurrent TryWriteNameFile can still move a new sidecar over this one
+            // while it is being read. A missing file ends in the catch block below like any other unusable sidecar.
             using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+            // Read at most one byte more than the limit: that extra byte is how an oversized file is recognized without
+            // reading the rest of it. A single Read may return less than asked for, hence the loop. The buffer is not a hot
+            // path allocation: sidecars are read while listing entries, not per frame.
             byte[] buffer = new byte[_MaxSidecarBytes + 1];
             int length = 0;
             int read;
@@ -206,7 +245,9 @@ public static class StorageNames
                 return false;
             }
 
-            // Strict decoding: invalid UTF-8 is not a name.
+            // Strict decoding: invalid UTF-8 is not a name (the decoder throws a DecoderFallbackException, an ArgumentException,
+            // which the catch block below turns into "no usable sidecar"). The content is trusted only when it maps back to this
+            // very storage name: a sidecar copied or edited by hand cannot claim a folder that belongs to another name.
             string content = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(buffer, 0, length);
             if (content.Length > MaxNameLength || !string.Equals(toStorageName(content), storageName, StringComparison.Ordinal))
             {

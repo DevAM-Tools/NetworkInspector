@@ -6,7 +6,9 @@ namespace NetworkInspector.Sources.Pcapng.Format.Blocks;
 /// Section Header Block (SHB) — 24 bytes.
 /// Marks the start of a new section. Fields are read as little-endian;
 /// if <see cref="ByteOrderMagic"/> equals <see cref="PcapConstants.PcapngSwappedMagic"/>,
-/// all fields must be swapped to the correct byte order.
+/// all fields must be swapped to the correct byte order. The 24 bytes are the fixed part only; the section options
+/// and the trailing block length follow. Each section carries its own byte order, so a file can mix sections of
+/// both byte orders.
 /// </summary>
 [BinaryParsable]
 internal readonly partial struct SectionHeaderBlock

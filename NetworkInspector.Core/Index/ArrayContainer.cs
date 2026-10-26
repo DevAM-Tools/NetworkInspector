@@ -4,7 +4,22 @@ namespace NetworkInspector.Core.Index;
 
 /// <summary>
 /// Sorted ushort array container. Efficient for sparse data (≤4096 elements).
-/// Automatically promotes to <see cref="BitmapContainer"/> at 4096 elements.
+/// Automatically promotes to <see cref="BitmapContainer"/> when a distinct 4097th element would be added.
+/// <para>
+/// <b>Why 4096:</b> an array of <c>n</c> values takes <c>2n</c> bytes and a <see cref="BitmapContainer"/> always takes 8 KiB
+/// (8192 bytes), so the array is the smaller representation up to exactly 4096 values (the standard Roaring bitmap
+/// crossover); beyond that the bitmap is smaller and has O(1) membership tests.
+/// </para>
+/// <para>
+/// <b>Invariants:</b> the first <see cref="Cardinality"/> slots of the backing array are strictly ascending (sorted, no
+/// duplicates). Every operation below relies on that: binary search, the early exit in <see cref="Contains"/> and the
+/// merge-style set operations. Members that take a pre-built array (the second constructor) trust the caller for it.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> not thread-safe. <see cref="Add"/> mutates in place (growth, shifting). Concurrent readers are
+/// made safe one level up by the sequence lock of the owning <see cref="RoaringBitmap"/>, which discards a read that
+/// overlapped a mutation; a racing read here may therefore return a wrong answer or throw.
+/// </para>
 ///
 /// SIMD acceleration is applied to the following operations (Vector128, 8 ushorts / 128 bits):
 /// <list type="bullet">
@@ -19,6 +34,11 @@ namespace NetworkInspector.Core.Index;
 /// </summary>
 internal sealed class ArrayContainer : IContainer
 {
+    /// <summary>
+    /// Largest number of values an array container holds before it becomes a <see cref="BitmapContainer"/>. A format fact
+    /// of Roaring bitmaps (array bytes 2n versus the 8 KiB bitmap), so a constant and not a setting. Other containers
+    /// also use it as the density threshold when a set-operation result is converted back to an array.
+    /// </summary>
     internal const int MaxCapacity = 4096;
 
     // Elements ≤ this threshold use SIMD linear scan in Contains instead of binary search.
@@ -26,18 +46,29 @@ internal sealed class ArrayContainer : IContainer
     // branch-prediction overhead from the log2(n) comparisons.
     private const int _SimdLinearScanThreshold = 32;
 
+    // Backing store; only the first Cardinality slots are valid (strictly ascending). Longer than Cardinality after
+    // growth, exactly Cardinality after a set operation or Clone.
     private ushort[] _Values;
 
+    /// <summary>Number of values stored.</summary>
     public int Cardinality { get; private set; }
 
     /// <summary>Creates an empty array container with default capacity.</summary>
     internal ArrayContainer()
     {
+        // Small initial capacity; Add doubles it when full (see Add).
         _Values = new ushort[4];
         Cardinality = 0;
     }
 
-    /// <summary>Creates an array container from existing sorted values.</summary>
+    /// <summary>
+    /// Creates an array container that takes ownership of <paramref name="values"/> (no copy).
+    /// The caller guarantees that the first <paramref name="count"/> entries are strictly ascending and that
+    /// <c>count</c> is at most <c>values.Length</c> and at most <see cref="MaxCapacity"/>; none of this is validated here
+    /// because the callers are the set operations, which produce sorted output by construction.
+    /// </summary>
+    /// <param name="values">Backing array; the container keeps and mutates it, so the caller must not use it afterwards.</param>
+    /// <param name="count">Number of valid leading entries.</param>
     internal ArrayContainer(ushort[] values, int count)
     {
         _Values = values;
@@ -69,6 +100,12 @@ internal sealed class ArrayContainer : IContainer
         return Array.BinarySearch(_Values, 0, Cardinality, value) >= 0;
     }
 
+    /// <summary>
+    /// Inserts <paramref name="value"/> keeping the array sorted. Returns <see langword="this"/>, or a new
+    /// <see cref="BitmapContainer"/> when the array already holds <see cref="MaxCapacity"/> values and the value is new
+    /// (the caller must continue with the returned container). Adding a present value is a no-op.
+    /// </summary>
+    /// <param name="value">The low 16 bits of the id to add.</param>
     public IContainer Add(ushort value)
     {
         // Append shortcut: ids arrive in ascending order, so the value is usually above the current maximum. That needs
@@ -91,7 +128,8 @@ internal sealed class ArrayContainer : IContainer
             insertAt = ~idx;
         }
 
-        // Promote to bitmap at threshold
+        // Promote to bitmap at threshold. Reached only for a value that is not present yet (a duplicate returned above), so
+        // the array really would exceed MaxCapacity. The array stays unchanged and is simply dropped by the caller.
         if (Cardinality >= MaxCapacity)
         {
             BitmapContainer bitmap = new();
@@ -103,8 +141,9 @@ internal sealed class ArrayContainer : IContainer
             return bitmap;
         }
 
-        // Grow if needed. A zero-length backing array (Clone of an empty container) grows to the default capacity 4,
-        // because doubling 0 would stay 0 and the store below would run past the array.
+        // Grow if needed: doubling gives amortized O(1) appends, capped at MaxCapacity + 1 slots. A zero-length backing
+        // array (Clone of an empty container) grows to the default capacity 4, because doubling 0 would stay 0 and the
+        // store below would run past the array.
         if (Cardinality == _Values.Length)
         {
             int newCap = Math.Min(Math.Max(_Values.Length * 2, 4), MaxCapacity + 1);
@@ -122,6 +161,10 @@ internal sealed class ArrayContainer : IContainer
         return this;
     }
 
+    /// <summary>
+    /// Deep copy sized exactly to <see cref="Cardinality"/> (no spare capacity), so the first <see cref="Add"/> on the copy
+    /// regrows the array. An empty container clones to a zero-length backing array, which <see cref="Add"/> handles.
+    /// </summary>
     public IContainer Clone()
     {
         ushort[] valueCopy = new ushort[Cardinality];
@@ -129,10 +172,16 @@ internal sealed class ArrayContainer : IContainer
         return new ArrayContainer(valueCopy, Cardinality);
     }
 
+    /// <summary>
+    /// Intersection. Array with array uses the SIMD intersection; against any other kind it probes <paramref name="other"/> for
+    /// each of this container's values (this side is the smaller one, at most <see cref="MaxCapacity"/> values).
+    /// The result is always a new array container (an intersection cannot exceed this container's size). Neither operand is mutated.
+    /// </summary>
     public IContainer And(IContainer other)
     {
         if (other is ArrayContainer arr)
         {
+            // The result cannot be larger than the smaller operand, so the buffer is allocated once at that size.
             ushort[] result = new ushort[Math.Min(Cardinality, arr.Cardinality)];
             int k = _SimdIntersect(_Values, Cardinality, arr._Values, arr.Cardinality, result);
             return new ArrayContainer(result, k);
@@ -152,13 +201,20 @@ internal sealed class ArrayContainer : IContainer
         return new ArrayContainer(res, cnt);
     }
 
+    /// <summary>
+    /// Union. Array with array merges into a buffer sized for the worst case (no overlap) and becomes a
+    /// <see cref="BitmapContainer"/> if the merged count exceeds <see cref="MaxCapacity"/>. Against any other kind it clones
+    /// <paramref name="other"/> and adds this container's values to the clone. Neither operand is mutated.
+    /// </summary>
     public IContainer Or(IContainer other)
     {
         if (other is ArrayContainer arr)
         {
+            // Worst-case size buffer (disjoint inputs); the merge reports how many entries it really wrote.
             ushort[] result = new ushort[Cardinality + arr.Cardinality];
             int k = _SimdMerge(_Values, Cardinality, arr._Values, arr.Cardinality, result);
 
+            // Same density rule as Add: more than MaxCapacity distinct values is cheaper as a bitmap.
             if (k > MaxCapacity)
             {
                 BitmapContainer bitmap = new();
@@ -183,6 +239,10 @@ internal sealed class ArrayContainer : IContainer
         return merged;
     }
 
+    /// <summary>
+    /// Difference (this AND NOT <paramref name="other"/>). The result is a new array container (it cannot be larger than this
+    /// container). Neither operand is mutated.
+    /// </summary>
     public IContainer AndNot(IContainer other)
     {
         if (other is ArrayContainer arr)
@@ -206,6 +266,11 @@ internal sealed class ArrayContainer : IContainer
         return new ArrayContainer(res, cnt);
     }
 
+    /// <summary>
+    /// Symmetric difference. Array with array merges and becomes a <see cref="BitmapContainer"/> when the result exceeds
+    /// <see cref="MaxCapacity"/>. Against any other kind this container is converted to a bitmap and the bitmap's XOR does the
+    /// work (it picks the right result kind). Neither operand is mutated.
+    /// </summary>
     public IContainer Xor(IContainer other)
     {
         if (other is ArrayContainer arr)
@@ -253,6 +318,12 @@ internal sealed class ArrayContainer : IContainer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _SimdLinearContains(ushort[] values, int count, ushort value)
     {
+        // A concurrent reader loads the array and the count at different moments, so it can hold an old, shorter array together
+        // with the count of a later insert (the writer grows the array before it raises the count). The wrong answer of such a
+        // torn read is discarded by the sequence lock of the bitmap, but the unchecked 8-lane load below must still never run
+        // past the array: bound the count to the array we actually hold.
+        count = Math.Min(count, values.Length);
+
         int i = 0;
         if (Vector128.IsHardwareAccelerated)
         {
@@ -267,6 +338,8 @@ internal sealed class ArrayContainer : IContainer
                     return false;
                 }
 
+                // LoadUnsafe does no bounds check on the other seven lanes; the loop condition (i + 8 <= count, with count
+                // bounded to values.Length above) keeps all eight lanes inside the array.
                 if (Vector128.EqualsAny(Vector128.LoadUnsafe(ref values[i]), target))
                 {
                     return true;
@@ -396,7 +469,8 @@ internal sealed class ArrayContainer : IContainer
 
                 if (lastA < firstB)
                 {
-                    // A chunk is entirely below B: no overlap → SIMD bulk-copy A chunk
+                    // A chunk is entirely below B: no overlap → SIMD bulk-copy A chunk. The unchecked 8-lane store stays
+                    // inside result because these 8 values are all part of the output (capacity is aCount + bCount).
                     Vector128.LoadUnsafe(ref a[i]).StoreUnsafe(ref result[k]);
                     i += vecSize;
                     k += vecSize;

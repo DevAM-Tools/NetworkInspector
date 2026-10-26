@@ -43,8 +43,13 @@ public sealed partial class DataProtocol : IProtocol
     /// <summary>
     /// Parses raw data — trivially stores the entire input as a byte field.
     /// </summary>
+    /// <param name="parentField">Parent field that receives the <c>data</c> container.</param>
+    /// <param name="data">The unrecognized payload; every byte is consumed. Not copied: the fields reference this memory.</param>
+    /// <param name="context">Parse context; used only to record index presence.</param>
+    /// <returns>The payload length, or 0 (consumed nothing, no error) when <paramref name="data"/> is empty.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        // An empty payload has nothing to show: add no empty "data" node and do not index the protocol.
         if (data.Length == 0)
         {
             return 0;
@@ -53,7 +58,7 @@ public sealed partial class DataProtocol : IProtocol
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_DataGroupId);
 
-
+        // Container and data.data reference the same memory slice (no copy); the container title shows the byte count.
         MutField container = parentField.AppendWithCustomText(
             _ProtocolFieldId, FieldValue.NewBytes(data), "Data (", data.Length, " bytes)");
 

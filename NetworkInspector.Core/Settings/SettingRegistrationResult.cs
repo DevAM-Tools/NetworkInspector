@@ -5,6 +5,8 @@ namespace NetworkInspector.Core.Settings;
 /// <summary>
 /// Result of registering a setting, containing both the load result and the current value.
 /// </summary>
+/// <param name="LoadResult">What happened to the persisted or preloaded value of the setting, if there was one.</param>
+/// <param name="Value">The current value of the setting right after registration (the default when no value was applied).</param>
 public readonly record struct SettingRegistrationResult(SettingLoadResult LoadResult, SettingValue Value)
 {
     #region Properties
@@ -12,7 +14,11 @@ public readonly record struct SettingRegistrationResult(SettingLoadResult LoadRe
     /// <summary>Returns true if a persisted value was successfully loaded.</summary>
     public bool WasLoaded => LoadResult == SettingLoadResult.Success;
 
-    /// <summary>Returns true if the setting is using its default value.</summary>
+    /// <summary>
+    /// Returns true if no persisted value existed for the setting. This is not the same as "the value is the default": a
+    /// persisted value that was refused (type mismatch, decoding error, out of range) leaves the default in place but reports
+    /// <see langword="false"/> here, so the caller can tell a damaged file from a fresh install via <see cref="LoadResult"/>.
+    /// </summary>
     public bool IsDefault => LoadResult == SettingLoadResult.NoPersistedValue;
 
     #endregion

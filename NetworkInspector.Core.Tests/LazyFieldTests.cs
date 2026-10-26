@@ -308,6 +308,49 @@ internal sealed class LazyFieldTests
         }
     }
 
+    [Test]
+    public async Task LazyField_MoreContainersThanRepresentableSlots_AreRefusedWithoutCorruptingTheMarker()
+    {
+        // Arrange: a protocol that registers more lazy containers than the 15-bit populator index can address.
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        MockManyLazyProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        Stack stack = builder.Build();
+        using (stack)
+        {
+            Packet packet = _ParseFrame(stack, new byte[14], protoId);
+
+            // Act: count the fields whose lazy index is set, and those that carry the materializing marker without a materializer.
+            int lazyCount = 0;
+            int markedCount = 0;
+            int fieldCount = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
+            for (int i = 0; i < fieldCount; i++)
+            {
+                ushort lazyIndex = packet.GetFieldRef(i).ReadLazyIndexVolatile();
+                if (lazyIndex != 0)
+                {
+                    lazyCount++;
+                }
+
+                if ((lazyIndex & FieldBody.LazyIndexMaterializingBit) != 0)
+                {
+                    markedCount++;
+                }
+            }
+
+            // Assert: no field is born "being materialized"; the surplus containers are refused (they carry an error child).
+            await Assert.That(markedCount).IsEqualTo(0);
+            await Assert.That(lazyCount).IsEqualTo(FieldBody.LazyIndexMaterializingBit - 1);
+
+            // Everything that was accepted can be materialized; the refused containers must not keep the packet "pending".
+            using CancellationTokenSource cts = new(TimeSpan.FromSeconds(30));
+            await Task.Run(() => packet.MaterializeAll(), cts.Token).WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+            await Assert.That(packet.HasUnpopulatedLazyFields).IsFalse();
+        }
+    }
+
     // === Mock Lazy Protocol ===
 
     /// <summary>
@@ -365,6 +408,34 @@ internal sealed class LazyFieldTests
                 container.Append(typeFieldId, FieldValue.NewU64(ethertype));
                 return 0;
             });
+            return 14;
+        }
+    }
+
+    /// <summary>
+    /// Mock protocol that registers more lazy containers than a 15-bit populator index can address.
+    /// </summary>
+    private sealed class MockManyLazyProtocol : IProtocol
+    {
+        private const int _ContainerCount = 32_770;
+
+        private FieldId _ContainerFieldId;
+
+        public string Name => "many";
+        public string UiName => "Many";
+
+        public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
+        {
+            _ContainerFieldId = builder.RegisterField(protocolId, "many.container", "Container", FieldType.None);
+        }
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+        {
+            for (int i = 0; i < _ContainerCount; i++)
+            {
+                parentField.AppendLazy(_ContainerFieldId, FieldValue.None, static (in container) => 0);
+            }
+
             return 14;
         }
     }

@@ -36,6 +36,7 @@ internal static class AscExporterRegistration
 
     /// <summary>Registers the options with the range of the Core exporter builder.</summary>
     private static void _RegisterOptions(SettingsRegistrar options) =>
+        // The default is the minimum (6 digits), the precision CANoe writes; 9 digits keep a nanosecond round trip.
         options.RegisterI64Setting(_DecimalsOption, "Timestamp decimals", "", AscExporter.MinTimestampDecimals,
             min: AscExporter.MinTimestampDecimals, max: AscExporter.MaxTimestampDecimals,
             description: "Fraction digits of the line timestamps: 6 (microseconds, what CANoe writes) to 9 (nanoseconds).");

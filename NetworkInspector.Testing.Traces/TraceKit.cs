@@ -42,7 +42,12 @@ public sealed class TraceKit
 
     #region Properties
 
-    /// <summary>The kit on <c>&lt;temp&gt;/ni-trace-cache/v1</c>, shared by all test projects of a machine.</summary>
+    /// <summary>
+    /// The kit on <c>&lt;temp&gt;/ni-trace-cache/v1</c>, shared by all test projects of a machine. Test projects run as
+    /// separate processes, so the sharing is what makes the cross-process writer lock of the cache necessary; the shared
+    /// folder is what lets a large trace be built once per machine instead of once per test project. The last segment names
+    /// the version of the cache file protocol (<c>TraceCache</c>).
+    /// </summary>
     public static TraceKit Default { get; } = new(Path.Combine(Path.GetTempPath(), "ni-trace-cache", "v1"));
 
     /// <summary>The cache folder of this kit.</summary>

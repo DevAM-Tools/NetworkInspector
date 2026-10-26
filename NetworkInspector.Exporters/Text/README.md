@@ -89,6 +89,10 @@ static void WriteText(IEnumerable<Packet> packets)
 - The packet header number is the running count of written packets, not `Packet.Id`.
 - `Full` is also truncated by `WithMaxTextLength`; pass `0` for complete values. Full detail on byte-heavy
   traffic can produce very large files.
+- A value longer than `WithMaxTextLength` is cut after that many characters (never inside a character or a surrogate
+  pair) and `…` is appended; a value that fits is written without it. The `…` is not counted in the limit. Byte values
+  print `aa bb cc` (three characters per byte except the last), so they show as many whole bytes as fit.
+- In `Strict` mode a packet that cannot be written counts as skipped and as an error, like in the other exporters.
 - Packets parsed with `FieldTreeMode.Skip` are skipped.
 
 ## Links

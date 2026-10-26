@@ -16,10 +16,17 @@ public readonly struct ValueCacheBuildOptions
 {
     #region Constants
 
-    /// <summary>Inclusive minimum <see cref="ChunkShift"/>. Same bound as <see cref="ChunkedOuterArray{TChunk}"/>.</summary>
+    /// <summary>
+    /// Inclusive minimum <see cref="ChunkShift"/> (16 rows per chunk). Same bound as <see cref="ChunkedOuterArray{TChunk}"/>.
+    /// A fixed limit of the underlying chunked store, not a host setting: constant. The store rejects anything outside, and
+    /// this type repeats the check so that a bad value fails at the options, with the options' parameter name.
+    /// </summary>
     public const int MinChunkShift = 4;
 
-    /// <summary>Inclusive maximum <see cref="ChunkShift"/>. Same bound as <see cref="ChunkedOuterArray{TChunk}"/>.</summary>
+    /// <summary>
+    /// Inclusive maximum <see cref="ChunkShift"/> (1,048,576 rows per chunk). Same bound as
+    /// <see cref="ChunkedOuterArray{TChunk}"/>; constant for the same reason as <see cref="MinChunkShift"/>.
+    /// </summary>
     public const int MaxChunkShift = 20;
 
     #endregion
@@ -33,7 +40,12 @@ public readonly struct ValueCacheBuildOptions
 
     #region Lifecycle
 
-    /// <summary>Defaults: <see cref="ChunkShift"/> 12, <see cref="DefaultCaptureMode"/> first occurrence, record flags false.</summary>
+    /// <summary>
+    /// Defaults: <see cref="ChunkShift"/> 12, <see cref="DefaultCaptureMode"/> first occurrence, record flags false.
+    /// An explicit parameterless constructor is what makes <c>new ValueCacheBuildOptions()</c> produce a usable ChunkShift
+    /// (a struct would otherwise be all zeros). It does not run for <c>default(ValueCacheBuildOptions)</c> or for array
+    /// elements, whose ChunkShift 0 is rejected by <see cref="ValueCache"/>.
+    /// </summary>
     public ValueCacheBuildOptions()
     {
         DefaultCaptureMode = ValueCaptureMode.FirstOccurrence;
@@ -86,6 +98,7 @@ public readonly struct ValueCacheBuildOptions
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="chunkShift"/> is out of range.</exception>
     internal static void ThrowIfChunkShiftOutOfRange(int chunkShift, string paramName)
     {
+        // Range test in one unsigned comparison: subtracting the minimum maps values below it to huge unsigned numbers.
         if ((uint)(chunkShift - MinChunkShift) > (uint)(MaxChunkShift - MinChunkShift))
         {
             throw new ArgumentOutOfRangeException(

@@ -15,9 +15,19 @@ namespace NetworkInspector.Core.Settings;
 /// <para>
 /// Thread safety: as safe as the wrapped manager (all <see cref="SettingsManager"/> members are thread-safe).
 /// </para>
+/// <para>
+/// Exceptions: every registering member forwards to <see cref="SettingsManager.RegisterGroup"/> or
+/// <see cref="SettingsManager.RegisterSetting"/> and surfaces what they throw (an invalid name or UI name, a duplicate
+/// name). The typed members first build the <see cref="Setting"/> through the matching <c>Setting</c> factory, whose
+/// checks (an invalid name or UI name, invalid min/max/default constraints) throw before the manager is touched. The
+/// typed members always use the factory default for the setting activation (<see cref="SettingActivation.Immediate"/>); a
+/// plugin that needs another activation passes a prepared <see cref="Setting"/> to <see cref="RegisterSetting"/>. A
+/// <c>default(SettingsRegistrar)</c> throws <see cref="InvalidOperationException"/>.
+/// </para>
 /// </summary>
 public readonly ref struct SettingsRegistrar
 {
+    /// <summary>The wrapped manager; <see langword="null"/> only for <c>default(SettingsRegistrar)</c>. Read it through <see cref="_Manager"/>.</summary>
     private readonly SettingsManager? _Wrapped;
 
     /// <summary>
@@ -55,7 +65,9 @@ public readonly ref struct SettingsRegistrar
 
     #region Setting Registration
 
-    /// <summary>Registers a raw setting instance.</summary>
+    /// <summary>Registers a raw setting instance (needed for options the typed members do not cover, such as another activation).</summary>
+    /// <param name="setting">The setting to register.</param>
+    /// <returns>The load result (a persisted value is applied on registration) and the current value of the setting.</returns>
     public SettingRegistrationResult RegisterSetting(Setting setting) =>
         _Manager.RegisterSetting(setting);
 

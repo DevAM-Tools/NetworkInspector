@@ -17,6 +17,7 @@ public sealed class PluginContext : IPluginContext, IDisposable
 {
     #region Fields
 
+    // The writable managers are kept only to subscribe and unsubscribe; plugins get the read-only views (see the properties).
     private readonly SettingsManager _ApplicationManager;
 
     private readonly SettingsManager _ProfileManager;
@@ -26,10 +27,16 @@ public sealed class PluginContext : IPluginContext, IDisposable
     // Set when the data folder could not be created; the read of DataDirectory reports it. Assigned only in the constructor.
     private readonly string? _DataDirectoryProblem;
 
+    // Backs Stopping. Cancelled by hand in SignalStopping, inside a try, and never by a timer: callbacks that the plugin
+    // registered on the token run inside Cancel, and on a timer thread a throwing callback would end the process.
     private readonly CancellationTokenSource _StoppingSource = new();
 
+    // Copy on write: the array is never changed after it is published. Subscribe and unsubscribe swap it with a CAS loop; a
+    // raise reads it once, so it iterates a stable snapshot. An array (not a multicast delegate) so that the raise can run
+    // every handler in its own try; invoking a delegate list directly would stop at the first handler that throws.
     private EventHandler<SettingsAppliedEventArgs>[] _Handlers = [];
 
+    // 0 = live, 1 = disposed. Interlocked/Volatile only; makes Dispose idempotent and SignalStopping a no-op afterwards.
     private int _Disposed;
 
     #endregion
@@ -45,11 +52,15 @@ public sealed class PluginContext : IPluginContext, IDisposable
     /// <param name="dataDirectory">Fully qualified path of the plugin's data folder; it is created when missing.</param>
     /// <param name="applicationSettings">The application settings manager.</param>
     /// <param name="profileSettings">The settings manager of the active profile.</param>
-    /// <exception cref="ArgumentException">The name is empty or the data directory is not fully qualified.</exception>
+    /// <exception cref="ArgumentException">
+    /// The name or the data directory is <see langword="null"/>, empty, or white space, or the data directory is not fully
+    /// qualified.
+    /// </exception>
     /// <exception cref="ArgumentNullException">A log or manager is <see langword="null"/>.</exception>
     public PluginContext(string pluginName, IPluginLog log, string dataDirectory, SettingsManager applicationSettings,
         SettingsManager profileSettings)
     {
+        // Arguments first, state afterwards: nothing is subscribed or created before every argument is known to be valid.
         ArgumentException.ThrowIfNullOrWhiteSpace(pluginName);
         ArgumentNullException.ThrowIfNull(log);
         ArgumentException.ThrowIfNullOrWhiteSpace(dataDirectory);
@@ -60,6 +71,8 @@ public sealed class PluginContext : IPluginContext, IDisposable
             throw new ArgumentException("The data directory must be a fully qualified path.", nameof(dataDirectory));
         }
 
+        // Plugins receive read-only views, so they can read settings but cannot write them through the context. Only the token
+        // leaves this class; the source that can cancel it stays private.
         PluginName = pluginName;
         Log = log;
         _DataDirectory = dataDirectory;
@@ -86,9 +99,13 @@ public sealed class PluginContext : IPluginContext, IDisposable
         _ProfileManager.SettingsApplied += _OnSettingsApplied;
     }
 
-    /// <summary>Unsubscribes from both managers and releases the stop signal; idempotent.</summary>
+    /// <summary>
+    /// Unsubscribes from both managers and releases the stop signal; idempotent and thread-safe. It does not cancel
+    /// <see cref="Stopping"/>: call <see cref="SignalStopping"/> first when the plugin has to hear the shutdown.
+    /// </summary>
     public void Dispose()
     {
+        // Exactly-once: a second Dispose must neither unsubscribe twice nor touch the disposed source.
         if (Interlocked.Exchange(ref _Disposed, 1) != 0)
         {
             return;
@@ -125,6 +142,8 @@ public sealed class PluginContext : IPluginContext, IDisposable
     /// <inheritdoc/>
     public CancellationToken Stopping { get; }
 
+    // Subscribing and unsubscribing are rare (typically once per plugin), raising happens for every applied settings change:
+    // so the write side copies the whole array and the raise side only reads it, without any lock.
     /// <inheritdoc/>
     public event EventHandler<SettingsAppliedEventArgs>? SettingsApplied
     {
@@ -135,6 +154,8 @@ public sealed class PluginContext : IPluginContext, IDisposable
                 return;
             }
 
+            // CAS loop: when another thread swapped the array between the read and the exchange, rebuild from the new array,
+            // so no concurrent subscription is lost.
             EventHandler<SettingsAppliedEventArgs>[] current;
             EventHandler<SettingsAppliedEventArgs>[] updated;
             do
@@ -151,6 +172,7 @@ public sealed class PluginContext : IPluginContext, IDisposable
                 return;
             }
 
+            // Same CAS loop; removes the first occurrence of the handler and ignores a handler that is not subscribed.
             EventHandler<SettingsAppliedEventArgs>[] current;
             EventHandler<SettingsAppliedEventArgs>[] updated;
             do
@@ -174,10 +196,12 @@ public sealed class PluginContext : IPluginContext, IDisposable
 
     /// <summary>
     /// Cancels <see cref="Stopping"/>; idempotent and a no-op after <see cref="Dispose"/>. A callback of the plugin that throws
-    /// becomes one error entry in the plugin's log and never an exception for the caller.
+    /// becomes one error entry in the plugin's log and never an exception for the caller; when the log fails too, the entry is
+    /// lost and the call still returns normally.
     /// </summary>
     public void SignalStopping()
     {
+        // Cheap early exit; the check races with Dispose, which the catch below absorbs.
         if (Volatile.Read(ref _Disposed) != 0)
         {
             return;
@@ -194,10 +218,11 @@ public sealed class PluginContext : IPluginContext, IDisposable
         catch (AggregateException ex)
         {
             // Plugin code: callbacks registered on Stopping run inside Cancel, which runs all of them and then throws the failures
-            // together. One failing callback must not stop the shutdown of the other plugins.
+            // together. One failing callback must not stop the shutdown of the other plugins. Each failure gets its own log
+            // entry in the log of this plugin, so the author can see which callback failed.
             foreach (Exception inner in ex.InnerExceptions)
             {
-                Log.Error("A Stopping callback failed: " + PluginActivator.Describe(inner), inner);
+                _TryLogError("A Stopping callback failed: " + PluginActivator.Describe(inner), inner);
             }
         }
     }
@@ -206,20 +231,47 @@ public sealed class PluginContext : IPluginContext, IDisposable
 
     #region Private helpers
 
-    // Forwards the event of either manager. A handler that throws is reported once and does not stop the others or the caller.
+    /// <summary>
+    /// Forwards the event of either manager. A handler that throws is reported once and does not stop the others or the caller.
+    /// It runs on the thread that applied the settings, which belongs to the application and must not be broken by plugin code.
+    /// </summary>
+    /// <param name="sender">The settings manager that raised the event; not passed on.</param>
+    /// <param name="args">The event arguments, passed on unchanged.</param>
     private void _OnSettingsApplied(object? sender, SettingsAppliedEventArgs args)
     {
+        // One read of the array: handlers added or removed while this loop runs take effect from the next raise on.
         foreach (EventHandler<SettingsAppliedEventArgs> handler in Volatile.Read(ref _Handlers))
         {
             try
             {
+                // The sender is this context, not the manager that raised the event: the manager is writable and plugins only
+                // get the read-only views of it.
                 handler(this, args);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // Plugin code: report it in the plugin's own log and keep going.
-                Log.Error("SettingsApplied handler failed: " + PluginActivator.Describe(ex), ex);
+                _TryLogError("SettingsApplied handler failed: " + PluginActivator.Describe(ex), ex);
             }
+        }
+    }
+
+    /// <summary>
+    /// Writes one error entry to the plugin's log. The log is supplied by the application and can fail (a full disk, a closed
+    /// file); the caller is the shutdown loop or the thread that applies settings, and a failing log must not end either of them,
+    /// so the entry is lost instead. The failure of the log itself is not reported again: it would go to the same log.
+    /// </summary>
+    /// <param name="text">The entry text.</param>
+    /// <param name="exception">The exception behind the entry.</param>
+    private void _TryLogError(string text, Exception exception)
+    {
+        try
+        {
+            Log.Error(text, exception);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // The entry is lost; there is no other place to write it to.
         }
     }
 

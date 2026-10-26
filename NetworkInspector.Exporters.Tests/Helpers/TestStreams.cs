@@ -79,4 +79,83 @@ internal static class TestStreams
             }
         }
     }
+
+    /// <summary>
+    /// Memory-backed stream whose chosen write call (counted from 1) throws <see cref="IOException"/> once, without storing
+    /// anything; all other writes succeed. Models a transient failure after which the export continues.
+    /// </summary>
+    internal sealed class FailOnceStream : Stream
+    {
+        private readonly MemoryStream _Inner = new();
+        private int _WriteCalls;
+
+        /// <summary>Number of the write call (1-based) that fails.</summary>
+        internal int FailingWriteCall
+        {
+            get; init;
+        }
+
+        /// <summary>The bytes that were actually written.</summary>
+        internal byte[] WrittenBytes => _Inner.ToArray();
+
+        /// <inheritdoc/>
+        public override bool CanRead => false;
+
+        /// <inheritdoc/>
+        public override bool CanSeek => false;
+
+        /// <inheritdoc/>
+        public override bool CanWrite => true;
+
+        /// <inheritdoc/>
+        public override long Length => _Inner.Length;
+
+        /// <inheritdoc/>
+        public override long Position
+        {
+            get => _Inner.Position;
+            set => throw new NotSupportedException();
+        }
+
+        /// <inheritdoc/>
+        public override void Flush()
+        {
+            // No-op: nothing is buffered here.
+        }
+
+        /// <inheritdoc/>
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        /// <inheritdoc/>
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        /// <inheritdoc/>
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        /// <inheritdoc/>
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+
+        /// <inheritdoc/>
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            _WriteCalls++;
+            if (_WriteCalls == FailingWriteCall)
+            {
+                throw new IOException("Simulated transient I/O failure");
+            }
+
+            _Inner.Write(buffer);
+        }
+
+        /// <inheritdoc/>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _Inner.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
 }

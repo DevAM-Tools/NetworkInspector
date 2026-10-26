@@ -88,12 +88,102 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `ProfileNames` (path separators, traversal, device names, leading or trailing space or dot).
 - **Core: the `Setting` factory methods** take an optional `activation` parameter, and `IReadOnlySetting` has the member
   `Activation`; code that implements `IReadOnlySetting` must add it.
+- **BREAKING (default): `tcp.max_tracked_streams` defaults to 10000** (was 100000), and the new `udp.max_tracked_streams`
+  (default 10000) bounds the UDP stream tracker; both are secure by default and configurable. Past the limit a packet is
+  still parsed, but not tracked, and a named message says so.
+- **BREAKING (minor): `ISession.TryRemoveJob`** returns `false` with `SessionFailure` code `JobStillRunning` instead of
+  throwing. `SessionErrorCode.ValueCacheInvalidRequest` is new (appended) for invalid value-cache options.
+- **Random source:** `MaxFrameSize`, `TcpStreamOptions.MaxPayloadSize`, and `TimestampInterval` are range-checked against
+  the length fields of the formats (the registration and the CLI refuse out-of-range values with the range); timestamps
+  saturate at `long.MaxValue`; seeds of CAN FD frames with a DLC code above 8 now produce a different byte 4.
+- **Protocols:** HTTP header-limit overruns are reported as `http.error.header_limit`; `json.error.string_limit` reports a
+  truncated JSON string; `icmpv6.checksum.status` is always emitted when verification is on (`[Unverified]` without an IPv6
+  layer); DHCP shows `dhcp.hw.mac_addr` only for a hardware address length of 6; the HTTP/2 client preface is shown as
+  `http2.magic`.
+- **Exporters:** the DuckDB exporter and the Parquet exporter drop a failed batch and count its packets as skipped; the
+  Text exporter counts a skipped packet in Strict mode as skipped, like the other exporters.
+- **Sessions: a stack replaced by `Restart` is disposed as soon as the last in-flight read on it ends** (a per-stack lease
+  counter; no lock and no allocation on the read path) instead of immediately under running reads. Packets handed out before
+  a restart keep their materialised fields; unmaterialised lazy parts run on the retired protocols and may yield an error
+  child. `Shutdown` now also throws the `OnShutdown` errors of session-owned stacks, which were lost before.
+- **Tests:** no test reads a Markdown file any more. The seven documentation tests of `Plugins.Tests/Docs` were removed;
+  the documents are checked by review.
 
 ### Fixed
 
 - **CLI: `--profile` was ignored** by `convert --filter` and `export`; the protocol settings of the profile now apply.
 - **Core: `SettingsManager.Save` dropped stored values** of settings that were not registered in the saving process (for
   example the settings of a plugin that was not loaded).
+- **Core: field trees deeper than 16** no longer return stale entries from the traversal stack; `ChunkedGrowOnlyStore.ReadRange`
+  stops for start indices above the maximum; more than 32767 lazy containers in one packet are refused with a field error
+  instead of corrupting the materialization marker; `FieldValueData.Equals` is consistent with `GetHashCode` for equal byte
+  slices of one array; `ValueCache` can no longer pair a stale payload type with a new series under concurrent first-seen
+  recording; the array-container linear search can no longer read past its array during a torn read; `TempString` buffers of
+  `FieldValue`, `FieldValueData`, and `SettingValue` formatting are released again; `TwoQueueCache` budget checks no longer
+  overflow `int`; `LengthPrefixDetector` reports a total length below the header as invalid; reassembly keeps the first total
+  length of a datagram and discards it on a conflicting last fragment.
+- **Core: settings.** `Save` no longer lets a refused stored value overwrite a registered setting's value, replaces a group
+  file that another reader has open (Windows), and reports invalid storage paths as `PersistenceSettingsException`; a
+  wrong-type preload reports `TypeMismatch`; `SettingsManager(string)` and `Setting.EnumWithMetadata` reject null;
+  `EnumSettingMetadata.AllowedValues` is read-only; `SettingValueJson.Write` fails loudly for a value without a JSON form;
+  `SettingsProfiles.TryDelete` can no longer remove the last two profiles concurrently and a failed rename rollback no
+  longer throws; `StackBuilder.Build` throws on a second call, and protocol tables reject Bool/Any registrations on tables
+  of another key type.
+- **Filter:** an out-of-range `FilterCompileOptions.RegexTimeout` fails the compile with an `InvalidValue` error that names
+  the allowed range (it was reported as "invalid pattern"); digit separators work in flank windows (`1_000ms`); a long-lived
+  `Filter` no longer keeps the last queried `PacketIndex` and its bitmaps alive.
+- **Sessions:** registrations, `TryStart`, and `Shutdown` are serialized (no lost random-access sources, `TryStart` succeeds
+  once, user jobs are cancelled, joined, and disposed, late slots are refused); source-loop and shutdown phase transitions
+  are atomic; listener and value-cache slots drain flags raised before cancellation and end `Cancelled`; the `Get*` lists
+  are read-only views; a PullFill value cache rebinds when a restart races its registration; a rejected parse fails the
+  slot; a restart re-parse recycles one packet.
+- **Protocols (HTTP, HTTP/2, TLS, WebSocket, TCP, UDP):** HTTP/1 framing crashes and off-by-ones (status line, chunk sizes
+  near `int.MaxValue`, trailers, header terminators), HPACK integer and Huffman decoding, the HTTP/2 client preface, TLS
+  GREASE lookups (`KeyNotFoundException`), exact WebSocket index groups, the TCP checksum inside tunnels, a UDP length below
+  8, and a zero UDP checksum over IPv6 (invalid there). A segment that the reassembly buffer refuses is dispatched raw
+  instead of dropped.
+- **Protocols (other):** DNS (`0x0x` ids, truncated records, NSEC bitmaps, DNS over TCP accepts the maximum message), JSON
+  (lone trailing backslash, over-long strings), PDU transport (length of 0x80000000 or more), SOME/IP (service discovery
+  array lengths of 0x7FFFFFF8 or more, TP segment validation, exact SD index groups), IPv6 (the extension walk stops at
+  fragments), DTLS (handshake decoded for epoch 0 only, connection-id records), SLL and SLL2 (0x0600 is an EtherType),
+  ICMP/ICMPv6 index groups, DHCP hardware address length, signal messages (`max_enum_values` minimum 1, duplicate
+  `value_names` keys reported), repeated CAN configuration ids are reported, and the IP address caches are cleared per
+  parse so a stale pair of another packet or stack cannot be read.
+- **Sources:** BLF header dates from 2262 on saturate instead of wrapping or throwing; huge file-header sizes and
+  uncompressed-container size mismatches are rejected; a failed decompression no longer leaves readers waiting forever;
+  classic frames of types 100 and 101 keep their DLC like type 1; ASC hex payload lines with blanks no longer end an Ethernet
+  packet early, FlexRay slots above 2047 and negative decimal CAN/LIN ids are rejected, keyword lines are matched by
+  position, German dates in the trigger block parse, and oversized Ethernet records are reported; PCAPNG keeps the index of a
+  malformed Interface Description Block and reports it, an empty mapped file reports a format error, and
+  `EstimatedFrameCount` stays unknown after disposing a partial scan; the random source stores the byte count of CAN FD
+  frames in byte 4.
+- **Exporters:** file-open failures are reported through `ItemSkipped` instead of thrown; the columnar batch and the PBF
+  standard block builder are all-or-nothing per packet; a failed Parquet or DuckDB batch is dropped and counted as skipped;
+  the BLF header patch respects the stream start position; BLF LIN DLC is limited to 8 and equals the data written;
+  ASC skips negative channels and limits the LIN length to 8; the Text exporter cuts at exactly `MaxTextLength` and shows
+  the ellipsis only when something was cut; PBF Strict mode no longer counts a dropped truncated block in the trailer;
+  PCAPNG skips link types above 65535; compact JSON writes the next packet in full after a failed write; the DuckDB
+  database path is no longer interpreted as connection-string syntax; `PooledBuffer` rejects oversized requests with a
+  clear message.
+- **Plugin loader:** a plugin that throws its own `TimeoutException` is reported as a plugin failure and not as a timeout;
+  a failure of a start or stop call abandoned after a timeout is logged once; describing an exception no longer escapes
+  containment when its `Message` getter throws; a failing plugin log cannot abort the shutdown signal or the
+  settings-applied raise; the pre-scan cache stamps a file with the length and time from before the read; `LoadTime` no
+  longer counts the info read twice.
+- **CLI:** the overwrite refusal of a split run names the first split file; `convert` honours a stopping exporter; `--tolerant`
+  drops a source that fails twice in a row without delivering a frame (it looped forever); `export` and `convert` exit with
+  code 3 when the output format stops early; `ni profile` file-system failures exit with code 3; a source option pair
+  without `key=value` is an error; profile load warnings and plugin contribution failures are printed once; the `timestampSorted`
+  and CSV delimiter option descriptions are correct.
+
+### Security
+
+- **CSV: formula neutralization.** Text cells that start with `=`, `+`, `-`, `@`, TAB, or CR get a leading `'` by default
+  (`CsvExporter.Builder.WithFormulaNeutralization`, registration option `neutralizeFormulas`; turn it off for machine
+  processing).
+- **Protocols: decompression limits.** HTTP bodies and WebSocket permessage-deflate payloads are inflated through a bounded
+  buffer that stops at `http.max_decompressed_bytes` and `ws.max_decompressed_bytes` (default 64 MiB, range 1 KiB to
+  128 GiB); a hit is reported in a named field instead of truncating silently.
 
 ---
 

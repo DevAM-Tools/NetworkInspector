@@ -51,10 +51,14 @@ public static class SignalConfigFixture
 
     /// <summary>Writes the signal message configuration JSON of <see cref="Layout"/>, with the value names of speed and gear.</summary>
     /// <param name="path">The file to write (replaced when it exists).</param>
-    /// <exception cref="ArgumentException"><paramref name="path"/> is empty.</exception>
+    /// <exception cref="ArgumentException"><paramref name="path"/> is empty or white space (<see cref="ArgumentNullException"/> when null).</exception>
     public static void WriteConfig(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        // Layout is the single description: the JSON is derived from it field by field, so the encoded bytes (layout) and the
+        // decoded values (configuration read by the protocol) cannot drift apart. FileMode.Create replaces a leftover file of
+        // an earlier write. Indented output only helps humans reading the file.
         using FileStream stream = new(path, FileMode.Create, FileAccess.Write, FileShare.Read);
         using Utf8JsonWriter writer = new(stream, new JsonWriterOptions { Indented = true });
         writer.WriteStartObject();

@@ -12,8 +12,13 @@ namespace NetworkInspector.Filter.Scope;
 /// <para>
 /// Without an occurrence index the scope is existential: it matches when <b>any</b> hit satisfies
 /// the body. With <c>[i]</c> it selects the <c>i</c>-th breadth-first hit and evaluates the body
-/// only there; an index past the last hit yields <see langword="false"/> instead of an error,
-/// so <c>$udp[1] { … }</c> is a normal non-match on single-UDP packets.
+/// only there; the index is zero-based, and an index past the last hit yields <see langword="false"/> instead of an
+/// error, so <c>$udp[1] { … }</c> is a normal non-match on single-UDP packets. With an index the search stops after
+/// <c>i + 1</c> hits instead of collecting every hit.
+/// </para>
+/// <para>
+/// Thread safety: immutable after construction. All per-packet state (domain, hit buffers) lives in the evaluation
+/// context, so one runtime can be evaluated against any number of contexts.
 /// </para>
 /// </summary>
 internal sealed class ScopeRuntime
@@ -21,6 +26,11 @@ internal sealed class ScopeRuntime
     #region Construction
 
     /// <summary>Creates a scope runtime from a resolved anchor and a compiled body.</summary>
+    /// <param name="name">The anchor name as written, kept for diagnostics.</param>
+    /// <param name="anchorFields">Field ids that make a node a hit; empty for a protocol anchor. Not copied.</param>
+    /// <param name="anchorProtocol">Owning protocol of the anchor, or <see cref="ProtocolId.Invalid"/>.</param>
+    /// <param name="occurrence">Zero-based breadth-first hit to select, or <see langword="null"/> for any hit.</param>
+    /// <param name="body">The compiled scope body. Parameters are not validated: the code generator is the only caller.</param>
     public ScopeRuntime(
         string name,
         FieldId[] anchorFields,

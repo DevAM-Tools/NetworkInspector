@@ -80,10 +80,15 @@ internal sealed class BlfDataBackend : IDisposable
     /// <summary>Creates an in-memory backend from a pre-loaded byte array.</summary>
     internal static BlfDataBackend FromMemory(byte[] data) => new(data);
 
-    /// <summary>Creates a memory-mapped backend for the given file (one read-only view).</summary>
+    /// <summary>
+    /// Creates a memory-mapped backend for the given file (one read-only view). A zero-length file cannot be mapped, so it
+    /// gets an empty in-memory backend: the header check then reports it exactly like a preloaded empty file.
+    /// </summary>
     /// <param name="path">Path to the BLF file.</param>
     internal static BlfDataBackend FromMmap(string path) =>
-        new(new MmapPool(path));
+        MmapPool.IsEmptyFile(path)
+            ? FromMemory([])
+            : new(new MmapPool(path));
 
     #endregion
 
@@ -106,18 +111,18 @@ internal sealed class BlfDataBackend : IDisposable
     /// <see cref="TryAcquireScanLease"/> (the sequential thread), or, for in-memory
     /// backends, until the backing array is garbage-collected. Callers must never escape
     /// the span beyond the lock scope or store it in a field. For mmap backends the
-    /// pointer is borrowed from the OS-mapped view; the pinned pointer is released as
-    /// part of <see cref="MmapPool.GetPrimarySpan"/>'s internal accounting, and the
-    /// backing pages remain valid until <see cref="Dispose"/> is called, which the
-    /// closed gate in <see cref="BlfSource.Dispose"/> ensures cannot happen concurrently
-    /// with any caller still inside a section.
+    /// span points straight into the OS-mapped view (no copy, no per-call pointer acquisition: the pool acquires the
+    /// view pointer once at construction, so <see cref="MmapPool.GetPrimarySpan"/> is a bounds check plus a pointer
+    /// addition). The pages stay mapped until <see cref="Dispose"/> releases that pointer: the closed gate in
+    /// <see cref="BlfSource.Dispose"/> ensures this cannot happen while a random-access caller is inside a section,
+    /// and a scan lease defers the unmap for the sequential thread.
     /// </remarks>
     internal ReadOnlySpan<byte> GetSpan(long offset, int length)
     {
         // Guard against reading after dispose. Between a disposed-check in the
         // caller and this entry point a racing Dispose() could have released the mmap
-        // pointer. The Volatile read gives the correct observed value without the full
-        // overhead of the reader-gate section that FrameById enters externally.
+        // pointer. The volatile read is a cheap best-effort check (no lock, no gate section); it does not make a
+        // span that is already handed out safe, which is the job of the reader gate and the scan lease.
         if (_Disposed != 0)
         {
             return ReadOnlySpan<byte>.Empty;
@@ -136,8 +141,8 @@ internal sealed class BlfDataBackend : IDisposable
                 : _InMemoryData.AsSpan((int)offset, safeLength);
         }
 
-        // Snapshot before use so that a parallel Dispose() cannot null _MmapPool
-        // between the null-conditional read and the method call.
+        // Mapped backend: the pool does its own offset/length clipping. The field is readonly (Dispose never nulls it);
+        // the local only makes the null check and the call use one value for the nullable flow analysis.
         MmapPool? pool = _MmapPool;
         if (pool is null)
         {
@@ -170,10 +175,11 @@ internal sealed class BlfDataBackend : IDisposable
             return;
         }
 
-        // Do not swallow exceptions silently. MmapPool.Dispose() is expected
-        // to succeed under normal operation (no callers hold the view open after the
-        // reader gate is closed). Let any unexpected OS-level exception
-        // propagate so the caller is aware of the failure.
+        // The latch makes Dispose idempotent and lets GetSpan observe the disposal.
+        // Do not swallow exceptions silently. MmapPool.Dispose() is expected to succeed under normal operation (random
+        // readers are excluded by the closed reader gate; a running scan step keeps its lease, which only defers the
+        // unmap). Let any unexpected OS-level exception propagate so the caller is aware of the failure.
+        // The in-memory array needs no release: the garbage collector reclaims it once the backend is unreachable.
         _MmapPool?.Dispose();
     }
 

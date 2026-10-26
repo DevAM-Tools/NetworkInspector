@@ -4,11 +4,17 @@ namespace NetworkInspector.Protocols.Tls;
 
 /// <summary>
 /// Precomputed display text tables for TLS protocol fields.
-/// Zero-allocation lookups via array indexing and binary search.
+/// Lookups of known values return a string built once at type initialisation (array index, dictionary, or binary search),
+/// so they do not allocate per packet. Values missing from a table fall back to a formatted string, which allocates; those
+/// are the rare unknown or private-use codes. The tables are not exhaustive (only values worth naming) and are read-only
+/// after the static initialisers ran, so every member is safe to call from any thread.
 /// </summary>
 internal static class TlsDisplayTables
 {
     #region Content Type (5 known values for byte field)
+
+    // Indexed by the raw byte, so the whole 0..255 domain is filled (unknown values get their decimal text) and the lookup needs
+    // no bounds branch beyond the array's own.
 
     private static readonly string[] _ContentTypeTable = _BuildContentTypeTable();
 
@@ -46,6 +52,8 @@ internal static class TlsDisplayTables
 
     #region TLS Version (sparse — use dictionary)
 
+    // Only five 16-bit values are named (a 65536-entry table would waste memory); the TLS 1.3 record layer still carries
+    // 0x0303 as legacy version, 0x0304 appears in supported_versions and the handshake. Other values print as hex.
     private static readonly Dictionary<ushort, string> _VersionDisplayTexts = new()
     {
         [0x0300] = "SSL 3.0 (0x0300)",
@@ -70,6 +78,8 @@ internal static class TlsDisplayTables
 
     #region Handshake Type (byte field)
 
+    // Same full-domain array scheme as the content type. GetHandshakeTypeName is the short form without the number; keep
+    // both in sync when a type is added.
     private static readonly string[] _HandshakeTypeTable = _BuildHandshakeTypeTable();
 
     /// <summary>Returns display text for a TLS handshake type byte.</summary>
@@ -122,10 +132,18 @@ internal static class TlsDisplayTables
 
     #region Cipher Suites (binary search on sorted list)
 
-    /// <summary>Known cipher suite entries sorted by code for binary search.</summary>
+    /// <summary>
+    /// Known cipher suite entries sorted by code for binary search. The order is a requirement, not a convention: an unsorted
+    /// entry makes the binary search miss it without any error.
+    /// </summary>
     private static readonly (ushort Code, string Name)[] _CipherSuites = _BuildCipherSuiteTable();
 
-    /// <summary>Precomputed display text for GREASE values (0x?A?A pattern, 16 entries).</summary>
+    /// <summary>
+    /// Precomputed display text for the 16 canonical GREASE values (RFC 8701: 0x0A0A, 0x1A1A, ... 0xFAFA, both bytes equal).
+    /// GREASE values are placeholders that clients insert into cipher suite, extension, group and signature algorithm lists to
+    /// keep peers tolerant of unknown values. They are precomputed like the other known values so that formatting them costs
+    /// no per-packet allocation.
+    /// </summary>
     private static readonly Dictionary<ushort, string> _GreaseDisplayTexts = _BuildGreaseDisplayTexts();
 
     /// <summary>Builds the 16-entry GREASE display text lookup.</summary>
@@ -144,12 +162,21 @@ internal static class TlsDisplayTables
     /// <summary>Returns display text for a TLS cipher suite code.</summary>
     internal static string GetCipherSuiteDisplayText(ushort code)
     {
-        // GREASE detection: pattern 0x?A?A — precomputed lookup
+        // GREASE detection: pattern 0x?A?A — precomputed lookup. The mask test accepts every code whose low nibbles are 0xA, but
+        // _GreaseDisplayTexts holds only the 16 canonical values (both bytes equal). The code comes from the wire, so any other
+        // 0x?A?A value must not fail the lookup (an exception would abort the parse of the whole packet): it gets the same
+        // formatted GREASE text as the group and signature algorithm variants.
         if ((code & 0x0F0F) == 0x0A0A)
         {
-            return _GreaseDisplayTexts[code];
+            if (_GreaseDisplayTexts.TryGetValue(code, out string? grease))
+            {
+                return grease;
+            }
+
+            return $"GREASE (0x{code:X4})";
         }
 
+        // Known suite: binary search over the sorted table (O(log n), no allocation); unknown suites format their code.
         int idx = _BinarySearchCipherSuite(code);
         if (idx >= 0)
         {
@@ -158,6 +185,7 @@ internal static class TlsDisplayTables
         return $"Unknown (0x{code:X4})";
     }
 
+    /// <summary>Binary search over <see cref="_CipherSuites"/>, which must be sorted ascending by code. Returns the index, or -1.</summary>
     private static int _BinarySearchCipherSuite(ushort code)
     {
         int lo = 0;
@@ -184,7 +212,8 @@ internal static class TlsDisplayTables
 
     private static (ushort, string)[] _BuildCipherSuiteTable()
     {
-        // Sorted by code for binary search. Includes the most common suites.
+        // Sorted ascending by code for binary search (see _CipherSuites). Not the full IANA registry: the common TLS 1.2/1.3
+        // suites plus the two signalling suites (0x00FF, 0x5600); anything else prints as "Unknown (0x....)".
         (ushort, string)[] table =
         [
             (0x0000, "TLS_NULL_WITH_NULL_NULL (0x0000)"),
@@ -256,7 +285,10 @@ internal static class TlsDisplayTables
         [0xFF01] = "renegotiation_info",
     };
 
-    /// <summary>Precomputed display text for known TLS extension types.</summary>
+    /// <summary>
+    /// Precomputed display text ("name (number)") for known TLS extension types. Static field initialisers run in textual
+    /// order, so this must stay declared after <c>_ExtensionTypeNames</c>, which its builder reads.
+    /// </summary>
     private static readonly Dictionary<ushort, string> _ExtensionTypeDisplayTexts = _BuildExtensionTypeDisplayTexts();
 
     /// <summary>Builds the precomputed extension type display text dictionary.</summary>
@@ -273,10 +305,16 @@ internal static class TlsDisplayTables
     /// <summary>Returns display text for a TLS extension type.</summary>
     internal static string GetExtensionTypeDisplayText(ushort type)
     {
-        // GREASE detection — precomputed lookup (shared with cipher suites)
+        // GREASE detection — precomputed lookup (shared with cipher suites). Same caveat as GetCipherSuiteDisplayText: the
+        // mask test is looser than the 16 canonical values in the table, so other wire values fall back to formatted text.
         if ((type & 0x0F0F) == 0x0A0A)
         {
-            return _GreaseDisplayTexts[type];
+            if (_GreaseDisplayTexts.TryGetValue(type, out string? grease))
+            {
+                return grease;
+            }
+
+            return $"GREASE (0x{type:X4})";
         }
 
         if (_ExtensionTypeDisplayTexts.TryGetValue(type, out string? text))
@@ -378,6 +416,7 @@ internal static class TlsDisplayTables
 
     #region Supported Groups (elliptic curves / named groups, RFC 8422/8446)
 
+    // Group numbers are the IANA "TLS Supported Groups" registry values; the display text is "name (decimal number)".
     private static readonly Dictionary<ushort, string> _SupportedGroupNames = new()
     {
         [1] = "sect163k1",
@@ -398,6 +437,7 @@ internal static class TlsDisplayTables
     /// <summary>Returns display text for a TLS supported group.</summary>
     internal static string GetSupportedGroupDisplayText(ushort group)
     {
+        // Non-canonical 0x?A?A codes fall back to a formatted GREASE string instead of failing the lookup.
         if ((group & 0x0F0F) == 0x0A0A)
         {
             if (_GreaseDisplayTexts.TryGetValue(group, out string? grease))
@@ -420,10 +460,14 @@ internal static class TlsDisplayTables
 
     #region Signature Algorithms (RFC 8446 Section 4.2.3)
 
+    // The 16-bit SignatureScheme: in the TLS 1.2 layout the high byte is the hash (2 = SHA-1, 3 = SHA-224, 4 = SHA-256,
+    // 5 = SHA-384, 6 = SHA-512) and the low byte the signature algorithm (1 = RSA, 2 = DSA, 3 = ECDSA); the 0x08xx values are
+    // the TLS 1.3 schemes.
     private static readonly Dictionary<ushort, string> _SignatureAlgorithmNames = new()
     {
         [0x0201] = "rsa_pkcs1_sha1",
-        [0x0301] = "SHA224 ECDSA",
+        // 0x0301 is hash 3 (SHA-224) with signature algorithm 1 (RSA); the ECDSA/SHA-224 scheme would be 0x0303.
+        [0x0301] = "rsa_sha224",
         [0x0401] = "rsa_pkcs1_sha256",
         [0x0403] = "ecdsa_secp256r1_sha256",
         [0x0501] = "rsa_pkcs1_sha384",
@@ -443,6 +487,7 @@ internal static class TlsDisplayTables
     /// <summary>Returns display text for a TLS signature algorithm.</summary>
     internal static string GetSignatureAlgorithmDisplayText(ushort algo)
     {
+        // Non-canonical 0x?A?A codes fall back to a formatted GREASE string instead of failing the lookup.
         if ((algo & 0x0F0F) == 0x0A0A)
         {
             if (_GreaseDisplayTexts.TryGetValue(algo, out string? grease))

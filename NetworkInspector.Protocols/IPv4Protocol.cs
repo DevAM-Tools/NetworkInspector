@@ -87,6 +87,14 @@ public sealed partial class IPv4Protocol : IProtocol
 
     #endregion
 
+    /// <summary>
+    /// Error text for a reassembled datagram that cannot be handed on because the packet's table of bound buffers is full.
+    /// Limit: 255 additional buffers per packet (a constant of the packet's effect keys, not configurable); secure by
+    /// default. Exceeding it is an expected failure that is named, not a silent drop.
+    /// </summary>
+    private const string _BoundBufferLimitMessage =
+        "Reassembled IPv4 datagram cannot be parsed further: a packet can hold at most 255 additional buffers";
+
     #region Fields
 
     // BytesField container carries header byte range for UI highlighting
@@ -246,19 +254,23 @@ public sealed partial class IPv4Protocol : IProtocol
     private bool _VerifyChecksum;
 
     // Pre-allocated delegate: created once in _OnStartCustom, reused for every packet.
-    // Captures only `this` (singleton) — zero per-packet allocation.
+    // Captures only `this` (singleton) — zero per-packet allocation. Converting the instance method group
+    // _PopulateIPv4 at the call site instead would allocate a new delegate for every parsed packet.
     private LazyPopulator _Populator = null!;
 
     // Dense dispatch cache for the IP protocol byte (256 entries).
     // Built once in OnStart from the ip.proto table; avoids a dictionary lookup per packet.
     // Non-null entry → single protocol; CallProtocol returns ParseError for invalid ids.
     // Null entry → zero or multiple protocols → fall back to full table dispatch.
+    // Immutable after _OnStartCustom, so concurrent parses may read it without synchronization.
     private ProtocolId?[] _IpProtoIdCache = [];
 
     // Pre-allocated option field IDs struct, built once in _OnStartCustom.
     private OptionFieldIds _OptionFieldIds;
 
     // IP fragment reassembly engine — datagram-based, keyed by (src, dst, id, protocol).
+    // Mutated only by the ordered first parse of a packet (see _IsReplay); replays never touch it. The memory and
+    // fragment-count limits for hostile fragment streams are enforced inside the defragmenter, not in this class.
     private readonly DatagramDefragmenter<DatagramFragmentKey> _Defragmenter = new();
 
     /// <summary>
@@ -365,7 +377,9 @@ public sealed partial class IPv4Protocol : IProtocol
         string csumText = DisplayTables.FormatHexU16(checksum);
         container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(checksum), csumText);
 
-        // IPV4-02: Re-verify checksum from the stored header bytes at materialisation time.
+        // Re-verify the checksum from the stored header bytes at materialisation time: the container holds exactly the
+        // header (IHL * 4 bytes, options included), which is what the checksum covers. A header with a correct checksum
+        // sums to 0. The index group for this field was recorded at parse time (see _ParseBody).
         if (_VerifyChecksum)
         {
             ushort computed = InternetChecksum.Compute(span);
@@ -373,7 +387,8 @@ public sealed partial class IPv4Protocol : IProtocol
             container.Append(_ChecksumStatusFieldId, FieldValue.NewString(checksumValid ? "[Good]" : "[Bad]"));
         }
 
-        // IPV4-01: Parse individual options when present (IHL > 5).
+        // Parse individual options when present (IHL > 5). The options span is bounded by the 4-bit IHL, so it is
+        // at most 40 bytes (60 - 20), the limit IPv4OptionsParser assumes.
         if (headerBytes.Length > IPv4Header.MinHeaderSize)
         {
             int optionsLen = headerBytes.Length - IPv4Header.MinHeaderSize;
@@ -406,10 +421,18 @@ public sealed partial class IPv4Protocol : IProtocol
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Packet packet = parentField.Packet;
+
+        // The layer key identifies which IPv4 layer of this packet is being parsed (a tunnel such as IP-in-IP
+        // parses IPv4 more than once per packet), so each layer records and replays its own defragmentation effect.
         if (!parentField.TryGetEffectLayerKey(data, out int layerKey))
         {
             return ParseError.Custom(ProtocolName, "Parse data is not a slice of this packet's buffers.");
         }
+
+        // First parse or replay: decided from the watermark alone. Only the outermost first parse of a packet may
+        // raise the watermark. A nested IPv4 parse of the same packet (for example IP-in-IP)
+        // must still count as a first parse, so the watermark stays below the packet id until the outermost call ends;
+        // raising it from the inner call would turn the packet's remaining layers into replays.
         bool isReplay = _IsReplay(packet.Id);
         bool raiseWatermark = !isReplay && _ParseNesting == 0;
         if (!isReplay)
@@ -417,12 +440,22 @@ public sealed partial class IPv4Protocol : IProtocol
             _ParseNesting++;
         }
 
+        // finally, not a plain epilogue: the nesting counter must return to zero and the watermark must advance
+        // even when the body returns an error, otherwise one failed packet would leave every later packet a
+        // "nested first parse" that never raises the watermark.
         try
         {
             return _ParseBody(in parentField, data, in context, layerKey, isReplay);
         }
         finally
         {
+            // The address cache is keyed by packet id only and is meant for the protocols dispatched from inside this
+            // parse. Left behind, its entry could be taken for the addresses of a different packet with the same id
+            // on this thread (for example one of another session, or a later expansion of an earlier packet), which
+            // would give a wrong pseudo header or stream key. Clearing it here makes such a stale read impossible; a
+            // reader that finds no entry falls back to the field tree.
+            _ThreadCache = null;
+
             if (!isReplay)
             {
                 _ParseNesting--;
@@ -439,6 +472,12 @@ public sealed partial class IPv4Protocol : IProtocol
     /// <paramref name="isReplay"/> selects replay of the recorded defragmentation outcome over
     /// feeding the defragmenter.
     /// </summary>
+    /// <param name="parentField">Parent field that receives the IPv4 container.</param>
+    /// <param name="data">Raw bytes starting at the IPv4 header.</param>
+    /// <param name="context">Parse context for index recording and next-protocol dispatch.</param>
+    /// <param name="layerKey">Identifies this IPv4 layer within the packet, the key of the recorded effect.</param>
+    /// <param name="isReplay"><see langword="true"/> to replay the recorded outcome and leave the defragmenter untouched.</param>
+    /// <returns>The bytes consumed (the IP total length, bounded by the data), or the parse error.</returns>
     private ParseResult _ParseBody(
         in MutField parentField,
         ReadOnlyMemory<byte> data,
@@ -497,10 +536,9 @@ public sealed partial class IPv4Protocol : IProtocol
             context.RecordGroupPresence(_IpOptionsGroupId);
         }
 
-        // Summary closure captures only src and dst (8 bytes total as IPv4Address value types).
-
         // Store the full header bytes (up to headerLen) in the field value so that
-        // PopulateIPv4Fields can re-parse all fields without any captured state.
+        // _PopulateIPv4 can re-parse all fields without any captured state: the lazy container keeps only a view of the
+        // header bytes (no copy) and the summary parts (source and destination address, two value types).
         // Use DisplayTables.GetHeaderLengthDisplayText() to avoid per-packet string allocation
         // for header length representation (table covers all valid IPv4 IHL values 20–60).
         ReadOnlyMemory<byte> headerBytes = data[..headerLen];
@@ -519,7 +557,9 @@ public sealed partial class IPv4Protocol : IProtocol
 
         // Cache raw IPv4 addresses in the thread-local field directly on this protocol
         // so downstream transport protocols (TCP, UDP) can read them without
-        // sibling-walk field-tree navigation.
+        // sibling-walk field-tree navigation. Set on replays as well: a replay re-runs the dispatch below on its own
+        // thread, and the cache is per thread. The cache holds one entry, so a nested (tunneled) IPv4 header overwrites
+        // the outer one, which gives the transport layer the innermost addresses that its pseudo-header needs.
         SetCachedAddresses(parentField.Packet.Id, src, dst);
 
         // Dispatch to next protocol on parentField (sibling dispatch).
@@ -529,7 +569,10 @@ public sealed partial class IPv4Protocol : IProtocol
         bool moreFragments = header.MoreFragments != 0;
         ushort fragOffset = header.FragmentOffset;
 
-        // Guard against negative payload length with Math.Max(0, ...)
+        // The payload ends at the IP total length, not at the end of the buffer: the link layer may append padding
+        // (Ethernet pads short frames to its minimum size) that must not reach the transport parser. The buffer end
+        // also bounds it for truncated captures. Math.Max(0, ...) guards a total length below the header length
+        // (including 0), which then yields no payload.
         int payloadLen = Math.Max(0, Math.Min(totalLength - headerLen, data.Length - headerLen));
         if (payloadLen > 0)
         {
@@ -537,6 +580,8 @@ public sealed partial class IPv4Protocol : IProtocol
 
             if (isFragment)
             {
+                // Even the first fragment (offset 0) is not dispatched on its own: the transport layer is parsed once,
+                // on the fragment that completes the datagram, from the reassembled payload.
                 byte[]? reassembled;
                 if (isReplay)
                 {
@@ -547,7 +592,9 @@ public sealed partial class IPv4Protocol : IProtocol
                 }
                 else
                 {
-                    // Route through defragmenter — fragment offset is in 8-byte units
+                    // Route through defragmenter — fragment offset is in 8-byte units. The key is the RFC 791
+                    // reassembly tuple (source, destination, identification, protocol). The effect is recorded in
+                    // the same step, before the watermark is raised, so a replay always finds it.
                     DatagramFragmentKey key = new(src.RawValue, dst.RawValue,
                         header.Identification.Value, protocol);
                     int byteOffset = fragOffset * 8; // convert to byte offset
@@ -561,6 +608,13 @@ public sealed partial class IPv4Protocol : IProtocol
                 {
                     // Bind the datagram so nested Parse can key effects on this packet's buffers.
                     ReadOnlyMemory<byte> reassembledPayload = parentField.BindParseBuffer(reassembled);
+                    if (reassembledPayload.IsEmpty && reassembled.Length > 0)
+                    {
+                        // The packet holds at most 255 bound buffers. An empty slice would reach the next protocol as
+                        // "no data" without any sign of why, so the limit is named here.
+                        return ParseError.Custom(ProtocolName, _BoundBufferLimitMessage);
+                    }
+
                     ParseResult dispatchResult = _DispatchIpProtocol(
                         in parentField, protocol, reassembledPayload, in context);
                     if (dispatchResult.TryPropagateError(out ParseResult error))
@@ -591,6 +645,10 @@ public sealed partial class IPv4Protocol : IProtocol
     /// Uses the pre-cached <see cref="ProtocolId"/> for the common single-protocol case;
     /// falls back to full table dispatch for multi-protocol keys or entries outside the cache.
     /// </summary>
+    /// <param name="parentField">The field that receives the dispatched protocol.</param>
+    /// <param name="protocol">The IP protocol number.</param>
+    /// <param name="payload">The transport payload (or the reassembled datagram payload).</param>
+    /// <param name="context">The parse context.</param>
     private ParseResult _DispatchIpProtocol(
         in MutField parentField, byte protocol, ReadOnlyMemory<byte> payload, in ParseContext context)
     {
@@ -752,11 +810,17 @@ public sealed partial class IPv4Protocol : IProtocol
     /// Written by <see cref="IProtocol.Parse"/> before dispatching to the next protocol;
     /// consumed by downstream protocols (TCP, UDP). Null means no data cached yet
     /// on this thread (correct default for <see langword="[ThreadStatic]"/>).
+    /// <para>
+    /// Thread-safety: <c>[ThreadStatic]</c> means each parsing thread has its own slot, so no synchronization is
+    /// needed and parses on different threads cannot see each other's addresses. The entry carries the packet id so a
+    /// stale entry left by an earlier packet on the same thread is never used for a later packet. The slot is a
+    /// nullable value tuple, so writing it allocates nothing.
+    /// </para>
     /// </summary>
     [ThreadStatic]
     private static (int PacketId, IPv4Address Src, IPv4Address Dst)? _ThreadCache;
 
-    /// <summary>Caches the IPv4 src/dst addresses for the current packet on this thread.</summary>
+    /// <summary>Caches the IPv4 src/dst addresses for the current packet on this thread (overwrites the previous entry).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void SetCachedAddresses(PacketId packetId, IPv4Address src, IPv4Address dst)
         => _ThreadCache = (packetId.Value, src, dst);

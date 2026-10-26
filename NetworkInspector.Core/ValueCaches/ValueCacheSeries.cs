@@ -22,12 +22,25 @@ public abstract class ValueCacheSeries : IReadOnlyValueCacheSeries
 {
     #region Fields
 
+    // Structure-of-arrays columns. Each store publishes its own count as soon as its append finishes, which is before the
+    // value column (on the derived type) has the row. That is why readers must never use the store counts and why
+    // _Count below is the only visibility boundary.
     private readonly ChunkedGrowOnlyStore<int> _PacketIds;
     private readonly ChunkedGrowOnlyStore<long> _Timestamps;
     private readonly ValueCaptureMode _CaptureMode;
+
+    // Published row count: written last by the single writer (volatile write = release, so every column slot below
+    // this count is visible to a reader that loaded the count). Readers use it as the exclusive upper bound.
     private volatile int _Count;
+
+    // 1 while every published packet id (timestamp) is >= its predecessor, 0 once one decreased; never goes back to 1
+    // until ClearKeyColumns. Consumers use the flag to binary-search the column instead of scanning it. The writer
+    // clears a flag before it publishes the offending row, so a flag read after Count can only be too pessimistic
+    // (0 although the loaded prefix is still sorted), never too optimistic. Hence Handle must load Count first.
     private volatile int _PacketIdsNonDecreasing = 1;
     private volatile int _TimestampsNonDecreasing = 1;
+
+    // Writer-only state (guarded by the series append gate of the derived type); readers never touch these.
     private int _LastPacketId = -1;
     private long _LastTimestampNanos;
 
@@ -78,6 +91,8 @@ public abstract class ValueCacheSeries : IReadOnlyValueCacheSeries
     /// <summary>
     /// Frozen prefix: loads <see cref="Count"/> and monotonic flags once. Index, range, and
     /// <c>foreach</c> ignore rows published after this load. Take another handle to follow the tail.
+    /// The count is loaded before the flags (argument evaluation order); that order is what keeps a flag from being
+    /// reported as sorted for a prefix that is not (see the flag fields).
     /// </summary>
     public ValueCacheSeriesHandle Handle =>
         new ValueCacheSeriesHandle(this, _Count, _PacketIdsNonDecreasing != 0, _TimestampsNonDecreasing != 0);
@@ -127,14 +142,14 @@ public abstract class ValueCacheSeries : IReadOnlyValueCacheSeries
     /// Prefer <see cref="Handle"/> for scans.
     /// </summary>
     public bool TryGetPacketIdChunk(int chunkIndex, int observedCount, out ReadOnlySpan<int> span) =>
-        _PacketIds.TryGetPublishedChunk(chunkIndex, _ClipObservedCount(observedCount), out span);
+        _PacketIds.TryGetPublishedChunk(chunkIndex, ClipObservedCount(observedCount), out span);
 
     /// <summary>
     /// Returns the published timestamp chunk at <paramref name="chunkIndex"/> clipped to
     /// <paramref name="observedCount"/>. Prefer <see cref="Handle"/> for scans.
     /// </summary>
     public bool TryGetTimestampChunk(int chunkIndex, int observedCount, out ReadOnlySpan<long> span) =>
-        _Timestamps.TryGetPublishedChunk(chunkIndex, _ClipObservedCount(observedCount), out span);
+        _Timestamps.TryGetPublishedChunk(chunkIndex, ClipObservedCount(observedCount), out span);
 
     /// <summary>
     /// Zero-allocation read-only view. Keep the compile-time type as
@@ -162,6 +177,8 @@ public abstract class ValueCacheSeries : IReadOnlyValueCacheSeries
     /// </summary>
     private protected void AppendKeys(int packetId, long timestampNanos)
     {
+        // Monotonic flags: compare against the previous row only. The published count (not the store count) tells whether
+        // a previous row exists. A flag is cleared here, before the new row is published, see the flag fields.
         if (_Count != 0)
         {
             if (packetId < _LastPacketId)
@@ -175,22 +192,35 @@ public abstract class ValueCacheSeries : IReadOnlyValueCacheSeries
             }
         }
 
+        // AppendOwned skips the store's own writer gate: the derived series serializes all appends and clears with its gate.
         _PacketIds.AppendOwned(packetId);
         _Timestamps.AppendOwned(timestampNanos);
         _LastPacketId = packetId;
         _LastTimestampNanos = timestampNanos;
     }
 
-    /// <summary>Publishes <see cref="Count"/> from the packet-id store after the value column is appended.</summary>
+    /// <summary>
+    /// Publishes <see cref="Count"/> from the packet-id store after the value column is appended. This single volatile
+    /// write is what makes the row visible to readers; the packet-id store holds exactly the appended rows because the
+    /// writer appends to it once per row (and the timestamp and value columns before this call).
+    /// </summary>
     private protected void PublishCount() =>
         _Count = _PacketIds.Count;
 
-    /// <summary>Clears packet-id / timestamp stores, count, and monotonic flags. Writer only.</summary>
+    /// <summary>
+    /// Clears packet-id / timestamp stores, count, and monotonic flags. Writer only; the caller holds the series append
+    /// gate. Each store swaps in a fresh generation with one volatile write (see <c>ChunkedSlotStore</c>), so readers never
+    /// observe a half-cleared column. A clear is destructive: a reader that loaded a count before the clear and indexes
+    /// afterwards reads the default values of the fresh generation; only a reader that loads the count after the clear is
+    /// consistent (it sees zero rows).
+    /// </summary>
     private protected void ClearKeyColumns()
     {
+        // Publish the empty count before the stores are swapped. In the other order a reader that loads the count between the
+        // swap and the reset would see the old row count over empty columns and read default values for rows that no longer exist.
+        _Count = 0;
         _PacketIds.Clear();
         _Timestamps.Clear();
-        _Count = 0;
         _LastPacketId = -1;
         _LastTimestampNanos = 0;
         _PacketIdsNonDecreasing = 1;
@@ -207,6 +237,11 @@ public abstract class ValueCacheSeries : IReadOnlyValueCacheSeries
     internal long TimestampAt(int index) =>
         _Timestamps.Get(index);
 
+    /// <summary>
+    /// Clamps a caller-supplied snapshot count to [0, published <see cref="Count"/>]. Chunk readers pass the result as the
+    /// published bound, so a caller that passes a stale, negative, or <see cref="int.MaxValue"/> count can never see slots
+    /// the writer has not published yet.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private protected int ClipObservedCount(int observedCount)
     {
@@ -228,10 +263,11 @@ public abstract class ValueCacheSeries : IReadOnlyValueCacheSeries
 
     #region Private helpers
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int _ClipObservedCount(int observedCount) =>
-        ClipObservedCount(observedCount);
-
+    /// <summary>
+    /// Throw helper kept out of line (NoInlining) so the inlined index getters stay small: the cold throw path adds no code
+    /// to the callers.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">Always.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private protected static void _ThrowIndexOutOfRange(int index) =>
         throw new ArgumentOutOfRangeException(nameof(index), index, "Index must be in the published range.");

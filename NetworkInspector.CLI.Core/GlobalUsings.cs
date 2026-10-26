@@ -16,6 +16,8 @@ global using System.Text.Json;
 global using System.Text.Json.Nodes;
 global using System.Threading;
 global using System.Threading.Tasks;
+// Gives the commands Invariant($"..."): interpolated user-facing text is formatted with the invariant culture, never with the
+// culture of the machine.
 global using static System.FormattableString;
 #endregion
 
@@ -38,31 +40,13 @@ global using NetworkInspector.Filter.Errors;
 global using PacketFilter = NetworkInspector.Filter.Filter;
 #endregion
 
-#region NetworkInspector.Exporters
-global using NetworkInspector.Exporters;
-global using NetworkInspector.Exporters.Asc;
-global using NetworkInspector.Exporters.Blf;
-global using NetworkInspector.Exporters.Json;
-global using NetworkInspector.Exporters.Pbf;
-global using NetworkInspector.Exporters.Pcapng;
-global using NetworkInspector.Exporters.Parquet;
-global using NetworkInspector.Exporters.DuckDb;
-global using NetworkInspector.Exporters.Text;
-#endregion
-
 #region NetworkInspector.Protocols
 global using NetworkInspector.Protocols;
 #endregion
 
-#region NetworkInspector.Sources
-global using NetworkInspector.Sources.Asc;
-global using NetworkInspector.Sources.Blf;
-global using NetworkInspector.Sources.Cached;
-global using NetworkInspector.Sources.Pcapng;
-global using NetworkInspector.Sources.Random;
-#endregion
-
 #region NetworkInspector.Plugins
+// The commands reach sources and export formats through the plugin registry (SourceConfig, FrameFormatConfig, PacketFormatConfig);
+// the loader namespace supplies the plugin lifecycle and the export target rules.
 global using NetworkInspector.BuiltInPlugins;
 global using NetworkInspector.Plugins;
 global using NetworkInspector.Plugins.Loader;

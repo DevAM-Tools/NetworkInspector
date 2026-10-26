@@ -138,7 +138,7 @@ internal sealed class CliSettingsTests
         JsonElement relative = items.Single(static item => item.GetProperty("name").GetString() == "tcp.relative_sequence_numbers");
         JsonElement paths = items.Single(static item => item.GetProperty("name").GetString() == "plugins.paths");
         await Assert.That(streams.GetProperty("value").GetInt64()).IsEqualTo(5000L);
-        await Assert.That(streams.GetProperty("default").GetInt64()).IsEqualTo(100000L);
+        await Assert.That(streams.GetProperty("default").GetInt64()).IsEqualTo(10000L);
         await Assert.That(streams.GetProperty("stored").GetBoolean()).IsTrue();
         await Assert.That(relative.GetProperty("stored").GetBoolean()).IsFalse();
         await Assert.That(paths.GetProperty("activation").GetString()).IsEqualTo("Restart");
@@ -180,7 +180,7 @@ internal sealed class CliSettingsTests
             .Single(static item => item.GetProperty("name").GetString() == "tcp.max_tracked_streams");
         await Assert.That(limited.Exit).IsEqualTo(0);
         await Assert.That(limited.Error).Contains("exceeds 10 bytes");
-        await Assert.That(limitedStreams.GetProperty("value").GetInt64()).IsEqualTo(100000L);
+        await Assert.That(limitedStreams.GetProperty("value").GetInt64()).IsEqualTo(10000L);
         await Assert.That(limitedStreams.GetProperty("stored").GetBoolean()).IsFalse();
         await Assert.That(unlimitedStreams.GetProperty("stored").GetBoolean()).IsTrue();
     }
@@ -350,7 +350,7 @@ internal sealed class CliSettingsTests
             "Error: Setting 'test.healthy.level' exists in the application and the profile scope; add --scope.",
             "settings", "get", "test.healthy.level");
         await _AssertOneErrorAndNoChangeAsync(sandbox,
-            "Error: tcp.max_tracked_streams: 'abc' is not a whole number; example: 100000",
+            "Error: tcp.max_tracked_streams: 'abc' is not a whole number; example: 10000",
             "settings", "set", "tcp.max_tracked_streams", "abc");
         await _AssertOneErrorAndNoChangeAsync(sandbox,
             "Error: plugins.startTimeoutSeconds: allowed 1 – 2147483",

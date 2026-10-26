@@ -5,6 +5,9 @@ namespace NetworkInspector.Core.Reassembly;
 /// <summary>
 /// Context-aware PDU boundary detector for stream reassembly.
 /// Extends <see cref="IPduBoundaryDetector"/> with stream context and per-stream state reset.
+/// Stateful detectors (for example one that tracks a handshake per connection) implement this; the stream buffer
+/// calls the context overload instead of the plain <see cref="IPduBoundaryDetector.Detect"/> when it is available.
+/// The detector keeps its per-stream state keyed by <see cref="StreamDetectionContext.StreamId"/>.
 /// <para>
 /// <b>Lifecycle contract:</b>
 /// <list type="number">
@@ -41,6 +44,9 @@ public interface IStreamPduBoundaryDetector : IPduBoundaryDetector
     /// <see cref="PduBoundaryResult.Complete"/> with the PDU length,
     /// <see cref="PduBoundaryResult.Incomplete"/> if more data is needed, or
     /// <see cref="PduBoundaryResult.Invalid"/> if the data is corrupt and resync is needed.
+    /// A complete length must be positive, at most <paramref name="data"/>'s length, and within
+    /// <see cref="StreamReassemblyConfig.MaxPduSize"/>; otherwise the stream buffer treats the result as a
+    /// broken detector and moves the stream to its error state instead of extracting a PDU.
     /// </returns>
     PduBoundaryResult Detect(ReadOnlySpan<byte> data, in StreamDetectionContext context);
 

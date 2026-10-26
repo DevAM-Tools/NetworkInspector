@@ -11,10 +11,13 @@ public sealed class RepeatedFailureRecipe : TraceRecipe
 {
     #region Constants
 
+    /// <summary>UDP bytes behind the IPv4 header: the two ports only, so the 8-byte UDP header is cut short.</summary>
     private const int _TruncatedUdpBytes = 4;
 
+    /// <summary>Frames between two cancellation checks.</summary>
     private const int _CancellationCheckInterval = 1024;
 
+    /// <summary>Distance of two frame timestamps: 1 ms in nanoseconds.</summary>
     private const long _FrameIntervalNanos = 1_000_000;
 
     #endregion
@@ -68,7 +71,10 @@ public sealed class RepeatedFailureRecipe : TraceRecipe
                 cancellationToken.ThrowIfCancellationRequested();
             }
 
-            // The writer keeps no reference, but a fresh array per frame keeps the frames independent of each other.
+            // The bytes are written by hand because the FrameBuilder layers refuse to build a UDP datagram shorter than its
+            // header. The IPv4 header and its checksum are valid, so the failure is raised by the UDP parser and is the same for
+            // every frame. A fresh array per frame keeps the frames independent of each other (the writer keeps no reference,
+            // so reusing one array would also be safe); this is cached test support, not a hot path.
             byte[] frame = new byte[Ipv4Wire.EthernetHeaderLength + Ipv4Wire.Ipv4HeaderLength + _TruncatedUdpBytes];
             Ipv4Wire.WriteEthernetAndIpv4(frame, Ipv4Wire.Ipv4HeaderLength + _TruncatedUdpBytes, Ipv4Wire.ProtocolUdp);
             BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(Ipv4Wire.EthernetHeaderLength + Ipv4Wire.Ipv4HeaderLength), 50000);

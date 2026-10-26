@@ -1177,7 +1177,7 @@ detected and never throw. A faulty signal does not take down the rest of that me
 | JSON / compile | Runtime |
 |----------------|---------|
 | `byte_length` | Compile-only floor: must be `>= RequiredByteLength` of the **remaining** signals after per-signal skips (max exclusive end byte over static + mux + mux-group signals). Not stored on `CompiledSignalMessage`. |
-| Signal `name` / `ui_name` | JSON values are the registered field name / UI name. The parser does not prefix `{message}.`. Optional protocol suffixes `.raw`, `.enum`, and mux `.value` are appended to that name. Invalid or duplicate names skip that signal. Config providers (e.g. the FrameBuilder test bridge) may write `{message}.{signal}` as the JSON `name`. |
+| Signal `name` / `ui_name` | JSON values are the registered field name / UI name. The parser does not prefix `{message}.`. Optional protocol suffixes `.raw`, `.enum`, and mux `.value` are appended to that name. Invalid or duplicate names skip that signal, as does a `value_names` object with two keys that denote the same number (for example `"1"` and `"01"`). Config providers (e.g. the FrameBuilder test bridge) may write `{message}.{signal}` as the JSON `name`. |
 | CustomText cache | Signal bit length `<= 12` precomputes `{ui_name}: {phys:F}[ {unit}] ({raw})[ [{enum}]]` for every raw value at registration (4096 strings at 12 bits). Wider signals format on materialize. |
 | `byte_order` | Required (`little_endian` / `big_endian`). Null/whitespace skips that signal with a warning; later signals and messages still compile. |
 | `mux_signal` / `mux_groups` | Invalid mux selector skips mux and groups, static signals remain. `mux_groups` without `mux_signal` are ignored with a warning. Duplicate or out-of-range `mux_value` skips that group. Selector bit length `<= 8` builds a dense `muxValue → SignalInfo[]` table (256 slots at 8 bits). Wider selectors keep a linear group scan. |
@@ -1291,7 +1291,7 @@ Group JSON and referenced `*_config_file` JSON are capped by `SettingsManager.Ma
 | `signal_message.config_file` | `""` | JSON of message protocols + `dispatch_bindings`. Empty = no Signal Message dissectors. |
 | `signal_message.show_raw` | `false` | Append `{signal}.raw` (U64) under each signal. |
 | `signal_message.show_enum` | `false` | Append `{signal}.enum` when a `value_names` hit occurs. |
-| `signal_message.max_enum_values` | `4096` | Cap on `value_names` entries per signal. |
+| `signal_message.max_enum_values` | `4096` | Cap on `value_names` entries per signal. Range 1 or more; `0` is refused (reported as `OutOfRange`) and the default stays. |
 
 #### External JSON (not the group files)
 
@@ -1735,7 +1735,7 @@ container — there is no nested `*.hdr` intermediate container.
 | `udp`    | —             | `udp.srcport`, `udp.dstport`, checksum (+status), length, payload |
 | `tcp`    | —             | ports, checksum, seq/ack, hdr_len, flags (+ sub-flags), window, urgent ptr, options, len, payload |
 | `tls`    | —             | per record: `tls.record` (content_type, version, length) followed by handshake/alert as siblings |
-| `dtls`   | —             | per record: `dtls.record` (content_type, version, epoch, seq, length) followed by handshake as siblings |
+| `dtls`   | —             | per record: `dtls.record` (content_type, version, epoch, seq, length) followed by handshake as siblings; the handshake header is decoded only for epoch 0, and a connection ID record (type 25) has no `length` field and ends the walk |
 | signal message (`SignalMessageProtocol`) | — | static signals (physical F64); mux container + `.value` + matching mux-group signals; optional `.raw` / `.enum` |
 
 ### 13b.2 Implementation Sketch
@@ -2463,8 +2463,27 @@ TCP stream settings (group `tcp`, defaults in parentheses):
 - `tcp.relative_sequence_numbers` (true) — `tcp.seq` / `tcp.ack` subtract the direction ISN; `tcp.seq_raw` / `tcp.ack_raw` stay on the wire.
 - `tcp.stream_key_last_vlan` (false) — include the innermost VLAN id in the stream key. Id 0 does not split.
 - `tcp.stream_key_frame` (false) — include `Frame.InterfaceId` in the stream key. An invalid interface does not split.
-- `tcp.max_tracked_streams` (100000) — new 5-tuples past the cap parse the header and set `tcp.error.stream_limit` instead of `tcp.stream`.
+- `tcp.max_tracked_streams` (10000) — new 5-tuples past the cap parse the header and set `tcp.error.stream_limit` instead of `tcp.stream`.
 - `tcp.verify_checksum` (false) — check the checksum, including a checksum field of 0.
+
+UDP stream settings (group `udp`):
+
+- `udp.max_tracked_streams` (10000) — new 4-tuples past the cap are still parsed and dispatched, but get no `udp.stream`; `udp.error.stream_limit` names the setting. Tuples already tracked keep their index.
+- `udp.verify_checksum` (false) — check the checksum. A zero checksum is not verified over IPv4 ("not computed") and is reported as `[Bad]` over IPv6, where it is invalid.
+
+Decompression limits (secure by default, range 1 KiB to 128 GiB, default 64 MiB; the result is one array, so about 2 GiB is the hard bound):
+
+- `http.max_decompressed_bytes` (group `http`) — a gzip, deflate or br body that inflates beyond it is left undecoded (never truncated) and `http.error.decompress_limit` names the setting.
+- `ws.max_decompressed_bytes` (group `ws`) — the same for permessage-deflate frames; `websocket.payload.decompressed.limit` names the setting.
+
+HTTP/1 also reports the fixed header limits (256 header lines, 8192 bytes per line) as `http.error.header_limit` instead of silently showing the remaining lines as payload.
+
+Fixed limits of the other application and bus protocols (constants, not settings; each is reported, never applied silently):
+
+- DNS over TCP: the reassembly accepts a PDU of up to 65537 bytes, the largest legal message (65535 bytes) plus its 2-byte length prefix.
+- JSON: a key or string value longer than 65536 (bytes without escapes, characters with escapes) is cut, and `json.error.string_limit` follows the field and names the limit.
+- SOME/IP-TP: at most 1024 reassembly sessions (the least recently used one is evicted and reported as `someip.tp.dropped`) and 1 MiB per message. A segment that is not the last must carry a non-zero multiple of 16 bytes, and no segment may start beyond the end fixed by the last segment; a violating session is dropped and reported as `someip.tp.dropped`.
+- Reassembled IPv4 or IPv6 datagrams and SOME/IP-TP messages are bound to the packet as additional buffers; a packet holds at most 255 of them, and a reassembly that would exceed it is reported as a parse error that names the limit.
 
 HTTP on TCP ports 80 and 8080 is reassembled with `Http1MessageDetector` before `HttpProtocol.Parse`. A port that has more than one registered protocol is not reassembled; every registered parser is still tried.
 

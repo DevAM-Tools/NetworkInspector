@@ -14,6 +14,11 @@ namespace NetworkInspector.Core;
 /// a vectorized form of the same computation, not an algorithmic difference.
 /// The bulk output (≥ 32 bytes) is not equivalent to sequential <see cref="NextU64"/> calls.
 /// </para>
+/// <para>
+/// <b>Usage:</b> not cryptographically secure; it generates deterministic synthetic data (for example the random frame
+/// source), where the same seed must reproduce the same bytes. Mutable struct: <b>not thread-safe</b>, and a copy is an
+/// independent generator that replays the same sequence, so pass it by <c>ref</c> and keep one instance per stream.
+/// </para>
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct Xoroshiro128PlusPlus
@@ -29,7 +34,9 @@ public struct Xoroshiro128PlusPlus
     private const int _StateRotationB = 28; // rotl(s1, 28)
 
     // Minimum buffer length that justifies 4-stream parallel generation.
-    // One iteration produces 4 × 8 = 32 bytes.
+    // One iteration produces 4 × 8 = 32 bytes. The bulk setup (six SplitMix64 rounds for the extra streams) is only
+    // worthwhile once one full iteration fits, so shorter buffers use the single-stream path. This constant is also the
+    // loop stride of every bulk path, and all paths store the streams in the order A, B, C, D, so their output is identical.
     private const int _BulkThreshold = 32;
 
     #endregion
@@ -56,7 +63,8 @@ public struct Xoroshiro128PlusPlus
         _S0 = _SplitMix64(ref seed);
         _S1 = _SplitMix64(ref seed);
 
-        // (0, 0) is the only fixed point of xoroshiro128. Guard against it.
+        // The all-zero state is the only invalid one: it maps to itself and would output zeros forever. SplitMix64 makes
+        // it astronomically unlikely, but a deterministic seed must never produce a dead generator, so guard it.
         if (_S0 == 0 && _S1 == 0)
         {
             _S0 = 1;
@@ -150,7 +158,9 @@ public struct Xoroshiro128PlusPlus
     /// <para>
     /// For buffers ≥ 32 bytes, three sub-streams are derived and all four streams
     /// advance in parallel (AVX2, SSE2/NEON, or scalar ILP), producing 32 bytes per
-    /// iteration. Output is byte-for-byte identical on every platform for a given seed.
+    /// iteration. Output is byte-for-byte identical on every supported platform for a given seed (the 64-bit results
+    /// are stored in native byte order, which is little-endian on x64 and ARM64; the tail below 8 bytes is extracted
+    /// least-significant byte first to match).
     /// </para>
     /// <para>
     /// Buffers ≥ 32 bytes produce output that is <em>not</em> equivalent to sequential
@@ -160,18 +170,24 @@ public struct Xoroshiro128PlusPlus
     /// <param name="buffer">Target span to fill with random bytes.</param>
     public void FillBytes(Span<byte> buffer)
     {
+        // Short buffers: single stream, so small fills stay identical to sequential NextU64 draws.
         if (buffer.Length < _BulkThreshold)
         {
             _FillBytesSequential(buffer);
             return;
         }
 
+        // Bulk: three extra streams are derived from the current state (stream A is the instance itself). The derivation
+        // does not advance A. The sub-streams are seeded through SplitMix64, not placed by jump-ahead, so their
+        // independence is statistical (overlap in a 2^128 - 1 period is improbable) rather than guaranteed.
         _DeriveSubStreams(
             out ulong s0B, out ulong s1B,
             out ulong s0C, out ulong s1C,
             out ulong s0D, out ulong s1D);
 
-        // All three paths produce identical byte sequences for the same seed.
+        // All three paths produce identical byte sequences for the same seed. Pick the widest accelerated vector type;
+        // the scalar path is the fallback (and the specification the vector paths must match). Each path advances only
+        // stream A in the instance and finishes the 0-31 byte remainder with the single-stream path.
         if (Vector256.IsHardwareAccelerated)
         {
             _FillBytesVector256(buffer, s0B, s1B, s0C, s1C, s0D, s1D);
@@ -199,6 +215,8 @@ public struct Xoroshiro128PlusPlus
         out ulong s0C, out ulong s1C,
         out ulong s0D, out ulong s1D)
     {
+        // Seed the SplitMix64 chain from the current state so the sub-streams are deterministic per generator state and
+        // differ from call to call (stream A has advanced between calls).
         ulong mix = _S0 ^ _S1;
 
         s0B = _SplitMix64(ref mix);
@@ -241,6 +259,8 @@ public struct Xoroshiro128PlusPlus
         Vector256<ulong> vs0 = Vector256.Create(_S0, s0B, s0C, s0D);
         Vector256<ulong> vs1 = Vector256.Create(_S1, s1B, s1C, s1D);
 
+        // Raw ref + WriteUnaligned instead of Span slicing: no bounds check and no Span construction per iteration. Safe
+        // because the loop condition guarantees that 32 bytes remain at offset; the span may be unaligned for the vector.
         ref byte bufRef = ref MemoryMarshal.GetReference(buffer);
         int offset = 0;
 
@@ -292,6 +312,7 @@ public struct Xoroshiro128PlusPlus
         Vector128<ulong> vs0Hi = Vector128.Create(s0C, s0D);
         Vector128<ulong> vs1Hi = Vector128.Create(s1C, s1D);
 
+        // Raw ref + WriteUnaligned as in the Vector256 path: bounds are guaranteed by the loop condition.
         ref byte bufRef = ref MemoryMarshal.GetReference(buffer);
         int offset = 0;
 
@@ -350,6 +371,7 @@ public struct Xoroshiro128PlusPlus
         // from repeated loads/stores of _S0/_S1 through the struct 'this' pointer).
         ulong s0A = _S0, s1A = _S1;
 
+        // Raw ref + WriteUnaligned as in the vector paths: bounds are guaranteed by the loop condition.
         ref byte bufRef = ref MemoryMarshal.GetReference(buffer);
         int offset = 0;
 
@@ -435,8 +457,9 @@ public struct Xoroshiro128PlusPlus
     #region SIMD Helpers
 
     // ─── Vector rotate-left ──────────────────────────────────────────────────
-    // No hardware rotate intrinsic exists for packed u64 lanes, so we implement
-    // rotl(x, k) as (x << k) | (x >> (64 - k)) using shift + OR.
+    // The portable Vector128/Vector256 API has no per-lane rotate (AVX-512 vprolq is not available on SSE2, AVX2, or
+    // NEON), so rotl(x, k) is built as (x << k) | (x >> (64 - k)) using shift + OR. k is always one of the constants
+    // above, so after inlining both shift counts are compile-time constants.
 
     /// <summary>Bitwise rotate-left on each u64 lane of a <see cref="Vector256{T}"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -458,8 +481,11 @@ public struct Xoroshiro128PlusPlus
 
     /// <summary>
     /// Derives a deterministic per-frame seed from a master seed and a frame index.
-    /// Applies the MurmurHash3 64-bit finalizer (Stafford variant 13) to
-    /// <c>masterSeed ^ frameId</c> for excellent avalanche across all bits.
+    /// Applies Stafford's "Mix13" 64-bit mixer (a retuned MurmurHash3 finalizer, the same mixer SplitMix64 uses) to
+    /// <c>masterSeed ^ frameId</c> for excellent avalanche across all bits. The mixer is a bijection, so distinct XOR
+    /// values give distinct seeds; but pairs with the same XOR (for example master 1 / frame 2 and master 2 / frame 1)
+    /// give the same seed. Each frame needs its own seed so a frame can be regenerated by index without replaying the
+    /// frames before it.
     /// </summary>
     /// <param name="masterSeed">The source-level master seed.</param>
     /// <param name="frameId">Zero-based frame index.</param>
@@ -476,8 +502,9 @@ public struct Xoroshiro128PlusPlus
     }
 
     /// <summary>
-    /// _SplitMix64: advances <paramref name="state"/> by ⌊2^64/φ⌋ and applies the
-    /// MurmurHash3 64-bit finalizer. Used for constructor seeding and sub-stream derivation.
+    /// SplitMix64: advances <paramref name="state"/> by the odd golden-ratio constant (≈ 2^64/φ) and applies Stafford's
+    /// "Mix13" 64-bit mixer. Used for constructor seeding and sub-stream derivation; the recommended way to expand a
+    /// short seed into xoroshiro state because consecutive outputs are decorrelated even for adjacent seeds.
     /// </summary>
     /// <param name="state">Mutable state, advanced by one step on each call.</param>
     /// <returns>A well-mixed 64-bit value derived from the updated state.</returns>
@@ -486,7 +513,7 @@ public struct Xoroshiro128PlusPlus
     {
         state = unchecked(state + 0x9E3779B97F4A7C15UL); // ⌊2^64/φ⌋ — golden ratio constant
         ulong z = state;
-        // MurmurHash3 64-bit finalizer (Stafford variant 13)
+        // Stafford Mix13 (shifts 30, 27, 31); the multiplications wrap on purpose, hence unchecked.
         z = unchecked((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL);
         z = unchecked((z ^ (z >> 27)) * 0x94D049BB133111EBUL);
         return z ^ (z >> 31);

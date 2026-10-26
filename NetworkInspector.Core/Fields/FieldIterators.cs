@@ -7,7 +7,20 @@ namespace NetworkInspector.Core.Fields;
 /// <summary>
 /// Iterates direct children of a field.
 /// When <c>materialize</c> is <see langword="true"/>, lazy parents are materialized before iteration.
+/// <para>
+/// <b>Design (applies to all enumerables in this file):</b> each enumerable is a small struct with two enumerators. The
+/// public <c>GetEnumerator()</c> returns a <see langword="ref struct"/> enumerator, which <see langword="foreach"/> binds
+/// to, so a normal loop allocates nothing and needs no interface call. The explicit
+/// <see cref="IEnumerable{T}"/> implementation returns a class-based enumerator (one allocation) so LINQ and other
+/// interface consumers still work. Enumerators never lock: they follow the volatile sibling/child links and use
+/// <c>WaitUntilFieldPublished</c> so a link that a concurrent materializer has just written is not followed before the
+/// slot it points to is visible.
+/// </para>
+/// <para><b>Thread-safety:</b> the enumerable is an immutable value; an enumerator belongs to one thread.</para>
 /// </summary>
+/// <param name="packet">The packet that owns the fields.</param>
+/// <param name="parentIndex">Storage index of the parent whose children are enumerated.</param>
+/// <param name="materialize">Whether to populate lazy children before iterating.</param>
 public readonly struct FieldChildEnumerable(Packet packet, ushort parentIndex, bool materialize)
     : IEnumerable<Field>
 {
@@ -82,11 +95,17 @@ public readonly struct FieldChildEnumerable(Packet packet, ushort parentIndex, b
 /// <summary>
 /// Struct-based enumerator for direct children of a field.
 /// Walks the sibling linked list — zero allocation, O(1) per step.
+/// A <see langword="ref struct"/>, so it cannot be stored on the heap or used across <c>await</c>; it is meant for a
+/// <see langword="foreach"/> loop. Not thread-safe (one enumerator per thread).
 /// </summary>
 public ref struct FieldChildEnumerator
 {
     private readonly Packet _Packet;
+
+    /// <summary>Storage index of the current child; before the first <c>MoveNext</c> it holds the first child (or the null index).</summary>
     private ushort _CurrentIndex;
+
+    /// <summary>False until the first <c>MoveNext</c>, which returns the pre-loaded first child instead of advancing.</summary>
     private bool _Started;
 
     /// <summary>Creates a child enumerator.</summary>
@@ -120,7 +139,7 @@ public ref struct FieldChildEnumerator
         _Started = false;
     }
 
-    /// <summary>The current child field.</summary>
+    /// <summary>The current child field. Valid only after <see cref="MoveNext"/> returned <see langword="true"/>.</summary>
     public readonly Field Current
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -128,18 +147,23 @@ public ref struct FieldChildEnumerator
     }
 
     /// <summary>Advances to the next child.</summary>
+    /// <returns><see langword="false"/> when there is no further child.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
+        // First call: the constructor already resolved the first child, so return it without advancing.
         if (!_Started)
         {
             _Started = true;
             return _CurrentIndex != FieldBody.NullIndex;
         }
+        // Exhausted already (or empty): stay exhausted.
         if (_CurrentIndex == FieldBody.NullIndex)
         {
             return false;
         }
+
+        // Follow the volatile sibling link; WaitUntilFieldPublished guards against a link to a not yet published slot.
         _CurrentIndex = _Packet.WaitUntilFieldPublished(_Packet.GetFieldRef(_CurrentIndex).NextIndex);
         return _CurrentIndex != FieldBody.NullIndex;
     }
@@ -152,7 +176,11 @@ public ref struct FieldChildEnumerator
 /// <summary>
 /// Iterates all descendants of a field in depth-first pre-order (excludes the root itself).
 /// When <c>materialize</c> is <see langword="true"/>, lazy fields are materialized during traversal.
+/// See <see cref="FieldChildEnumerable"/> for the shared enumerator design.
 /// </summary>
+/// <param name="packet">The packet that owns the fields.</param>
+/// <param name="rootIndex">Storage index of the field whose descendants are enumerated.</param>
+/// <param name="materialize">Whether to populate lazy fields while traversing.</param>
 public readonly struct FieldDescendantEnumerable(Packet packet, ushort rootIndex, bool materialize)
     : IEnumerable<Field>
 {
@@ -351,7 +379,10 @@ public ref struct FieldDescendantEnumerator
 /// <summary>
 /// Depth-first pre-order enumerable over all fields in a packet (including root).
 /// When <c>materialize</c> is <see langword="true"/>, lazy fields are materialized during traversal.
+/// See <see cref="FieldChildEnumerable"/> for the shared enumerator design.
 /// </summary>
+/// <param name="packet">The packet to traverse.</param>
+/// <param name="materialize">Whether to populate lazy fields while traversing.</param>
 public readonly struct FieldDfsEnumerable(Packet packet, bool materialize)
     : IEnumerable<Field>
 {
@@ -520,7 +551,10 @@ public ref struct FieldDfsEnumerator
 /// Iterates all fields in the packet's internal array linearly (storage order, not tree order).
 /// When <c>materialize</c> is <see langword="true"/>, lazy fields are materialized as encountered
 /// and their newly added children are visited when the index reaches them.
+/// See <see cref="FieldChildEnumerable"/> for the shared enumerator design.
 /// </summary>
+/// <param name="packet">The packet to iterate.</param>
+/// <param name="materialize">Whether to populate lazy fields while iterating.</param>
 public readonly struct FieldFlatEnumerable(Packet packet, bool materialize)
     : IEnumerable<Field>
 {
@@ -652,12 +686,18 @@ public ref struct FieldFlatEnumerator
 /// Lightweight inline stack for <see cref="ushort"/> values.
 /// Stores up to 16 entries (32 bytes) directly on the call stack.
 /// Falls back to a heap-allocated array for deeper trees.
+/// The depth-first enumerators use it for their pending siblings and children: a field tree is shallow in practice, so
+/// the common traversal needs no heap allocation, which a <c>Stack&lt;ushort&gt;</c> would always cost.
 /// </summary>
 internal ref struct InlineStack16
 {
+    /// <summary>Entries that fit into the inline buffer before the stack spills to the heap.</summary>
     private const int _InlineCapacity = 16;
 
+    /// <summary>Fixed-size inline storage (an <c>[InlineArray]</c> struct, so it lives inside this struct, on the stack).</summary>
     private InlineBuffer16 _InlineBuffer;
+
+    /// <summary>Heap storage; null until the first push beyond <see cref="_InlineCapacity"/>.</summary>
     private ushort[]? _HeapBuffer;
 
     /// <summary>Number of elements currently on the stack.</summary>
@@ -667,7 +707,9 @@ internal ref struct InlineStack16
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Push(ushort value)
     {
-        if (Count < _InlineCapacity)
+        // Once the stack has spilled, the heap buffer holds every entry and Pop reads from it. Writing to the inline buffer
+        // after the stack shrank below the inline capacity would leave the heap entry stale and Pop would return old data.
+        if (Count < _InlineCapacity && _HeapBuffer is null)
         {
             _InlineBuffer[Count] = value;
         }
@@ -695,7 +737,10 @@ internal ref struct InlineStack16
         return _HeapBuffer[Count];
     }
 
-    /// <summary>Slow path: spills to heap when inline capacity is exceeded.</summary>
+    /// <summary>
+    /// Slow path: spills to heap when inline capacity is exceeded, and keeps writing to the heap afterwards (the heap buffer stays
+    /// authoritative even when the stack shrinks below the inline capacity again).
+    /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _PushSlow(ushort value)
     {

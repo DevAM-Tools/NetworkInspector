@@ -21,6 +21,10 @@ internal static class FieldTypeMarkers
 
     // Each marker is a unique sealed class so that ReferenceEquals checks are
     // sufficient for type discrimination — no virtual dispatch needed.
+    // The markers carry no state and each has exactly one static instance, created once per process; building a
+    // field value therefore stores a reference to an existing object and allocates nothing. Do not add instance
+    // state or a second instance of a marker: type checks compare references, so a second instance would make
+    // otherwise identical values look like different types.
 
     internal sealed class BoolMarker
     {

@@ -20,6 +20,18 @@ internal sealed class CliLogFileTests
         public override void WriteLine(string? value) => throw new IOException("The console is closed.");
     }
 
+    // A writer that records whether the lock of the writer itself was held while a line was written.
+    private sealed class LockProbeWriter : StringWriter
+    {
+        public bool WroteUnderLock { get; private set; }
+
+        public override void WriteLine(string? value)
+        {
+            WroteUnderLock = Monitor.IsEntered(this);
+            base.WriteLine(value);
+        }
+    }
+
     private static readonly DateTimeOffset _Start = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
     private static CliLogFile _Open(string path, long maxBytes, int maxFiles)
@@ -103,6 +115,41 @@ internal sealed class CliLogFileTests
                 "Warning Sample.Protocol: careful"], CollectionOrdering.Matching);
         await Assert.That(lines[0]).EndsWith("Error Sample.Protocol: it broke (InvalidOperationException: boom)");
         await Assert.That(lines.Any(static line => line.Contains("   at ", StringComparison.Ordinal))).IsFalse();
+    }
+
+    [Test]
+    public async Task AnErrorWithoutTextIsRefusedWithOrWithoutAnException()
+    {
+        CliPluginLog log = new("Sample.Protocol", TextWriter.Null, null);
+
+        // The exception is looked at only after the text was checked, so a missing text is the bug of the plugin in both cases.
+        await Assert.That(() => log.Error(null!)).Throws<ArgumentNullException>();
+        await Assert.That(() => log.Error(null!, new InvalidOperationException("boom"))).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task AProblemOfTheLogFileIsPrintedLikeTheWarningForALogFileThatCannotBeOpened()
+    {
+        LockProbeWriter error = new();
+
+        CliPluginSession.WriteLogProblem(new CliIo(TextWriter.Null, error), "The log file 'ni.log' is switched off: boom");
+
+        // Same form as "Warning: The log file '...' cannot be used: ..." (a colon after the level), written under the writer lock.
+        await Assert.That(error.ToString()).IsEqualTo("Warning: The log file 'ni.log' is switched off: boom" + Environment.NewLine);
+        await Assert.That(error.WroteUnderLock).IsTrue();
+    }
+
+    [Test]
+    public async Task TheCancellationNoticeIsWrittenUnderTheLockOfTheErrorWriter()
+    {
+        LockProbeWriter error = new();
+
+        CliCommandSupport.WriteLocked(error, "Cancellation requested...");
+
+        // The plugin log and the session lock the error writer itself; an unlocked notice from the console thread could tear
+        // their lines on a writer that is not synchronized.
+        await Assert.That(error.ToString()).IsEqualTo("Cancellation requested..." + Environment.NewLine);
+        await Assert.That(error.WroteUnderLock).IsTrue();
     }
 
     [Test]

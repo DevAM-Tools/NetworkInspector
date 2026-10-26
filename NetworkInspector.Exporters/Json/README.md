@@ -71,6 +71,9 @@ static void WriteJson(IEnumerable<Packet> packets)
 - Not thread-safe; call `OnPacket()` and `OnFinish()` from one thread.
 - The output is one JSON array, not newline-delimited JSON.
 - Packets parsed with `FieldTreeMode.Skip` are skipped.
+- A packet that cannot be serialized or written is skipped (`ItemSkipped`), never thrown out of `OnPacket()`. In the
+  compact format the next packet is then written in full, because the skipped packet is not in the file and cannot be
+  the "previous" one. `WithFormat` rejects values that are not a `JsonExportFormat` member.
 - The output contains every decoded field, including payload-derived text. Treat it as sensitive.
 
 ## Links

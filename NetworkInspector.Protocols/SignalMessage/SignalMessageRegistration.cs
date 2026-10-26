@@ -39,7 +39,17 @@ public static class SignalMessageRegistration
     /// <summary>Setting: append <c>.enum</c> child fields when an enum name hits (default false).</summary>
     public const string ShowEnumSetting = "signal_message.show_enum";
 
-    /// <summary>Setting: max enum entries per signal (default 4096).</summary>
+    /// <summary>
+    /// Setting: max enum (<c>value_names</c>) entries per signal (default 4096).
+    /// </summary>
+    /// <remarks>
+    /// Trust-boundary limit on the JSON config: it bounds the size of the per-signal enum table built at
+    /// registration, so a malformed or hostile config cannot make registration allocate without bound.
+    /// A signal that exceeds it is skipped with a warning that names the setting (never truncated silently).
+    /// Configurable through the settings system (not a constant). A value of zero is accepted by the setting
+    /// itself but reported as an out-of-range warning when the config is compiled, and then no message of
+    /// that config is registered.
+    /// </remarks>
     public const string MaxEnumValuesSetting = "signal_message.max_enum_values";
 
     private const string _GroupName = "signal_message";
@@ -163,6 +173,15 @@ public static class SignalMessageRegistration
     /// into <see cref="SettingsLoadWarning"/> entries for signal-message config.
     /// Call after <see cref="StackBuilder.Build"/> when tolerant registration was used.
     /// </summary>
+    /// <remarks>
+    /// Needed because dispatch bindings are deferred: a binding whose table never appears produces no
+    /// error at registration time, only a build diagnostic after the stack is built.
+    /// </remarks>
+    /// <param name="stack">Built stack whose build diagnostics are inspected.</param>
+    /// <param name="warnings">Receives one warning per dispatch table that was never registered.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="stack"/> or <paramref name="warnings"/> is <see langword="null"/>.
+    /// </exception>
     public static void AppendBuildDiagnosticsWarnings(
         IStack stack,
         ICollection<SettingsLoadWarning> warnings)
@@ -255,8 +274,11 @@ public static class SignalMessageRegistration
             "Max Enum Values Per Signal",
             _GroupName,
             defaultValue: 4096UL,
-            min: 0UL,
-            description: "Hard cap on discrete value_names entries per signal.");
+            // Minimum 1, not 0: the compiler rejects a cap of 0 (it would refuse every enum), and a registered range
+            // that allows 0 made _TryResolveCompileSettings skip the whole configuration. With min 1 the setting
+            // itself refuses 0, reports it, and keeps the default.
+            min: 1UL,
+            description: "Hard cap on discrete value_names entries per signal (1 or more).");
         _AddSettingLoadWarningIfNeeded(maxEnum, MaxEnumValuesSetting, warnings);
     }
 
@@ -324,6 +346,9 @@ public static class SignalMessageRegistration
         compileSettings = default;
         bool showRaw = settings.GetBoolSetting(ShowRawSetting) ?? false;
         bool showEnum = settings.GetBoolSetting(ShowEnumSetting) ?? false;
+        // The compiler and table builder work with int counts, so a stored value above int.MaxValue is
+        // clamped instead of overflowing (an entry count can never exceed int.MaxValue anyway). The
+        // fallback literal mirrors the default registered in _RegisterSettings.
         ulong maxEnumU = settings.GetU64Setting(MaxEnumValuesSetting) ?? 4096UL;
         int maxEnum = maxEnumU > int.MaxValue ? int.MaxValue : (int)maxEnumU;
         if (maxEnum <= 0)
@@ -354,6 +379,9 @@ public static class SignalMessageRegistration
         in SignalMessageCompileSettings compileSettings,
         List<SettingsLoadWarning> warnings)
     {
+        // Pre-check names instead of relying on the exceptions of the builder: the compiler only knows the
+        // names of this config, while the builder also holds built-in protocols and earlier configs
+        // (file plus stream), so collisions are reported as warnings and the remaining messages still load.
         if (builder.GetProtocolId(compiled.Name) is not null)
         {
             warnings.Add(_MessageWarning(compiled.Name, "protocol name already registered."));
@@ -378,6 +406,10 @@ public static class SignalMessageRegistration
             return;
         }
 
+        // Order matters: the protocol must be registered before its fields (they need the ProtocolId), and
+        // dispatch bindings come last because they reference the protocol id. The catch is a safety net for
+        // builder-side registration failures that the pre-checks above do not cover; a protocol that was
+        // already registered before such a failure stays registered.
         try
         {
             SignalMessageProtocol protocol = new(compiled, in compileSettings);
@@ -414,6 +446,10 @@ public static class SignalMessageRegistration
                 continue;
             }
 
+            // Copy to locals: the callback may run later (when the table is registered, possibly by a protocol
+            // registered after this one) and DispatchBinding is a mutable DTO, so the callback captures
+            // the values as they were at registration time. Failures inside the callback have no caller to
+            // throw to, so they are routed into the shared warnings list.
             string tableName = binding.Table;
             ulong key = binding.Key;
             builder.WhenProtocolTableRegistered(tableName, tableId =>

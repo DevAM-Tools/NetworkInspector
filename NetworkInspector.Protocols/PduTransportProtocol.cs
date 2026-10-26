@@ -35,10 +35,12 @@ namespace NetworkInspector.Protocols;
 /// </summary>
 /// <remarks>
 /// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>_RegisterFieldsCustom</c> / <c>OnStartCustom</c>
+/// All mutable state is initialised inside <c>_RegisterFieldsCustom</c>
 /// (single-threaded build phase) and is read-only thereafter, so <see cref="IProtocol.Parse"/> may
 /// be invoked concurrently from any number of threads on the same instance without external
-/// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
+/// synchronisation. The configuration methods (<see cref="TryLoadConfigFromStream"/>,
+/// <see cref="ApplyConfig"/>, <see cref="AppendRegistrationWarnings"/>) belong to that build phase: they are not
+/// thread-safe, and the first two are rejected once fields have been registered.</para>
 /// </remarks>
 [Protocol("pdu_transport", "PDU Transport", Description = "PDU Transport (AUTOSAR)")]
 public sealed partial class PduTransportProtocol : IProtocol
@@ -93,6 +95,9 @@ public sealed partial class PduTransportProtocol : IProtocol
     [StringSetting("pdu_transport.config_file", "Configuration File", "pdu_transport", Default = "")]
     private string? _ConfigFile;
 
+    // The widths of the ID and length fields are settings. Only 1, 2 and 4 bytes are accepted (checked in
+    // _RegisterFieldsCustom): each width maps to a native integer read in _ReadBigEndianUint, and the sum is the
+    // fixed header size used by Parse. Both are constant after registration.
     [U64Setting("pdu_transport.id_field_size", "ID Field Size (bytes)", "pdu_transport", Default = 4)]
     private ulong _IdFieldSize;
 
@@ -115,7 +120,11 @@ public sealed partial class PduTransportProtocol : IProtocol
 
     #region Runtime state
 
-    /// <summary>PDU ID → display name lookup, built from config.</summary>
+    /// <summary>
+    /// PDU ID → display name lookup, built from config. Frozen because it is built once during registration and
+    /// then read by every parse thread without locking; an immutable lookup needs no synchronization and is
+    /// optimized for reads.
+    /// </summary>
     private FrozenDictionary<uint, string> _NameLookup = FrozenDictionary<uint, string>.Empty;
 
     /// <summary>
@@ -199,6 +208,8 @@ public sealed partial class PduTransportProtocol : IProtocol
     public void AppendRegistrationWarnings(ICollection<SettingsLoadWarning> warnings)
     {
         ArgumentNullException.ThrowIfNull(warnings);
+        // When no file warning exists, _RegisterFieldsCustom reports the additional-load warning as ConfigLoadWarning
+        // too; the comparison below keeps the same failure from being added twice.
         if (ConfigLoadWarning is { } configWarning)
         {
             warnings.Add(configWarning);
@@ -242,6 +253,9 @@ public sealed partial class PduTransportProtocol : IProtocol
         ArgumentNullException.ThrowIfNull(stream);
         _ThrowIfFieldsRegistered();
 
+        // Trust boundary: JsonConfigStream applies no size or depth limit to a caller-owned stream (unlike the
+        // settings file path, which is bounded by the settings manager). The caller must bound an untrusted stream.
+        // A failed load is an expected failure: it is reported as a warning and leaves no additional config behind.
         bool ok = JsonConfigStream.TryLoad(
             stream,
             PduTransportConfigContext.Default.PduTransportConfig,
@@ -309,6 +323,8 @@ public sealed partial class PduTransportProtocol : IProtocol
             _LengthFieldSize = 4;
         }
 
+        // Load the optional name file referenced by the setting (bounded by the settings manager's file size and JSON
+        // depth limits). A failure is not fatal: parsing works without names, so it is surfaced as a warning only.
         builder.Settings.TryLoadReferencedJsonConfig(
             PduTransportRegistration.ConfigFileSetting, PduTransportConfigContext.Default.PduTransportConfig,
             out PduTransportConfig? fileConfig, out SettingsLoadWarning? fileLoadWarning);
@@ -321,6 +337,10 @@ public sealed partial class PduTransportProtocol : IProtocol
 
         _ApplyNameLookup(fileConfig, _AdditionalConfig);
 
+        // UDP auto-dispatch is opt-in: with no configured port this protocol is never selected by UDP. The port table
+        // belongs to UDP and may be registered before or after this protocol, so the binding is deferred until the
+        // table exists (the callback fires immediately when it already does). Out-of-range ports were already
+        // filtered (and warned about).
         ulong[] udpPorts = _FilterUdpDispatchPorts(_UdpDispatchPorts, out SettingsLoadWarning? udpPortsWarning);
         UdpDispatchPortsWarning = udpPortsWarning;
         if (udpPorts.Length > 0)
@@ -350,7 +370,12 @@ public sealed partial class PduTransportProtocol : IProtocol
             return [];
         }
 
+        // Single pass: out-of-range values are collected for one combined warning (never dropped silently), and
+        // duplicates are dropped without a warning so that each port is bound exactly once.
+        // 'seen' answers the duplicate question in constant time; a List.Contains per element would cost
+        // O(n^2) for a very large setting array. 'ports' keeps the first-seen order.
         List<ulong> ports = [];
+        HashSet<ulong> seen = [];
         List<string> skipped = [];
         for (int i = 0; i < raw.Length; i++)
         {
@@ -361,7 +386,7 @@ public sealed partial class PduTransportProtocol : IProtocol
                 continue;
             }
 
-            if (ports.Contains(candidate))
+            if (!seen.Add(candidate))
             {
                 continue;
             }
@@ -403,6 +428,9 @@ public sealed partial class PduTransportProtocol : IProtocol
     /// </summary>
     private void _ApplyNameLookup(PduTransportConfig? fileConfig, PduTransportConfig? additionalConfig)
     {
+        // Precedence: the additional (programmatic) names win over the settings file, so a host can override the
+        // file. For duplicate IDs inside the settings file the first entry wins, inside the additional config the
+        // last one wins (a consequence of overwrite being a per-source flag).
         Dictionary<uint, string> names = [];
         _MergePdus(names, fileConfig, overwrite: false);
         _MergePdus(names, additionalConfig, overwrite: true);
@@ -413,8 +441,12 @@ public sealed partial class PduTransportProtocol : IProtocol
 
     /// <summary>
     /// Copies PDU display names into <paramref name="names"/>. Empty names are skipped.
-    /// Within one source, first entry wins unless <paramref name="overwrite"/> is true.
+    /// With <paramref name="overwrite"/> false the first entry for an ID wins (also over entries already in
+    /// <paramref name="names"/>); with true the last entry wins, replacing existing names.
     /// </summary>
+    /// <param name="names">Destination lookup.</param>
+    /// <param name="config">Source config; <see langword="null"/> or empty is ignored.</param>
+    /// <param name="overwrite">Whether later entries replace existing names.</param>
     private static void _MergePdus(Dictionary<uint, string> names, PduTransportConfig? config, bool overwrite)
     {
         if (config?.Pdus is not { Length: > 0 })
@@ -449,9 +481,20 @@ public sealed partial class PduTransportProtocol : IProtocol
     /// Header fields are appended eagerly as children of the protocol container
     /// (Ethernet / IPv6 / UDP pattern). Sub-protocol dispatch uses <c>parentField</c>
     /// so Signal Messages are siblings of <c>pdu_transport</c>, not children of it.
+    /// <para>
+    /// A trailing PDU whose declared length exceeds the remaining bytes is shown with the bytes that are present
+    /// (the length field keeps the declared value). The whole datagram is always consumed. Thread safety: only
+    /// reads state fixed at registration; may be called concurrently.
+    /// </para>
     /// </summary>
+    /// <param name="parentField">Parent field that receives the container; dispatched sub-protocols become siblings.</param>
+    /// <param name="data">The UDP payload: concatenated PDUs.</param>
+    /// <param name="context">Parse context used to record index groups and dispatch the PDU payloads.</param>
+    /// <returns>The number of bytes consumed (all of <paramref name="data"/>), or a <see cref="ParseError"/>.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        // The field widths were validated to 1, 2 or 4 bytes at registration, so the casts cannot truncate and the
+        // header size is 2 to 8 bytes.
         int headerSize = (int)_IdFieldSize + (int)_LengthFieldSize;
         if (data.Length < headerSize)
         {
@@ -467,6 +510,9 @@ public sealed partial class PduTransportProtocol : IProtocol
         MutField container = parentField.AppendWithCustomText(
             _ProtocolFieldId, containerValue, new LazyString("PDU Transport"));
 
+        // Walk the concatenated PDUs. Each iteration consumes at least the header (2 bytes or more), so the loop
+        // terminates and the number of PDU nodes is bounded by the datagram size; there is no separate PDU count
+        // limit. A trailing fragment shorter than a header is ignored.
         ReadOnlySpan<byte> span = data.Span;
         int idSize = (int)_IdFieldSize;
         int lenSize = (int)_LengthFieldSize;
@@ -486,7 +532,14 @@ public sealed partial class PduTransportProtocol : IProtocol
                 context.RecordGroupPresence(_Pdu_transportNameGroupId);
             }
 
-            int actualPayload = Math.Min((int)payloadLength, span.Length - offset);
+            // Clamp the declared length to the bytes present (a datagram can be cut short); the Length field below
+            // still shows the declared value. The comparison is done on unsigned values: a 4-byte length of 0x80000000
+            // or more would turn negative in an int cast, and a negative payload size moves the read position backwards
+            // (or before the start of the datagram), which makes the next slice throw on a hostile datagram.
+            int availablePayload = span.Length - offset;
+            int actualPayload = payloadLength > (uint)availablePayload
+                ? availablePayload
+                : (int)payloadLength;
 
             MutField pduField = hasName
                 ? container.AppendWithCustomText(
@@ -500,6 +553,9 @@ public sealed partial class PduTransportProtocol : IProtocol
                 pduField.Append(_NameFieldId, FieldValue.NewString(name!));
             }
 
+            // Hand the payload to the sub-protocol registered for this PDU ID. An error from it aborts the remaining
+            // PDUs and is propagated. When nothing consumed the payload (no protocol registered, or it declined), the
+            // raw bytes are attached so they stay visible; the index group is recorded in the same branch.
             if (actualPayload > 0)
             {
                 ReadOnlyMemory<byte> payloadData = data.Slice(offset, actualPayload);
@@ -527,6 +583,11 @@ public sealed partial class PduTransportProtocol : IProtocol
     /// <summary>
     /// Reads a big-endian unsigned integer of the given byte size (1, 2, or 4).
     /// </summary>
+    /// <param name="span">Bytes starting at the field; must hold at least <paramref name="size"/> bytes (the caller's
+    /// loop condition guarantees it).</param>
+    /// <param name="size">Field width in bytes.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="size"/> is not 1, 2 or 4 (a broken invariant: the
+    /// sizes are validated at registration).</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static uint _ReadBigEndianUint(ReadOnlySpan<byte> span, int size) => size switch
     {

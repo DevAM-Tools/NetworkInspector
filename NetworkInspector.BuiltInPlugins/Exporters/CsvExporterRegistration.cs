@@ -25,6 +25,9 @@ internal static class CsvExporterRegistration
     /// <summary>Option name: list of field columns.</summary>
     private const string _ColumnsOption = "columns";
 
+    /// <summary>Option name: prefix text cells that a spreadsheet would run as a formula.</summary>
+    private const string _NeutralizeFormulasOption = "neutralizeFormulas";
+
     /// <summary>Separator of the field names in the <c>columns</c> option.</summary>
     private const char _ColumnSeparator = ';';
 
@@ -50,12 +53,24 @@ internal static class CsvExporterRegistration
     private static void _RegisterOptions(SettingsRegistrar options)
     {
         options.RegisterStringSetting(_DelimiterOption, "Delimiter", "", ",",
-            description: "Field separator: exactly one ASCII character that is not a control character or a double quote.");
+            description: "Field separator: exactly one ASCII character other than NUL, CR, LF, and the double quote (a tab is allowed).");
         options.RegisterBoolSetting(_HeaderOption, "Header row", "", true, description: "Write a header row with the column titles.");
         options.RegisterBoolSetting(_BomOption, "Byte order mark", "", true,
             description: "Write a UTF-8 byte order mark so that spreadsheet programs detect the encoding.");
         options.RegisterStringSetting(_ColumnsOption, "Columns", "", "",
             description: "Protocol field names separated by ';' (for example ip.src;udp.dstport); empty writes number, time, info, and length.");
+
+        // Threat: CSV injection. Text in a capture (a DNS name, an HTTP line, the info column) is controlled by whoever sent the
+        // traffic, and a spreadsheet runs a cell that starts with =, +, -, @, tab, or CR as a formula when the file is opened.
+        // Posture: secure by default (on); the user may turn it off, because machine processing needs the exact text and the
+        // added apostrophe would corrupt it. The Core exporter owns the rule; this option only passes the choice through.
+        // Rejected alternative: no option (a fixed behavior would break every consumer that reads the text back).
+        // Residual risk when off: any text cell may run as a formula in a spreadsheet.
+        options.RegisterBoolSetting(_NeutralizeFormulasOption, "Neutralize spreadsheet formulas", "", true,
+            description: "Protects against CSV injection: a text cell (the info column and text fields) that starts with =, +, -, @, tab, " +
+                "or CR gets a leading apostrophe, so a spreadsheet shows it as text instead of running it as a formula. Numbers, times, " +
+                "addresses, and the header row are never changed. Turn it off for machine processing, where the apostrophe would " +
+                "change the data; the file is then unsafe to open in a spreadsheet.");
     }
 
     /// <summary>Creates the Core CSV exporter.</summary>
@@ -76,6 +91,7 @@ internal static class CsvExporterRegistration
 
         bool header = OptionValues.GetBool(values, _HeaderOption);
         bool bom = OptionValues.GetBool(values, _BomOption);
+        bool neutralizeFormulas = OptionValues.GetBool(values, _NeutralizeFormulasOption);
         return ExporterBuild.TryBuild<IPacketListener>(
             () =>
             {
@@ -84,6 +100,7 @@ internal static class CsvExporterRegistration
                     .WithDelimiter(delimiter)
                     .WithHeader(header)
                     .WithBom(bom)
+                    .WithFormulaNeutralization(neutralizeFormulas)
                     .WithCancellationToken(request.CancellationToken);
 
                 // No field names means the default columns; otherwise exactly the listed fields, titled by their names.

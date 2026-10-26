@@ -26,7 +26,7 @@ public enum RandomFrameMode
     /// Generate Ethernet frames encapsulating IPv4 packets with random payloads.
     /// Fills the entire buffer with random bytes, then patches the required IPv4
     /// header fields (EtherType, version/IHL, total length, DF flag, TTL, checksum).
-    /// The protocol field is left random; use <see cref="UdpIPv4"/> for well-formed UDP.
+    /// The protocol field is left random (a drawn zero is replaced by 1); use <see cref="UdpIPv4"/> for well-formed UDP.
     /// </summary>
     IPv4 = 2,
 
@@ -34,7 +34,7 @@ public enum RandomFrameMode
     /// Generate Ethernet frames encapsulating IPv6 packets with random payloads.
     /// Fills the entire buffer with random bytes, then patches the required IPv6
     /// header fields (EtherType, version nibble, payload length, hop limit).
-    /// The next-header field is left random; use <see cref="UdpIPv6"/> for well-formed UDP.
+    /// The next-header field is left random (a drawn zero is replaced by 1); use <see cref="UdpIPv6"/> for well-formed UDP.
     /// </summary>
     IPv6 = 3,
 
@@ -65,20 +65,24 @@ public enum RandomFrameMode
     /// Each frame has a random CAN ID (11-bit or 29-bit extended), a random DLC (0–15)
     /// with the corresponding FD data length (up to 64 bytes), BRS and FDF flags set,
     /// and random data bytes.  Uses <see cref="LinkType.CanSocketcan"/>.
+    /// Byte 4 of the SocketCAN header holds the payload byte count (0–64), as the SocketCAN format and the CAN dissector
+    /// expect; for the DLC codes 9–15 the count (12–64) therefore differs from the code that sized the frame.
     /// </summary>
     CanFd = 7,
 
     /// <summary>
     /// Generate Ethernet/IPv4/TCP frames with random addresses, ports, sequence numbers, and payload.
-    /// Fully well-formed: correct EtherType, IP version/IHL/length/protocol/checksum,
-    /// and TCP data offset/flags/checksum. Individual segments with no stream tracking.
+    /// Well-formed headers: correct EtherType, IP version/IHL/length/protocol/checksum,
+    /// and TCP data offset and flags (ACK and PSH). The TCP checksum is zero, not computed.
+    /// Individual segments with no stream tracking.
     /// </summary>
     TcpIPv4 = 8,
 
     /// <summary>
     /// Generate Ethernet/IPv6/TCP frames with random addresses, ports, sequence numbers, and payload.
-    /// Fully well-formed: correct EtherType, IPv6 version/payload length/next-header,
-    /// and TCP data offset/flags/checksum. Individual segments with no stream tracking.
+    /// Well-formed headers: correct EtherType, IPv6 version/payload length/next-header,
+    /// and TCP data offset and flags (ACK and PSH). The TCP checksum is zero, not computed.
+    /// Individual segments with no stream tracking.
     /// </summary>
     TcpIPv6 = 9,
 
@@ -86,7 +90,9 @@ public enum RandomFrameMode
     /// Generate full TCP connections (SYN → data → FIN) over IPv4.
     /// Stateless rule-based generation via <see cref="TcpStreamFrameBuilder"/> with
     /// configurable stream count, segments per stream, and handshake/teardown inclusion.
-    /// Any frame is independently reproducible by index from the master seed.
+    /// Any frame is independently reproducible by index from the master seed. The frame sizes follow
+    /// <see cref="TcpStreamOptions.MinPayloadSize"/> and <see cref="TcpStreamOptions.MaxPayloadSize"/>, not the frame
+    /// size range of <see cref="RandomSourceOptions"/>; the TCP checksum is zero, not computed.
     /// </summary>
     TcpStreamIPv4 = 10,
 
@@ -94,7 +100,9 @@ public enum RandomFrameMode
     /// Generate full TCP connections (SYN → data → FIN) over IPv6.
     /// Stateless rule-based generation via <see cref="TcpStreamFrameBuilder"/> with
     /// configurable stream count, segments per stream, and handshake/teardown inclusion.
-    /// Any frame is independently reproducible by index from the master seed.
+    /// Any frame is independently reproducible by index from the master seed. The frame sizes follow
+    /// <see cref="TcpStreamOptions.MinPayloadSize"/> and <see cref="TcpStreamOptions.MaxPayloadSize"/>, not the frame
+    /// size range of <see cref="RandomSourceOptions"/>; the TCP checksum is zero, not computed.
     /// </summary>
     TcpStreamIPv6 = 11,
 

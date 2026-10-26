@@ -200,6 +200,17 @@ internal sealed class SplitOutputManagerTests
     }
 
     [Test]
+    public async Task NeedsSplit_ItemCountBeyondTheInt32Range_IsComparedWithoutWrapping()
+    {
+        // An output that is split by size only can hold more than int.MaxValue frames; a 32-bit count would wrap to a negative
+        // number there and compare wrongly.
+        SplitOutputManager manager = new("output.pcapng", maxSize: 0, maxCount: int.MaxValue);
+
+        await Assert.That(manager.NeedsSplit(estimatedOutputBytes: 0, itemCount: int.MaxValue - 1L)).IsFalse();
+        await Assert.That(manager.NeedsSplit(estimatedOutputBytes: 0, itemCount: int.MaxValue + 1L)).IsTrue();
+    }
+
+    [Test]
     public async Task NeedsSplit_DirectoryMode_UsesEstimatedBytesNotFilesystem()
     {
         SplitOutputManager manager = new("out_parquet", maxSize: 300, maxCount: 0, isDirectoryOutput: true);

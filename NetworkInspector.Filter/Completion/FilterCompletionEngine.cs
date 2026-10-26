@@ -15,6 +15,8 @@ namespace NetworkInspector.Filter.Completion;
 /// <para>
 /// <b>Cost.</b> Linear in the expression length plus a binary search in the stack's cached
 /// <see cref="FilterNameCatalog"/>; no parse tree is built, so no recursion depth depends on the input.
+/// The engine runs once per keystroke in an editor, never per packet, so it favors simple code (lists, delegates) over
+/// allocation avoidance; the per-stack name table is the only thing worth caching, and it is.
 /// </para>
 /// <para><b>Thread-safety:</b> stateless; safe to call from any thread.</para>
 /// </summary>
@@ -130,6 +132,8 @@ internal static class FilterCompletionEngine
             }
         }
 
+        // Fallback: complete the word at the caret. The result is never null here because _Complete returns null only
+        // when operatorsOnly is true.
         return _Complete(expression, caretPosition, stack, isOperator: false, operatorsOnly: false)!;
     }
 
@@ -186,6 +190,12 @@ internal static class FilterCompletionEngine
 
     #region Context decision
 
+    /// <summary>
+    /// Decides what may follow the lenient token list that precedes the caret word. Two steps: a forward pass that tracks
+    /// the open brackets (a closing bracket with nothing open is ignored, since the text may be malformed), then a decision
+    /// on the last token in the context of the innermost open bracket. Unknown situations answer
+    /// <see cref="Expect.Nothing"/> so the editor never offers misleading items.
+    /// </summary>
     private static Expect _Decide(List<Token> tokens)
     {
         if (tokens.Count == 0)
@@ -202,6 +212,8 @@ internal static class FilterCompletionEngine
             TokenKind previous = i > 0 ? tokens[i - 1].Kind : TokenKind.Eof;
             switch (kind)
             {
+                // The token before an opener names the bracket: "flank(" and "len(" take special arguments, "in {" starts a
+                // value list, "$name[" is a scope index, any other "[" a byte slice, any other "{" a scope body.
                 case TokenKind.LeftParen:
                     open.Add(new OpenGroup
                     {
@@ -223,6 +235,7 @@ internal static class FilterCompletionEngine
                 case TokenKind.RightParen:
                 case TokenKind.RightBrace:
                 case TokenKind.RightBracket:
+                    // Remember what just closed: "len(x)" and "x[0:3]" end an operand, a plain "(…)" ends a whole term.
                     lastClosed = open.Count > 0 ? open[^1].Kind : null;
                     if (open.Count > 0)
                     {

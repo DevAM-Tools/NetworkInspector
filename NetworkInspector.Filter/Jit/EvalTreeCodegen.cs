@@ -46,16 +46,23 @@ internal sealed class EvalTreeCodegen : IFilterCodegen
     {
         ArgumentNullException.ThrowIfNull(program);
         ArgumentNullException.ThrowIfNull(resolver);
+
+        // Per-compile state lives on the instance (the emit methods are recursive and share it); reset it so an instance
+        // can compile more than once, but never concurrently.
         _Resolver = resolver;
         _Error = null;
         _Flanks.Clear();
 
+        // Emission never throws for bad input: the first error is recorded and emission continues with constant-false
+        // nodes, so one pass reports the first problem in source order. The partial tree is discarded on error.
         EvalNode root = _Emit(program.Root);
         if (_Error is not null)
         {
             return FilterResult.Fail<CompiledFilterProgram>(_Error);
         }
 
+        // The root's Evaluate becomes the FilterEvalFn delegate (one delegate allocation per compile); the flank list is
+        // copied so the program does not alias the reusable builder list.
         return new CompiledFilterProgram(root.Evaluate, [.. _Flanks]);
     }
 
@@ -63,6 +70,10 @@ internal sealed class EvalTreeCodegen : IFilterCodegen
 
     #region Emission
 
+    /// <summary>
+    /// Lowers one AST node. Recursion depth is the expression depth (bounded by the parser's nesting limit). The lambdas
+    /// below allocate closures, which is acceptable: they run once per compile, never per packet.
+    /// </summary>
     private EvalNode _Emit(FilterNode node)
     {
         switch (node)
@@ -229,7 +240,10 @@ internal sealed class EvalTreeCodegen : IFilterCodegen
 
     #region Helpers
 
-    /// <summary>Records the first error and returns a constant-false node so emission can continue.</summary>
+    /// <summary>
+    /// Records the first error and returns a constant-false node so emission can continue. Only the first error is kept:
+    /// later ones are usually consequences of it.
+    /// </summary>
     private ConstEvalNode _Fail(FilterError error)
     {
         _Error ??= error;

@@ -47,8 +47,9 @@ internal struct BlfRowCursor
 /// </summary>
 /// <remarks>
 /// <para>
-/// Constant-size objects (classic CAN) give a constant position step, so the positions cost about 0.4 B per frame
-/// (<see cref="PackedLongSequence"/>). Rows and spanning entries grow with containers, not with frames.
+/// Constant-size objects (classic CAN) give a constant position step, so the positions cost about 0.4 B per frame in a
+/// perfectly regular capture (<see cref="PackedLongSequence"/>: 0.375 B plus the residual width of a group of 64); the
+/// Sources README gives the measured total per file type. Rows and spanning entries grow with containers, not with frames.
 /// </para>
 /// <para>
 /// <b>Thread-safety:</b> single writer (the scanner); any number of readers. Rows and spanning entries are appended
@@ -209,9 +210,14 @@ internal sealed class BlfFrameIndex
     /// <summary>Builds the location of a container object from its row; adds the stored length of a spanning object.</summary>
     private BlfFrameLocation _Locate(int frameIndex, long position, long fileOffset, long virtualStart)
     {
+        // Only spanning objects have a stored length; the lookup is a binary search over a list that is empty or tiny
+        // for most files (an object split across two containers is rare), so the common case costs one comparison.
         int length = _TryFindSpanningLength(frameIndex, out int spanningLength)
             ? spanningLength
             : -1;
+
+        // The inner offset is below the container's decompressed length (an int), so the cast cannot overflow for a
+        // consistent index; checked turns a corrupted index into an exception instead of a wrong offset.
         return new BlfFrameLocation(fileOffset, checked((int)(position - virtualStart)), length);
     }
 
@@ -275,6 +281,10 @@ internal sealed class BlfFrameIndex
     {
         fileOffset = 0;
         virtualStart = 0;
+
+        // The count is read once: rows appended by the writer meanwhile are not needed, because a published position
+        // only refers to rows that were appended before it. AddContainer writes the file offset before the virtual
+        // start, so every row found here has its file offset (the TryGet below cannot fail for a published row).
         int low = 0;
         int high = _RowVirtualStarts.Count - 1;
         int found = -1;

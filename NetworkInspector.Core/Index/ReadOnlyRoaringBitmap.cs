@@ -9,6 +9,10 @@ namespace NetworkInspector.Core.Index;
 /// through this wrapper. Set operations (<see cref="And"/>, <see cref="Or"/>,
 /// <see cref="AndNot"/>, <see cref="Xor"/>) produce a new <see cref="ReadOnlyRoaringBitmap"/>
 /// backed by a freshly computed <see cref="RoaringBitmap"/> without touching the original.
+/// Exception: when an operand is <see cref="Empty"/> and the result equals the other operand
+/// (<see cref="Or"/> and <see cref="Xor"/> with either operand empty, <see cref="AndNot"/> with an empty right-hand
+/// side), that operand's view is returned as is, without a copy. That result is still a live view of the original bitmap, not a snapshot.
+/// Set operations read both operands without the seqlock, so neither may be appended to while one runs.
 /// </para>
 /// <para>
 /// Use <see cref="RoaringBitmap.AsReadOnly"/> to obtain a read-only view of an existing
@@ -38,9 +42,13 @@ public readonly struct ReadOnlyRoaringBitmap
     /// <summary>
     /// Shared empty mutable bitmap used only when <see cref="Inner"/> must return a non-null
     /// instance for in-assembly set ops against <see cref="Empty"/>. Never mutated.
+    /// Why a shared instance: <see cref="Empty"/> is <c>default</c> (null inner) to stay allocation-free, and the
+    /// in-place operations of <see cref="RoaringBitmap"/> need a non-null operand. It is only ever read, so sharing it
+    /// between threads is safe.
     /// </summary>
     private static readonly RoaringBitmap _SharedEmpty = new();
 
+    // Null only for default / Empty. Every other instance wraps a live RoaringBitmap, so reads see later appends.
     private readonly RoaringBitmap? _Inner;
 
     #endregion
@@ -129,7 +137,7 @@ public readonly struct ReadOnlyRoaringBitmap
 
     #region Query methods
 
-    /// <summary>Returns whether <paramref name="value"/> is present in the bitmap.</summary>
+    /// <summary>Returns whether <paramref name="value"/> is present in the bitmap. Safe while a single writer appends to the viewed bitmap.</summary>
     public bool Contains(uint value) => _Inner is not null && _Inner.Contains(value);
 
     /// <summary>
@@ -166,6 +174,7 @@ public readonly struct ReadOnlyRoaringBitmap
     /// </summary>
     public ReadOnlyRoaringBitmap And(ReadOnlyRoaringBitmap other)
     {
+        // x AND empty is empty: skip the merge and allocate nothing.
         if (_Inner is null || other._Inner is null)
         {
             return Empty;
@@ -180,6 +189,7 @@ public readonly struct ReadOnlyRoaringBitmap
     /// </summary>
     public ReadOnlyRoaringBitmap Or(ReadOnlyRoaringBitmap other)
     {
+        // Empty identity: the union equals the other view, so it is returned without a copy (still a live view).
         if (_Inner is null)
         {
             return other;
@@ -199,6 +209,7 @@ public readonly struct ReadOnlyRoaringBitmap
     /// </summary>
     public ReadOnlyRoaringBitmap AndNot(ReadOnlyRoaringBitmap other)
     {
+        // empty AND NOT x is empty; x AND NOT empty is x, returned as the same live view without a copy.
         if (_Inner is null)
         {
             return Empty;
@@ -218,6 +229,7 @@ public readonly struct ReadOnlyRoaringBitmap
     /// </summary>
     public ReadOnlyRoaringBitmap Xor(ReadOnlyRoaringBitmap other)
     {
+        // Empty identity, as in Or: the other view is returned without a copy.
         if (_Inner is null)
         {
             return other;

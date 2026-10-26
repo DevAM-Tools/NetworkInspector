@@ -11,6 +11,22 @@ namespace NetworkInspector.Exporters.Pbf.Columnar;
 /// <see cref="PbfFieldNumbers.ColumnFieldId"/> and neighbouring constants). String columns
 /// (value, custom representation, custom text) are written as plain repeated strings.
 /// </para>
+/// <para>
+/// <b>Two-phase design:</b> <see cref="AddPacket"/> only appends the packet to the shared batch (cheap, no encoding);
+/// the protobuf encoding of the whole block happens once in <see cref="Build"/>. Collecting first is what allows the
+/// delta encoding, the per-field grouping and the min/max header values, none of which are known per packet.
+/// </para>
+/// <para>
+/// <b>Wire layout of a block:</b> envelope (block type <see cref="PbfFieldNumbers.BlockTypeColumnar"/> plus a
+/// length-delimited payload). The payload holds the five header fields shared with the standard block, then the
+/// packet ID and timestamp columns, the optional info, frame-bytes and topology columns, and one
+/// <c>FieldColumn</c> sub-message per field ID that has rows in this block.
+/// </para>
+/// <para>
+/// <b>Thread safety:</b> Not thread-safe; owned by <see cref="PbfExporter"/> and used from its single caller thread.
+/// The span returned by <see cref="Build"/> aliases a pooled buffer and must be consumed before the next call to
+/// <see cref="Build"/>, <see cref="Reset"/> or <see cref="Dispose"/>.
+/// </para>
 /// </summary>
 internal sealed class ColumnarBlockBuilder : IDisposable
 {
@@ -31,7 +47,10 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     #region Constructor
 
     /// <summary>Creates a new columnar block builder.</summary>
-    /// <param name="maxFieldId">Maximum expected field ID, sizing the presence bitmap.</param>
+    /// <param name="maxFieldId">
+    /// Exclusive upper bound of the field IDs tracked in the presence bitmap. IDs at or above it are not rejected
+    /// (unlike the standard block builder); they are written normally but are missing from the presence bitmap.
+    /// </param>
     /// <param name="maxPacketsPerBlock">Maximum packets before flush.</param>
     /// <param name="maxBlockSize">Maximum estimated block size before flush.</param>
     /// <param name="flags">Controls which optional per-packet/per-field data is captured.</param>
@@ -88,25 +107,38 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     /// <summary>
     /// Adds a packet to the columnar block. Returns <c>true</c> if the block
     /// should be flushed after this packet (packet count or estimated size threshold reached).
+    /// The size threshold is the batch's in-memory estimate, not the encoded size.
     /// </summary>
+    /// <param name="packet">A packet parsed with a field tree.</param>
+    /// <returns><see langword="true"/> when the caller should call <see cref="Build"/> and flush the block.</returns>
+    /// <exception cref="InvalidOperationException"><paramref name="packet"/> has no field tree, or a field's value type
+    /// does not match its declared type.</exception>
     internal bool AddPacket(Packet packet) => _Batch.AddPacket(packet);
 
     /// <summary>
     /// Builds the columnar block as protobuf-encoded bytes (PBF columnar wire format).
     /// Returns a span that is valid until <see cref="Reset"/> or the next <see cref="Build"/> call.
     /// </summary>
+    /// <returns>The serialized block, ready to be compressed and framed by the exporter.</returns>
     internal ReadOnlySpan<byte> Build()
     {
+        // The header values (min/max timestamp and packet ID) and the presence bitmap are computed from the whole
+        // batch here, once per block, instead of being tracked on every AddPacket call.
         _ComputeTimestampRange();
         _MarkFieldPresence();
 
+        // The payload is assembled in a temporary pooled buffer because the envelope needs its final length first.
+        // It is returned to the pool at the end of this method; only the envelope outlives the call.
         PooledBuffer payload = new(64 * 1024);
 
+        // Block header: the same five fields as the standard block (shared field numbers).
         int packetCount = PacketCount;
         ProtobufEncoder.WriteVarintField(ref payload, PbfFieldNumbers.BlockPacketCount, (ulong)packetCount);
 
         if (packetCount > 0)
         {
+            // Packet IDs are not guaranteed to be sorted, so a scan is needed; packet IDs are non-negative, so the
+            // plain varint cast keeps them short.
             IReadOnlyList<int> packetIds = _Batch.PacketIds;
             int minId = packetIds[0], maxId = packetIds[0];
             for (int i = 1; i < packetCount; i++)
@@ -126,6 +158,8 @@ internal sealed class ColumnarBlockBuilder : IDisposable
             ProtobufEncoder.WriteSint64(ref payload, PbfFieldNumbers.BlockMaxTimestamp, MaxTimestamp);
         }
 
+        // Packet-level columns: IDs and timestamps are delta encoded (small differences for consecutive packets),
+        // the optional columns follow only when their detail flag was requested, mirroring what the batch collected.
         _WriteDeltaSint64Column(ref payload, PbfFieldNumbers.ColumnarPacketIds, _Batch.PacketIds);
         _WriteDeltaSint64Column(ref payload, PbfFieldNumbers.ColumnarTimestamps, _Batch.Timestamps);
 
@@ -148,7 +182,8 @@ internal sealed class ColumnarBlockBuilder : IDisposable
 
         // Wrap in block envelope. Release any previous envelope first (defensive: the
         // caller is expected to call Reset between blocks, but Build-without-Reset must
-        // not leak the previous rental).
+        // not leak the previous rental). The envelope is sized for the payload plus the block-type field and the
+        // payload tag and length varint (at most 1 + 1 + 1 + 5 bytes), so writing it never regrows the buffer.
         _Envelope?.Return();
         PooledBuffer envelope = new(payload.Length + 32);
         ProtobufEncoder.WriteVarintField(ref envelope, PbfFieldNumbers.BlockType, PbfFieldNumbers.BlockTypeColumnar);
@@ -193,6 +228,8 @@ internal sealed class ColumnarBlockBuilder : IDisposable
             return;
         }
 
+        // Full scan: the sorted-timestamps declaration is metadata only (see the builder option) and does not
+        // shortcut this to first/last, so the min/max written to the block header and trailer index are always exact.
         long minTs = timestamps[0], maxTs = timestamps[0];
         for (int i = 1; i < timestamps.Count; i++)
         {
@@ -217,6 +254,9 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     /// </summary>
     private void _MarkFieldPresence()
     {
+        // The return value of Mark (first occurrence) is not needed: columnar blocks carry no per-block metadata
+        // deduplication, the bitmap is only aggregated into the trailer. Field IDs beyond the bitmap range are
+        // ignored by Mark and therefore missing from the trailer bitmap (no exception, no data loss in the block).
         foreach (TopologyNode node in _Batch.Topology)
         {
             if (node.FieldId >= 0)
@@ -239,6 +279,20 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     #region Private Helpers — Column Writers
 
     /// <summary>
+    /// Initial capacity for a column buffer: <paramref name="count"/> times <paramref name="bytesPerValue"/> plus
+    /// <paramref name="fixedBytes"/>, a guess of the encoded size. The product is formed in 64 bits and capped at 64 MiB:
+    /// with a very large <c>maxPacketsPerBlock</c> the 32-bit product wraps negative and the buffer constructor would reject
+    /// it. The cap is a sizing hint, not a limit; the buffer still grows on demand, and the buffer itself reports when a
+    /// column would exceed <see cref="Array.MaxLength"/> bytes.
+    /// </summary>
+    private static int _InitialColumnCapacity(int count, int bytesPerValue, int fixedBytes)
+    {
+        const long MaxInitialCapacity = 64L * 1024 * 1024;
+        long guess = ((long)count * bytesPerValue) + fixedBytes;
+        return checked((int)Math.Min(guess, MaxInitialCapacity));
+    }
+
+    /// <summary>
     /// Writes a delta-encoded sint64 column. The first element is the base value (sub-field 1);
     /// subsequent elements are deltas from their predecessor (sub-field 2). Encoding deltas
     /// instead of absolute values produces smaller varints for monotonic sequences such as
@@ -251,8 +305,15 @@ internal sealed class ColumnarBlockBuilder : IDisposable
             return;
         }
 
-        PooledBuffer col = new(values.Count * 2 + 16);
+        // The column is encoded into its own temporary buffer first because the length prefix of the enclosing
+        // field must precede the content. Initial capacity is a heuristic of about 2 bytes per value (most deltas fit
+        // in one or two varint bytes); PooledBuffer grows if the guess is too small.
+        PooledBuffer col = new(_InitialColumnCapacity(values.Count, 2, 16));
         ProtobufEncoder.WriteSint64(ref col, 1, values[0]);
+
+        // Differences are computed in unchecked 64-bit arithmetic: an extreme jump wraps instead of throwing, and
+        // a reader that accumulates with the same wrap-around reconstructs the exact values. The zigzag encoding
+        // keeps negative deltas (out-of-order input) short as well.
         for (int i = 1; i < values.Count; i++)
         {
             ProtobufEncoder.WriteSint64(ref col, 2, values[i] - values[i - 1]);
@@ -272,7 +333,8 @@ internal sealed class ColumnarBlockBuilder : IDisposable
             return;
         }
 
-        PooledBuffer col = new(values.Count * 2 + 16);
+        // Same layout as the long overload. The subtraction is widened to long first, so two ints can never overflow.
+        PooledBuffer col = new(_InitialColumnCapacity(values.Count, 2, 16));
         ProtobufEncoder.WriteSint64(ref col, 1, values[0]);
         for (int i = 1; i < values.Count; i++)
         {
@@ -282,10 +344,13 @@ internal sealed class ColumnarBlockBuilder : IDisposable
         col.Return();
     }
 
-    /// <summary>Writes a repeated string column (one tag+value per row, in row order).</summary>
+    /// <summary>
+    /// Writes a repeated string column (one tag+value per row, in row order). Unlike the delta column writer and the
+    /// nullable variant it also writes an empty sub-message when there are no rows.
+    /// </summary>
     private static void _WriteStringColumn(ref PooledBuffer buffer, int fieldNumber, IReadOnlyList<string> values)
     {
-        PooledBuffer col = new(values.Count * 16);
+        PooledBuffer col = new(_InitialColumnCapacity(values.Count, 16, 0));
         foreach (string value in values)
         {
             ProtobufEncoder.WriteString(ref col, 1, value);
@@ -297,7 +362,7 @@ internal sealed class ColumnarBlockBuilder : IDisposable
     /// <summary>Writes a repeated bytes column. Null entries are written as zero-length byte strings.</summary>
     private static void _WriteBytesColumn(ref PooledBuffer buffer, int fieldNumber, IReadOnlyList<byte[]> values)
     {
-        PooledBuffer col = new(values.Count * 16);
+        PooledBuffer col = new(_InitialColumnCapacity(values.Count, 16, 0));
         foreach (byte[] value in values)
         {
             ProtobufEncoder.WriteLengthDelimited(ref col, 1, value);
@@ -315,10 +380,13 @@ internal sealed class ColumnarBlockBuilder : IDisposable
             return;
         }
 
-        PooledBuffer topo = new(topology.Count * 4);
+        // The four columns are written as parallel repeated fields of one sub-message, so row i is the i-th element
+        // of each. Node and field IDs are never negative (plain varint); the parent node ID is -1 for top-level
+        // fields, hence sint64 (zigzag) so that -1 costs one byte instead of ten.
+        PooledBuffer topo = new(_InitialColumnCapacity(topology.Count, 4, 0));
 
         // Packet IDs: delta-encoded (topology rows are grouped by ascending packet insertion order).
-        PooledBuffer packetIdCol = new(topology.Count * 2 + 16);
+        PooledBuffer packetIdCol = new(_InitialColumnCapacity(topology.Count, 2, 16));
         ProtobufEncoder.WriteSint64(ref packetIdCol, 1, topology[0].PacketId);
         for (int i = 1; i < topology.Count; i++)
         {
@@ -355,6 +423,9 @@ internal sealed class ColumnarBlockBuilder : IDisposable
                 continue;
             }
 
+            // One FieldColumn sub-message per field ID, built in its own buffer (length prefix first) and returned to
+            // the pool right after being copied into the payload. Bags that exist but received no rows in this block
+            // (the batch keeps bags across blocks) are skipped.
             PooledBuffer colBuf = new(256);
             ProtobufEncoder.WriteVarintField(ref colBuf, PbfFieldNumbers.ColumnFieldId, (ulong)bag.FieldIdValue);
             ProtobufEncoder.WriteVarintField(ref colBuf, PbfFieldNumbers.ColumnFieldType, (ulong)bag.FieldType);
@@ -382,7 +453,12 @@ internal sealed class ColumnarBlockBuilder : IDisposable
         }
     }
 
-    /// <summary>Writes the type-specific value column matching <see cref="FieldColumnBag.FieldType"/>.</summary>
+    /// <summary>
+    /// Writes the type-specific value column matching <see cref="FieldColumnBag.FieldType"/>. Numeric values are
+    /// written as one repeated field entry per row directly in the column message (signed and timestamp values
+    /// zigzag encoded, doubles as fixed64); string columns are wrapped in a sub-message; bytes and fixed-size
+    /// address types share the bytes column, each as raw bytes.
+    /// </summary>
     private static void _WriteTypedValues(ref PooledBuffer colBuf, FieldColumnBag bag)
     {
         switch (bag.FieldType)
@@ -437,7 +513,11 @@ internal sealed class ColumnarBlockBuilder : IDisposable
         }
     }
 
-    /// <summary>Writes a repeated nullable string column, emitting null entries as empty strings.</summary>
+    /// <summary>
+    /// Writes a repeated nullable string column, emitting null entries as empty strings. The column is omitted
+    /// entirely when there are no rows. Null and empty therefore cannot be told apart by a PBF reader, unlike in
+    /// the Parquet and DuckDB output, which keep nulls.
+    /// </summary>
     private static void _WriteNullableStringColumn(ref PooledBuffer buffer, int fieldNumber, IReadOnlyList<string?> values)
     {
         if (values.Count == 0)
@@ -445,7 +525,7 @@ internal sealed class ColumnarBlockBuilder : IDisposable
             return;
         }
 
-        PooledBuffer col = new(values.Count * 16);
+        PooledBuffer col = new(_InitialColumnCapacity(values.Count, 16, 0));
         foreach (string? value in values)
         {
             ProtobufEncoder.WriteString(ref col, 1, value ?? string.Empty);

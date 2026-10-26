@@ -9,6 +9,11 @@ namespace NetworkInspector.Core;
 /// configuration problems (<see cref="BuildCallbackWarning"/>) and protocol startup failures
 /// (<see cref="BuildStartupError"/>).
 /// </para>
+/// <para>
+/// Diagnostics are collected instead of thrown so one broken protocol or a missing optional registration does not
+/// prevent the whole stack from being built; the host decides how severe the result is. Subtypes are immutable
+/// records and therefore safe to share between threads.
+/// </para>
 /// </summary>
 public abstract record BuildDiagnostic
 {

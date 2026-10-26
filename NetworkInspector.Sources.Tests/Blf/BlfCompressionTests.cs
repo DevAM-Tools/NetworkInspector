@@ -87,7 +87,7 @@ internal sealed class BlfCompressionTests
 
     /// <summary>
     /// CompressionNone copies the compressed span into a new array byte-for-byte;
-    /// <paramref name="uncompressedSize"/> is ignored for the None path.
+    /// <paramref name="uncompressedSize"/> must equal the payload length for the None path (a mismatch is a BlfException).
     /// </summary>
     [Test]
     public async Task Decompress_None_CopiesDataExactly()

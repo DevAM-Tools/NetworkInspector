@@ -2,7 +2,12 @@
 
 namespace NetworkInspector.Core.Infos;
 
-/// <summary>Metadata for a registered protocol dispatch table.</summary>
+/// <summary>Metadata for a registered protocol dispatch table. Immutable record; safe to share between threads.</summary>
+/// <param name="Id">Unique protocol table identifier.</param>
+/// <param name="Name">Machine-readable table name.</param>
+/// <param name="UiName">Human-readable display name.</param>
+/// <param name="KeyType">The kind of key the table dispatches on (number, string, bytes, bool or catch-all).</param>
+/// <param name="Description">Optional description text.</param>
 public sealed record ProtocolTableInfo(
     ProtocolTableId Id,
     string Name,

@@ -30,7 +30,14 @@ public sealed class PcapngSourceOptions : IFileSourceOptions
     /// whatever the budget says.
     /// Null = always use memory-mapped I/O.
     /// Default: 256 MiB on 64-bit processes, 64 MiB on 32-bit processes.
+    /// <para>
+    /// Trade-off: a preloaded file lives on the managed heap as one array, and its frames alias that array (zero-copy);
+    /// a memory-mapped file keeps its bytes off the managed heap and copies each frame out of the mapping. A larger
+    /// budget therefore spends memory (the whole file) to save the copy; a smaller one bounds the heap a single open
+    /// can claim. Configurable by the caller of <c>Open</c> only; 0 preloads only empty files.
+    /// </para>
     /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
     public long? PreloadBudget
     {
         get => _PreloadBudget;
@@ -43,6 +50,8 @@ public sealed class PcapngSourceOptions : IFileSourceOptions
             _PreloadBudget = value;
         }
     }
+
+    /// <summary>Backing field of <see cref="PreloadBudget"/>; validated by the <c>init</c> accessor (non-negative).</summary>
     private readonly long? _PreloadBudget =
         Environment.Is64BitProcess ? 256L * 1024 * 1024 : 64L * 1024 * 1024;
 
@@ -69,6 +78,8 @@ public sealed class PcapngSourceOptions : IFileSourceOptions
         get => _FrameSlabSize;
         init => _FrameSlabSize = FrameSlabAllocator.ValidateOption(value);
     }
+
+    /// <summary>Backing field of <see cref="FrameSlabSize"/>; validated by <see cref="FrameSlabAllocator.ValidateOption"/>.</summary>
     private readonly int _FrameSlabSize;
 
     #endregion

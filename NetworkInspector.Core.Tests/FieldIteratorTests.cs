@@ -985,6 +985,32 @@ internal sealed class FieldIteratorTests
     }
 
     [Test]
+    public async Task InlineStack16_PushAfterShrinkingBelowInlineCapacity_ReturnsPushedValue()
+    {
+        // Spill to the heap, shrink below the inline capacity, then push again: the pushed value must come back from Pop.
+        InlineStack16 stack = default;
+        for (int i = 0; i < 20; i++)
+        {
+            stack.Push((ushort)i);
+        }
+
+        for (int i = 0; i < 6; i++)
+        {
+            stack.Pop();
+        }
+
+        stack.Push(999);
+        stack.Push(998);
+        ushort first = stack.Pop();
+        ushort second = stack.Pop();
+        ushort third = stack.Pop();
+
+        await Assert.That(first).IsEqualTo((ushort)998);
+        await Assert.That(second).IsEqualTo((ushort)999);
+        await Assert.That(third).IsEqualTo((ushort)13);
+    }
+
+    [Test]
     public async Task InlineStack16_PopOnEmpty_Throws()
     {
         InlineStack16 stack = default;

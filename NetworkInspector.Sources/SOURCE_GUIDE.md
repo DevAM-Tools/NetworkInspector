@@ -489,6 +489,10 @@ flowchart TD
   only its own thread's slot, and `Dispose` closes the gate, which waits for the sections of other threads, before it
   unmaps. Either way a concurrent `Dispose` cannot unmap memory under a running copy. This matters in practice: a session
   shutdown with a timeout disposes sources whose read loop may still run. There is no accessor pool.
+- **Empty file:** a zero-length file cannot be mapped, so the PCAPNG and BLF mapped backends serve it from an empty in-memory
+  array. The format check then reports it exactly like a preloaded empty file (`PcapException` / `BlfException`), not as a
+  mapping error. `MmapPool` itself throws an `IOException` for an empty file and releases the stream, the mapping, and the
+  view on every failure.
 - **Disk backend (ASC):** the index stores byte offsets per frame line (both backends, §11.6) and, per group of 64
   frames, one byte with the shift of a power-of-two read window. The open-time scan sizes that window to cover every
   record of the group: the line through its LF, and for Ethernet the continuation lines plus the whole line that ends the
@@ -509,6 +513,10 @@ flowchart TD
 | Container cache (2Q) | 32 MiB | BlfSource |
 | Stream read buffer | 64 KiB `BufferedStream` (unless the stream is a `MemoryStream` / `BufferedStream`) | All stream sources |
 | Frame slab size (`FrameSlabSize`) | 0 = one array per frame; 1 KiB … 16 MiB when set | All sequential reads |
+| Random source frame size (`MaxFrameSize`) | At most 65 549 (IPv4, UDP over IPv4, TCP over IPv4 modes), 65 589 (IPv6 modes), `Array.MaxLength` (`FullRandom`, `Ethernet`); constants of the header formats, rejected at construction | RandomFrameSource |
+| Random source TCP stream payload (`TcpStreamOptions.MaxPayloadSize`) | At most 65 495 (IPv4) / 65 515 (IPv6): the 16-bit IP length must not wrap | RandomFrameSource |
+| Random source `TimestampInterval` | At most `long.MaxValue / L` ns, `L` = largest frame index (`FrameCount − 1`, or the largest frame id when unlimited); the sum with the base timestamp saturates | RandomFrameSource |
+| Ethernet record (ASC stream source) | 16 384 bytes of packet text (`AscEthernetParser.MaxRecordBytes`); a longer packet is skipped and reported with this limit | AscStreamSource |
 
 ### 11.3 Cache Pattern (BLF)
 

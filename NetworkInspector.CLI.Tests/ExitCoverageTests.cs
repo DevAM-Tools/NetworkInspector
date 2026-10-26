@@ -77,6 +77,7 @@ internal sealed class ExitCoverageTests
                 TextWriter.Null,
                 ref counter,
                 CancellationToken.None,
+                out _,
                 out _))
             .Throws<InvalidOperationException>();
     }

@@ -5,7 +5,8 @@ namespace NetworkInspector.Sources.Blf.Format.Headers;
 /// <summary>
 /// BLF block/object header — 16 bytes.
 /// Every BLF object (including log containers) starts with this header.
-/// The signature field must equal <see cref="BlfConstants.ObjectMagic"/> ("LOBJ").
+/// The signature field must equal <see cref="BlfConstants.ObjectMagic"/> ("LOBJ"). The parser itself only reads the
+/// fields; callers (<see cref="TryGetSkipDistance"/> and the object parser) check the signature and the sizes.
 ///
 /// Layout:
 ///   [0..4)  Signature  — "LOBJ" as LE u32
@@ -23,7 +24,11 @@ internal readonly partial struct BlfBlockHeader
         get; init;
     }
 
-    /// <summary>Total header size in bytes (block header + log object header).</summary>
+    /// <summary>
+    /// Total header size in bytes (block header + log object header). For a LOG_CONTAINER the BLF writer of this product
+    /// stores 16 (the block header alone); the 16-byte container header then starts at this offset. Untrusted: readers
+    /// clamp it to at least 16 when they compute the skip distance.
+    /// </summary>
     public U16LE HeaderSize
     {
         get; init;

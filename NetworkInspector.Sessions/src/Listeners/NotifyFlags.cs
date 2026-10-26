@@ -9,9 +9,12 @@ namespace NetworkInspector.Sessions.Listeners;
 /// <para>
 /// <b>Protocol:</b>
 /// Producers set flags via <c>Interlocked.Or(ref slot.Flags, (int)flag)</c>.
-/// Consumers read and reset via <c>Interlocked.Exchange(ref _Flags, 0)</c>.
+/// Consumers read and reset via <c>Interlocked.Exchange(ref Flags, 0)</c>.
 /// Multiple OR writes between two Exchange reads coalesce naturally — the
 /// consumer sees the union of all flags set since its last read.
+/// A flag therefore means "at least once since the last dispatch", never a count: a consumer must re-query the
+/// session (packet count, source list, job list) instead of counting notifications. Bit values do not encode the
+/// dispatch order; the listener slot decides it (stack swap, packets, sources, jobs, then lifecycle).
 /// </para>
 ///
 /// <para>

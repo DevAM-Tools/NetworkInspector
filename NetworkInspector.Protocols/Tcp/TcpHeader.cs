@@ -6,6 +6,13 @@ namespace NetworkInspector.Protocols;
 /// TCP header struct (20 bytes minimum) parsed via ZeroAlloc [BinaryParsable].
 /// Layout: SrcPort(2) DstPort(2) Seq(4) Ack(4) DataOff:4+Reserved:3+NS:1+Flags(1) Win(2) Csum(2) Urg(2)
 /// </summary>
+/// <remarks>
+/// The binary parser generator reads the members in declaration order, so the declaration order (including the three
+/// bit fields that share byte 12) must match the wire layout above; multi-byte values use the big-endian wrappers
+/// (<c>U16BE</c>/<c>U32BE</c>). Options are not part of this struct: they follow the first 20 bytes and are described by
+/// <see cref="DataOffset"/>. Parsing only checks that 20 bytes exist; a data offset below 5 words or beyond the segment
+/// is rejected by the caller, not here. Thread safety: immutable value type.
+/// </remarks>
 [BinaryParsable]
 internal readonly partial struct TcpHeader
 {

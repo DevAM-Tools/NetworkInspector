@@ -7,15 +7,15 @@ public enum ProtocolTableKeyType : byte
 {
     #region Enum Values
 
-    /// <summary>Numeric key (port numbers, protocol values).</summary>
+    /// <summary>Numeric key (port numbers, protocol values), compared as an unsigned 64-bit integer.</summary>
     U64 = 0,
-    /// <summary>Text-based identifier.</summary>
+    /// <summary>Text-based identifier, compared ordinally (case-sensitive).</summary>
     String = 1,
-    /// <summary>Binary data (signatures, prefixes).</summary>
+    /// <summary>Binary data (signatures, prefixes), compared by content as a <see cref="BytesKey"/>.</summary>
     Bytes = 2,
-    /// <summary>Boolean branching.</summary>
+    /// <summary>Boolean branching: one list of protocols for <see langword="true"/> and one for <see langword="false"/>.</summary>
     Bool = 3,
-    /// <summary>Catch-all (single entry).</summary>
+    /// <summary>Catch-all: no key, a single list of protocols that applies to every dispatch.</summary>
     Any = 4,
 
     #endregion

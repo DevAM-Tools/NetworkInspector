@@ -24,14 +24,20 @@ internal static class FrameEmitting
         where TTrailer : struct, ITrailerLayer
         where TInterceptor : struct, IFrameInterceptor
     {
-        // Header plus payload is the whole frame for the layers used here; a trailer or a fragmenting stack would need more.
+        // The buffer holds exactly one frame: headers, payload, and trailer. A stack whose payload exceeds the link limit does
+        // not fragment here (the recipes set don't-fragment); the build then reports FragmentationRequired and MoveNext
+        // returns false, which becomes the exception below instead of a silently truncated frame.
         byte[] buffer = new byte[created.HeaderSize + payload.Length + created.TrailerSize];
         using FrameSequence<TStack, TTrailer, TInterceptor> sequence = created.Build(payload);
-        if (!sequence.MoveNext(buffer, out int written) || sequence.Status != BuildStatus.Success && written == 0)
+        // Two failures end here: MoveNext returned false (the stack produced no frame), or it returned true with a status other
+        // than success and nothing written. The parentheses state the grouping that && over || already gives.
+        if (!sequence.MoveNext(buffer, out int written) || (sequence.Status != BuildStatus.Success && written == 0))
         {
             throw new InvalidOperationException($"The frame could not be built: {sequence.Status}.");
         }
 
+        // Normally the frame fills the buffer and is returned without a copy; if the stack wrote less than it reserved,
+        // copy to an array of the true length so that the caller never sees trailing bytes that are not part of the frame.
         return written == buffer.Length
             ? buffer
             : buffer.AsSpan(0, written).ToArray();

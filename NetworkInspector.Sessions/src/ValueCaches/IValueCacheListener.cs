@@ -17,8 +17,11 @@ namespace NetworkInspector.Sessions.ValueCaches;
 /// <para>
 /// <b>Threading:</b>
 /// All methods are called on the dedicated value-cache slot thread,
-/// the same threading contract as <see cref="ISessionListener"/>.
+/// the same threading contract as <see cref="ISessionListener"/>. The one exception is
+/// <see cref="OnUnsubscribed"/> when the slot's thread could not be started: it is then called once on the thread
+/// that tried to start it. <see cref="UiName"/> is read on the thread that registers the listener.
 /// Do not block for extended periods — it stalls notification processing.
+/// A callback that throws fails only this subscription (its job ends Failed); the session and other listeners go on.
 /// </para>
 ///
 /// <para>
@@ -45,7 +48,7 @@ public interface IValueCacheListener
     /// <paramref name="fromIndex"/> (inclusive) to <paramref name="toIndexExclusive"/>
     /// (exclusive) are packet ids, the same coalescing window as
     /// <see cref="ISessionListener.OnNewPackets"/>. They are not series row indexes:
-    /// a packet without the configured field adds no rows. A frame that cannot be re-read
+    /// a packet without the configured field adds no rows. A frame that cannot be re-read or re-parsed
     /// fails the slot rather than skipping the id. A read refused because queries are disabled
     /// (restart or shutdown in progress) only pauses the fill: the window ends at the refused id,
     /// and a restart then delivers the full re-parsed range from 0. Index columns with
@@ -75,7 +78,7 @@ public interface IValueCacheListener
 
     // ── Job lifecycle ────────────────────────────────────────────────────────
 
-    /// <summary>Jobs changed (added or status changed). Query via <see cref="ISessionReader.GetJobs"/>.</summary>
+    /// <summary>Jobs changed (added, changed status, or removed). Query via <see cref="ISessionReader.GetJobs"/>.</summary>
     void OnJobsChanged(ISessionReader session)
     {
     }
@@ -104,7 +107,10 @@ public interface IValueCacheListener
     {
     }
 
-    /// <summary>Listener was unsubscribed. No further callbacks will follow.</summary>
+    /// <summary>
+    /// Listener was unsubscribed, the session ended, or the slot failed. Called once, also when an earlier
+    /// callback threw (the call is guarded to run at most once); no further callbacks will follow.
+    /// </summary>
     void OnUnsubscribed()
     {
     }

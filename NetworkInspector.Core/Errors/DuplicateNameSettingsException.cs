@@ -6,7 +6,8 @@ namespace NetworkInspector.Core.Errors;
 /// Thrown when a settings group or individual setting with the same name
 /// has already been registered.
 /// </summary>
-/// <remarks>Creates a new duplicate-name settings exception.</remarks>
+/// <param name="name">The duplicate group or setting name.</param>
+/// <param name="message">Message text; built by the factory methods so group and setting duplicates read differently.</param>
 public sealed class DuplicateNameSettingsException(string name, string message)
     : SettingsException(message)
 {
@@ -20,10 +21,12 @@ public sealed class DuplicateNameSettingsException(string name, string message)
     #region Factory Methods
 
     /// <summary>Creates an exception for a duplicate group name.</summary>
+    /// <param name="name">The group name that already exists.</param>
     internal static DuplicateNameSettingsException ForGroup(string name) =>
         new(name, $"Group '{name}' already exists");
 
     /// <summary>Creates an exception for a duplicate setting name.</summary>
+    /// <param name="name">The setting name that already exists.</param>
     internal static DuplicateNameSettingsException ForSetting(string name) =>
         new(name, $"Setting '{name}' already exists");
 

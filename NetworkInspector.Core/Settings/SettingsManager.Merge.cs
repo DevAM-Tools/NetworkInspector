@@ -13,10 +13,19 @@ public sealed partial class SettingsManager
     /// <summary>File name of the cross-process lock in the storage folder.</summary>
     internal const string LockFileName = ".ni-settings.lock";
 
-    /// <summary>Longest time to wait for the folder lock: two seconds.</summary>
+    /// <summary>
+    /// Longest time to wait for the folder lock: two seconds.
+    /// Limit record: value 2000 ms · threat: another process that holds the lock for a long time (a hung or very slow writer)
+    /// would otherwise block this caller without end · constant, not configurable · a caller that cannot get the lock fails
+    /// closed: nothing is written and the exception tells the user to try again. The operating system releases the lock when
+    /// the holding process ends, so a crashed holder does not block for good.
+    /// </summary>
     private const int _LockWaitMilliseconds = 2000;
 
-    /// <summary>First pause between lock attempts; the pause doubles up to <see cref="_MaxLockPauseMilliseconds"/>.</summary>
+    /// <summary>
+    /// First pause between lock attempts; the pause doubles up to <see cref="_MaxLockPauseMilliseconds"/>. An exponential
+    /// back-off picks up a briefly held lock within about a millisecond while a lock held longer costs only a few attempts.
+    /// </summary>
     private const int _FirstLockPauseMilliseconds = 1;
 
     /// <summary>Longest pause between lock attempts.</summary>
@@ -54,7 +63,9 @@ public sealed partial class SettingsManager
             throw PersistenceSettingsException.ForNoStoragePath();
         }
 
-        // Snapshot what to write before the lock is taken, so the folder lock is held only for file work.
+        // Snapshot what to write before the lock is taken, so the folder lock is held only for file work. The values written
+        // are the ones at this moment; a change made while the folder lock is awaited is not part of this call. An unknown
+        // name fails the whole call before any file is touched.
         List<(string Stem, string Name, JsonNode? Node)> edits = [];
         HashSet<string> seen = new(StringComparer.Ordinal);
         _Lock.EnterReadLock();
@@ -77,6 +88,7 @@ public sealed partial class SettingsManager
                 }
                 else if (_TryFindOrphanLocked(name, out string? groupName, out JsonNode? orphan))
                 {
+                    // Clone: a JsonNode can have only one parent, and the orphan table keeps its own node.
                     edits.Add((_StemOf(groupName), name, orphan.DeepClone()));
                 }
                 else
@@ -139,6 +151,8 @@ public sealed partial class SettingsManager
 
         // The file no longer holds the key; now bring the memory in line. The setting may have vanished or become an orphan
         // in the meantime only by a registration, which is harmless: both paths below look the name up again.
+        // valueChanged is computed before the reset: only a current value that differs from the default changes by the reset.
+        // The events are raised after the lock is released (and SettingsApplied before PendingChanged), like the bulk members.
         bool valueChanged = false;
         bool pendingChanged = false;
         _Lock.EnterWriteLock();
@@ -178,7 +192,8 @@ public sealed partial class SettingsManager
 
     /// <summary>
     /// Snapshot of the values that were loaded for settings that are not registered (for example the settings of a plugin that
-    /// is not loaded), ordered by group and name. The JSON values are clones.
+    /// is not loaded), ordered by group and name. The JSON values are clones. For tooling and diagnostics: the ordering with
+    /// LINQ and the per-value parse allocate, which is accepted because this is not on a read path of the settings.
     /// </summary>
     public IReadOnlyList<OrphanedSettingValue> Orphans
     {
@@ -276,6 +291,25 @@ public sealed partial class SettingsManager
         return obj;
     }
 
+    /// <summary>
+    /// Creates the storage folder when it does not exist. A path the file system cannot use at all (empty, null character,
+    /// unsupported form) is reported as a <see cref="PersistenceSettingsException"/> like every other file-system failure of
+    /// the persistence members, not as the caller-bug exception the framework throws for it.
+    /// </summary>
+    /// <param name="storagePath">The configured storage path.</param>
+    /// <exception cref="PersistenceSettingsException">The path is invalid.</exception>
+    private static void _CreateStorageFolder(string storagePath)
+    {
+        try
+        {
+            _ = Directory.CreateDirectory(storagePath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            throw PersistenceSettingsException.ForInvalidPath(ex);
+        }
+    }
+
     /// <summary>Finds an orphan by setting name in any group; the caller holds a lock.</summary>
     private bool _TryFindOrphanLocked(string name, [NotNullWhen(true)] out string? groupName, [NotNullWhen(true)] out JsonNode? node)
     {
@@ -329,7 +363,7 @@ public sealed partial class SettingsManager
 
         try
         {
-            Directory.CreateDirectory(StoragePath);
+            _CreateStorageFolder(StoragePath);
             using FolderLock folderLock = FolderLock.Acquire(StoragePath);
 
             HashSet<string> written = new(StringComparer.OrdinalIgnoreCase);
@@ -339,6 +373,8 @@ public sealed partial class SettingsManager
             {
                 foreach (IGrouping<string, (string Stem, string Name, JsonNode? Node)> group in edits.GroupBy(static edit => edit.Stem, StringComparer.Ordinal))
                 {
+                    // Per group file: read the current content (other managers may have changed it), apply this call's keys, and
+                    // write back. Reading the file again under the lock is what makes this a merge instead of an overwrite.
                     string fileName = group.Key + ".json";
                     string filePath = Path.Combine(StoragePath, fileName);
                     JsonObject obj = _ReadGroupObject(filePath);
@@ -350,6 +386,7 @@ public sealed partial class SettingsManager
                         }
                         else
                         {
+                            // Clone: the edit's node may only have one parent, and the caller's edits stay untouched.
                             obj[name] = node.DeepClone();
                         }
                     }
@@ -366,7 +403,7 @@ public sealed partial class SettingsManager
                         try
                         {
                             File.WriteAllText(tempPath, obj.ToJsonString(_WriteOptions));
-                            File.Move(tempPath, filePath, overwrite: true);
+                            SettingsFileAccess.ReplaceFile(tempPath, filePath);
                         }
                         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                         {
@@ -492,7 +529,9 @@ public sealed partial class SettingsManager
     /// <summary>
     /// Whether the edits would change no file: only removals, each of a key that is not in its file (or whose file does not
     /// exist). The check reads without the lock; a file that cannot be read counts as "changes something" so that the real merge
-    /// reports the problem.
+    /// reports the problem. Purpose: an unset of a value that is not stored must not create the folder, the lock file, or the
+    /// manifest as a side effect. A stale answer (another process adds the key right after the check) is harmless: the removal
+    /// is then simply ordered before that process's write.
     /// </summary>
     private bool _AllEditsAreNoOps(IReadOnlyList<(string Stem, string Name, JsonNode? Node)> edits)
     {
@@ -529,7 +568,9 @@ public sealed partial class SettingsManager
     /// <summary>
     /// Reads a group file as a JSON object for merging; a missing file is an empty object. A file that is too large, nested
     /// too deep, or not an object is an error (<see cref="JsonException"/>): overwriting it would destroy content that
-    /// <see cref="Load"/> had skipped with a warning.
+    /// <see cref="Load"/> had skipped with a warning. Fail closed on purpose: a refused merge loses nothing, a silent
+    /// overwrite would. The size cap is checked against the length the file system reports and against the bytes actually read,
+    /// as in <see cref="Load"/>.
     /// </summary>
     private JsonObject _ReadGroupObject(string filePath)
     {
@@ -539,14 +580,33 @@ public sealed partial class SettingsManager
         }
 
         using FileStream stream = SettingsFileAccess.OpenSharedRead(filePath);
+        string oversizedMessage = string.Create(CultureInfo.InvariantCulture,
+            $"Settings file '{SettingsFileAccess.SafeFileLabel(filePath)}' exceeds {MaxConfigFileBytes} bytes.");
         if (MaxConfigFileBytes > 0 && stream.Length > MaxConfigFileBytes)
         {
-            throw new JsonException(string.Create(CultureInfo.InvariantCulture,
-                $"Settings file '{SettingsFileAccess.SafeFileLabel(filePath)}' exceeds {MaxConfigFileBytes} bytes."));
+            throw new JsonException(oversizedMessage);
         }
 
-        JsonNode? root = JsonNode.Parse(stream, nodeOptions: null,
-            documentOptions: new JsonDocumentOptions { MaxDepth = EffectiveJsonMaxDepth(MaxJsonDepth) });
+        // The cap also holds for the bytes actually read, as in Load: the reported length can be wrong for a file that grows
+        // after the check or for a file the system reports no useful length for, and the whole file is parsed into memory.
+        using BoundedReadStream? bounded = MaxConfigFileBytes > 0 ? new BoundedReadStream(stream, MaxConfigFileBytes) : null;
+        JsonNode? root;
+        try
+        {
+            root = JsonNode.Parse(bounded ?? (Stream)stream, nodeOptions: null,
+                documentOptions: new JsonDocumentOptions { MaxDepth = EffectiveJsonMaxDepth(MaxJsonDepth) });
+        }
+        catch (JsonException) when (bounded is { Exceeded: true })
+        {
+            // Cut at the cap: report the size, not the syntax error the cut produced.
+            throw new JsonException(oversizedMessage);
+        }
+
+        if (bounded is { Exceeded: true })
+        {
+            throw new JsonException(oversizedMessage);
+        }
+
         return root as JsonObject
             ?? throw new JsonException($"Settings file '{SettingsFileAccess.SafeFileLabel(filePath)}' does not contain a JSON object.");
     }
@@ -588,6 +648,8 @@ public sealed partial class SettingsManager
                 catch (IOException ex) when (ex is not (DirectoryNotFoundException or FileNotFoundException))
                 {
                     // A sharing violation is an IOException on every platform; anything else that persists ends the same way.
+                    // A missing folder is excluded from the retry (waiting cannot fix it) and propagates at once; an access
+                    // denial is not an IOException and propagates too.
                     if (Stopwatch.GetElapsedTime(start).TotalMilliseconds >= _LockWaitMilliseconds)
                     {
                         throw PersistenceSettingsException.ForLocked(folder);

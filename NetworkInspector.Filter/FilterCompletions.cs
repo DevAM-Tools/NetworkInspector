@@ -62,6 +62,9 @@ public sealed class FilterCompletions
         ReplaceStart = replaceStart;
         ReplaceLength = replaceLength;
         Prefix = prefix;
+
+        // Wrap without copying: the engine hands over a freshly built array nobody else references, and the read-only
+        // wrapper keeps callers from mutating it, which is what makes the result immutable and shareable.
         Items = Array.AsReadOnly(items);
     }
 

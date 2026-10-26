@@ -186,6 +186,125 @@ internal sealed class PluginLifecycleTests
         public CancellationToken Stopping => CancellationToken.None;
     }
 
+    // A context whose log keeps every entry and completes a task when the lifecycle reports the failure of an abandoned call,
+    // so that a test waits for that event instead of for a fixed time.
+    private sealed class AbandonedCallContext : IPluginContext
+    {
+        private sealed class SignalingLog(CapturingPluginLog inner, TaskCompletionSource<string> abandoned) : IPluginLog
+        {
+            public void Info(string text) => inner.Info(text);
+
+            public void Warning(string text) => inner.Warning(text);
+
+            public void Error(string text, Exception? exception = null)
+            {
+                inner.Error(text, exception);
+                if (text.Contains("abandoned", StringComparison.Ordinal))
+                {
+                    abandoned.TrySetResult(text);
+                }
+            }
+        }
+
+        private readonly CapturingPluginLog _Captured = new();
+
+        public AbandonedCallContext()
+        {
+            Log = new SignalingLog(_Captured, Abandoned);
+        }
+
+        public TaskCompletionSource<string> Abandoned { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IReadOnlyList<LogEntry> Entries => _Captured.Entries;
+
+        public string PluginName => "Life.Late";
+
+        public IPluginLog Log { get; }
+
+        public string DataDirectory => throw new NotSupportedException();
+
+        public ReadOnlySettingsManagerView ApplicationSettings => throw new NotSupportedException();
+
+        public ReadOnlySettingsManagerView ProfileSettings => throw new NotSupportedException();
+
+        public event EventHandler<SettingsAppliedEventArgs>? SettingsApplied
+        {
+            add { }
+            remove { }
+        }
+
+        public CancellationToken Stopping => CancellationToken.None;
+    }
+
+    [Test]
+    public async Task AStartThatThrowsATimeoutExceptionItselfIsAPluginFailureAndNotATimeout()
+    {
+        using LoaderHarness harness = new("life-start-own-timeout");
+        using LifecycleContexts contexts = new();
+        PluginLoadReport loaded = harness.Load([], [new LifePlugin("Life.OwnTimeout", [], StartBehavior.ThrowTimeoutException)]);
+
+        PluginLoadReport started = await PluginLifecycle.StartAsync(loaded, harness.Registry.Disable, contexts.For, TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+
+        PluginRecord failed = started.Plugins.Single();
+        await Assert.That(failed.State).IsEqualTo(PluginLoadState.Failed);
+        await Assert.That(failed.Reason).IsEqualTo("StartAsync failed: TimeoutException: start gave up");
+        await Assert.That(contexts.LogOf("Life.OwnTimeout").Single().Text).IsEqualTo("StartAsync failed: TimeoutException: start gave up");
+    }
+
+    [Test]
+    public async Task AStopThatThrowsATimeoutExceptionItselfIsAPluginFailureAndNotATimeout()
+    {
+        using LoaderHarness harness = new("life-stop-own-timeout");
+        using LifecycleContexts contexts = new();
+        PluginLoadReport loaded = harness.Load([], [new LifePlugin("Life.OwnTimeout", [], stop: StopBehavior.ThrowTimeoutException)]);
+        PluginLoadReport started = await PluginLifecycle.StartAsync(loaded, harness.Registry.Disable, contexts.For, TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+
+        await PluginLifecycle.StopAsync(started, contexts.For, TimeSpan.FromSeconds(5));
+
+        LogEntry error = contexts.LogOf("Life.OwnTimeout").Single(static entry => entry.Level == "Error");
+        await Assert.That(error.Text).IsEqualTo("StopAsync failed: TimeoutException: stop gave up");
+    }
+
+    [Test]
+    [Category("Slow")]
+    public async Task ALaterFailureOfAnAbandonedStartIsLoggedOnceInsteadOfBeingLeftUnobserved()
+    {
+        using LoaderHarness harness = new("life-start-late");
+        LifePlugin late = new("Life.Late", [], StartBehavior.WaitForReleaseThenThrow);
+        PluginLoadReport loaded = harness.Load([], [late]);
+        AbandonedCallContext context = new();
+
+        PluginLoadReport started = await PluginLifecycle.StartAsync(loaded, harness.Registry.Disable, _ => context,
+            TimeSpan.FromMilliseconds(50), CancellationToken.None);
+        late.ReleaseWithFailure();
+        string entry = await context.Abandoned.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(started.Plugins.Single().State).IsEqualTo(PluginLoadState.Failed);
+        await Assert.That(entry).IsEqualTo("StartAsync failed after its call was abandoned: InvalidOperationException: late boom");
+        await Assert.That(context.Entries.Count(static item => item.Level == "Error")).IsEqualTo(2);
+    }
+
+    [Test]
+    [Category("Slow")]
+    public async Task ALaterFailureOfAnAbandonedStopIsLoggedOnceInsteadOfBeingLeftUnobserved()
+    {
+        using LoaderHarness harness = new("life-stop-late");
+        LifePlugin late = new("Life.Late", [], stop: StopBehavior.WaitForReleaseThenThrow);
+        PluginLoadReport loaded = harness.Load([], [late]);
+        AbandonedCallContext context = new();
+        PluginLoadReport started = await PluginLifecycle.StartAsync(loaded, harness.Registry.Disable, _ => context, TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+
+        await PluginLifecycle.StopAsync(started, _ => context, TimeSpan.FromMilliseconds(50));
+        late.ReleaseWithFailure();
+        string entry = await context.Abandoned.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(entry).IsEqualTo("StopAsync failed after its call was abandoned: InvalidOperationException: late boom");
+        await Assert.That(context.Entries.Count(static item => item.Level == "Error")).IsEqualTo(2);
+    }
+
     [Test]
     [Category("Slow")]
     public async Task AStartThatBlocksItsThreadIsCutAtTheTimeoutAndTheOthersStillStart()

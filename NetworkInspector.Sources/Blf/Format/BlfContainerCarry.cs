@@ -44,6 +44,9 @@ internal static class BlfContainerCarry
             return BlfContainerTailKind.Padding;
         }
 
+        // After the alignment zeros the tail must start like an object: a full "LOBJ" magic, or, when fewer than 4 bytes
+        // are left, a prefix of it (the writer split the object inside its signature). A claimed length above the read cap
+        // is treated as corruption, not as a split object (_DeclaredObjectLengthExceedsCap).
         ReadOnlySpan<byte> candidate = tail[firstData..];
         int n = Math.Min(candidate.Length, BlfConstants.ObjectMagicBytes.Length);
         if (!candidate[..n].SequenceEqual(BlfConstants.ObjectMagicBytes[..n]) || _DeclaredObjectLengthExceedsCap(candidate))
@@ -64,6 +67,8 @@ internal static class BlfContainerCarry
     /// </summary>
     internal static bool TryStitch(byte[] carry, byte[] decoded, long maxUncompressedSize, out byte[] stitched)
     {
+        // The sum is formed in long so two large arrays cannot overflow int. The same cap as for a single container
+        // applies to the stitched blob; otherwise a defective stream could chain carries into an unbounded buffer.
         long total = (long)carry.Length + decoded.Length;
         if (total > Array.MaxLength || (maxUncompressedSize > 0 && total > maxUncompressedSize))
         {

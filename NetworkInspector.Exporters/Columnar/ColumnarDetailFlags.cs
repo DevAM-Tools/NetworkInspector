@@ -6,6 +6,11 @@ namespace NetworkInspector.Exporters.Columnar;
 /// Controls which optional data is included when building a <see cref="ColumnarPacketBatch"/>.
 /// Shared across all columnar exporters (PBF columnar blocks, Parquet, DuckDB) so callers
 /// configure detail once regardless of the target format.
+/// <para>
+/// Every flag trades output size and export time for detail: the info strings are retained per packet, the frame bytes
+/// are copied per packet (the source buffers may be recycled), the custom texts are materialized from lazy strings, and
+/// the topology adds one row per field node. Without a flag the batch does not even evaluate the corresponding data.
+/// </para>
 /// </summary>
 [Flags]
 public enum ColumnarDetailFlags

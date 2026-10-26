@@ -11,6 +11,19 @@ namespace NetworkInspector.Protocols.Helpers;
 /// initialization eagerly, so no first-access cost occurs during
 /// the timed parsing phase.
 /// </para>
+/// <para>
+/// Design: a field's display text ("Name (number)") is read for every parsed packet. Formatting it on demand would
+/// allocate one string per field per packet, so every text is formatted once here and the parse path only indexes an
+/// array. A table is keyed by the full range of the wire field (byte: 256 entries, ushort: 65,536 entries), and
+/// narrower bit fields are masked, so no input value can index out of range and no lookup needs a bounds branch of
+/// its own. Values without a name fall back to their number, so the tables never contain <see langword="null"/>.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> every table is built by the type initializer (which the runtime runs exactly once, under its
+/// own lock) and is never modified afterwards, so all members are safe for concurrent use without synchronization.
+/// Static field initializers run in textual order: a table that is derived from another table (the "display text"
+/// tables built from the "name" tables) must stay declared below the table it reads.
+/// </para>
 /// </summary>
 internal static class DisplayTables
 {
@@ -21,6 +34,11 @@ internal static class DisplayTables
     /// lookup tables. Call once during stack build so the first packet
     /// parse does not pay the initialization cost.
     /// </summary>
+    /// <remarks>
+    /// The class has no explicit static constructor, so the runtime is allowed to defer the type initializer until
+    /// the first static field access. <see cref="RuntimeHelpers.RunClassConstructor(RuntimeTypeHandle)"/> removes that
+    /// freedom: the cost of building the 64K-entry tables is paid at a known point instead of inside the first packet.
+    /// </remarks>
     internal static void EnsureInitialized() =>
         RuntimeHelpers.RunClassConstructor(typeof(DisplayTables).TypeHandle);
 
@@ -30,12 +48,14 @@ internal static class DisplayTables
 
     private static readonly string[] _DscpTable = _BuildDscpTable();
 
+    /// <summary>Returns the display text for a DSCP value; only the low 6 bits are used.</summary>
+    /// <param name="dscp">A DSCP value; the mask with 0x3F keeps any byte inside the 64-entry table.</param>
     internal static string GetDscpDisplayText(byte dscp) => _DscpTable[dscp & 0x3F];
 
     private static string[] _BuildDscpTable()
     {
         string[] table = new string[64];
-        // Well-known DSCP values
+        // Well-known DSCP values: class selectors (CSn), assured forwarding (AFxy) and expedited forwarding (EF).
         table[0] = "Default (BE) (0)";
         table[8] = "CS1 (8)";
         table[10] = "AF11 (10)";
@@ -71,6 +91,7 @@ internal static class DisplayTables
 
     #region ECN Display Text (4 entries for 2-bit field)
 
+    // The order follows the 2-bit codepoints of RFC 3168: 01 is ECT(1) and 10 is ECT(0), so the index is the raw field value.
     private static readonly string[] _EcnTable =
     [
         "Not-ECT (0)",
@@ -79,6 +100,8 @@ internal static class DisplayTables
         "CE (3)"
     ];
 
+    /// <summary>Returns the display text for the 2-bit ECN field; only the low 2 bits are used.</summary>
+    /// <param name="ecn">The ECN field value; the mask with 0x03 keeps any byte inside the table.</param>
     internal static string GetEcnDisplayText(byte ecn) => _EcnTable[ecn & 0x03];
 
     #endregion
@@ -87,6 +110,8 @@ internal static class DisplayTables
 
     private static readonly string[] _IpProtocolTable = _BuildIpProtocolTable();
 
+    /// <summary>Returns the display text for an IP protocol / IPv6 next-header number; unnamed numbers print as the number.</summary>
+    /// <param name="protocol">The 8-bit protocol number; the 256-entry table needs no range check.</param>
     internal static string GetIpProtocolDisplayText(byte protocol) => _IpProtocolTable[protocol];
 
     private static string[] _BuildIpProtocolTable()
@@ -126,13 +151,17 @@ internal static class DisplayTables
 
     private static readonly string[] _EtherTypeTable = _BuildEtherTypeTable();
 
+    /// <summary>Returns the display text for an EtherType; unnamed values print as lower-case "0xNNNN".</summary>
+    /// <param name="etherType">The 16-bit EtherType; the 65,536-entry table needs no range check.</param>
     internal static string GetEtherTypeDisplayText(ushort etherType) => _EtherTypeTable[etherType];
 
     private static string[] _BuildEtherTypeTable()
     {
+        // One-time cost: 65,536 references (512 KB on 64-bit, so a large-object-heap array that lives for the process)
+        // plus one string per entry. Accepted so that every EtherType, named or not, is a single array read.
         string[] table = new string[65536];
 
-        // Well-known EtherType values
+        // Well-known EtherType values. The hex digits in the names are lower case to match the fallback format below.
         table[0x0800] = "IPv4 (0x0800)";
         table[0x0806] = "ARP (0x0806)";
         table[0x0842] = "Wake-on-LAN (0x0842)";
@@ -197,6 +226,8 @@ internal static class DisplayTables
 
     private static readonly string[] _HexU16Table = _BuildHexU16Table();
 
+    /// <summary>Formats a 16-bit value as lower-case "0xNNNN" without allocating (the string is preformatted).</summary>
+    /// <param name="value">The value to format.</param>
     internal static string FormatHexU16(ushort value) => _HexU16Table[value];
 
     private static string[] _BuildHexU16Table()
@@ -217,6 +248,9 @@ internal static class DisplayTables
     /// Formats a 32-bit unsigned integer as "0xNNNNNNNN" using the precomputed u16 table.
     /// Single allocation (the result string), no intermediate allocations.
     /// </summary>
+    /// <param name="value">The value to format; always printed with 8 lower-case hex digits.</param>
+    // string.Create with a static lambda writes straight into the result string: no closure, no temporary buffer.
+    // The two halves are copied from the u16 table (after its "0x" prefix) instead of formatting 8 digits by hand.
     internal static string FormatHexU32(uint value) =>
         string.Create(10, value, static (span, v) =>
         {
@@ -230,12 +264,14 @@ internal static class DisplayTables
     /// Formats a 32-bit unsigned integer as "0xNNN" (3-digit hex) for standard CAN IDs.
     /// Single allocation (the result string), no intermediate allocations.
     /// </summary>
+    /// <param name="value">The value to format; only the low 12 bits are printed (an 11-bit CAN ID always fits).</param>
     internal static string FormatHexU12(uint value) =>
         string.Create(5, value, static (span, v) =>
         {
             span[0] = '0';
             span[1] = 'x';
-            // Use lower 3 hex digits from the U16 table (skip "0x" prefix + first digit)
+            // Use lower 3 hex digits from the U16 table (skip "0x" prefix + first digit). The mask keeps the index
+            // below 0x1000, so the skipped first digit is always '0'.
             _HexU16Table[v & 0x0FFF].AsSpan(3).CopyTo(span[2..]);
         });
 
@@ -245,6 +281,8 @@ internal static class DisplayTables
 
     private static readonly string[] _HexU8Table = _BuildHexU8Table();
 
+    /// <summary>Formats a byte as lower-case "0xNN" without allocating (the string is preformatted).</summary>
+    /// <param name="value">The value to format.</param>
     internal static string FormatHexU8(byte value) => _HexU8Table[value];
 
     private static string[] _BuildHexU8Table()
@@ -265,10 +303,12 @@ internal static class DisplayTables
 
     /// <summary>
     /// Returns precomputed "N bytes" display text for header lengths 0-60.
-    /// Falls back to dynamic formatting for out-of-range values.
+    /// Falls back to dynamic formatting (one allocation) for out-of-range values.
     /// </summary>
+    /// <param name="headerLength">The header length in bytes; negative values take the fallback path.</param>
     internal static string GetHeaderLengthDisplayText(int headerLength)
     {
+        // One unsigned comparison covers both bounds: a negative length wraps to a huge uint and misses the table.
         if ((uint)headerLength < (uint)_HeaderLengthTable.Length)
         {
             return _HeaderLengthTable[headerLength];
@@ -278,7 +318,8 @@ internal static class DisplayTables
 
     private static string[] _BuildHeaderLengthTable()
     {
-        // Covers IPv4 IHL range: 5*4=20 to 15*4=60
+        // Covers IPv4 IHL range: 5*4=20 to 15*4=60 (IHL is a 4-bit count of 32-bit words). Entries 0..19 are
+        // filled as well so a malformed (too short) header still prints without taking the allocating fallback.
         string[] table = new string[61];
         for (int i = 0; i <= 60; i++)
         {
@@ -303,6 +344,9 @@ internal static class DisplayTables
         "Network Control (7)"
     ];
 
+    /// <summary>Returns the display text for the 3-bit VLAN priority code point (IEEE 802.1Q PCP); only the low 3 bits are used.</summary>
+    /// <param name="pcp">The PCP value; the mask with 0x07 keeps any byte inside the table.</param>
+    /// <remarks>The names follow the default 802.1Q priority-to-traffic-class naming, where 1 (Background) ranks below 0 (Best Effort).</remarks>
     internal static string GetVlanPriorityDisplayText(byte pcp) => _VlanPriorityTable[pcp & 0x07];
 
     #endregion
@@ -313,6 +357,11 @@ internal static class DisplayTables
     /// Returns display text for ARP opcodes.
     /// Well-known values (1-9) get named text, others fall back to numeric.
     /// </summary>
+    /// <param name="opcode">The 16-bit ARP operation code.</param>
+    /// <remarks>
+    /// A switch instead of a table: the named values are few and dense, and the 16-bit opcode of a normal ARP packet
+    /// is 1 or 2. Only an unknown opcode allocates (its number string).
+    /// </remarks>
     internal static string GetArpOpcodeDisplayText(ushort opcode) => opcode switch
     {
         1 => "request (1)",
@@ -333,6 +382,11 @@ internal static class DisplayTables
 
     private static readonly string[] _ArpHwTypeTable = _BuildArpHwTypeTable();
 
+    /// <summary>Returns the display text for a 16-bit ARP hardware type.</summary>
+    /// <param name="hwType">
+    /// The hardware type. Values below 256 use the table; larger values are legal on the wire but unnamed, so they take
+    /// the allocating numeric fallback instead of a 64K-entry table for a rare case.
+    /// </param>
     internal static string GetArpHwTypeDisplayText(ushort hwType)
     {
         if (hwType < _ArpHwTypeTable.Length)
@@ -382,6 +436,8 @@ internal static class DisplayTables
 
     private static readonly string[] _IcmpTypeTable = _BuildIcmpTypeTable();
 
+    /// <summary>Returns the display text for an ICMPv4 type; unnamed types print as the number.</summary>
+    /// <param name="type">The 8-bit ICMPv4 type.</param>
     internal static string GetIcmpTypeDisplayText(byte type) => _IcmpTypeTable[type];
 
     private static string[] _BuildIcmpTypeTable()
@@ -421,6 +477,13 @@ internal static class DisplayTables
     /// <summary>
     /// Returns display text for ICMP code values, contextualized by type.
     /// </summary>
+    /// <param name="type">The ICMPv4 type; the meaning of a code depends on it.</param>
+    /// <param name="code">The ICMPv4 code.</param>
+    /// <remarks>
+    /// Only types 3, 5, 11 and 12 define named codes; every other combination prints the plain number. Unlike the
+    /// type tables this is a nested switch (type x code is sparse, a table would be mostly empty), so a code without
+    /// a name allocates its number string.
+    /// </remarks>
     internal static string GetIcmpCodeDisplayText(byte type, byte code) => type switch
     {
         3 => code switch // Destination Unreachable
@@ -473,6 +536,8 @@ internal static class DisplayTables
 
     private static readonly string[] _Icmpv6TypeTable = _BuildIcmpv6TypeTable();
 
+    /// <summary>Returns the display text for an ICMPv6 type; unnamed types print as the number.</summary>
+    /// <param name="type">The 8-bit ICMPv6 type (0-127 are error messages, 128-255 informational messages).</param>
     internal static string GetIcmpv6TypeDisplayText(byte type) => _Icmpv6TypeTable[type];
 
     private static string[] _BuildIcmpv6TypeTable()
@@ -517,6 +582,8 @@ internal static class DisplayTables
     /// Returns a display string for the SLL packet type field.
     /// Values: 0=Unicast, 1=Broadcast, 2=Multicast, 3=Other host, 4=Sent by us.
     /// </summary>
+    /// <param name="pktType">The packet type of a Linux cooked capture (SLL) header.</param>
+    /// <remarks>Only values 0-4 are named; any other value allocates a new "Unknown (n)" string (rare, so no table).</remarks>
     internal static string GetSllPacketTypeDisplayText(ushort pktType) => pktType switch
     {
         0 => "Unicast to us (0)",
@@ -538,6 +605,7 @@ internal static class DisplayTables
     /// The full byte is looked up: odd values name group addresses (for example 0x03, 0xFF), so the I/G or C/R bit
     /// is part of the key.
     /// </summary>
+    /// <param name="sap">The raw 8-bit DSAP or SSAP value, including its lowest bit.</param>
     internal static string GetLlcSapDisplayText(byte sap) => _LlcSapTable[sap];
 
     private static string[] _BuildLlcSapTable()
@@ -581,6 +649,7 @@ internal static class DisplayTables
     private static readonly string[] _IpOptionNameTable = _BuildIpOptionNameTable();
 
     /// <summary>Returns the short name for an IPv4 option type (0-255). Empty string for unknown types.</summary>
+    /// <param name="optType">The full option type byte (copied flag, class and number together).</param>
     internal static string GetIpOptionTypeName(byte optType) => _IpOptionNameTable[optType];
 
     private static string[] _BuildIpOptionNameTable()
@@ -611,6 +680,9 @@ internal static class DisplayTables
         table[0x97] = "Dynamic Packet State";
         table[0x98] = "Upstream Multicast Packet";
         table[0x9A] = "Cilium DSR";
+
+        // Unknown types become empty strings (never null): the display table below tests Length > 0 to tell a named
+        // option from an unnamed one, and callers can use the name without a null check.
         for (int i = 0; i < 256; i++)
         {
             table[i] ??= "";
@@ -625,10 +697,12 @@ internal static class DisplayTables
     private static readonly string[] _IpOptionDisplayTextTable = _BuildIpOptionDisplayTextTable();
 
     /// <summary>Returns the preformatted display text for an IPv4 option type.</summary>
+    /// <param name="optType">The full option type byte.</param>
     internal static string GetIpOptionTypeDisplayText(byte optType) => _IpOptionDisplayTextTable[optType];
 
     private static string[] _BuildIpOptionDisplayTextTable()
     {
+        // Reads _IpOptionNameTable, so that field must be declared (and therefore initialized) before this one.
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
         {
@@ -651,7 +725,8 @@ internal static class DisplayTables
         "Reserved (3)",
     ];
 
-    /// <summary>Returns display text for the 2-bit option class field (0-3).</summary>
+    /// <summary>Returns display text for the 2-bit option class field (0-3); only the low 2 bits are used.</summary>
+    /// <param name="optClass">The option class (bits 6-5 of the option type byte, already shifted down).</param>
     internal static string GetIpOptionClassDisplayText(byte optClass)
         => _IpOptionClassTable[optClass & 0x03];
 
@@ -661,7 +736,8 @@ internal static class DisplayTables
 
     private static readonly string[] _IpTimestampFlagTable = _BuildIpTimestampFlagTable();
 
-    /// <summary>Returns display text for the 4-bit timestamp flag field.</summary>
+    /// <summary>Returns display text for the 4-bit timestamp flag field; only the low 4 bits are used.</summary>
+    /// <param name="flag">The flag nibble of the IPv4 Time Stamp option (0, 1 and 3 are defined; others print as "Unknown").</param>
     internal static string GetIpTimestampFlagDisplayText(byte flag)
         => _IpTimestampFlagTable[flag & 0x0F];
 
@@ -686,6 +762,12 @@ internal static class DisplayTables
     /// Returns display text for a Router Alert value.
     /// Returns <see langword="null"/> for unknown values.
     /// </summary>
+    /// <param name="value">The 16-bit value of the IPv4 Router Alert option (RFC 2113).</param>
+    /// <remarks>
+    /// Returns <see langword="null"/> instead of a number string so the caller decides how to print an unassigned
+    /// value. A switch expression, not a table, because only a few ranges are assigned; the nesting-level range
+    /// allocates its formatted text.
+    /// </remarks>
     internal static string? GetRouterAlertDisplayText(ushort value)
     {
         return value switch
@@ -705,6 +787,7 @@ internal static class DisplayTables
     private static readonly string[] _Ipv6OptionNameTable = _BuildIpv6OptionNameTable();
 
     /// <summary>Returns the short name for an IPv6 option type (0-255). Empty string for unknown.</summary>
+    /// <param name="optType">The full option type byte (action bits, change bit and number together).</param>
     internal static string GetIpv6OptionTypeName(byte optType) => _Ipv6OptionNameTable[optType];
 
     private static string[] _BuildIpv6OptionNameTable()
@@ -730,6 +813,8 @@ internal static class DisplayTables
         table[0xC2] = "Jumbo Payload";
         table[0xC9] = "Home Address";
         table[0xEE] = "DFF";
+
+        // Unknown types become empty strings (never null), as in the IPv4 option name table.
         for (int i = 0; i < 256; i++)
         {
             table[i] ??= "";
@@ -744,10 +829,12 @@ internal static class DisplayTables
     private static readonly string[] _Ipv6OptionDisplayTextTable = _BuildIpv6OptionDisplayTextTable();
 
     /// <summary>Returns preformatted display text for an IPv6 option type.</summary>
+    /// <param name="optType">The full option type byte.</param>
     internal static string GetIpv6OptionTypeDisplayText(byte optType) => _Ipv6OptionDisplayTextTable[optType];
 
     private static string[] _BuildIpv6OptionDisplayTextTable()
     {
+        // Reads _Ipv6OptionNameTable, so that field must be declared (and therefore initialized) before this one.
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
         {
@@ -769,7 +856,11 @@ internal static class DisplayTables
         "Discard and send ICMP if not multicast (3)"
     ];
 
-    /// <summary>Returns display text for the 2-bit IPv6 option action field.</summary>
+    /// <summary>Returns display text for the 2-bit IPv6 option action field; only the low 2 bits are used.</summary>
+    /// <param name="action">
+    /// The two highest bits of an IPv6 option type, shifted down: they tell a node what to do with a packet whose
+    /// option it does not recognize (RFC 8200 section 4.2).
+    /// </param>
     internal static string GetIpv6OptActionDisplayText(byte action) => _Ipv6OptActionTable[action & 0x03];
 
     #endregion
@@ -779,6 +870,7 @@ internal static class DisplayTables
     private static readonly string[] _Ipv6RoutingTypeNameTable = _BuildIpv6RoutingTypeNameTable();
 
     /// <summary>Returns the short name for an IPv6 routing header type (0-255). Empty string for unknown.</summary>
+    /// <param name="routingType">The 8-bit routing type of an IPv6 Routing header.</param>
     internal static string GetIpv6RoutingTypeName(byte routingType) => _Ipv6RoutingTypeNameTable[routingType];
 
     private static string[] _BuildIpv6RoutingTypeNameTable()
@@ -791,6 +883,8 @@ internal static class DisplayTables
         table[4] = "Segment Routing (SRH)";
         table[5] = "CRH-16";
         table[6] = "CRH-32";
+
+        // Unknown types become empty strings (never null), as in the option name tables.
         for (int i = 0; i < 256; i++)
         {
             table[i] ??= "";
@@ -805,10 +899,12 @@ internal static class DisplayTables
     private static readonly string[] _Ipv6RoutingTypeDisplayTextTable = _BuildIpv6RoutingTypeDisplayTextTable();
 
     /// <summary>Returns preformatted display text for an IPv6 routing header type.</summary>
+    /// <param name="routingType">The 8-bit routing type of an IPv6 Routing header.</param>
     internal static string GetIpv6RoutingTypeDisplayText(byte routingType) => _Ipv6RoutingTypeDisplayTextTable[routingType];
 
     private static string[] _BuildIpv6RoutingTypeDisplayTextTable()
     {
+        // Reads _Ipv6RoutingTypeNameTable, so that field must be declared (and therefore initialized) before this one.
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
         {
@@ -826,6 +922,8 @@ internal static class DisplayTables
     /// Returns display text for an IPv6 Router Alert option value.
     /// Returns <see langword="null"/> for unknown values.
     /// </summary>
+    /// <param name="value">The 16-bit value of the IPv6 Router Alert option (RFC 2711). Unknown values yield <see langword="null"/>
+    /// so the caller decides how to print them.</param>
     internal static string? GetIpv6RouterAlertDisplayText(ushort value)
     {
         return value switch
@@ -844,19 +942,27 @@ internal static class DisplayTables
 
     #region TCP Option Kind Display Text (256 entries for 8-bit field)
 
+    // The display table is built from the name table, so the name table must be declared first.
     private static readonly string[] _TcpOptionNameTable = _BuildTcpOptionNameTable();
     private static readonly string[] _TcpOptionDisplayTextTable = _BuildTcpOptionDisplayTextTable();
 
-    /// <summary>Gets the name of a TCP option kind (e.g., "Maximum Segment Size").</summary>
+    /// <summary>
+    /// Gets the name of a TCP option kind (e.g., "Maximum Segment Size"). Unlike the IPv4 and IPv6 option name tables,
+    /// an unnamed kind yields its decimal number, not an empty string.
+    /// </summary>
+    /// <param name="kind">The 8-bit TCP option kind.</param>
     internal static string GetTcpOptionName(byte kind) => _TcpOptionNameTable[kind];
 
     /// <summary>Gets the display text for a TCP option kind (e.g., "Maximum Segment Size (2)").</summary>
+    /// <param name="kind">The 8-bit TCP option kind.</param>
     internal static string GetTcpOptionDisplayText(byte kind) => _TcpOptionDisplayTextTable[kind];
 
     private static string[] _BuildTcpOptionNameTable()
     {
         string[] table = new string[256];
-        // Fill with numeric fallback
+
+        // Fill with numeric fallback first (here the names overwrite it, the reverse of the other tables, which fill
+        // the gaps afterwards); the display table below detects an unnamed kind by comparing name and number.
         for (int i = 0; i < 256; i++)
         {
             table[i] = i.ToString(CultureInfo.InvariantCulture);

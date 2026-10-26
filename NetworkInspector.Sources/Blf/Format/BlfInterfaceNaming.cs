@@ -8,7 +8,9 @@ namespace NetworkInspector.Sources.Blf.Format;
 /// </summary>
 /// <remarks>
 /// Stateless; all members are thread-safe. Link-compiled into the exporter assembly, where the BLF exporter uses the
-/// same names to decide which interfaces need an AppText channel-name object.
+/// same names to decide which interfaces need an AppText channel-name object. Because of that link, this file may only
+/// depend on types the Exporters assembly also compiles (<see cref="BlfConstants"/>, <see cref="BlfInterfacePropertyKeys"/>)
+/// and must not reference other types of the Sources assembly.
 /// </remarks>
 internal static class BlfInterfaceNaming
 {
@@ -103,6 +105,8 @@ internal static class BlfInterfaceNaming
     /// <summary>Interface properties: channel, object type, bus type, and the Ethernet hardware channel when present.</summary>
     internal static Dictionary<string, object> BuildProperties(uint objectType, ushort channel, ushort? hardwareChannel)
     {
+        // Capacity 4 is the maximum key count (three always, the hardware channel optionally), so the dictionary never
+        // resizes. One bag is built per registered interface, not per frame.
         Dictionary<string, object> properties = new(4)
         {
             [BlfInterfacePropertyKeys.Channel] = (long)channel,

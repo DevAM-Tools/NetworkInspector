@@ -6,6 +6,14 @@ namespace NetworkInspector.Exporters;
 /// Flag constants for same-as-previous optimizations in exporters.
 /// When consecutive packets or fields share identical values, the exporter
 /// stores only a bitmask indicating which values are repeated, saving space.
+/// <para>
+/// The bit values are part of the output formats (the JSON Compact and PBF Standard writers store the mask as a number
+/// and readers test the same bits), so they are format constants and must not be renumbered. Packet-level and
+/// field-level flags are separate words (the packet flag and <see cref="FieldSameValue"/> are both <c>0x01</c>
+/// because they are never combined in one mask). The PBF Standard writer resets all "previous" state at every
+/// block boundary so each block decodes on its own; the JSON Compact writer keeps its state for the whole output, so
+/// its mask refers to the previous occurrence anywhere earlier in the document.
+/// </para>
 /// </summary>
 internal static class SameFlags
 {

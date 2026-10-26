@@ -66,6 +66,9 @@ internal sealed class ReaderGate
         }
 
         // The publish above is a full fence, so this read cannot move before it (see the protocol in the remarks).
+        // A plain volatile store of the slot would only release: the CPU may then run this load first, and both
+        // this reader and Close could miss each other. On the closed path the slot is cleared again so Close does
+        // not wait for a section that never began.
         if (_Closed != 0)
         {
             slot.Clear();
@@ -83,17 +86,21 @@ internal sealed class ReaderGate
     {
         if (token.IsOverflow)
         {
+            // Pop the per-thread record first, then release the shared counter that Close waits on.
             ReaderSlot.PopOverflow(this);
             _ = Interlocked.Decrement(ref _OverflowReaders);
             return;
         }
 
+        // A volatile store has release semantics: every read of the protected resource in the section completes
+        // before Close can see the slot empty, so no fence is needed on the exit side.
         ReaderSlot.Current.Clear();
     }
 
     /// <summary>
     /// Closes the gate: no new section starts, and the call returns once no other thread is inside a section. The
-    /// caller then releases the protected resource. Called once.
+    /// caller then releases the protected resource. Called once. The wait has no timeout: it ends when every other
+    /// thread has left its section, which the scope rule (no user code inside a section) keeps short.
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// The gate is already closed, or the calling thread is inside a section of this gate (it would wait for itself).
@@ -106,6 +113,8 @@ internal sealed class ReaderGate
         }
 
         // A section of this thread would never end while this thread waits: a broken caller invariant, not a race.
+        // The flag is already set when this throws, so the gate refuses new sections either way; the exception
+        // only avoids a self-deadlock.
         if (ReaderSlot.CurrentHolds(this))
         {
             throw new InvalidOperationException("A thread inside a read section cannot close the same reader gate.");

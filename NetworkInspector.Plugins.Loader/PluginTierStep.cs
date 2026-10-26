@@ -10,6 +10,7 @@ namespace NetworkInspector.Plugins.Loader;
 /// <param name="MethodName">Name of the method; it appears in failure reasons such as <c>ConfigureHost failed: …</c>.</param>
 /// <param name="Configure">
 /// Casts plugin and builder to the tier's interfaces and calls the method. The contract assembly of that tier owns the step,
-/// so the loader needs no reference to the higher contracts.
+/// so the loader needs no reference to the higher contracts. An exception from it (including a failed cast) fails only the
+/// plugin it ran for, with the reason <c>&lt;MethodName&gt; failed: …</c>.
 /// </param>
 public sealed record PluginTierStep(PluginTier Tier, string MethodName, Action<IPlugin, IPluginBuilder> Configure);

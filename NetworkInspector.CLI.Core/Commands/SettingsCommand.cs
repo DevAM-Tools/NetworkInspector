@@ -6,7 +6,9 @@ namespace NetworkInspector.CLI.Commands;
 /// <c>ni settings list | get | set | reset</c>: reads and changes the application settings and the settings of a profile,
 /// plugin settings included (plugins are loaded to register them). Values use the Core text form, errors use the Core
 /// problem messages, and every check happens before a file is touched, so a refused command changes nothing. A value is written
-/// with a merge save of its own key only, so other keys of the files (and other processes' changes) stay.
+/// with a merge save of its own key only, so other keys of the files (and other processes' changes) stay. Exit codes: a refused
+/// command (unknown name, bad value, wrong arguments) is 1; a settings folder that cannot be written (locked by another
+/// process, I/O error) is 3. Results go to the output writer, errors to the error writer. Stateless; thread-safe.
 /// </summary>
 internal static class SettingsCommand
 {
@@ -41,7 +43,15 @@ internal static class SettingsCommand
 
     #region Private Helpers
 
-    /// <summary>Parses the arguments, opens the session, and runs the sub-command.</summary>
+    /// <summary>
+    /// Parses the arguments, opens the session, and runs the sub-command. The syntax (sub-command, number of arguments, scope
+    /// text) is checked before the session opens, so a usage error never loads a plugin or touches a file.
+    /// </summary>
+    /// <param name="args">The arguments after the command name.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <param name="cancellationToken">Cancels the plugin load and start.</param>
+    /// <returns>The exit code.</returns>
+    /// <exception cref="ArgumentException">An option has no value or an invalid value; the caller maps it to exit code 1.</exception>
     private static async Task<int> _RunCoreAsync(string[] args, CliIo io, CancellationToken cancellationToken)
     {
         if (args.Length == 0)
@@ -64,6 +74,9 @@ internal static class SettingsCommand
             return (int)ExitCode.ArgumentError;
         }
 
+        // Options are shared by all sub-commands except --json, which only "list" knows; for the others "--json" is not an
+        // option and ends up in the positional arguments, where the count check refuses it. For "list" a null scope means
+        // both scopes ("all").
         List<string> positional = [];
         SettingScope? scope = null;
         string? group = null;
@@ -110,6 +123,8 @@ internal static class SettingsCommand
             return (int)ExitCode.ArgumentError;
         }
 
+        // Plugins are loaded on purpose: their settings only exist (with type, range, and description) while the plugin is
+        // loaded. A stored value of a plugin that is not loaded is still reachable as an orphan.
         SettingsArguments arguments = new(command, positional, scope, group, json, settings.Build());
         (CliPluginSession? session, int openExit) = await CliPluginSession.OpenAsync(arguments.Options, io, cancellationToken)
             .ConfigureAwait(false);
@@ -120,6 +135,8 @@ internal static class SettingsCommand
 
         await using (session.ConfigureAwait(false))
         {
+            // Only the write paths can fail with a persistence error (locked folder, I/O); it is a runtime failure (3), not a
+            // usage error. All other failures were refused by the lookup and the Core codec before anything was written.
             try
             {
                 return arguments.Command switch
@@ -138,7 +155,11 @@ internal static class SettingsCommand
         }
     }
 
-    /// <summary>Parses <c>application</c>, <c>profile</c>, or (for list) <c>all</c>.</summary>
+    /// <summary>Parses <c>application</c>, <c>profile</c>, or (for list) <c>all</c>, ignoring case.</summary>
+    /// <param name="text">The value of <c>--scope</c>.</param>
+    /// <param name="allowAll">Whether <c>all</c> is accepted (only the list command).</param>
+    /// <returns>The scope, or <see langword="null"/> for <c>all</c> (both scopes).</returns>
+    /// <exception cref="ArgumentException">The text names no scope.</exception>
     private static SettingScope? _ParseScope(string text, bool allowAll)
     {
         if (string.Equals(text, "application", StringComparison.OrdinalIgnoreCase))
@@ -162,6 +183,8 @@ internal static class SettingsCommand
     }
 
     /// <summary>The syntax line of a sub-command for the error about a wrong number of arguments.</summary>
+    /// <param name="command">The upper-case sub-command.</param>
+    /// <returns>One line of text.</returns>
     private static string _Syntax(string command) => command switch
     {
         "LIST" => "'settings list' takes no arguments.",
@@ -174,9 +197,17 @@ internal static class SettingsCommand
 
     #region List
 
-    /// <summary>Lists the settings of the chosen scopes.</summary>
+    /// <summary>
+    /// Lists the settings of the chosen scopes: per scope the registered settings and the stored values of plugins that are not
+    /// loaded together, sorted by name (ordinal, so the order does not depend on the culture); application scope first.
+    /// </summary>
+    /// <param name="session">The plugin session.</param>
+    /// <param name="arguments">The parsed arguments.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <returns>The exit code.</returns>
     private static int _List(CliPluginSession session, SettingsArguments arguments, CliIo io)
     {
+        // An unknown group is refused like in the lookup, with the list of groups.
         if (arguments.Group is not null && !SettingsLookup.Groups(session, arguments.Scope).Contains(arguments.Group, StringComparer.Ordinal))
         {
             io.Error.WriteLine(Invariant(
@@ -184,6 +215,8 @@ internal static class SettingsCommand
             return (int)ExitCode.ArgumentError;
         }
 
+        // Collect per scope. "Stored" tells whether a value is present in a file (as opposed to the default applying); it is
+        // found by reading the key names of the group files.
         List<Entry> entries = [];
         foreach ((SettingScope scope, SettingsManager manager) in SettingsLookup.Scopes(session, arguments.Scope))
         {
@@ -208,6 +241,7 @@ internal static class SettingsCommand
             entries.AddRange(scopeEntries.OrderBy(static entry => entry.Name, StringComparer.Ordinal));
         }
 
+        // JSON is the complete form; the text form is one line per setting: scope, name, type, value.
         if (arguments.Json)
         {
             io.Out.WriteLine(_ToJson(entries));
@@ -233,7 +267,12 @@ internal static class SettingsCommand
     /// <summary>One line of the list.</summary>
     private sealed record Entry(SettingScope Scope, string Name, Setting? Setting, OrphanedSettingValue? Orphan, bool Stored);
 
-    /// <summary>The names of the keys present in the group files of a manager's folder.</summary>
+    /// <summary>
+    /// The names of the keys present in the group files of a manager's folder. A file that cannot be read or parsed contributes
+    /// no names (the manager's own load already reported it).
+    /// </summary>
+    /// <param name="manager">The settings manager of a scope.</param>
+    /// <returns>The key names, compared ordinally.</returns>
     private static HashSet<string> _StoredNames(SettingsManager manager)
     {
         HashSet<string> names = new(StringComparer.Ordinal);
@@ -243,7 +282,9 @@ internal static class SettingsCommand
         }
 
         // The files are read with the limits the manager loaded them with (--settings-max-*): a file that Load skipped as too
-        // large or too deep is not read here either, and nothing is loaded into one string.
+        // large or too deep is not read here either, and nothing is loaded into one string (the parser reads the stream).
+        // Residual risk: the size is checked before the read, so a file that grows in between is bounded only by the depth
+        // limit; the files belong to the user who runs the command.
         JsonDocumentOptions documentOptions = new()
         {
             MaxDepth = manager.MaxJsonDepth > 0
@@ -259,6 +300,8 @@ internal static class SettingsCommand
                     continue;
                 }
 
+                // Shared read/write/delete access, so that another process that holds or replaces the file at the same time does
+                // not make this read fail.
                 using FileStream stream = new(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                 if (JsonNode.Parse(stream, nodeOptions: null, documentOptions) is JsonObject obj)
                 {
@@ -277,7 +320,13 @@ internal static class SettingsCommand
         return names;
     }
 
-    /// <summary>Writes the list as a JSON array of setting objects.</summary>
+    /// <summary>
+    /// Writes the list as a JSON array of setting objects. Every object has the same keys: a stored value of a plugin that is not
+    /// loaded (<c>orphan: true</c>) has no type information, so its <c>uiName</c>, <c>type</c>, <c>default</c>,
+    /// <c>description</c>, and <c>activation</c> are <c>null</c>, and its value is the stored JSON as it is.
+    /// </summary>
+    /// <param name="entries">The entries in output order.</param>
+    /// <returns>The JSON text.</returns>
     private static string _ToJson(List<Entry> entries)
     {
         using MemoryStream stream = new();
@@ -326,7 +375,9 @@ internal static class SettingsCommand
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    /// <summary>The lower-case name of a scope in the output.</summary>
+    /// <summary>The lower-case name of a scope in the output (the same words <c>--scope</c> accepts).</summary>
+    /// <param name="scope">The scope.</param>
+    /// <returns><c>application</c> or <c>profile</c>.</returns>
     internal static string ScopeName(SettingScope scope) => scope == SettingScope.Application
         ? "application"
         : "profile";
@@ -335,7 +386,14 @@ internal static class SettingsCommand
 
     #region Get, set, reset
 
-    /// <summary>Prints the current value of one setting.</summary>
+    /// <summary>
+    /// Prints the current value of one setting in the Core text form, without any decoration, so a script can capture it. Unlike
+    /// the list, the value is printed as it is (no control-character cleaning).
+    /// </summary>
+    /// <param name="session">The plugin session.</param>
+    /// <param name="arguments">The parsed arguments.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <returns>The exit code.</returns>
     private static int _Get(CliPluginSession session, SettingsArguments arguments, CliIo io)
     {
         if (!SettingsLookup.TryFind(session, arguments.Positional[0], arguments.Scope, arguments.Group, out SettingsLookup.Match? match,
@@ -351,7 +409,15 @@ internal static class SettingsCommand
         return (int)ExitCode.Success;
     }
 
-    /// <summary>Sets one setting: parse, validate, apply, and merge-save its key.</summary>
+    /// <summary>
+    /// Sets one setting: find, parse, validate, apply, and merge-save its key. Everything that can be refused is refused before
+    /// the first write, so a refused command changes nothing.
+    /// </summary>
+    /// <param name="session">The plugin session.</param>
+    /// <param name="arguments">The parsed arguments.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <returns>The exit code.</returns>
+    /// <exception cref="PersistenceSettingsException">The settings folder cannot be written (the caller maps it to exit code 3).</exception>
     private static int _Set(CliPluginSession session, SettingsArguments arguments, CliIo io)
     {
         string name = arguments.Positional[0];
@@ -376,7 +442,8 @@ internal static class SettingsCommand
         }
 
         // Relative paths are resolved against the base directory of the run (the current directory) before they are stored,
-        // because a stored path must mean one place.
+        // because a stored path must mean one place: a relative path in a settings file would point somewhere else for every
+        // later run from another directory. Empty entries are left as they are.
         if (string.Equals(name, PluginPathsSetting.Name, StringComparison.Ordinal) && value.TryGetAsStringArray(out string[] paths))
         {
             string baseDirectory = io.BaseDirectory;
@@ -385,6 +452,9 @@ internal static class SettingsCommand
                 : Path.GetFullPath(path, baseDirectory))]);
         }
 
+        // The setting validates the value (range, shape) and keeps it as pending; a refusal comes back as a problem, not as an
+        // exception. Applying makes the pending value the current one, which is what SaveChanged writes; it then merges only this
+        // key into the group file under the folder lock, so other keys and other processes' changes survive.
         if (!setting.TrySetPendingValue(value, out SettingProblem? setProblem))
         {
             io.Error.WriteLine("Error: " + setProblem);
@@ -397,7 +467,17 @@ internal static class SettingsCommand
         return (int)ExitCode.Success;
     }
 
-    /// <summary>Sets the stored value of a setting whose plugin is not loaded; the text must be JSON.</summary>
+    /// <summary>
+    /// Sets the stored value of a setting whose plugin is not loaded; the text must be JSON, because without the plugin there is
+    /// no type to parse a plain text against. The text is one command-line argument (bounded by the operating system) and is
+    /// parsed with the default depth limit of <see cref="JsonDocument"/>.
+    /// </summary>
+    /// <param name="match">The orphan found by the lookup.</param>
+    /// <param name="name">The setting name.</param>
+    /// <param name="text">The value as typed.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <returns>The exit code.</returns>
+    /// <exception cref="PersistenceSettingsException">The settings folder cannot be written (the caller maps it to exit code 3).</exception>
     private static int _SetOrphan(SettingsLookup.Match match, string name, string text, CliIo io)
     {
         JsonDocument document;
@@ -413,6 +493,7 @@ internal static class SettingsCommand
 
         using (document)
         {
+            // The manager refuses a JSON null and a name that is not an orphan; nothing is written then.
             if (!match.Manager.TrySetOrphanValue(name, document.RootElement))
             {
                 io.Error.WriteLine(Invariant($"Error: {name}: the value cannot be stored."));
@@ -426,7 +507,15 @@ internal static class SettingsCommand
         return (int)ExitCode.Success;
     }
 
-    /// <summary>Removes the stored value of a setting; the default applies again.</summary>
+    /// <summary>
+    /// Removes the stored value of a setting; the default applies again. A stored value of a plugin that is not loaded is removed
+    /// from the file. Only the one key is removed (merge write), other keys of the file stay.
+    /// </summary>
+    /// <param name="session">The plugin session.</param>
+    /// <param name="arguments">The parsed arguments.</param>
+    /// <param name="io">Output and error writers.</param>
+    /// <returns>The exit code.</returns>
+    /// <exception cref="PersistenceSettingsException">The settings folder cannot be written (the caller maps it to exit code 3).</exception>
     private static int _Reset(CliPluginSession session, SettingsArguments arguments, CliIo io)
     {
         string name = arguments.Positional[0];
@@ -436,6 +525,8 @@ internal static class SettingsCommand
             return (int)ExitCode.ArgumentError;
         }
 
+        // Unset changes the file first and the in-memory value second, and needs no separate save; false means the name is no
+        // longer known to the manager (the lookup just found it, so this only guards against a change in between).
         if (!match.Manager.Unset(name))
         {
             io.Error.WriteLine($"Error: Unknown setting '{name}'; see ni settings list.");

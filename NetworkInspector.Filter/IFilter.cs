@@ -83,6 +83,7 @@ public interface IFilter
     /// <param name="matched">Receives the verdict.</param>
     /// <param name="failure">Receives the error when evaluation failed.</param>
     /// <returns><see langword="true"/> when a verdict was produced.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="packet"/> is <see langword="null"/>.</exception>
     bool TryIsMatch(Packet packet, out bool matched, [NotNullWhen(false)] out FilterError? failure);
 
     /// <summary>
@@ -98,6 +99,7 @@ public interface IFilter
     /// Concrete reader type. Constrained so <see cref="PacketIndexReaderView"/> stays unboxed
     /// (<c>constrained.callvirt</c>).
     /// </typeparam>
+    /// <exception cref="ArgumentNullException"><paramref name="packet"/> is <see langword="null"/>.</exception>
     bool TryIsMatch<TIndex>(Packet packet, TIndex? index, out bool matched, [NotNullWhen(false)] out FilterError? failure)
         where TIndex : IPacketIndexReader;
 
@@ -110,7 +112,13 @@ public interface IFilter
     /// Do not pass a <see cref="PacketIndexReaderView"/> as <see cref="IPacketIndexReader"/> —
     /// that boxes. Let <typeparamref name="TIndex"/> be the struct or <see cref="PacketIndex"/>.
     /// </para>
+    /// <para>
+    /// Returns <see langword="false"/> ("no pruning possible, evaluate every packet") for an always-match filter and
+    /// when <paramref name="index"/> belongs to another stack than the filter. A returned bitmap is a superset of the
+    /// matching packets, never a final verdict.
+    /// </para>
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="index"/> is <see langword="null"/> (or a view over no index).</exception>
     bool TryBuildCandidates<TIndex>(TIndex index, [NotNullWhen(true)] out RoaringBitmap? candidates)
         where TIndex : IPacketIndexReader;
 
@@ -126,6 +134,7 @@ public interface IFilter
     /// that boxes. Let <typeparamref name="TIndex"/> be the struct or <see cref="PacketIndex"/>.
     /// </para>
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="index"/> is <see langword="null"/> (or a view over no index).</exception>
     bool TryIsPresenceCandidate<TIndex>(TIndex index, uint packetId, out bool isCandidate)
         where TIndex : IPacketIndexReader;
 
@@ -144,6 +153,7 @@ public interface IFilter
     /// <param name="stack">The stack to bind names against.</param>
     /// <param name="derived">Receives the new, independent filter on success.</param>
     /// <param name="failure">Receives the bind error, for example a name the new stack does not know.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="stack"/> is <see langword="null"/>.</exception>
     bool TryDerive(IStack stack, [NotNullWhen(true)] out IFilter? derived, [NotNullWhen(false)] out FilterError? failure);
 
     #endregion

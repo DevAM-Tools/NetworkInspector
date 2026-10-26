@@ -24,6 +24,21 @@ internal sealed class EnumSettingMetadataTests
     }
 
     [Test]
+    public async Task AllowedValues_IsReadOnlyAndNotTheInternalArray()
+    {
+        EnumSettingMetadata meta = EnumSettingMetadata.FromPairs([("Low", 0), ("High", 1)]);
+
+        bool isArray = meta.AllowedValues is EnumSettingValue[];
+        bool readOnly = meta.AllowedValues is IList<EnumSettingValue> list && list.IsReadOnly;
+        bool sameInstance = ReferenceEquals(meta.AllowedValues, meta.AllowedValues);
+
+        await Assert.That(isArray).IsFalse();
+        await Assert.That(readOnly).IsTrue();
+        await Assert.That(sameInstance).IsTrue();
+        await Assert.That(meta.AllowedValues[1].Name).IsEqualTo("High");
+    }
+
+    [Test]
     public async Task GetByNumeric_Found()
     {
         EnumSettingMetadata meta = EnumSettingMetadata.FromPairs(

@@ -6,18 +6,36 @@ namespace NetworkInspector.Sources.Asc.Format;
 /// Parses a Vector ASC <c>CANXL</c> line (logging spec 1.4.17 / linux-can <c>eval_canxl</c>)
 /// into the compact SocketCAN buffer used by the CAN XL dissector.
 /// Channel and the decimal data-length column are decimal. Every other numeric column is hex,
-/// even when the file header says <c>base dec</c>.
-/// Stateless; safe to call from multiple threads.
+/// even when the file header says <c>base dec</c>, so this parser ignores <see cref="AscHeader.NumericBase"/>.
+/// <para>
+/// A <c>CANXL</c> line carries one of three formats, selected by the format token. <c>XLFF</c> produces the 12-byte
+/// CAN XL header buffer that <c>CanProtocol</c> reads: bytes 0-3 big-endian word (VCID in bits 16-23, 11-bit priority in
+/// bits 0-10), byte 4 flags (XLF, SEC, RRS), byte 5 SDU type, bytes 6-7 payload length (little-endian), bytes 8-11
+/// acceptance field (little-endian), then the payload. <c>CBFF</c>/<c>CEFF</c> (classic) and <c>FBFF</c>/<c>FEFF</c> (FD)
+/// rows are written into the same SocketCAN classic/FD layouts as <see cref="AscCanParser"/> and
+/// <see cref="AscCanFdParser"/>, so they are not CAN XL frames downstream.
+/// </para>
 /// </summary>
 internal static class AscCanXlParser
 {
     #region Constants
 
+    /// <summary>Header of a classic or FD SocketCAN frame: id(4) + length(1) + flags(1) + reserved(2).</summary>
     private const int _ClassicHeaderSize = 8;
+
+    /// <summary>Header of a CAN XL SocketCAN frame (priority/VCID word, flags, SDU type, length, acceptance field).</summary>
     private const int _XlHeaderSize = 12;
+
+    /// <summary>Data bytes of a classic frame; the classic buffer is always header plus this many bytes.</summary>
     private const int _ClassicDataSize = 8;
+
+    /// <summary>Largest CAN FD payload; bounds the stack scratch of the FD tail.</summary>
     private const int _MaxFdData = 64;
+
+    /// <summary>Largest CAN XL payload (ISO 11898-1:2024); equals the maximum that <c>CanProtocol</c> accepts.</summary>
     private const int _MaxXlData = 2048;
+
+    // SocketCAN id-word and flag-byte bits written into the output frame.
     private const uint _SocketCanEff = 0x80000000u;
     private const uint _SocketCanRtr = 0x40000000u;
     private const byte _SocketCanXlf = 0x80;
@@ -26,6 +44,9 @@ internal static class AscCanXlParser
     private const byte _SocketCanFdf = 0x04;
     private const byte _SocketCanBrs = 0x01;
     private const byte _SocketCanEsi = 0x02;
+
+    // Bits of the hexadecimal flags column at the end of a CANXL line (Vector ASC logging spec); they differ from the
+    // SocketCAN bits above and are translated one by one.
     private const uint _AscFXlf = 0x00400000u;
     private const uint _AscFFdf = 0x00001000u;
     private const uint _AscFBrs = 0x00002000u;
@@ -33,7 +54,11 @@ internal static class AscCanXlParser
     private const uint _AscFSec = 0x01000000u;
     private const uint _AscFRrs = 0x00800000u;
     private const uint _AscFRemote = 0x10u;
+
+    /// <summary>11-bit identifier (also the XL priority); larger values in a standard format are rejected, not truncated.</summary>
     private const uint _StandardIdMask = 0x7FFu;
+
+    /// <summary>29-bit identifier (CAN_EFF_MASK).</summary>
     private const uint _ExtendedIdMask = 0x1FFFFFFFu;
 
     #endregion
@@ -44,8 +69,13 @@ internal static class AscCanXlParser
     /// Reads the format token and maps it to the bus type used for interface registration.
     /// <c>XLFF</c> is <see cref="AscBusType.CanXl"/> so export can tell it from CAN FD.
     /// </summary>
+    /// <param name="line">Trimmed ASC line.</param>
+    /// <param name="busType">The bus type for a recognised format token; <see cref="AscBusType.Unknown"/> otherwise.</param>
+    /// <returns><c>false</c> when the line is not a <c>CANXL</c> line or the format token is not one of the four known formats.</returns>
     internal static bool TryPeekBusType(ReadOnlySpan<byte> line, out AscBusType busType)
     {
+        // Used by the open-time scan (interface discovery) before any frame is built, so it reads only the format token
+        // and none of the numeric columns.
         busType = AscBusType.Unknown;
         if (!_TryReadFormat(line, out ReadOnlySpan<byte> format))
         {
@@ -127,17 +157,21 @@ internal static class AscCanXlParser
             return false;
         }
 
+        // Two columns between the format token and the identifier carry nothing that is stored in the frame.
         if (!tokenizer.TryNextToken(out _) || !tokenizer.TryNextToken(out _))
         {
             return false;
         }
 
+        // The identifier is hex in every format. For XLFF it is the 11-bit priority. The range check per format rejects
+        // a line whose id does not fit instead of masking it into a different identifier.
         if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> idToken)
             || !_TryParseHexUInt(idToken, out uint identifier))
         {
             return false;
         }
 
+        // Dispatch on the format token; busType is set only on the branch that parsed, so a failure leaves Unknown.
         if (_TokenEquals(format, "XLFF"u8))
         {
             if (identifier > _StandardIdMask)
@@ -180,6 +214,10 @@ internal static class AscCanXlParser
 
     #region Format tails
 
+    /// <summary>
+    /// Parses the XLFF tail (SDT, SEC, DLC, data length, ..., data, flags). Tries the tail as written; if the DLC/length
+    /// pair is unreadable, retries once with one token skipped, because an optional symbolic name can sit in front of SDT.
+    /// </summary>
     private static bool _TryParseXlff(ref AscTokenizerBytes tokenizer, uint priority, out byte[] frame)
     {
         frame = [];
@@ -205,6 +243,17 @@ internal static class AscCanXlParser
         return _TryXlffTail(ref tokenizer, priority, out frame, out _);
     }
 
+    /// <summary>
+    /// Parses one attempt at the XLFF tail: SDT, SEC, DLC, data length, two unstored columns, VCID, acceptance field, the
+    /// data bytes, one unstored column and the flags column (which must have the XL format bit set).
+    /// </summary>
+    /// <param name="tokenizer">Tokenizer positioned after the identifier column.</param>
+    /// <param name="priority">The 11-bit priority parsed from the identifier column.</param>
+    /// <param name="frame">The CAN XL frame; empty when this method returns <c>false</c>.</param>
+    /// <param name="retryName">
+    /// True while the failure is still in the leading columns (SDT, SEC, DLC, length), where a symbolic name could be the
+    /// cause. Cleared once the DLC/length pair is valid, so a later failure is reported as a bad line, not retried.
+    /// </param>
     private static bool _TryXlffTail(
         ref AscTokenizerBytes tokenizer,
         uint priority,
@@ -240,6 +289,7 @@ internal static class AscCanXlParser
         }
 
         // Past this point the DLC/length pair was readable. A later failure is the line, not a name.
+        // CAN XL encodes the length as DLC = length − 1 (1..2048 bytes), so the two columns must agree.
         if (dataLen < 1 || dataLen > _MaxXlData || dataLen != (int)dlc + 1)
         {
             return false;
@@ -247,6 +297,7 @@ internal static class AscCanXlParser
 
         retryName = false;
 
+        // Two columns between the length and the VCID are not stored.
         if (!tokenizer.TryNextToken(out _) || !tokenizer.TryNextToken(out _))
         {
             return false;
@@ -264,6 +315,9 @@ internal static class AscCanXlParser
             return false;
         }
 
+        // Build the XL header in the layout CanProtocol parses. The word is big-endian while the length and the acceptance
+        // field are little-endian: that mix is the layout of the consumer, not an oversight. dataLen (≤ 2048) is bounded
+        // above, so the allocation and the ushort cast are safe. Byte 4 (flags) is written after the flags column is read.
         frame = new byte[_XlHeaderSize + dataLen];
         uint word = ((uint)vcid << 16) | (priority & _StandardIdMask);
         BinaryPrimitives.WriteUInt32BigEndian(frame, word);
@@ -271,6 +325,7 @@ internal static class AscCanXlParser
         BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(6), (ushort)dataLen);
         BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(8), acceptanceField);
 
+        // Every payload byte must be present: a short line is rejected whole (the frame is dropped, not zero-padded).
         for (int i = 0; i < dataLen; i++)
         {
             if (!tokenizer.TryNextToken(out ReadOnlySpan<byte> dataToken)
@@ -310,6 +365,10 @@ internal static class AscCanXlParser
         return true;
     }
 
+    /// <summary>
+    /// Parses the CBFF/CEFF tail into a 16-byte classic SocketCAN frame. Unlike <see cref="AscCanParser"/> the bus DLC
+    /// above 8 is not copied to <c>len8_dlc</c> (byte 7); only the stored length is capped at 8.
+    /// </summary>
     private static bool _TryParseClassic(
         ref AscTokenizerBytes tokenizer,
         uint identifier,
@@ -322,6 +381,7 @@ internal static class AscCanXlParser
             return false;
         }
 
+        // The scratch is 8 bytes on the stack; dataLen ≤ 8 was checked by _TryReadLengthPair, so data[i] stays in range.
         Span<byte> data = stackalloc byte[_ClassicDataSize];
         data.Clear();
         for (int i = 0; i < dataLen; i++)
@@ -333,6 +393,7 @@ internal static class AscCanXlParser
             }
         }
 
+        // One column (not stored) precedes the flags column; its remote-request bit selects RTR.
         if (!tokenizer.TryNextToken(out _)
             || !tokenizer.TryNextToken(out ReadOnlySpan<byte> flagsToken)
             || !_TryParseHexUInt(flagsToken, out uint flags))
@@ -361,6 +422,10 @@ internal static class AscCanXlParser
         return true;
     }
 
+    /// <summary>
+    /// Parses the FBFF/FEFF tail into a SocketCAN FD frame whose length byte is the data-length column; the flags column
+    /// must have the FD-format bit set, else the line is not an FD frame.
+    /// </summary>
     private static bool _TryParseFd(
         ref AscTokenizerBytes tokenizer,
         uint identifier,
@@ -373,6 +438,8 @@ internal static class AscCanXlParser
             return false;
         }
 
+        // dataLen ≤ 64 was checked by _TryReadLengthPair, so the 64-byte stack scratch cannot overflow. Not cleared:
+        // only the first dataLen bytes are read, and each is written before.
         Span<byte> data = stackalloc byte[_MaxFdData];
         for (int i = 0; i < dataLen; i++)
         {
@@ -448,6 +515,10 @@ internal static class AscCanXlParser
         return _TryLengthPair(ref tokenizer, maxDlc, maxData, out dlc, out dataLen);
     }
 
+    /// <summary>
+    /// Reads the DLC (hex, at most <paramref name="maxDlc"/>) and the data length (decimal, at most
+    /// <paramref name="maxData"/>); the whole token must be consumed. The bounds protect the callers' fixed-size scratch.
+    /// </summary>
     private static bool _TryLengthPair(
         ref AscTokenizerBytes tokenizer,
         int maxDlc,
@@ -481,6 +552,7 @@ internal static class AscCanXlParser
 
     #region Helpers
 
+    /// <summary>Reads the format token (the fifth token) of a <c>CANXL</c> line; it must be four characters long.</summary>
     private static bool _TryReadFormat(ReadOnlySpan<byte> line, out ReadOnlySpan<byte> format)
     {
         format = default;
@@ -500,6 +572,7 @@ internal static class AscCanXlParser
         return tokenizer.TryNextToken(out format) && format.Length == 4;
     }
 
+    /// <summary>True for <c>Rx</c> and <c>Tx</c>; <c>TxRq</c> (a transmit request, not a frame) is deliberately excluded.</summary>
     private static bool _IsFrameDirection(ReadOnlySpan<byte> token) =>
         _TokenEquals(token, "Rx"u8) || _TokenEquals(token, "Tx"u8);
 
@@ -516,6 +589,7 @@ internal static class AscCanXlParser
         return identifier <= _StandardIdMask;
     }
 
+    /// <summary>Parses a hexadecimal token without prefix; the whole token must be consumed.</summary>
     private static bool _TryParseHexUInt(ReadOnlySpan<byte> token, out uint value)
     {
         value = 0;

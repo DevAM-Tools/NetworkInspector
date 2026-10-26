@@ -247,6 +247,94 @@ internal sealed class BuiltInSourceTests
     }
 
     [Test]
+    [Arguments("ipv4", 2UL, 65_549L)]
+    [Arguments("udp4", 4UL, 65_549L)]
+    [Arguments("tcp4", 8UL, 65_549L)]
+    [Arguments("ipv6", 3UL, 65_589L)]
+    [Arguments("udp6", 5UL, 65_589L)]
+    [Arguments("tcp6", 9UL, 65_589L)]
+    [Arguments("fullrandom", 0UL, 2_147_483_591L)]
+    [Arguments("ethernet", 1UL, 2_147_483_591L)]
+    public async Task TheLargestFrameSizeIsBoundedByTheFormatOfTheMode(string mode, ulong modeValue, long limit)
+    {
+        (IFrameSource? atLimit, PluginError? atLimitError) = RegistrationRunner.Open(RandomSourceRegistration.Create(), [],
+            ("count", SettingValue.I64(1)), ("mode", SettingValue.Enum(mode, modeValue)), ("maxFrameSize", SettingValue.I64(limit)));
+        atLimit?.Dispose();
+        PluginError above = _Fail(RandomSourceRegistration.Create(), [],
+            ("count", SettingValue.I64(1)), ("mode", SettingValue.Enum(mode, modeValue)), ("maxFrameSize", SettingValue.I64(limit + 1)));
+
+        // One above the limit is refused with the option, the range, and the mode; the limit itself is accepted. The value
+        // limit + 1 stays inside the setting bounds, so it is the registration that judges it.
+        await Assert.That(atLimitError).IsNull();
+        await Assert.That(atLimit).IsNotNull();
+        await Assert.That($"{above.Code}:{above.Option}").IsEqualTo("InvalidOption:maxFrameSize");
+        await Assert.That(above.Message).IsEqualTo($"The largest frame size {limit + 1} exceeds the maximum {limit} for mode {mode}.");
+    }
+
+    [Test]
+    [Arguments("can", 6UL)]
+    [Arguments("canfd", 7UL)]
+    [Arguments("tcpstream4", 10UL)]
+    [Arguments("tcpstream6", 11UL)]
+    public async Task ModesThatIgnoreFrameSizesDoNotCheckTheLargestFrameSize(string mode, ulong modeValue)
+    {
+        (IFrameSource? source, PluginError? error) = RegistrationRunner.Open(RandomSourceRegistration.Create(), [],
+            ("count", SettingValue.I64(1)), ("mode", SettingValue.Enum(mode, modeValue)), ("maxFrameSize", SettingValue.I64(int.MaxValue)));
+        source?.Dispose();
+
+        await Assert.That(error).IsNull();
+        await Assert.That(source).IsNotNull();
+    }
+
+    [Test]
+    public async Task TheRateMustKeepTheTimestampsOfTheLastFrameIn64Bits()
+    {
+        // An unlimited source can reach the largest frame id (about 2.1e9), so its interval is at most about 4.29e9 ns.
+        PluginError unlimited = _Fail(RandomSourceRegistration.Create(), [],
+            ("count", SettingValue.I64(0)), ("framesPerSecond", SettingValue.F64(0.2)));
+        PluginError largeCount = _Fail(RandomSourceRegistration.Create(), [],
+            ("count", SettingValue.I64(Array.MaxLength)), ("framesPerSecond", SettingValue.F64(0.2)));
+        (IFrameSource? atMinimum, PluginError? atMinimumError) = RegistrationRunner.Open(RandomSourceRegistration.Create(), [],
+            ("count", SettingValue.I64(0)), ("framesPerSecond", SettingValue.F64(0.233)));
+        atMinimum?.Dispose();
+
+        // With few frames the whole setting range (down to 0.001 frames per second, 1e12 ns) fits, one frame has no interval at all.
+        (IFrameSource? slow, PluginError? slowError) = RegistrationRunner.Open(RandomSourceRegistration.Create(), [],
+            ("count", SettingValue.I64(1000)), ("framesPerSecond", SettingValue.F64(0.001)));
+        slow?.Dispose();
+        (IFrameSource? single, PluginError? singleError) = RegistrationRunner.Open(RandomSourceRegistration.Create(), [],
+            ("count", SettingValue.I64(1)), ("framesPerSecond", SettingValue.F64(0.001)));
+        single?.Dispose();
+
+        await Assert.That($"{unlimited.Code}:{unlimited.Option}").IsEqualTo("InvalidOption:framesPerSecond");
+        await Assert.That(unlimited.Message).IsEqualTo(
+            "The rate 0.2 frames per second is too low for an unlimited source: the timestamps must fit in 64 bits, so the rate must be at least 0.233.");
+        await Assert.That($"{largeCount.Code}:{largeCount.Option}").IsEqualTo("InvalidOption:framesPerSecond");
+        await Assert.That(largeCount.Message).StartsWith($"The rate 0.2 frames per second is too low for {Array.MaxLength} frames: ");
+        await Assert.That(atMinimumError).IsNull();
+        await Assert.That(atMinimum).IsNotNull();
+        await Assert.That(slowError).IsNull();
+        await Assert.That(slow).IsNotNull();
+        await Assert.That(singleError).IsNull();
+        await Assert.That(single).IsNotNull();
+    }
+
+    [Test]
+    public async Task TheOptionDescriptionsNameTheRanges()
+    {
+        using SettingsManager options = RegistrationOptions.CreateDefaults(RandomSourceRegistration.Create().RegisterOptions);
+
+        string size = Expect.NotNull(Expect.NotNull(options.GetSetting("maxFrameSize")).Description);
+        string rate = Expect.NotNull(Expect.NotNull(options.GetSetting("framesPerSecond")).Description);
+
+        await Assert.That(size).Contains("65549");
+        await Assert.That(size).Contains("65589");
+        await Assert.That(size).Contains("2147483591");
+        await Assert.That(rate).Contains("0.001 to 1000000000");
+        await Assert.That(rate).Contains("0.233");
+    }
+
+    [Test]
     public async Task AnEmptyOrTruncatedFileIsUnsupportedNotUnreadable()
     {
         using TempFolder folder = new("src-truncated");

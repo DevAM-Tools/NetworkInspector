@@ -5,6 +5,11 @@ namespace NetworkInspector.Protocols.Icmpv6;
 /// <summary>
 /// Groups all registered field IDs for ICMPv6 Neighbor Discovery Protocol (NDP) sub-fields.
 /// Populated in <see cref="Icmpv6Protocol._OnStartCustom"/> from attribute-registered field IDs.
+/// <para>
+/// The ids are bundled in one immutable struct that <see cref="Icmpv6NdpParser"/> receives by
+/// <see langword="in"/> reference, so the parser methods keep a short parameter list and no per-packet object is
+/// created. The struct is filled once at start and only read afterwards, so concurrent parses may share it.
+/// </para>
 /// </summary>
 internal readonly struct Icmpv6NdpFieldIds
 {

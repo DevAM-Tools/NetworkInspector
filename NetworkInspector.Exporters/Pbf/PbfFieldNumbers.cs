@@ -3,8 +3,18 @@
 namespace NetworkInspector.Exporters.Pbf;
 
 /// <summary>
-/// PBF protobuf field numbers for the standard block format.
-/// These correspond to the PBF wire protocol specification.
+/// PBF protobuf field numbers for the standard and columnar block formats.
+/// These correspond to the PBF wire protocol specification (format v1); changing a value breaks every file written
+/// before the change, so these are format constants, not tuning knobs.
+/// <para>
+/// Field numbers are scoped to the message they appear in, so the same number is reused across messages (for example
+/// 1 is the packet count in a block header, the packet ID in a packet, and the field ID in a field). Within a standard
+/// block payload the number 5 is used twice: <see cref="BlockMaxTimestamp"/> (varint, wire type 0) and
+/// <see cref="PacketField"/> (length-delimited, wire type 2), which carries each packet; a reader tells them apart
+/// by wire type. In the columnar format a string column, the frame-bytes column or a delta column is a length-delimited
+/// sub-message: string and frame-bytes columns repeat sub-field 1 once per row; delta-encoded integer columns use sub-field 1 for the
+/// first value and sub-field 2 for each following difference.
+/// </para>
 /// </summary>
 internal static class PbfFieldNumbers
 {
@@ -75,6 +85,12 @@ internal static class PbfFieldNumbers
     internal const int TrailerBlockCount = 2;
     /// <summary>Trailer field presence bitmap.</summary>
     internal const int TrailerFieldBitmap = 3;
+    /// <summary>Trailer block index: one length-delimited entry per block, holding the two sub-fields below.</summary>
+    internal const int TrailerBlockIndex = 4;
+    /// <summary>Sub-field of a trailer block-index entry: minimum timestamp of the block (sint64).</summary>
+    internal const int TrailerBlockIndexMinTimestamp = 1;
+    /// <summary>Sub-field of a trailer block-index entry: maximum timestamp of the block (sint64).</summary>
+    internal const int TrailerBlockIndexMaxTimestamp = 2;
 
     // ========================================================================
     // === Columnar block payload (top level; shares fields 1-5 above      ===
@@ -86,9 +102,15 @@ internal static class PbfFieldNumbers
     internal const int ColumnarPacketIds = 10;
     /// <summary>Timestamp column: base value + per-row deltas (sint64 zigzag), length-delimited.</summary>
     internal const int ColumnarTimestamps = 11;
-    /// <summary>Per-packet info strings (repeated string). Present only when <c>IncludeInfo</c> was requested.</summary>
+    /// <summary>
+    /// Per-packet info strings: a sub-message repeating string sub-field 1 once per packet. Present only when
+    /// <c>IncludeInfo</c> was requested.
+    /// </summary>
     internal const int ColumnarInfos = 12;
-    /// <summary>Raw captured frame bytes, one per packet (repeated bytes). Present only when <c>IncludeFrameBytes</c> was requested.</summary>
+    /// <summary>
+    /// Raw captured frame bytes: a sub-message repeating bytes sub-field 1 once per packet. Present only when
+    /// <c>IncludeFrameBytes</c> was requested.
+    /// </summary>
     internal const int ColumnarFrameBytes = 13;
     /// <summary>Flattened field-tree topology, encoded as a single <see cref="ColumnarTopology"/> sub-message (see the Topology* constants below).</summary>
     internal const int ColumnarTopology = 14;
@@ -98,11 +120,14 @@ internal static class PbfFieldNumbers
     // === Columnar topology sub-message (nested under ColumnarTopology) ===
     /// <summary>Owning packet ID per topology row: base value + per-row deltas (sint64 zigzag).</summary>
     internal const int TopologyPacketIds = 1;
-    /// <summary>Depth-first node ID per topology row (packed as repeated varint).</summary>
+    /// <summary>Depth-first node ID per topology row (repeated varint, one tag per row; not the packed encoding).</summary>
     internal const int TopologyNodeIds = 2;
-    /// <summary>Registered field ID per topology row (packed as repeated varint).</summary>
+    /// <summary>Registered field ID per topology row (repeated varint, one tag per row; not the packed encoding).</summary>
     internal const int TopologyFieldIds = 3;
-    /// <summary>Parent node ID per topology row, or -1 for top-level fields (repeated sint64 zigzag).</summary>
+    /// <summary>
+    /// Parent node ID per topology row, or -1 for top-level fields (repeated sint64 zigzag; zigzag keeps the -1 to
+    /// one byte).
+    /// </summary>
     internal const int TopologyParentNodeIds = 4;
 
     // === Columnar field-value column sub-message (nested under ColumnarFieldColumns) ===
@@ -127,16 +152,20 @@ internal static class PbfFieldNumbers
     /// <summary>Values for a <c>Bytes</c> or fixed-size address column (repeated length-delimited).</summary>
     internal const int ColumnBytesValues = 10;
     /// <summary>
-    /// Plain string values for a <c>String</c> column (repeated string). Wire tag 12 is stable for
-    /// PBF v1 (historically reserved for dictionary entries; writers emit one string per row).
+    /// Plain string values for a <c>String</c> column: a sub-message repeating string sub-field 1 once per row, with
+    /// a null value written as an empty string. Field number 12 is stable for PBF v1 (historically reserved for
+    /// dictionary entries; writers emit one string per row).
     /// </summary>
     internal const int ColumnStringValues = 12;
     /// <summary>
-    /// Plain custom-representation strings per row (repeated string). Wire tag 15 is stable for PBF v1.
+    /// Plain custom-representation strings per row: a sub-message repeating string sub-field 1 once per row, absent
+    /// values written as empty strings (so absent and empty are not distinguishable in PBF). Field number 15 is stable
+    /// for PBF v1.
     /// </summary>
     internal const int ColumnCustomRepresentations = 15;
     /// <summary>
-    /// Plain custom-text strings per row (repeated string). Wire tag 18 is stable for PBF v1.
+    /// Plain custom-text strings per row: a sub-message repeating string sub-field 1 once per row, absent values
+    /// written as empty strings. Field number 18 is stable for PBF v1.
     /// </summary>
     internal const int ColumnCustomTexts = 18;
 }

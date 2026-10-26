@@ -7,10 +7,21 @@ namespace NetworkInspector.Sources.Asc.Format;
 /// Examines line prefixes to determine the bus type and event kind.
 /// Provides overloads for both <c>ReadOnlySpan&lt;char&gt;</c> (string-based path) and
 /// <c>ReadOnlySpan&lt;byte&gt;</c> (raw ASCII byte path, zero allocation during disk scan).
+/// <para>
+/// The checks run in a fixed order and the first match wins; the order is part of the behaviour (see the comments at the
+/// individual checks). The classifier looks at prefixes and keywords only: it decides which parser a line goes to, and the
+/// parsers validate the rest. It runs for every line of the open-time scan and again for every frame that is re-read, so
+/// the byte overload, which the sources use, must stay allocation-free. The <c>char</c> overload is the reference
+/// implementation kept in step with it by tests; the sources do not call it.
+/// </para>
+/// Stateless; safe to call from multiple threads.
 /// </summary>
 internal static class AscLineClassifier
 {
+    /// <summary>Digit set used to require at least one digit in a timestamp (char overload).</summary>
     private static readonly SearchValues<char> _AsciiTimestampDigits = SearchValues.Create("0123456789");
+
+    /// <summary>Digit set used to require at least one digit in a timestamp (byte overload).</summary>
     private static readonly SearchValues<byte> _AsciiTimestampDigitBytes = SearchValues.Create("0123456789"u8);
 
     /// <summary>Characters a timestamp body may contain (digits and the decimal point).</summary>
@@ -99,21 +110,18 @@ internal static class AscLineClassifier
             return AscLineType.CanFdMessage;
         }
 
-        // ErrorFrame — can appear as "<time> <ch> ErrorFrame" or "<time> <ch>  ErrorFrame"
-        if (_ContainsToken(rest, "ErrorFrame"))
+        // A first token that starts with a digit is the decimal channel of a classic CAN bus. These are by far the most
+        // frequent lines, so they are decided first, from the second token alone (see _ClassifyChannelFirstLine). The
+        // CANFD check above runs first on purpose: an FD error line is handled by AscCanFdParser, not as a classic error frame.
+        if (char.IsDigit(rest[0]))
         {
-            return AscLineType.CanErrorFrame;
+            return _ClassifyChannelFirstLine(rest);
         }
 
-        // OverloadFrame
-        if (_ContainsToken(rest, "OverloadFrame"))
-        {
-            return AscLineType.CanOverloadFrame;
-        }
-
-        // CAN status: "CAN <ch> Status:..."
+        // CAN status: "CAN <ch> Status:..." with the keyword as the token after the channel (a symbolic name elsewhere in
+        // the line must not turn a line into a status event).
         if (rest.StartsWith("CAN ", StringComparison.OrdinalIgnoreCase)
-            && _ContainsToken(rest, "Status"))
+            && _TokenAtStartsWith(rest, 2, "Status"))
         {
             return AscLineType.CanStatus;
         }
@@ -168,18 +176,7 @@ internal static class AscLineClassifier
             return AscLineType.GpsEvent;
         }
 
-        // "<channel> Statistic:" is a bus-statistics event, not a CAN frame.
-        if (_IsChannelStatistic(rest))
-        {
-            return AscLineType.CanBusStatistics;
-        }
-
-        // Default: if the first char of rest is a digit (channel number), it's a CAN message
-        if (char.IsDigit(rest[0]))
-        {
-            return AscLineType.CanMessage;
-        }
-
+        // A line that starts with a digit (channel number) was decided above; nothing else is a known line type.
         return AscLineType.Unknown;
     }
 
@@ -250,6 +247,8 @@ internal static class AscLineClassifier
             return AscLineType.Unknown;
         }
 
+        // Same order and meaning as the char overload (the comments there apply): CANXL and CANFD must be the token right
+        // after the timestamp, and are tested before the keyword searches so a symbolic name cannot steal the line.
         if (_NextTokenEquals(rest, "CANXL"u8))
         {
             return AscLineType.CanXlMessage;
@@ -260,17 +259,17 @@ internal static class AscLineClassifier
             return AscLineType.CanFdMessage;
         }
 
-        if (_ContainsByteTokenIgnoreCase(rest, "ErrorFrame"u8))
+        // A first token that starts with a digit is the decimal channel of a classic CAN bus: the most frequent lines, so
+        // they are decided first and from their second token alone (no scan over the whole line, whatever its length). The
+        // CANFD check above runs first on purpose: an FD error line is handled by AscCanFdParser, not as a classic error frame.
+        if (_IsAsciiDigit(rest[0]))
         {
-            return AscLineType.CanErrorFrame;
+            return _ClassifyChannelFirstLine(rest);
         }
 
-        if (_ContainsByteTokenIgnoreCase(rest, "OverloadFrame"u8))
-        {
-            return AscLineType.CanOverloadFrame;
-        }
-
-        if (StartsWithAsciiIgnoreCase(rest, "CAN "u8) && _ContainsByteTokenIgnoreCase(rest, "Status"u8))
+        // "CAN <ch> Status:..." with the keyword as the token after the channel; a symbolic name elsewhere in the line
+        // must not turn it into a status event.
+        if (StartsWithAsciiIgnoreCase(rest, "CAN "u8) && _TokenAtStartsWith(rest, 2, "Status"u8))
         {
             return AscLineType.CanStatus;
         }
@@ -286,7 +285,7 @@ internal static class AscLineClassifier
             return _ClassifyLinEvent(rest);
         }
 
-        // FlexRay: "Fr " or "Fr\t"
+        // FlexRay: "Fr " or "Fr\t" (the separator is required so a longer word starting with "Fr" is not taken).
         if ((StartsWithAsciiIgnoreCase(rest, "Fr"u8))
             && rest.Length > 2
             && (rest[2] == (byte)' ' || rest[2] == (byte)'\t'))
@@ -297,11 +296,6 @@ internal static class AscLineClassifier
         if (_IsEthernetPacket(rest))
         {
             return AscLineType.EthernetPacket;
-        }
-
-        if (_IsChannelStatistic(rest))
-        {
-            return AscLineType.CanBusStatistics;
         }
 
         if (StartsWithAsciiIgnoreCase(rest, "EnvVar:"u8))
@@ -324,11 +318,7 @@ internal static class AscLineClassifier
             return AscLineType.GpsEvent;
         }
 
-        if (_IsAsciiDigit(rest[0]))
-        {
-            return AscLineType.CanMessage;
-        }
-
+        // A line that starts with a digit (channel number) was decided above; nothing else is a known line type.
         return AscLineType.Unknown;
     }
 
@@ -336,6 +326,7 @@ internal static class AscLineClassifier
 
     #region Char helpers
 
+    /// <summary>True when the first token of <paramref name="rest"/> is exactly <paramref name="expected"/> (ignoring case).</summary>
     private static bool _NextTokenEquals(ReadOnlySpan<char> rest, string expected)
     {
         ReadOnlySpan<char> trimmed = rest.TrimStart();
@@ -438,14 +429,74 @@ internal static class AscLineClassifier
         return after.StartsWith("Statistic:", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Decides a line after the timestamp whose first token is a digit, that is the decimal channel of a classic CAN bus:
+    /// an <c>ErrorFrame</c> or <c>OverloadFrame</c> line, a <c>&lt;channel&gt; Statistic:</c> event, or a CAN message. The
+    /// keyword must be the second token, where <c>AscCanErrorParser</c> reads it; a symbolic name that merely contains the
+    /// word (<c>ErrorFrameCounter</c>) is a message, not an error frame.
+    /// </summary>
+    private static AscLineType _ClassifyChannelFirstLine(ReadOnlySpan<char> rest)
+    {
+        int end = rest.IndexOfAny(' ', '\t');
+        if (end <= 0)
+        {
+            return AscLineType.CanMessage;
+        }
+
+        ReadOnlySpan<char> afterChannel = rest[(end + 1)..].TrimStart();
+        if (_NextTokenEquals(afterChannel, "ErrorFrame"))
+        {
+            return AscLineType.CanErrorFrame;
+        }
+
+        if (_NextTokenEquals(afterChannel, "OverloadFrame"))
+        {
+            return AscLineType.CanOverloadFrame;
+        }
+
+        if (_IsChannelStatistic(rest))
+        {
+            return AscLineType.CanBusStatistics;
+        }
+
+        return AscLineType.CanMessage;
+    }
+
+    /// <summary>
+    /// A LIN line is a sleep or wakeup event when the keyword starts the token right after the channel token or the one
+    /// after that. A message has its id there (and the direction after it), so a symbolic name further along that happens to
+    /// contain the word cannot turn a message into an event.
+    /// </summary>
     private static AscLineType _ClassifyLinEvent(ReadOnlySpan<char> rest)
     {
-        if (_ContainsToken(rest, "sleep") || _ContainsToken(rest, "wakeup"))
+        if (_TokenAtStartsWith(rest, 1, "sleep") || _TokenAtStartsWith(rest, 1, "wakeup")
+            || _TokenAtStartsWith(rest, 2, "sleep") || _TokenAtStartsWith(rest, 2, "wakeup"))
         {
             return AscLineType.LinEvent;
         }
 
         return AscLineType.LinMessage;
+    }
+
+    /// <summary>
+    /// True when the token at zero-based <paramref name="tokenIndex"/> (blank-separated) starts with <paramref name="prefix"/>,
+    /// ignoring case.
+    /// </summary>
+    private static bool _TokenAtStartsWith(ReadOnlySpan<char> span, int tokenIndex, ReadOnlySpan<char> prefix)
+    {
+        ReadOnlySpan<char> remaining = span.TrimStart();
+        for (int skipped = 0; skipped < tokenIndex; skipped++)
+        {
+            int end = remaining.IndexOfAny(' ', '\t');
+            if (end < 0)
+            {
+                return false;
+            }
+
+            remaining = remaining[end..].TrimStart();
+        }
+
+        return remaining.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     private static AscLineType _ClassifyFlexRayEvent(ReadOnlySpan<char> rest)
@@ -497,16 +548,11 @@ internal static class AscLineClassifier
             && body.ContainsAny(_AsciiTimestampDigits);
     }
 
-    private static bool _ContainsToken(ReadOnlySpan<char> span, ReadOnlySpan<char> token)
-    {
-        int idx = span.IndexOf(token, StringComparison.OrdinalIgnoreCase);
-        return idx >= 0;
-    }
-
     #endregion
 
     #region Byte helpers
 
+    /// <summary>True when the first token of <paramref name="rest"/> is exactly <paramref name="expected"/> (ASCII, ignoring case).</summary>
     private static bool _NextTokenEquals(ReadOnlySpan<byte> rest, ReadOnlySpan<byte> expected)
     {
         ReadOnlySpan<byte> trimmed = AscTokenizerBytes.TrimStartAscii(rest);
@@ -525,6 +571,10 @@ internal static class AscLineClassifier
         return next == (byte)' ' || next == (byte)'\t';
     }
 
+    /// <summary>
+    /// True for <c>ETH</c> or <c>AFDX</c>, a channel token, and a packet direction. Status lines (<c>STAT</c>, <c>RxEr</c>,
+    /// <c>BUS</c>) fail the direction test and stay <see cref="AscLineType.Unknown"/>.
+    /// </summary>
     private static bool _IsEthernetPacket(ReadOnlySpan<byte> rest)
     {
         AscTokenizerBytes tokenizer = new(rest);
@@ -557,6 +607,10 @@ internal static class AscLineClassifier
         || (direction.Length == 4 && StartsWithAsciiIgnoreCase(direction, "TxRq"u8))
         || (direction.Length == 5 && StartsWithAsciiIgnoreCase(direction, "TxFwd"u8));
 
+    /// <summary>
+    /// True when the first token is a LIN channel: <c>Li</c> (channel 1) or <c>L</c> plus one or more digits. The digits are
+    /// not range-checked here; the LIN parser validates the channel.
+    /// </summary>
     private static bool _IsLinChannel(ReadOnlySpan<byte> rest)
     {
         if (rest.Length < 2 || (rest[0] != (byte)'L' && rest[0] != (byte)'l'))
@@ -607,9 +661,49 @@ internal static class AscLineClassifier
         return StartsWithAsciiIgnoreCase(after, "Statistic:"u8);
     }
 
+    /// <summary>
+    /// Decides a line after the timestamp whose first token is a digit, that is the decimal channel of a classic CAN bus:
+    /// an <c>ErrorFrame</c> or <c>OverloadFrame</c> line, a <c>&lt;channel&gt; Statistic:</c> event, or a CAN message. The
+    /// keyword must be the second token, where <c>AscCanErrorParser</c> reads it; a symbolic name that merely contains the
+    /// word (<c>ErrorFrameCounter</c>) is a message, not an error frame. Reads at most the first two tokens, so the cost
+    /// does not grow with the line length.
+    /// </summary>
+    private static AscLineType _ClassifyChannelFirstLine(ReadOnlySpan<byte> rest)
+    {
+        int end = rest.IndexOfAny(" \t"u8);
+        if (end <= 0)
+        {
+            return AscLineType.CanMessage;
+        }
+
+        ReadOnlySpan<byte> afterChannel = AscTokenizerBytes.TrimStartAscii(rest[(end + 1)..]);
+        if (_NextTokenEquals(afterChannel, "ErrorFrame"u8))
+        {
+            return AscLineType.CanErrorFrame;
+        }
+
+        if (_NextTokenEquals(afterChannel, "OverloadFrame"u8))
+        {
+            return AscLineType.CanOverloadFrame;
+        }
+
+        if (_IsChannelStatistic(rest))
+        {
+            return AscLineType.CanBusStatistics;
+        }
+
+        return AscLineType.CanMessage;
+    }
+
+    /// <summary>
+    /// A LIN line is a sleep or wakeup event when the keyword starts the token right after the channel token or the one
+    /// after that. A message has its id there (and the direction after it), so a symbolic name further along that happens to
+    /// contain the word cannot turn a message into an event.
+    /// </summary>
     private static AscLineType _ClassifyLinEvent(ReadOnlySpan<byte> rest)
     {
-        if (_ContainsByteTokenIgnoreCase(rest, "sleep"u8) || _ContainsByteTokenIgnoreCase(rest, "wakeup"u8))
+        if (_TokenAtStartsWith(rest, 1, "sleep"u8) || _TokenAtStartsWith(rest, 1, "wakeup"u8)
+            || _TokenAtStartsWith(rest, 2, "sleep"u8) || _TokenAtStartsWith(rest, 2, "wakeup"u8))
         {
             return AscLineType.LinEvent;
         }
@@ -617,6 +711,32 @@ internal static class AscLineClassifier
         return AscLineType.LinMessage;
     }
 
+    /// <summary>
+    /// True when the token at zero-based <paramref name="tokenIndex"/> (blank-separated) starts with <paramref name="prefix"/>,
+    /// ignoring ASCII case.
+    /// </summary>
+    private static bool _TokenAtStartsWith(ReadOnlySpan<byte> span, int tokenIndex, ReadOnlySpan<byte> prefix)
+    {
+        ReadOnlySpan<byte> remaining = AscTokenizerBytes.TrimStartAscii(span);
+        for (int skipped = 0; skipped < tokenIndex; skipped++)
+        {
+            int end = remaining.IndexOfAny(" \t"u8);
+            if (end < 0)
+            {
+                return false;
+            }
+
+            remaining = AscTokenizerBytes.TrimStartAscii(remaining[end..]);
+        }
+
+        return StartsWithAsciiIgnoreCase(remaining, prefix);
+    }
+
+    /// <summary>
+    /// Decides whether an <c>Fr</c> line is a frame: <c>RMSG</c> and <c>PDU</c> are; the cycle and symbol events
+    /// (<c>SCE</c>, <c>SE</c>, <c>EE</c>, <c>StartCycleEvent</c>) are not; an all-digit token after <c>Fr</c> is the channel
+    /// of the old format, which is a frame. Any other token is <see cref="AscLineType.Unknown"/>.
+    /// </summary>
     private static AscLineType _ClassifyFlexRayEvent(ReadOnlySpan<byte> rest)
     {
         AscTokenizerBytes tokenizer = new(rest);
@@ -672,7 +792,9 @@ internal static class AscLineClassifier
 
     /// <summary>
     /// Case-insensitive ASCII prefix match on byte spans.
-    /// Only works correctly for pure ASCII keywords.
+    /// Only works correctly for pure ASCII keywords. This is a prefix test, not equality: callers that need a whole token
+    /// compare the length as well (see the <c>_TokenEquals</c> helpers of the parsers).
+    /// Only ASCII letters are folded (<c>_ToAsciiLower</c>), so the result never depends on the host culture.
     /// </summary>
     internal static bool StartsWithAsciiIgnoreCase(ReadOnlySpan<byte> span, ReadOnlySpan<byte> prefix)
     {
@@ -704,37 +826,6 @@ internal static class AscLineClassifier
 
         return StartsWithAsciiIgnoreCase(span[^suffix.Length..], suffix);
     }
-
-    /// <summary>
-    /// Returns the index of the first occurrence of <paramref name="needle"/> in
-    /// <paramref name="haystack"/> using case-insensitive ASCII comparison, or -1.
-    /// </summary>
-    private static int _IndexOfAsciiIgnoreCase(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)
-    {
-        if (needle.IsEmpty || haystack.Length < needle.Length)
-        {
-            return -1;
-        }
-
-        int last = haystack.Length - needle.Length;
-        for (int i = 0; i <= last; i++)
-        {
-            if (StartsWithAsciiIgnoreCase(haystack[i..], needle))
-            {
-                return i;
-            }
-        }
-
-        return -1;
-    }
-
-    /// <summary>
-    /// Checks whether the byte span contains the given ASCII token (case-insensitive).
-    /// This is a simple substring search — token boundary checking is not performed
-    /// because ASC keyword checks are always followed by structure-level validation in parsers.
-    /// </summary>
-    private static bool _ContainsByteTokenIgnoreCase(ReadOnlySpan<byte> span, ReadOnlySpan<byte> token)
-        => _IndexOfAsciiIgnoreCase(span, token) >= 0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static byte _ToAsciiLower(byte b)

@@ -142,21 +142,23 @@ public interface IPacketIndexReader
     /// Attempts to retrieve the bitmap of packets containing the specified field, resolved
     /// via its index group.
     /// Returns <see langword="false"/> when <paramref name="fieldId"/> is out of range,
-    /// or when the field has no index group. Never throws for invalid IDs.
+    /// or when the field has no index group (unlike <see cref="GetFieldBitmap"/>, which returns an empty bitmap with success
+    /// semantics for a field without a group). Never throws for invalid IDs. On failure <paramref name="bitmap"/> is set to
+    /// <see cref="ReadOnlyRoaringBitmap.Empty"/>.
     /// </summary>
     bool TryGetFieldBitmap(FieldId fieldId, out ReadOnlyRoaringBitmap bitmap);
 
     /// <summary>
     /// Attempts to count packets containing the specified index group.
     /// Returns <see langword="false"/> when <paramref name="groupId"/> is out of range.
-    /// Never throws for invalid IDs.
+    /// Never throws for invalid IDs. <paramref name="cardinality"/> is 0 on failure.
     /// </summary>
     bool TryGroupCardinality(IndexGroupId groupId, out long cardinality);
 
     /// <summary>
     /// Attempts to count packets containing the specified protocol.
     /// Returns <see langword="false"/> when <paramref name="protocolId"/> is out of range.
-    /// Never throws for invalid IDs.
+    /// Never throws for invalid IDs. <paramref name="cardinality"/> is 0 on failure.
     /// </summary>
     bool TryProtocolCardinality(ProtocolId protocolId, out long cardinality);
 

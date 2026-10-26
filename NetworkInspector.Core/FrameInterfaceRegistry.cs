@@ -15,6 +15,19 @@ namespace NetworkInspector.Core;
 /// instead of traditional reader-writer locks. Reads are always wait-free;
 /// writes (registrations) are rare and use CAS retry.
 /// </para>
+/// <para>
+/// <b>Why copy-on-write:</b> every parsed packet reads the registry (the frame's interface is looked up and the registry
+/// reference is compared on the parse path), while registrations happen a handful of times when a source opens. A lock or
+/// reader-writer lock would put a synchronization cost on every read; here a read is one volatile load of an immutable
+/// array. A registration pays instead: it copies the array (O(n) in the registered count, which stays tiny) and publishes
+/// the new array with a compare-exchange, retrying if another registration won the race. Ids are the array indexes, so
+/// they are dense, assigned in registration order, and never reused or removed.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> all members are safe to call from any thread. Published arrays are never mutated, so a snapshot
+/// (including the spans returned by <see cref="All"/> and <see cref="AllSources"/>) stays valid and consistent while other
+/// threads register. Entries are only ever appended: an id that resolved once resolves forever.
+/// </para>
 /// </summary>
 public sealed class FrameInterfaceRegistry
 {
@@ -22,8 +35,8 @@ public sealed class FrameInterfaceRegistry
     /// The current snapshot of registered interfaces.
     /// Replaced atomically on every registration via copy-on-write
     /// (<see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/>).
-    /// All reads MUST go through <see cref="System.Threading.Volatile"/> Read
-    /// to observe a consistent, immutable snapshot under the .NET memory model.
+    /// The field is <see langword="volatile"/>, so a plain read is an acquire read: it observes a fully constructed array.
+    /// Readers load it once into a local and use only that local, so they see one consistent immutable snapshot.
     /// </summary>
     private volatile FrameInterfaceInfo[] _Interfaces = [];
 
@@ -31,7 +44,7 @@ public sealed class FrameInterfaceRegistry
     /// The current snapshot of registered frame sources.
     /// Replaced atomically on every registration via copy-on-write
     /// (<see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/>).
-    /// All reads MUST go through <see cref="System.Threading.Volatile"/> Read.
+    /// Same volatile-snapshot read rule as <see cref="_Interfaces"/>.
     /// </summary>
     private volatile FrameSourceInfo[] _Sources = [];
 
@@ -60,10 +73,14 @@ public sealed class FrameInterfaceRegistry
     /// <paramref name="sourceId"/> is invalid or not registered, or <paramref name="uiName"/> is empty,
     /// whitespace, or contains control characters.
     /// </exception>
+    /// <exception cref="InvalidOperationException">The interface count has reached <see cref="ArrayIndexIdRange.MaxValue"/> + 1.</exception>
     public FrameInterfaceId Register(
         FrameSourceId sourceId, string uiName, string? description = null,
         LinkType? linkType = null, IReadOnlyDictionary<string, object>? properties = null)
     {
+        // Validate the display name here, before the retry loop. Names come from capture files and sources (untrusted); the
+        // same check also runs inside FrameInterfaceInfo, but doing it first fails fast, before any array is copied, and
+        // names the caller's parameter.
         ArgumentException.ThrowIfNullOrWhiteSpace(uiName);
         if (!NameValidation.IsValidUiName(uiName))
         {
@@ -80,16 +97,23 @@ public sealed class FrameInterfaceRegistry
                 nameof(sourceId));
         }
 
+        // The source table only grows and entries are never removed, so one check against the current snapshot is enough:
+        // a source that is registered now stays registered while the loop below runs. The unsigned compare also rejects
+        // negative values.
         if ((uint)sourceId.Value >= (uint)_Sources.Length)
         {
             throw new ArgumentException(
                 $"Frame source ID {sourceId.Value} is not registered.", nameof(sourceId));
         }
 
-        // CAS retry loop: copy-on-write for lock-free registration
+        // CAS retry loop: copy-on-write for lock-free registration. The id and the info are rebuilt on each attempt from the
+        // freshest snapshot, because the id is the array length and a concurrent registration may have taken it.
         while (true)
         {
             FrameInterfaceInfo[] current = _Interfaces;
+
+            // Capacity guard: ids are array indexes, so the count is capped by what an id can hold. Exceeding it is a
+            // broken-invariant condition at registration time (not an expected per-packet failure), hence an exception.
             if (current.Length > ArrayIndexIdRange.MaxValue)
             {
                 throw new InvalidOperationException(
@@ -121,7 +145,8 @@ public sealed class FrameInterfaceRegistry
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public FrameInterfaceInfo? Get(FrameInterfaceId id)
     {
-        // Read the snapshot once — consistent even if another thread is registering
+        // Read the snapshot once — consistent even if another thread is registering. The unsigned compare handles
+        // the negative Invalid id and any id past the end in one branch. An id issued by this registry always resolves.
         FrameInterfaceInfo[] snapshot = _Interfaces;
         if ((uint)id.Value < (uint)snapshot.Length)
         {
@@ -151,7 +176,8 @@ public sealed class FrameInterfaceRegistry
 
     /// <summary>
     /// Returns a snapshot of all registered interfaces. The returned array is immutable
-    /// and will not change as new interfaces are registered.
+    /// and will not change as new interfaces are registered; interfaces registered later are not part of an already
+    /// returned span. Allocation-free (a span over the published array).
     /// </summary>
     public ReadOnlySpan<FrameInterfaceInfo> All => _Interfaces;
 
@@ -172,11 +198,13 @@ public sealed class FrameInterfaceRegistry
     /// <param name="source">The frame source to register. Must not be <see langword="null"/>.</param>
     /// <returns>The unique identifier assigned to the new source.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="source"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">The source count has reached <see cref="ArrayIndexIdRange.MaxValue"/> + 1.</exception>
     public FrameSourceId RegisterSource(IFrameSource source)
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        // CAS retry loop: copy-on-write for lock-free registration
+        // CAS retry loop: copy-on-write for lock-free registration. Same scheme as Register: the id is the array length of
+        // the snapshot, so it is recomputed after a lost race.
         while (true)
         {
             FrameSourceInfo[] current = _Sources;
@@ -236,7 +264,7 @@ public sealed class FrameInterfaceRegistry
     }
 
     /// <summary>
-    /// Returns a snapshot of all registered frame sources.
+    /// Returns a snapshot of all registered frame sources. Same snapshot rules as <see cref="All"/>.
     /// </summary>
     public ReadOnlySpan<FrameSourceInfo> AllSources => _Sources;
     #endregion

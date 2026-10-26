@@ -12,6 +12,12 @@ namespace NetworkInspector.Sources.Blf.Format;
 /// </list>
 /// Absolute timestamps are computed as: file_start_offset_ns + relative_timestamp_ns.
 /// </summary>
+/// <remarks>
+/// Matching the whole flags word is deliberate and documented behaviour: only the exact words 1 and 2 define a unit, and
+/// any other word is treated as an unknown resolution (timestamp 0) instead of guessing a unit. Overflow policy: a raw
+/// value that does not fit a nanosecond <see cref="long"/> saturates at <see cref="long.MaxValue"/> rather than wrapping
+/// to a negative (pre-1970) time. Stateless; thread-safe.
+/// </remarks>
 internal static class BlfTimestamp
 {
     #region Public API
@@ -30,6 +36,7 @@ internal static class BlfTimestamp
     {
         if (flags == BlfConstants.TimestampResolution10Us)
         {
+            // Largest raw value whose product with 10,000 still fits a signed 64-bit nanosecond count.
             const ulong maxRaw = (ulong)long.MaxValue / (ulong)BlfConstants.TimestampMultiplier10Us;
             if (rawTimestamp > maxRaw)
             {
@@ -87,7 +94,11 @@ internal static class BlfTimestamp
     /// <see cref="TimeZoneInfo.Utc"/> for cross-machine determinism, or
     /// <see cref="TimeZoneInfo.Local"/> for Vector tooling compatibility.
     /// </param>
-    /// <returns>Nanoseconds since 1970-01-01T00:00:00Z, or 0 if the date is invalid.</returns>
+    /// <returns>
+    /// Nanoseconds since 1970-01-01T00:00:00Z, 0 if the date is invalid, or <see cref="long.MaxValue"/> when the instant
+    /// does not fit a nanosecond count (dates from the year 2262 on, including those beyond <see cref="DateTime.MaxValue"/>
+    /// once the zone offset is applied). Never throws for a header value.
+    /// </returns>
     internal static long DateToUnixNanoseconds(in BlfDate date, TimeZoneInfo dateTimeZone)
     {
         ArgumentNullException.ThrowIfNull(dateTimeZone);
@@ -116,9 +127,27 @@ internal static class BlfTimestamp
             return 0;
         }
 
-        // Use the caller-supplied zone's offset (UTC default = no shift, fully reproducible).
-        DateTimeOffset dto = new(civil, dateTimeZone.GetUtcOffset(civil));
-        return dto.ToUnixTimeMilliseconds() * 1_000_000L;
+        // Use the caller-supplied zone's offset (UTC default = no shift, fully reproducible). The offset is taken for the
+        // civil time itself, so a DST transition inside the zone is resolved by the zone's own rules.
+        //
+        // The UTC instant is computed from ticks instead of through new DateTimeOffset(civil, offset): that constructor
+        // throws when the UTC instant falls outside DateTime's range, and a header dated 9999-12-31 in a zone west of UTC
+        // is exactly that. A hostile file header must never turn into an exception, so the range is checked explicitly.
+        // civil.Ticks is within [0, DateTime.MaxValue.Ticks] and a zone offset is within +-14 hours, so the subtraction
+        // cannot overflow a long.
+        long utcTicks = civil.Ticks - dateTimeZone.GetUtcOffset(civil).Ticks;
+        long millisecondsSinceEpoch = (utcTicks - DateTime.UnixEpoch.Ticks) / TimeSpan.TicksPerMillisecond;
+
+        // A date whose nanosecond count does not fit a long (from the year 2262 on) saturates at long.MaxValue, the same
+        // policy as ToNanoseconds, instead of wrapping to a negative (pre-1970) start time. Rejected alternative: returning 0
+        // (that would make a far-future header indistinguishable from a missing date and shift every timestamp to 1970).
+        const long maxMilliseconds = long.MaxValue / 1_000_000L;
+        if (millisecondsSinceEpoch > maxMilliseconds)
+        {
+            return long.MaxValue;
+        }
+
+        return millisecondsSinceEpoch * 1_000_000L;
     }
 
     #endregion

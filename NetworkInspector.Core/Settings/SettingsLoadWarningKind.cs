@@ -24,26 +24,28 @@ public enum SettingsLoadWarningKind
 
     /// <summary>
     /// The value in the JSON file was parsed but failed range or constraint validation
-    /// (e.g. value below minimum, or non-finite F64).
+    /// (e.g. value below minimum). A non-finite F64 never gets this far: it is reported as <see cref="TypeMismatch"/>.
     /// The value is ignored and the setting keeps its default or previously applied value.
     /// </summary>
     OutOfRange,
 
     /// <summary>
     /// The value in the JSON file could not be deserialized for the registered setting type
-    /// (e.g. invalid base64 for a Bytes setting, malformed enum string).
+    /// (e.g. invalid base64 for a Bytes setting, an enum object that repeats a property name).
     /// The value is ignored and the setting keeps its default or previously applied value.
     /// </summary>
     DeserializationError,
 
     /// <summary>
-    /// The root JSON node in a group file is not a JSON object (e.g. it is an array or a scalar).
+    /// The root JSON node in a group file is not a JSON object (e.g. it is an array or a scalar), or the file is larger than
+    /// <see cref="SettingsManager.MaxConfigFileBytes"/> (the size cap reuses this kind).
     /// The file is skipped entirely and no settings in that group are changed.
     /// </summary>
     InvalidGroupFileShape,
 
     /// <summary>
-    /// A group settings JSON file contains syntactically invalid JSON.
+    /// A group settings JSON file contains syntactically invalid JSON, nests deeper than
+    /// <see cref="SettingsManager.MaxJsonDepth"/>, or repeats a property name.
     /// The file is skipped entirely and no settings in that group are changed.
     /// </summary>
     InvalidGroupFileSyntax,

@@ -626,63 +626,64 @@ public sealed partial class BlfSource
         byte[]? decompressed = null;
         Exception? failure = null;
 
-        if (!_TryReadContainerPayload(containerFileOffset,
-            out ReadOnlySpan<byte> payloadData,
-            out ushort compressionMethod, out uint uncompressedSize, out _, out _))
+        // Problem avoided: any exception that the typed handler below does not take (an IOException from the mapped view,
+        // an ObjectDisposedException from a racing Dispose, a defect) used to skip the publish step, so the in-flight
+        // entry stayed in _PendingDecompressions and every thread waiting for this container (and a later Dispose that
+        // waits for those threads) blocked forever. The finally block completes and removes the entry on every path;
+        // waiters see the unexpected exception as the failure and return an empty result. The winner still rethrows it:
+        // it is not a malformed-file condition, so it must not be hidden.
+        try
         {
-            failure = new BlfException($"Failed to parse container headers at offset {containerFileOffset}.");
-        }
-        else
-        {
-            // CancellationToken.None is intentional: forwarding the caller token would leave the
-            // work entry dangling in _PendingDecompressions if the winner is cancelled while
-            // holding the semaphore, deadlocking all waiters for this container. The token is
-            // already checked at the FrameById entry point before this code is reached.
-            _DecompressionSemaphore.Wait(CancellationToken.None);
-            try
+            if (!_TryReadContainerPayload(containerFileOffset,
+                out ReadOnlySpan<byte> payloadData,
+                out ushort compressionMethod, out uint uncompressedSize, out _, out _))
             {
-                _ = Interlocked.Increment(ref _SourceDecompressionCount);
-                decompressed = BlfContainer.Decompress(
-                    payloadData,
-                    compressionMethod,
-                    uncompressedSize,
-                    _Options.MaxUncompressedContainerSize);
-            }
-            catch (Exception ex) when (
-                ex is BlfException or OutOfMemoryException or BlfDecompressionLimitExceededException)
-            {
-                failure = ex;
-            }
-            finally
-            {
-                _DecompressionSemaphore.Release();
-            }
-        }
-
-        // Publish result under the lock: update cache / error, remove sentinel, signal waiters.
-        // All three steps are atomic relative to other lock holders so no waiter can observe
-        // a partially published state.
-        lock (_ContainerCacheLock)
-        {
-            if (failure is null)
-            {
-                _ContainerCache.Put(containerFileOffset, decompressed!);
-                work.Result = decompressed;
+                failure = new BlfException($"Failed to parse container headers at offset {containerFileOffset}.");
             }
             else
             {
-                work.Error = failure;
+                // CancellationToken.None is intentional: forwarding the caller token would leave the
+                // work entry dangling in _PendingDecompressions if the winner is cancelled while
+                // holding the semaphore, deadlocking all waiters for this container. The token is
+                // already checked at the FrameById entry point before this code is reached.
+                _DecompressionSemaphore.Wait(CancellationToken.None);
+                try
+                {
+                    _ = Interlocked.Increment(ref _SourceDecompressionCount);
+                    decompressed = BlfContainer.Decompress(
+                        payloadData,
+                        compressionMethod,
+                        uncompressedSize,
+                        _Options.MaxUncompressedContainerSize);
+                }
+                catch (Exception ex) when (
+                    ex is BlfException or OutOfMemoryException or BlfDecompressionLimitExceededException)
+                {
+                    failure = ex;
+                }
+                finally
+                {
+                    _DecompressionSemaphore.Release();
+                }
             }
-
-            _PendingDecompressions.Remove(containerFileOffset);
-            work.Ready.Set();
+        }
+        catch (Exception unexpected)
+        {
+            // Not a malformed-capture condition: record it for the waiters (published by the finally block), count it like
+            // any other failed inflate, and let it propagate to the caller.
+            failure = unexpected;
+            Interlocked.Increment(ref _RandomAccessFailureCount);
+            throw;
+        }
+        finally
+        {
+            _PublishContainerWork(containerFileOffset, work, decompressed, failure);
         }
 
-        // The semaphore counting the failure happens outside the lock to keep the critical
-        // section as short as possible. Waiters that woke up on Ready.Set() above have not
-        // yet observed _RandomAccessFailureCount; the increment is logically associated with
-        // this specific decompression attempt and is safe to do outside the lock because
-        // Interlocked guarantees atomic visibility.
+        // Counting the failure happens outside the lock to keep the critical section as short as possible. The counter is
+        // only a diagnostic (RandomAccessFailureCount), nobody decides on it, so a waiter that already woke up on
+        // Ready.Set() may run before the increment. Only the winner counts: waiters of the same container return [] without
+        // counting, so one failed inflate is one failure however many threads were waiting for it.
         if (failure is not null)
         {
             Interlocked.Increment(ref _RandomAccessFailureCount);
@@ -790,70 +791,70 @@ public sealed partial class BlfSource
         Exception? failure = null;
         FrameReadErrorEventArgs? errorArgs = null;
 
-        if (!_TryReadContainerPayload(containerFileOffset,
-            out ReadOnlySpan<byte> payloadData,
-            out ushort compressionMethod, out uint uncompressedSize,
-            out FrameReadErrorKind errorKind, out string? errorMessage))
+        // Same guarantee as in _TryGetContainerData: an exception outside the typed handler must not leave the in-flight
+        // entry behind (a random-access thread waiting for this container would block forever). The finally block
+        // completes and removes the entry on every path; the unexpected exception still propagates to the caller.
+        try
         {
-            failure = new BlfException(errorMessage ?? $"Failed to parse container headers at offset {containerFileOffset}.");
-            errorArgs = new FrameReadErrorEventArgs
+            if (!_TryReadContainerPayload(containerFileOffset,
+                out ReadOnlySpan<byte> payloadData,
+                out ushort compressionMethod, out uint uncompressedSize,
+                out FrameReadErrorKind errorKind, out string? errorMessage))
             {
-                FrameIndex = frameIndex,
-                FileOffset = containerFileOffset,
-                Kind = errorKind,
-                Message = failure.Message,
-            };
-        }
-        else
-        {
-            // CancellationToken.None is intentional: forwarding the caller token would leave the
-            // work entry dangling in _PendingDecompressions if the winner is cancelled while
-            // holding the semaphore, deadlocking all waiters for this container. The token is
-            // already checked at the NextFrame call chain entry point before this code is reached.
-            _DecompressionSemaphore.Wait(CancellationToken.None);
-            try
-            {
-                _ = Interlocked.Increment(ref _SourceDecompressionCount);
-                decompressed = BlfContainer.Decompress(
-                    payloadData,
-                    compressionMethod,
-                    uncompressedSize,
-                    _Options.MaxUncompressedContainerSize);
-            }
-            catch (Exception ex) when (
-                ex is BlfException or OutOfMemoryException or BlfDecompressionLimitExceededException)
-            {
-                failure = ex;
+                failure = new BlfException(errorMessage ?? $"Failed to parse container headers at offset {containerFileOffset}.");
                 errorArgs = new FrameReadErrorEventArgs
                 {
                     FrameIndex = frameIndex,
                     FileOffset = containerFileOffset,
-                    Kind = FrameReadErrorKind.DecompressionFailure,
-                    Message = $"Container decompression failed at offset {containerFileOffset}: " +
-                              $"{(ex is OutOfMemoryException ? "OutOfMemoryException" : ex.Message)}",
+                    Kind = errorKind,
+                    Message = failure.Message,
                 };
-            }
-            finally
-            {
-                _DecompressionSemaphore.Release();
-            }
-        }
-
-        // Publish result under the lock: update cache / error, remove sentinel, signal waiters.
-        lock (_ContainerCacheLock)
-        {
-            if (failure is null)
-            {
-                _ContainerCache.Put(containerFileOffset, decompressed!);
-                work.Result = decompressed;
             }
             else
             {
-                work.Error = failure;
+                // CancellationToken.None is intentional: forwarding the caller token would leave the
+                // work entry dangling in _PendingDecompressions if the winner is cancelled while
+                // holding the semaphore, deadlocking all waiters for this container. The token is
+                // already checked at the NextFrame call chain entry point before this code is reached.
+                _DecompressionSemaphore.Wait(CancellationToken.None);
+                try
+                {
+                    _ = Interlocked.Increment(ref _SourceDecompressionCount);
+                    decompressed = BlfContainer.Decompress(
+                        payloadData,
+                        compressionMethod,
+                        uncompressedSize,
+                        _Options.MaxUncompressedContainerSize);
+                }
+                catch (Exception ex) when (
+                    ex is BlfException or OutOfMemoryException or BlfDecompressionLimitExceededException)
+                {
+                    failure = ex;
+                    errorArgs = new FrameReadErrorEventArgs
+                    {
+                        FrameIndex = frameIndex,
+                        FileOffset = containerFileOffset,
+                        Kind = FrameReadErrorKind.DecompressionFailure,
+                        Message = $"Container decompression failed at offset {containerFileOffset}: " +
+                                  $"{(ex is OutOfMemoryException ? "OutOfMemoryException" : ex.Message)}",
+                    };
+                }
+                finally
+                {
+                    _DecompressionSemaphore.Release();
+                }
             }
-
-            _PendingDecompressions.Remove(containerFileOffset);
-            work.Ready.Set();
+        }
+        catch (Exception unexpected)
+        {
+            // Not a malformed-capture condition: waiters get it as the failure (published by the finally block) and the
+            // caller sees the exception itself.
+            failure = unexpected;
+            throw;
+        }
+        finally
+        {
+            _PublishContainerWork(containerFileOffset, work, decompressed, failure);
         }
 
         if (failure is BlfDecompressionLimitExceededException)
@@ -876,6 +877,45 @@ public sealed partial class BlfSource
     }
 
     /// <summary>
+    /// Completes the in-flight entry of a container: stores the result (cache and direct hand-over) or the failure,
+    /// removes the entry, and wakes the waiters. Runs in a <c>finally</c> block of the winner, so it must not fail halfway:
+    /// the removal and the signal are in their own <c>finally</c>, which keeps them running even when the cache throws.
+    /// Remove, signal, and result form one step under <see cref="_ContainerCacheLock"/>, so no waiter observes a partial
+    /// state.
+    /// </summary>
+    /// <param name="containerFileOffset">Key of the entry in <see cref="_PendingDecompressions"/>.</param>
+    /// <param name="work">The entry the calling winner registered.</param>
+    /// <param name="decompressed">The decoded container on success.</param>
+    /// <param name="failure">The failure, or null on success.</param>
+    private void _PublishContainerWork(long containerFileOffset, ContainerDecompressionWork work, byte[]? decompressed, Exception? failure)
+    {
+        lock (_ContainerCacheLock)
+        {
+            try
+            {
+                if (failure is null && decompressed is not null)
+                {
+                    // Hand the bytes over first: if the cache refuses them, the waiters still get the result.
+                    work.Result = decompressed;
+                    _ContainerCache.Put(containerFileOffset, decompressed);
+                }
+                else
+                {
+                    // A missing result without a recorded failure cannot happen; it is reported like a failure so a waiter
+                    // never mistakes it for an empty container.
+                    work.Error = failure
+                        ?? new BlfException($"No decompressed data for the container at offset {containerFileOffset}.");
+                }
+            }
+            finally
+            {
+                _PendingDecompressions.Remove(containerFileOffset);
+                work.Ready.Set();
+            }
+        }
+    }
+
+    /// <summary>
     /// Keeps <paramref name="decoded"/> as the current sequential container, so the following frames of the same
     /// container neither take the cache lock nor inflate it again — also with the cache disabled
     /// (<see cref="BlfSourceOptions.CacheBudget"/> 0). NextFrame thread only; holds at most one container.
@@ -891,6 +931,12 @@ public sealed partial class BlfSource
     /// Copies a container object that starts in one decompressed blob and continues in the
     /// next LOG_CONTAINER blobs. Used when <c>object_length</c> overruns the first container.
     /// </summary>
+    /// <remarks>
+    /// Mirrors the scanner's carry rule (the unread tail of one container is prepended to the next one), but on demand:
+    /// the index keeps only the start and the length of such an object. Split objects are rare (a defective writer), so the
+    /// copy into a fresh array per call is accepted instead of caching stitched blobs. The length is bounded by
+    /// <see cref="BlfConstants.MaxBlockReadSize"/> because it originates from an untrusted <c>object_length</c>.
+    /// </remarks>
     private byte[]? _TryMaterializeSpanningObject(
         long firstContainerOffset,
         int objectOffset,
@@ -1002,11 +1048,16 @@ public sealed partial class BlfSource
             return false;
         }
 
+        // Same skip rule as the scanner's outer loop (see BlfBlockHeader.TryGetSkipDistance): the next object starts at or
+        // after offset + max(max(16, object_length), header_size); the alignment zeros are found by the magic search.
         long skip = Math.Max(
             Math.Max((long)BlfConstants.BlockHeaderSize, currentHeader.ObjectLength.Value),
             currentHeader.HeaderSize.Value);
         long searchFrom = currentContainerOffset + skip;
 
+        // Walk the file-level objects until a LOG_CONTAINER shows up. Windows of 4 MiB overlap by 3 bytes so a "LOBJ"
+        // magic cut by a window edge is still found; every candidate is validated as a header before it is trusted, because
+        // the bytes "LOBJ" can also occur inside compressed payload.
         while (searchFrom + 4 <= fileSize)
         {
             int chunkSize = (int)Math.Min(_ScanForMagicChunkSize, fileSize - searchFrom);
@@ -1080,6 +1131,9 @@ public sealed partial class BlfSource
         compressionMethod = 0;
         uncompressedSize = 0;
 
+        // The offset comes from the frame index, which holds only containers the scanner already validated (signature and
+        // skip distance). The checks below re-validate the bounds anyway because a file that changed after the scan (caught
+        // by the capture file guard, but not atomically) must end in an error result, never in a read past the mapping.
         if (containerFileOffset >= _Backend.FileSize)
         {
             errorKind = FrameReadErrorKind.CorruptedBlock;

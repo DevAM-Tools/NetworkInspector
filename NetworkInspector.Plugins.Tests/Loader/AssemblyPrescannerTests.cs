@@ -33,6 +33,47 @@ internal sealed class AssemblyPrescannerTests
     }
 
     [Test]
+    public async Task InspectStampsAnUnchangedFileWithItsOwnLengthAndTime()
+    {
+        using TempFolder folder = new("prescanner-stamp-same");
+        string path = TestPluginFiles.CopyInto(TestPluginFiles.Sample, folder.Path);
+        FileInfo file = new(path);
+
+        PrescanResult result = AssemblyPrescanner.Inspect(path);
+
+        await Assert.That(result.Length).IsEqualTo(file.Length);
+        await Assert.That(result.LastWriteUtcTicks).IsEqualTo(file.LastWriteTimeUtc.Ticks);
+    }
+
+    [Test]
+    public async Task InspectStampsAFileThatChangesWhileItIsReadWithTheStateOfBeforeTheRead()
+    {
+        using TempFolder folder = new("prescanner-stamp-race");
+        string path = TestPluginFiles.CopyInto(TestPluginFiles.Sample, folder.Path);
+        FileInfo before = new(path);
+        long lengthBefore = before.Length;
+        long ticksBefore = before.LastWriteTimeUtc.Ticks;
+
+        // The file is replaced after its content was read: longer and newer, as a build or an installer would leave it.
+        PrescanResult result = AssemblyPrescanner.Inspect(path, () =>
+        {
+            using (FileStream append = new(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+            {
+                append.WriteByte(0);
+            }
+
+            File.SetLastWriteTimeUtc(path, new DateTime(ticksBefore, DateTimeKind.Utc).AddHours(1));
+        });
+
+        // The result must not match the new file: the next scan sees different stamps and reads the file again.
+        FileInfo after = new(path);
+        await Assert.That(after.Length).IsEqualTo(lengthBefore + 1);
+        await Assert.That(result.Length).IsEqualTo(lengthBefore);
+        await Assert.That(result.LastWriteUtcTicks).IsEqualTo(ticksBefore);
+        await Assert.That(result.LastWriteUtcTicks).IsNotEqualTo(after.LastWriteTimeUtc.Ticks);
+    }
+
+    [Test]
     public async Task EntryTypesOfOneAssemblyAreOrderedByFullName()
     {
         PrescanResult result = AssemblyPrescanner.Inspect(TestPluginFiles.TestPlugins);

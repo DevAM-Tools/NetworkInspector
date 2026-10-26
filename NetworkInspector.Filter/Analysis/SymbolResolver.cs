@@ -17,6 +17,10 @@ namespace NetworkInspector.Filter.Analysis;
 /// evaluator answer "does this subtree belong to protocol X" in O(1) while walking a packet,
 /// which is what scope anchors and index-less protocol presence need.
 /// </para>
+/// <para>
+/// <b>Thread-safety:</b> not thread-safe. The name cache is a plain <see cref="Dictionary{TKey, TValue}"/> filled during
+/// compilation, which runs on one thread; only <see cref="FieldOwners"/> is handed to the runtime, and it is never mutated.
+/// </para>
 /// </summary>
 internal sealed class SymbolResolver
 {
@@ -34,8 +38,12 @@ internal sealed class SymbolResolver
     public SymbolResolver(IStack stack)
     {
         _Stack = stack;
+
+        // Ordinal: names are compared exactly, with no culture or case folding.
         _Cache = new Dictionary<string, FilterSymbol?>(StringComparer.Ordinal);
 
+        // Owner table: a flat array indexed by field id, so the evaluator maps field -> protocol with one bounds-checked
+        // load instead of a dictionary lookup or an IStack call per visited field.
         ReadOnlySpan<FieldInfo> fields = stack.Fields.Span;
         _FieldOwners = new ProtocolId[fields.Length];
         for (int i = 0; i < fields.Length; i++)
@@ -64,6 +72,8 @@ internal sealed class SymbolResolver
     /// </summary>
     public FilterSymbol? Resolve(string name)
     {
+        // The same name is resolved by the binder and by the dependency analyzer; the cache makes both see one symbol
+        // instance. Unknown names are cached as null too, so a repeated miss costs no stack lookups.
         if (_Cache.TryGetValue(name, out FilterSymbol? cached))
         {
             return cached;
@@ -147,8 +157,10 @@ internal sealed class SymbolResolver
 
     #region Helpers
 
+    /// <summary>Uncached resolution in the documented order: protocol, canonical field, alias group.</summary>
     private FilterSymbol? _ResolveCore(string name)
     {
+        // Protocol first: see the class remarks, the container field of a protocol shares its name.
         ProtocolId? protocolId = _Stack.GetProtocolId(name);
         if (protocolId is ProtocolId protocol)
         {

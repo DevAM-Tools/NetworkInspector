@@ -45,16 +45,27 @@ internal sealed class BlfIncrementalScanner
         new Dictionary<(byte BusType, byte Channel), string>();
     private readonly long _MaxUncompressedContainerSize;
 
-    // Outer loop state
+    // Outer loop state. All scanner fields below are touched by the scanning thread only; the failure counters are plain
+    // longs on purpose (the owner polls them from the same thread that calls ScanNext, so no Interlocked is needed).
+
+    /// <summary>File offset of the next file-level object to read.</summary>
     private long _FileOffset;
+
+    /// <summary>True once no further object will be read; the index is sealed at that moment.</summary>
     private bool _Exhausted;
 
     /// <summary>Number of containers that failed to decompress.</summary>
     private long _DecompressionFailures;
 
     // Inner loop state — pending decompressed container (may include a carry-over prefix)
+
+    /// <summary>Decompressed bytes of the container being drained (carry prefix included); null between containers.</summary>
     private byte[]? _PendingContainer;
+
+    /// <summary>Read position inside <see cref="_PendingContainer"/> (prefix included).</summary>
     private int _ContainerOffset;
+
+    /// <summary>File offset of the LOG_CONTAINER that produced <see cref="_PendingContainer"/>.</summary>
     private long _ContainerFileOffset;
 
     /// <summary>
@@ -215,9 +226,18 @@ internal sealed class BlfIncrementalScanner
     /// Uses windowed reads via <see cref="BlfDataBackend.GetSpan"/> so that
     /// files larger than 2 GiB are handled correctly.
     /// </summary>
+    /// <exception cref="OperationCanceledException">The token was cancelled between two objects.</exception>
+    /// <exception cref="BlfDecompressionLimitExceededException">
+    /// A container declares more than the configured uncompressed size. Deliberately not counted as a corrupt container:
+    /// the caller configured the limit and has to decide how to react.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">The frame index is full (see <see cref="BlfFrameIndex"/>).</exception>
     internal bool ScanNext(CancellationToken cancellationToken = default)
     {
-        // First: drain any pending container objects
+        // First: drain any pending container objects. _DrainPendingContainer indexes a container to its end and clears
+        // _PendingContainer itself, so this branch normally finds nothing pending; it only resumes a drain that was
+        // interrupted by an exception. A lazy scan therefore indexes one whole container (up to the configured
+        // uncompressed size) per call, not one frame.
         if (_PendingContainer is not null)
         {
             if (_DrainPendingContainer())
@@ -282,7 +302,7 @@ internal sealed class BlfIncrementalScanner
             if (objectType == BlfConstants.ObjTypeAppText)
             {
                 // Process AppText for channel names
-                _ProcessAppText(fullObjectData);
+                _ProcessAppText(fullObjectData, currentOffset);
                 continue;
             }
 
@@ -324,10 +344,10 @@ internal sealed class BlfIncrementalScanner
     /// </summary>
     private void _ProcessContainer(ReadOnlySpan<byte> objectData, ushort headerSize, long fileOffset)
     {
-        // Container layout: [block header (16B)] [log object header] [container header (16B)] [payload]
-        // The log object header size varies; container header starts after headerSize from the beginning.
-        // But the container header is embedded after the log object header, within the headerSize region.
-        // Payload starts after headerSize, container header is at headerSize - ContainerHeaderSize.
+        // Container layout: [block header (16B)] [container header (16B)] [payload]. The block header's header_size
+        // field of a LOG_CONTAINER covers the block header only (writers store 16), so the container header starts at
+        // header_size; any header_size above 16 is extra bytes a reader has to skip. The payload follows the container
+        // header. header_size is clamped to at least 16 so a corrupt smaller value cannot overlap the block header.
 
         // Bounds-check the container header offset before slicing.
         // A crafted huge headerSize would put containerHeaderOffset beyond objectData,
@@ -335,7 +355,7 @@ internal sealed class BlfIncrementalScanner
         // can surface the diagnostic through the error-tolerance pipeline.
         int containerHeaderOffset = Math.Max((int)headerSize, BlfConstants.BlockHeaderSize);
         int payloadOffset = containerHeaderOffset + BlfConstants.ContainerHeaderSize;
-        if (containerHeaderOffset < 0 || containerHeaderOffset + BlfConstants.ContainerHeaderSize > objectData.Length)
+        if (containerHeaderOffset + BlfConstants.ContainerHeaderSize > objectData.Length)
         {
             _DropCarryAsTruncated();
             _CorruptedContainerCount++;
@@ -346,14 +366,19 @@ internal sealed class BlfIncrementalScanner
         ReadOnlySpan<byte> containerHeaderData = objectData[containerHeaderOffset..];
         if (!BlfContainerHeader.TryParse(containerHeaderData, out BlfContainerHeader containerHeader, out _))
         {
+            // Unreachable while the bounds check above holds (the header is a fixed 16-byte structure and at least 16 bytes
+            // are left), kept as a safety net: like every other container failure it is counted, so a container that is
+            // lost can never vanish without a diagnostic.
             _DropCarryAsTruncated();
+            _CorruptedContainerCount++;
+            _RecordMark();
             return;
         }
 
         ushort compressionMethod = containerHeader.CompressionMethod.Value;
         uint uncompressedSize = containerHeader.UncompressedSize.Value;
 
-        // Compressed/raw payload starts after block header + container header.
+        // Compressed/raw payload starts after the header_size region and the container header.
         ReadOnlySpan<byte> payloadData = objectData.Length > payloadOffset
             ? objectData[payloadOffset..]
             : ReadOnlySpan<byte>.Empty;
@@ -432,6 +457,9 @@ internal sealed class BlfIncrementalScanner
         bool foundFrame = false;
         ReadOnlySpan<byte> containerSpan = _PendingContainer.AsSpan();
 
+        // Walk the objects of the decompressed blob. Nothing is copied or decoded here: each frame object only gets an
+        // index entry, and the frame itself is rebuilt from the object header when it is read. The loop runs to the end of
+        // the blob; a tail shorter than a block header is handled by _FinishContainer (carry, padding, or garbage).
         while (_ContainerOffset + BlfConstants.BlockHeaderSize <= containerSpan.Length)
         {
             ReadOnlySpan<byte> objectData = containerSpan[_ContainerOffset..];
@@ -487,7 +515,9 @@ internal sealed class BlfIncrementalScanner
             if (objectStart < _CarryPrefixLength)
             {
                 // Starts in the previous container's tail and continues here: the only case whose header may be split,
-                // so the length is kept. The row and inner offset refer to the container where the object starts.
+                // so the length is kept. The row and inner offset refer to the container where the object starts. The carry
+                // prefix holds the alignment zeros plus the start of exactly one object (a tail that contained a complete
+                // object would have been parsed in its own container), so only this first object can begin inside it.
                 _Index.PushSpanningObject(_CarrySourceRow, _CarrySourceInnerOffset + objectStart, skipDistance);
             }
             else
@@ -572,9 +602,11 @@ internal sealed class BlfIncrementalScanner
     /// <summary>
     /// Processes an AppText object for channel name extraction.
     /// </summary>
-    private void _ProcessAppText(ReadOnlySpan<byte> objectData)
+    private void _ProcessAppText(ReadOnlySpan<byte> objectData, long objectFileOffset)
     {
-        if (!BlfObjectHeaderParser.TryParse(objectData, _FileOffset,
+        // The caller passes the offset where the object starts: _FileOffset has already advanced past the object when the
+        // outer loop gets here, so using the field would put a wrong StartOffset on the parsed header.
+        if (!BlfObjectHeaderParser.TryParse(objectData, objectFileOffset,
                 out BlfObjectInfo objInfo, out _))
         {
             return;
@@ -635,8 +667,9 @@ internal sealed class BlfIncrementalScanner
 
     /// <summary>
     /// Chunk size used by <see cref="_ScanForMagic"/> when scanning for the LOBJ magic.
-    /// 4 MiB with a 3-byte overlap is enough to find a magic that spans a chunk edge
-    /// without pulling a 64 MiB window on every miss.
+    /// 4 MiB with a 3-byte overlap (one byte less than the 4-byte magic) finds a magic that spans a chunk edge while a
+    /// miss only touches a bounded window instead of the rest of a possibly huge mapped file. A constant of the
+    /// recovery path, not a trust-boundary limit: the search only moves forward and ends at the end of the file.
     /// </summary>
     private const int _ScanForMagicChunkSize = 4 * 1024 * 1024;
 

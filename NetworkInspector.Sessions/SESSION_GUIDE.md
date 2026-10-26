@@ -126,7 +126,7 @@ the phase `Stopped`; listeners receive `OnShuttingDown` without a phase change.
 | `TryAddFrameSource` | `Idle` | any other phase: `InvalidPhase` |
 | `TryAddListener`, `TryAddValueCache` | `Idle`, `Running`, `Stopped` | shutting down: `InvalidPhase`; restart running or failed, after shutdown: `QueriesDisabled` |
 | `TryAddJob` | every phase until shutdown | once `Shutdown` started (also after it): `InvalidPhase` |
-| `TryStart` | `Idle`, once | otherwise: `InvalidPhase` |
+| `TryStart` | `Idle`, once (of several concurrent callers exactly one wins) | otherwise: `InvalidPhase` |
 | `Restart` | `Running`, `Stopped` | throws (section 9) |
 | `TryUnsubscribe` | every phase except `ShuttingDown` | `ShuttingDown`: `InvalidPhase`; foreign job: `JobNotFound`; finished job: `JobTerminal` |
 | reads (`TryGetPacket`, …) | while `QueriesEnabled` | restart running or failed, after shutdown: `QueriesDisabled` |
@@ -140,7 +140,9 @@ A listener or value cache added after packets exist is notified at once for the 
 - **Do not block** in a callback for long: it delays only that listener, but its flags keep coalescing.
 - A UI must **marshal** to its UI thread inside the callback (for example `Dispatcher.UIThread.Post`). Hand
   over plain data (ids, counts, strings), not packets from a recycled buffer (section 7.4).
-- `ISessionReader` is thread-safe. Reads may run on any thread, also outside callbacks.
+- `ISessionReader` is thread-safe. Reads may run on any thread, also outside callbacks. The lists from `GetJobs()`,
+  `GetListeners()`, `GetFrameSources()`, and `GetValueCaches()` are read-only views of an immutable snapshot: a later
+  change gives a new list, the one you hold stays valid and cannot be modified.
 - **Never call these from a callback:** `Shutdown`, `Dispose` (they wait for the listener threads, including
   the calling one), and `TryUnsubscribe` / `ListenerInfo.Unsubscribe` / `ValueCacheInfo.Unsubscribe` of the
   **own** listener (it waits for its own thread). Unsubscribing a different listener is fine.
@@ -300,12 +302,14 @@ charts: they read values once and do not build field trees.
 ### 8.4 One packet with field observers
 
 The session has no read overload that takes `ParseOptions`. Read the frame and parse it yourself with the
-session's stack; observers are passed through `ParseOptions.Observers`:
+session's stack; observers are passed through `ParseOptions.Observers`. This parse runs outside the session's own reads, so
+it holds no stack lease: a `Restart` that runs at the same time can dispose the stack under it. Do not restart while you
+parse this way, and read `session.Stack` again after `OnStackChanged`:
 
 ```csharp
 if (session.TryGetFrame(id, out Frame frame, out SessionFailure? failure))
 {
-    Stack stack = session.Stack;                               // read once; a restart may swap it
+    Stack stack = session.Stack;                               // read once; never keep it across a restart
     ParseObserver[] observers =
     [
         new ParseObserver { Observer = myObserver, Watch = FieldWatch.Only(stack, ipTtlFieldId) },
@@ -325,8 +329,11 @@ per parse at a time.
 ### 8.5 Background work
 
 `TryAddJob(uiName, description, work, …)` runs `work(cancellationToken)` on its own thread and shows it in
-`GetJobs()` (exports, statistics). It is allowed until shutdown starts; `Shutdown` cancels it.
-`TryUnsubscribe(job)` cancels it early; `TryRemoveJob` removes a finished job from the list.
+`GetJobs()` (exports, statistics). It is allowed until shutdown starts; `Shutdown` cancels it, waits for it (within
+the shutdown time budget), and disposes it, so the work must observe its token. It must not call `Shutdown`,
+`Restart`, or `WaitForCompletion` once shutdown has begun (`Shutdown` waits for the job while it holds the lock
+those calls need). `TryUnsubscribe(job)` cancels it early; `TryRemoveJob` removes a finished job from the list and
+refuses a pending or running one (`false` with `JobStillRunning`).
 
 ## 9. Restart (re-parse with a new stack)
 
@@ -348,7 +355,9 @@ What happens, in order:
    not define throws `ValueCacheUnknownField` / `ValueCacheInvalidFieldName` here, **before anything
    changed**; the session disposes the unused stack.
 2. Phase `Restarting`, source threads park before their next parse, queries are disabled.
-3. The stack is swapped (the session owns it from now on and disposes a stack it created earlier).
+3. The stack is swapped (the session owns it from now on). The replaced stack, when the session created it, is retired:
+   disposed at once if no session read is parsing on it, otherwise by the last such read when it ends. `Restart`
+   never waits for those reads and never keeps the old stack until `Shutdown`.
 4. Every frame is re-parsed in id order with its original id.
 5. Listener filters are re-bound to the new stack; a filter that cannot be re-bound makes that listener's
    `Matching` pulls fail with its `FilterError`.
@@ -360,7 +369,7 @@ What happens, in order:
 | wrong phase, shutdown started | `SessionException(InvalidPhase)` | unchanged |
 | second restart at the same time | `InvalidOperationException` | unchanged |
 | factory used another registry | `ArgumentException` | unchanged |
-| ingest request not satisfiable | `SessionException(ValueCacheUnknownField / …InvalidFieldName)` | unchanged |
+| ingest request not satisfiable | `SessionException(ValueCacheUnknownField / …InvalidFieldName / …InvalidRequest)` | unchanged |
 | a frame cannot be re-read | `SessionException(FrameUnavailable)` | queries stay disabled; only `Shutdown` remains |
 
 While a restart runs, `QueriesEnabled` is false and reads are refused: show a busy state and wait for
@@ -372,14 +381,17 @@ While a restart runs, `QueriesEnabled` is false and reads are refused: show a bu
 |-------|--------|-------------|
 | caller | the stack passed to the constructor | the caller, after the session |
 | session | every added frame source | `Shutdown` |
-| session | every stack built by a restart factory | the next restart or `Shutdown` |
+| session | every stack built by a restart factory | the restart that replaces it (once its last in-flight read ended) or `Shutdown` |
 | caller | listener objects, filters, observers | the caller |
 
 - `TryUnsubscribe(job)`: a source stops reading (its frames stay readable until `Shutdown`); a listener or value
   cache gets `OnUnsubscribed` and is removed; a user job is cancelled. Convenience: `FrameSourceInfo.Stop()`,
   `ListenerInfo.Unsubscribe()`, `ValueCacheInfo.Unsubscribe()`.
-- `Shutdown(timeout)`: cancels sources, waits for them (one shared time budget; `null` waits forever), drains
-  and unsubscribes every listener (status `SessionEnded`), disables reads, disposes sources and owned stacks.
+- `Shutdown(timeout)`: cancels sources and user jobs, waits for them (one shared time budget for both; `null` waits
+  forever), drains and unsubscribes every listener (status `SessionEnded`; a flag raised before the cancellation is
+  still delivered), disables reads, disposes jobs, sources and owned stacks (a replaced stack that a read still uses is waited for within
+  the same time budget, then disposed anyway). A listener, value cache, or job added
+  while the shutdown starts is either part of it or refused with `InvalidPhase`.
   It is idempotent and safe from several threads. Disposal errors are collected into one
   `AggregateException`; `Dispose()` stores them in `ShutdownErrors` instead of throwing.
 - A source that ignores cancellation and returns after `Shutdown(timeout)` ends `Cancelled`; its late frame is
@@ -390,7 +402,9 @@ While a restart runs, `QueriesEnabled` is false and reads are refused: show a bu
 - Expected refusals return `false` with a `SessionFailure(Code, Message)`; see the tables above.
 - Caller bugs and hard limits throw `SessionException(Code)`: empty `UiName`, a disposed session, exhausted
   ids (`JobIdExhausted`, `ListenerIdExhausted`, `ValueCacheIdExhausted`, `PacketIdExhausted`), invalid or
-  unknown value-cache names. Null arguments throw `ArgumentNullException`.
+  unknown value-cache names (`ValueCacheInvalidFieldName`, `ValueCacheUnknownField`), and a value-cache request that
+  cannot be built (`ValueCacheInvalidRequest`: empty, a field that records nothing, a duplicate series, `ChunkShift`
+  outside 4…20). Null arguments throw `ArgumentNullException`.
 - Listener and value-cache callback exceptions fail only their own job.
 
 ## 12. Performance

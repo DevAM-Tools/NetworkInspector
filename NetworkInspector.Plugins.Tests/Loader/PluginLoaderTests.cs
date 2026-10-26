@@ -86,4 +86,46 @@ internal sealed class PluginLoaderTests
     }
 
     #endregion
+
+    #region Load time
+
+    [Test]
+    [Category("Slow")]
+    public async Task TheTimeOfReadingTheInfoOfAnExternalPluginIsCountedOnceInItsLoadTime()
+    {
+        using LoaderHarness harness = new("loader-info-time");
+        string folder = harness.Folder.FilePath("plugins");
+
+        // The Info getter spins for at least 80 ms (a busy wait, so that no sleep and no clock fake is needed). The info is read
+        // once. A load time of twice that or more can only mean that the same span was added to the total twice.
+        TestAssemblyCompiler.Compile(Path.Combine(folder, "SlowInfo.dll"), "SlowInfo", """
+            using System.Diagnostics;
+            using NetworkInspector.Plugins;
+            public sealed class SlowInfoPlugin : IPlugin
+            {
+                public PluginInfo Info
+                {
+                    get
+                    {
+                        long start = Stopwatch.GetTimestamp();
+                        while (Stopwatch.GetElapsedTime(start) < System.TimeSpan.FromMilliseconds(80))
+                        {
+                        }
+
+                        return new("Slow.Info", "1", "MIT", "Reads slowly.", []);
+                    }
+                }
+
+                public void Configure(IPluginBuilder b) { }
+            }
+            """);
+
+        PluginRecord record = harness.Load([folder]).Plugins.Single();
+
+        await Assert.That(record.State).IsEqualTo(PluginLoadState.Loaded);
+        await Assert.That(record.LoadTime).IsGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(80));
+        await Assert.That(record.LoadTime).IsLessThan(TimeSpan.FromMilliseconds(160));
+    }
+
+    #endregion
 }

@@ -32,37 +32,54 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// <summary>Separator between packets: comma + newline + blank line.</summary>
     private static ReadOnlySpan<byte> _PacketSeparator => ",\n\n"u8;
 
+    /// <summary>Cooperative cancellation; checked per packet.</summary>
     private readonly CancellationToken _CancellationToken;
+
+    /// <summary>Output format; selects the packet writer.</summary>
     private readonly JsonExportFormat _Format;
+
+    /// <summary>Whether the stream is flushed after every packet (costs one flush call per packet).</summary>
     private readonly bool _FlushPerPacket;
+
+    /// <summary>Maximum number of packets to write; 0 means unlimited.</summary>
     private readonly int _TargetPacketCount;
 
-    // Output target consumed on lazy init
+    /// <summary>Output target. Cleared to <c>null</c> after disposal to prevent a double dispose.</summary>
     private ExportOutput? _Output;
-    // _OutputStreamRef: non-owning reference to the stream created by _Output.
+
+    // _DirectStream is a non-owning reference to the stream created by _Output.
     // _Output is the sole owner and is responsible for disposing it on Dispose/OnFinish.
-    // Never dispose _OutputStreamRef directly — doing so would double-dispose the underlying stream.
-    // Rename kept as _DirectStream for API-surface stability; the 'Ref' suffix communicates
-    // the non-owning semantics to future readers even without this comment.
+    // Never dispose _DirectStream directly — doing so would double-dispose the underlying stream.
+    // The packets are written straight to this stream (for a file output a 4 MiB BufferedStream), so no second
+    // buffering layer is needed between the serialization buffer and the stream.
     [SuppressMessage("Design", "CA2213:Disposable fields should be disposed",
         Justification = "_DirectStream is a non-owning reference to _Output's stream; _Output.Dispose() handles cleanup.")]
     private Stream? _DirectStream;
 
-    // Compact format state (only allocated for Compact mode)
+    /// <summary>Same-as-previous and field-info deduplication state; only allocated for the Compact format.</summary>
     private readonly JsonExporterState? _State;
 
-    // Reusable serialization buffer to avoid per-packet allocations.
-    // Not declared readonly because the writers receive it by `ref` (see CompactWriter / PrettyWriter / ArrayWriter),
-    // and `ref readonly` would prevent in-place writes through PooledBuffer's mutable methods.
+    // Reusable serialization buffer: each packet is serialized here and then written to the stream in one call, which
+    // avoids per-packet allocations. Not declared readonly because the writers take it by `ref`, and a readonly field
+    // cannot be passed by ref. (PooledBuffer is a class, so the `ref` is not needed for the writes to be visible.)
     private PooledBuffer _Buffer = new(4096);
 
+    /// <summary>Bytes handed to the stream so far; backs <see cref="EstimatedOutputBytes"/>.</summary>
     private long _CommittedBytes;
+
+    /// <summary>Latched fatal state; every later <see cref="OnPacket"/> returns <c>false</c>.</summary>
     private bool _HasError;
+
+    /// <summary>Set once <see cref="_Start"/> ran, successful or not, so a failed start is never retried.</summary>
     private bool _Started;
+
+    /// <summary>Latch that stops <see cref="OnPacket"/> once <see cref="OnFinish"/> began.</summary>
     private bool _Finished;
+
     // Tracks whether the closing JSON array bracket has been written.
-    // Separate from _Finished so that a failed bracket write on the first
-    // OnFinish call can be retried on a subsequent call.
+    // Separate from _Finished so that a failed bracket write on the first OnFinish call is not mistaken for a
+    // completed finish. In the current flow the first OnFinish also releases the output, so a later call finds no
+    // stream and cannot write the bracket (see _FinalizeFile).
     private bool _ClosingBracketWritten;
 
     /// <summary>Creates a new exporter (use <see cref="CreateBuilder"/> for construction).</summary>
@@ -83,7 +100,9 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         _TargetPacketCount = targetPacketCount;
         _CancellationToken = cancellationToken;
 
-        // Allocate state only for Compact mode (dedup + same-as-previous)
+        // Allocate state only for Compact mode (dedup + same-as-previous); Pretty and Array are stateless. 2048 is a sizing
+        // hint for the number of distinct field ids (it matches the dense-array threshold of the previous-value store), not
+        // a limit: larger ids are handled by the growth/overflow paths.
         if (format == JsonExportFormat.Compact)
         {
             _State = new JsonExporterState(2048);
@@ -146,6 +165,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
     /// <inheritdoc/>
     public bool OnPacket(Packet packet)
     {
+        // Stop conditions first: a false return tells the driver to stop sending packets.
         if (_CancellationToken.IsCancellationRequested)
         {
             return false;
@@ -174,7 +194,8 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
         _Finished = true;
 
-        // Shared finish sequence: finalize, then release every resource even when a step fails.
+        // Shared finish sequence: finalize, then release every resource even when a step fails. Pooled buffer first and
+        // the output last (the output close flushes and may throw); ExporterFinish runs every step regardless.
         ExporterFinish.Run(
             "JSON",
             _FinalizeFile,
@@ -184,9 +205,11 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
     }
 
     /// <summary>
-    /// Writes the closing bracket and flushes. Starts first for an empty export so it produces <c>"[\n]\n"</c>. A previous
-    /// OnFinish may have failed before completing the write; retrying here makes the file a valid JSON document when the
-    /// underlying stream recovers.
+    /// Writes the closing bracket and flushes. Starts first for an empty export so it produces <c>"[\n]\n"</c>, a valid
+    /// empty JSON array. The closing bracket is guarded by <see cref="_ClosingBracketWritten"/> so it is written at most
+    /// once. A repeated <see cref="OnFinish"/> after a failed first attempt reaches this method again, but the first
+    /// attempt already released the output (<see cref="_DisposeOutput"/> clears the stream reference), so the bracket is
+    /// not retried and the file stays incomplete; the failure was reported through <see cref="ItemSkipped"/> on the first call.
     /// </summary>
     private void _FinalizeFile()
     {
@@ -248,13 +271,16 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
 
         _Started = true;
 
-        Stream? underlyingStream = _Output.GetOrCreateUnderlyingStream();
-        if (underlyingStream is null)
+        // An open failure (bad path, missing directory, access denied) or a missing stream goes through the normal error
+        // path instead of escaping from OnPacket. A disposed exporter (output already null, above) stays silent so a late
+        // call does not start an error loop.
+        if (!_Output.TryGetOrCreateUnderlyingStream(out Stream? underlyingStream, out string openFailure))
         {
-            _HasError = true;
+            _ReportStartFailure(ExportErrorKind.IoError, $"JSON output could not be opened: {openFailure}");
             return false;
         }
 
+        // _Started is already set, so a failed opening is never retried: a half-written document cannot be repaired.
         try
         {
             // Opening bracket write may throw on a broken stream — surface as an
@@ -264,28 +290,42 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
         catch (Exception ex)
         {
-            _HasError = true;
-            if (ErrorCount < int.MaxValue) ErrorCount++;
-            ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-            {
-                ItemIndex = 0,
-                Kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
-                Message = $"JSON header write failed: {ex.Message}",
-            });
+            _ReportStartFailure(
+                ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
+                $"JSON header write failed: {ex.Message}");
             return false;
         }
 
         return true;
     }
 
+    /// <summary>Latches the fatal state for a failed start, counts it, and raises <see cref="ItemSkipped"/> as item 0.</summary>
+    private void _ReportStartFailure(ExportErrorKind kind, string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = 0,
+            Kind = kind,
+            Message = message,
+        });
+    }
+
     /// <summary>Serializes and outputs a single packet.</summary>
     private bool _HandlePacket(Packet packet)
     {
+        // Target reached: refuse the packet so the driver stops. IsFinished reports the same condition to polling callers.
         if (_TargetPacketCount > 0 && PacketCount >= _TargetPacketCount)
         {
             return false;
         }
 
+        // A skip packet has no parsed field tree to serialize: an expected per-item failure, handled by the tolerance mode.
         if (!packet.HasFieldTree)
         {
             return _HandleSkip(new ExportErrorEventArgs
@@ -298,29 +338,22 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
 
         _Buffer.Reset();
 
-        // Comma + blank line separator between packets
+        // Comma + blank line separator between packets. It is written in front of a packet (not after it) and only when a
+        // packet was already written: PacketCount counts written packets only, so a skipped packet leaves neither a
+        // dangling comma nor a missing one, and the closing bracket needs no special handling for the last element.
         if (PacketCount > 0)
         {
             _Buffer.Write(_PacketSeparator);
         }
 
-        // Serialize packet using the configured format
-        switch (_Format)
-        {
-            case JsonExportFormat.Compact:
-                CompactWriter.WritePacket(packet, ref _Buffer, _State!);
-                break;
-            case JsonExportFormat.Pretty:
-                PrettyWriter.WritePacket(packet, ref _Buffer);
-                break;
-            case JsonExportFormat.Array:
-                ArrayWriter.WritePacket(packet, ref _Buffer);
-                break;
-        }
-
+        // Serialize the whole packet into the buffer first, then write it with one stream call. A packet is therefore
+        // either handed to the stream completely or not at all. Serialization is inside the try block with the write: a
+        // field whose text cannot be produced (a deferred protocol string that throws on corrupt data, for example) is a
+        // property of this packet and must become a skipped packet, not an exception out of OnPacket.
         // _DirectStream is guaranteed non-null after _Start() succeeds
         try
         {
+            _SerializePacket(packet);
             _WriteDirect(_Buffer.WrittenSpan);
             if (_FlushPerPacket)
             {
@@ -329,7 +362,12 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
         catch (Exception ex)
         {
-            // Any error during write — skip packet with error reporting.
+            // The compact writer updated its same-as-previous state while it serialized this packet, but the packet never
+            // reached the file. Forget that state so the next packet is written in full instead of referring to values
+            // the file does not contain. Not needed for the other formats (they keep no state).
+            _State?.Reset();
+
+            // Any error during serialization or write — skip packet with error reporting.
             // I/O errors map to IoError; other failures (encoding, etc.) map
             // to SerializationError so callers can distinguish the cause.
             ExportErrorKind kind = ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError;
@@ -345,12 +383,36 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         return true;
     }
 
+    /// <summary>Serializes one packet into <see cref="_Buffer"/> in the configured format.</summary>
+    /// <exception cref="InvalidOperationException">The format is not one of the defined values (a broken invariant).</exception>
+    private void _SerializePacket(Packet packet)
+    {
+        switch (_Format)
+        {
+            case JsonExportFormat.Compact:
+                CompactWriter.WritePacket(packet, ref _Buffer, _State!);
+                break;
+            case JsonExportFormat.Pretty:
+                PrettyWriter.WritePacket(packet, ref _Buffer);
+                break;
+            case JsonExportFormat.Array:
+                ArrayWriter.WritePacket(packet, ref _Buffer);
+                break;
+            default:
+                // The builder rejects undefined values, so this is a bug (a cast enum that bypassed it). Writing nothing
+                // would produce an empty object for every packet.
+                throw new InvalidOperationException(
+                    $"Undefined JSON export format {((int)_Format).ToString(CultureInfo.InvariantCulture)}.");
+        }
+    }
+
     /// <summary>
     /// Handles a skipped packet: increments counters, fires the event in Tolerant mode,
     /// and returns false to abort in Strict mode.
     /// </summary>
     private bool _HandleSkip(ExportErrorEventArgs error)
     {
+        // Saturating counters: a multi-billion-packet export must not wrap into negative counts.
         if (SkippedCount < int.MaxValue)
         {
             SkippedCount++;
@@ -404,7 +466,8 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         private bool _FlushPerPacket;
         private int _TargetPacketCount;
 
-        /// <summary>Sets the output to a file path with a 4 MiB buffer.</summary>
+        /// <summary>Sets the output to a file path with a 4 MiB buffer. The file is created lazily on the first write.</summary>
+        /// <exception cref="ArgumentException"><paramref name="path"/> is null, empty, or contains invalid path characters.</exception>
         public Builder ToFile(string path)
         {
             _Output = ExportOutput.File(path);
@@ -446,13 +509,23 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
 
         /// <summary>Sets the JSON output format.</summary>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="format"/> is not a defined <see cref="JsonExportFormat"/>.</exception>
         public Builder WithFormat(JsonExportFormat format)
         {
+            // A cast integer would otherwise select no writer and every packet would come out empty.
+            if (!Enum.IsDefined(format))
+            {
+                throw new ArgumentOutOfRangeException(nameof(format), format, "The JSON export format is not defined.");
+            }
+
             _Format = format;
             return this;
         }
 
-        /// <summary>Enables or disables flushing the stream after each packet.</summary>
+        /// <summary>
+        /// Enables or disables flushing the stream after each packet. Off by default: a flush per packet defeats the
+        /// output buffering and is only useful for consumers that read the file while it is being written.
+        /// </summary>
         public Builder WithFlushPerPacket(bool flush)
         {
             _FlushPerPacket = flush;
@@ -460,9 +533,15 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IDis
         }
 
         /// <summary>Stops after writing the specified number of packets. 0 means unlimited.</summary>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="count"/> is negative or exceeds <see cref="ArrayIndexIdRange.MaxCount"/>.
+        /// </exception>
         public Builder WithTargetPacketCount(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+            // Packets are addressed by array-index ids, so a source cannot deliver more than MaxCount packets; a larger
+            // target would be unreachable and is rejected as a configuration error.
             if (count > ArrayIndexIdRange.MaxCount)
             {
                 throw new ArgumentOutOfRangeException(

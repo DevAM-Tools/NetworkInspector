@@ -30,6 +30,9 @@ internal static class CanFlagsFormatter
     #region Classic CAN (3 flags)
 
     // Key packing: bit0=XTD, bit1=RTR, bit2=ERR
+    // The tables are built once in the type initializer, so the per-packet Format* calls are an array index with no
+    // string building and no allocation. The key packing in FormatClassic and the bit tests in the builder below must
+    // stay in sync: table index i holds the text for the flag set whose bit n is flag n.
     private static readonly string[] _ClassicFlagsTable = _Build_ClassicFlagsTable();
 
     /// <summary>
@@ -42,6 +45,7 @@ internal static class CanFlagsFormatter
         return _ClassicFlagsTable[key];
     }
 
+    /// <summary>Builds all 2^3 classic flag strings. Runs once; allocation here is irrelevant for the per-packet path.</summary>
     private static string[] _Build_ClassicFlagsTable()
     {
         string[] table = new string[8];
@@ -73,6 +77,7 @@ internal static class CanFlagsFormatter
         return _FdFlagsTable[key];
     }
 
+    /// <summary>Builds all 2^5 CAN FD flag strings, each starting with the constant "FD" entry.</summary>
     private static string[] _Build_FdFlagsTable()
     {
         string[] table = new string[32];
@@ -104,6 +109,7 @@ internal static class CanFlagsFormatter
         return _XlFlagsTable[key];
     }
 
+    /// <summary>Builds all 2^2 CAN XL flag strings, each starting with the constant "XLF" entry.</summary>
     private static string[] _Build_XlFlagsTable()
     {
         string[] table = new string[4];
@@ -125,6 +131,9 @@ internal static class CanFlagsFormatter
     /// Builds a bracket-enclosed flag string for the given active-flag booleans and names.
     /// An optional <paramref name="prefix"/> is always inserted as the first entry.
     /// Example output: <c>[FD, BRS]</c>, <c>[None]</c> (when no variable flags set and no prefix).
+    /// Only used while the lookup tables are built (type initialization), never per packet; it still sizes the
+    /// string exactly in a first pass and fills it in place with <c>string.Create</c> to avoid
+    /// intermediate builders. <paramref name="active"/> and <paramref name="names"/> must have the same length.
     /// </summary>
     private static string _BuildFlagString(bool[] active, string[] names, string? prefix)
     {

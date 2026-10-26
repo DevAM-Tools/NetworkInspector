@@ -5,17 +5,32 @@ namespace NetworkInspector.Exporters.Pbf;
 /// <summary>
 /// Dynamic bitmap for tracking field presence per block.
 /// Replaces <see cref="HashSet{T}"/> with a dense bit array for
-/// cache-friendly field ID lookups.
+/// cache-friendly field ID lookups: one bit per field ID, no hashing, no per-entry allocation, and a block-to-block
+/// <see cref="Clear"/> that only touches the bytes that were set.
+/// <para>
+/// The bitmap layout (bit <c>id % 8</c> of byte <c>id / 8</c>, least-significant bit first) is also the layout of the
+/// PBF trailer's global field bitmap, which is why <see cref="MergeInto"/> can combine per-block bitmaps with a
+/// plain byte-wise OR.
+/// </para>
+/// <para>
+/// Thread safety: not thread-safe; owned by one block builder and used from the exporter's single caller thread.
+/// </para>
 /// </summary>
 internal sealed class FieldPresence
 {
     private readonly byte[] _Bitmap;
-    private int _UsedBytes; // tracks highest byte index with a set bit
+
+    // Number of leading bytes of _Bitmap that may contain a set bit. Lets Clear and AsBytes work on a short prefix
+    // instead of the whole array (4 KiB for the 32 768 IDs the PBF exporter tracks) when only low field IDs occur.
+    private int _UsedBytes;
 
     /// <summary>
-    /// Creates a new field presence bitmap sized for the given maximum field ID.
+    /// Creates a new field presence bitmap sized for the given number of field IDs.
     /// </summary>
-    /// <param name="maxFieldId">The highest field ID value expected.</param>
+    /// <param name="maxFieldId">
+    /// Exclusive upper bound of the tracked field IDs, rounded up to a multiple of 8: IDs <c>0</c> to
+    /// <c>maxFieldId - 1</c> are tracked. Must not be negative.
+    /// </param>
     internal FieldPresence(int maxFieldId)
     {
         _Bitmap = new byte[(maxFieldId + 7) / 8];
@@ -37,6 +52,8 @@ internal sealed class FieldPresence
     /// constructing <see cref="FieldPresence"/>.
     /// </para>
     /// </summary>
+    /// <param name="fieldIdValue">The field ID to mark.</param>
+    /// <returns><see langword="true"/> when the field was not marked before (or is outside the tracked range).</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="fieldIdValue"/> is negative.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool Mark(int fieldIdValue)
@@ -51,7 +68,10 @@ internal sealed class FieldPresence
         int byteIndex = fieldIdValue >> 3;        // / 8
         int bitIndex = fieldIdValue & 0x07;       // % 8
 
-        // Bounds check — if fieldIdValue exceeds our bitmap, treat as always new
+        // Bounds check — if fieldIdValue exceeds our bitmap, treat as always new. The bitmap is deliberately not
+        // grown: its size bounds the memory used per block and the size of the trailer bitmap (a field ID near
+        // int.MaxValue would otherwise ask for a 256 MiB array). The cost is that such IDs are absent from the
+        // merged trailer bitmap.
         if (byteIndex >= _Bitmap.Length)
         {
             return true;
@@ -60,11 +80,30 @@ internal sealed class FieldPresence
         byte mask = (byte)(1 << bitIndex);
         bool wasSet = (_Bitmap[byteIndex] & mask) != 0;
         _Bitmap[byteIndex] |= mask;
+
+        // Keep the used-prefix length current so Clear and AsBytes never miss a set bit.
         if (byteIndex >= _UsedBytes)
         {
             _UsedBytes = byteIndex + 1;
         }
         return !wasSet;
+    }
+
+    /// <summary>
+    /// Clears the bit of a field that <see cref="Mark"/> reported as new, so the field counts as unseen again. Used to undo
+    /// the marks of a packet that was not added to the block. Ids outside the tracked range have no bit and are ignored.
+    /// The used-prefix length is left as it is (a trailing zero byte is harmless).
+    /// </summary>
+    /// <param name="fieldIdValue">The field ID to unmark; a negative value is ignored.</param>
+    internal void Unmark(int fieldIdValue)
+    {
+        int byteIndex = fieldIdValue >> 3;
+        if (fieldIdValue < 0 || byteIndex >= _Bitmap.Length)
+        {
+            return;
+        }
+
+        _Bitmap[byteIndex] &= (byte)~(1 << (fieldIdValue & 0x07));
     }
 
     /// <summary>Clears all set bits (only zeros the used portion for speed).</summary>
@@ -74,15 +113,21 @@ internal sealed class FieldPresence
         _UsedBytes = 0;
     }
 
-    /// <summary>Returns the used portion of the bitmap as a read-only span.</summary>
+    /// <summary>
+    /// Returns the used portion of the bitmap (trailing all-zero bytes omitted) as a read-only span. The span aliases
+    /// the internal array and is invalidated by <see cref="Mark"/> and <see cref="Clear"/>.
+    /// </summary>
     internal ReadOnlySpan<byte> AsBytes() => _Bitmap.AsSpan(0, _UsedBytes);
 
     /// <summary>
     /// OR-merges this bitmap into the target span. Fields present in this
     /// bitmap will be marked present in the target as well.
     /// </summary>
+    /// <param name="target">The accumulating bitmap; bytes beyond its length are not merged.</param>
     internal void MergeInto(Span<byte> target)
     {
+        // Only the used prefix is visited, and a shorter target silently truncates the merge (it is sized by the
+        // exporter to the same field ID limit, so nothing is lost in practice).
         ReadOnlySpan<byte> source = AsBytes();
         int length = Math.Min(source.Length, target.Length);
         for (int i = 0; i < length; i++)

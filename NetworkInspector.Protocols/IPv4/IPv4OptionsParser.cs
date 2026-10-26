@@ -11,12 +11,18 @@ namespace NetworkInspector.Protocols;
 /// <item>Record Route (RR, 0x07)</item>
 /// <item>Loose Source Route (LSR, 0x83)</item>
 /// <item>Strict Source Route (SSR, 0x89)</item>
-/// <item>Internet _Timestamp (TS, 0x44)</item>
+/// <item>Internet Timestamp (TS, 0x44)</item>
 /// <item>Router Alert (RA, 0x94)</item>
-/// <item>_Security (SEC, 0x82)</item>
+/// <item>Security (SEC, 0x82) and Extended Security (0x85), shown as raw data</item>
 /// <item>Stream Identifier (SID, 0x88)</item>
 /// <item>Unknown options (displayed with raw data)</item>
 /// </list>
+/// <para>
+/// Design: the parser is tolerant, because option bytes come from the network. A malformed option (missing or
+/// invalid length byte, length beyond the options region) ends parsing: the options decoded before it stay, the rest
+/// is dropped without an error field. A multi-byte option is never read beyond its own declared length.
+/// </para>
+/// <para><b>Thread-safety:</b> stateless; safe for concurrent use. It appends fields only to the container it is given.</para>
 /// </summary>
 internal static class IPv4OptionsParser
 {
@@ -38,10 +44,12 @@ internal static class IPv4OptionsParser
     private const int _RouterAlertLen = 4;
     private const int _StreamIdLen = 4;
 
-    // Maximum total options length (IHL max 15 → 60 byte header − 20 byte fixed = 40 bytes)
+    // Maximum total options length (IHL max 15 → 60 byte header − 20 byte fixed = 40 bytes).
+    // A constant of the format (IHL is a 4-bit count of 32-bit words), not a tunable limit: the caller derives the
+    // options span from IHL, so a longer span cannot occur; this guard only protects against a caller error.
     private const int _MaxOptionsLen = 40;
 
-    // _Timestamp flag values
+    // Timestamp flag values (low nibble of the fourth option byte, RFC 791)
     private const byte _TsFlagTimestampsOnly = 0;
     private const byte _TsFlagTimestampAndAddr = 1;
     private const byte _TsFlagPrespecified = 3;
@@ -53,6 +61,9 @@ internal static class IPv4OptionsParser
     /// <param name="optionsContainer">The parent field for all options (ip.options).</param>
     /// <param name="data">Options bytes (from offset 20 to header length).</param>
     /// <param name="fields">Field IDs for the option sub-fields.</param>
+    /// <remarks>
+    /// An empty region, or one longer than 40 bytes (more than IHL allows), produces no fields and no error.
+    /// </remarks>
     internal static void Parse(
         MutField optionsContainer,
         ReadOnlySpan<byte> data,
@@ -64,6 +75,8 @@ internal static class IPv4OptionsParser
             return;
         }
 
+        // One option per iteration. Every branch either advances offset by at least one byte or returns, so the loop
+        // terminates; the single-byte options (EOOL, NOP) have no length byte, all others carry type + length + data.
         int offset = 0;
         while (offset < len)
         {
@@ -77,6 +90,7 @@ internal static class IPv4OptionsParser
                         fields.EolFieldId, FieldValue.None,
                         "End of Options List (EOL)");
 
+                    // The field stores memory, not a span, so the padding is copied (rare: only when bytes follow EOOL).
                     if (offset + 1 < len)
                     {
                         ReadOnlyMemory<byte> padding = data[(offset + 1)..len].ToArray();
@@ -94,7 +108,8 @@ internal static class IPv4OptionsParser
                     break;
 
                 default:
-                    // Multi-byte option: type(1) + length(1) + data(N)
+                    // Multi-byte option: type(1) + length(1) + data(N). The length byte counts the type and length
+                    // bytes too (RFC 791), so values below 2 are invalid and a length past the region is truncated data.
                     if (offset + 1 >= len)
                     {
                         return; // Malformed: no length byte
@@ -115,6 +130,10 @@ internal static class IPv4OptionsParser
     }
 
     /// <summary>Dispatches a multi-byte option to the appropriate specific parser.</summary>
+    /// <param name="optionsContainer">The parent field for all options.</param>
+    /// <param name="optType">The option type byte.</param>
+    /// <param name="optData">The whole option (type, length, data); its length is the validated option length (at least 2).</param>
+    /// <param name="fields">The registered option sub-field ids used to append the decoded values.</param>
     private static void _ParseMultiByteOption(
         MutField optionsContainer,
         byte optType,
@@ -222,9 +241,14 @@ internal static class IPv4OptionsParser
     }
 
     /// <summary>
-    /// Parses a _Timestamp option (type 0x44).
+    /// Parses a Timestamp option (type 0x44).
     /// Format: type(1) + length(1) + pointer(1) + oflw_flag(1) + entries.
     /// </summary>
+    /// <remarks>
+    /// The fourth byte holds the overflow counter in its high nibble and the flag in its low nibble. Entries are
+    /// 32-bit values; with flag 1 or 3 each is preceded by a 4-byte address. Only whole entries are shown, and a flag
+    /// other than 0, 1 or 3 shows no entries.
+    /// </remarks>
     private static void _ParseTimestampOption(
         MutField optionsContainer,
         ReadOnlySpan<byte> optData,
@@ -318,9 +342,10 @@ internal static class IPv4OptionsParser
     }
 
     /// <summary>
-    /// Parses a _Security option (type 0x82) or Extended _Security (type 0x85).
+    /// Parses a Security option (type 0x82) or Extended Security (type 0x85).
     /// Displays raw data since full classification parsing is rarely needed.
     /// </summary>
+    /// <remarks>The raw bytes are copied (<c>ToArray</c>) because the field value stores memory, not a span.</remarks>
     private static void _ParseSecurityOption(
         MutField optionsContainer,
         ReadOnlySpan<byte> optData,
@@ -370,7 +395,10 @@ internal static class IPv4OptionsParser
         container.Append(fields.OptSidFieldId, FieldValue.NewU64(sidValue));
     }
 
-    /// <summary>Parses an unknown option — displays type, length, and raw data.</summary>
+    /// <summary>
+    /// Parses an unknown option — displays type, length, and raw data. The raw bytes are copied (<c>ToArray</c>)
+    /// because the field value stores memory, not a span; unknown options are rare.
+    /// </summary>
     private static void _ParseUnknownOption(
         MutField optionsContainer,
         byte optType,
@@ -409,6 +437,7 @@ internal static class IPv4OptionsParser
         byte optType,
         in IPv4Protocol.OptionFieldIds fields)
     {
+        // Option type byte (RFC 791): bit 7 = copied into fragments, bits 6-5 = class, bits 4-0 = option number.
         bool copy = (optType & 0x80) != 0;
         byte optClass = (byte)((optType >> 5) & 0x03);
         byte number = (byte)(optType & 0x1F);

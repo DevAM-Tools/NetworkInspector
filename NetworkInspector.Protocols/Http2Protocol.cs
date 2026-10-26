@@ -3,18 +3,31 @@
 namespace NetworkInspector.Protocols;
 
 /// <summary>
-/// HTTP/2 protocol parser — frame-level only (RFC 7540).
-/// Parses the 9-byte frame header and extracts type, flags, stream ID, and length.
-/// Does not decode HPACK-compressed headers (Phase 1 approach).
-/// <para>Field tree structure:</para>
+/// HTTP/2 protocol parser (RFC 7540) for the frames of one TCP segment.
+/// Parses the 9-byte frame header of every frame in the segment and extracts type, flags, stream ID, and length.
+/// SETTINGS, PING, GOAWAY, WINDOW_UPDATE, and RST_STREAM payloads are decoded into fields. HEADERS and CONTINUATION
+/// header blocks are decoded with the stateless <see cref="HpackDecoder"/>, so headers that depend on the dynamic
+/// table of earlier blocks are missing from the field tree.
+/// <para>
+/// A segment that starts with the client connection preface shows it as <c>http2.magic</c> and decodes the frames after it.
+/// </para>
+/// <para>
+/// Design: frames are not reassembled across TCP segments (no stream reassembly is registered for HTTP/2). A frame
+/// whose payload extends past the segment is shown with the bytes that are present, and the next frame header is
+/// searched after them. Each frame is walked twice: once eagerly in <c>Parse</c> to record the index groups, and again
+/// lazily in the populator to build the fields (see <c>Parse</c>).
+/// </para>
+/// <para>Field tree structure (abridged; per-type flag fields, settings, and header fields follow the same pattern):</para>
 /// <code>
 /// http2: HTTP/2
 /// └── http2.frame: HTTP/2 Frame
 ///     ├── http2.frame.length: 16384
 ///     ├── http2.frame.type: HEADERS (1)
-///     ├── http2.frame.flags: 0x05
+///     ├── http2.frame.flags: 0x05 [ES/ACK, END_HDRS]
 ///     ├── http2.frame.stream_id: 1
-///     └── http2.frame.payload: [bytes]
+///     ├── http2.frame.flags.end_stream / end_headers / ... (per frame type)
+///     ├── http2.header: name: value (one per decoded header, each with .name and .value children)
+///     └── http2.frame.payload: [bytes]   (only when the payload is not decoded into structured fields)
 /// </code>
 /// </summary>
 /// <remarks>
@@ -30,13 +43,27 @@ public sealed partial class Http2Protocol : IProtocol
 {
     #region Constants
 
-    /// <summary>TCP port for HTTP/2 over TLS (h2). Also used for direct TCP (h2c prior knowledge).</summary>
+    /// <summary>
+    /// TCP port that selects this parser through the TCP port table. 8443 is a conventional alternative HTTPS port, not
+    /// a port assigned to HTTP/2; TLS-protected HTTP/2 is encrypted and only parses here for cleartext (h2c prior
+    /// knowledge) traffic. Cleartext HTTP/2 on other ports is found by the heuristic parser, which recognizes the
+    /// client connection preface.
+    /// </summary>
     public const ulong TcpPortKey = 8443;
+
+    /// <summary>
+    /// The HTTP/2 client connection preface, "PRI * HTTP/2.0", CRLF CRLF, "SM", CRLF CRLF (24 octets, RFC 9113 section
+    /// 3.4). A protocol fact, shared with the heuristic parser that recognizes it.
+    /// </summary>
+    internal static ReadOnlySpan<byte> ConnectionPreface => "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"u8;
 
     /// <summary>Index group for always-present HTTP/2 fields.</summary>
     private const string _Http2IndexGroup = "http2";
 
-    /// <summary>Index group for frame payload (conditional, only when payload length > 0).</summary>
+    /// <summary>
+    /// Index group for the raw frame payload (conditional): present only when a frame has a payload that is not decoded
+    /// into structured fields. <c>_DetectFrameGroups</c> must keep this in step with <c>_PopulateHttp2Fields</c>.
+    /// </summary>
     private const string _Http2PayloadIndexGroup = "http2.payload";
 
     #endregion
@@ -49,6 +76,10 @@ public sealed partial class Http2Protocol : IProtocol
     #endregion
 
     #region Frame fields
+
+    /// <summary>The 24-octet client connection preface at the start of a connection (RFC 9113 section 3.4).</summary>
+    [BytesField("http2.magic", "Magic", IndexGroup = _Http2IndexGroup)]
+    private FieldId _MagicFieldId;
 
     [NoneField("http2.frame", "HTTP/2 Frame", IndexGroup = _Http2IndexGroup)]
     private FieldId _FrameFieldId;
@@ -147,7 +178,9 @@ public sealed partial class Http2Protocol : IProtocol
     [StringField("http2.header.value", "Value", IndexGroup = "http2.header")]
     private FieldId _HeaderValueFieldId;
 
-    // Pre-allocated populator
+    // Pre-allocated populator: converting the instance method _PopulateHttp2Fields to a delegate allocates a new
+    // delegate object on every conversion, so it is converted once at stack start and the same delegate is handed
+    // to every packet instead of allocating one per parsed segment.
     private LazyPopulator _Populator = null!;
 
     partial void _OnStartCustom(Stack stack) => _Populator = _PopulateHttp2Fields;
@@ -155,14 +188,24 @@ public sealed partial class Http2Protocol : IProtocol
     /// <summary>
     /// Parses HTTP/2 frames from the TCP segment payload. Uses lazy population.
     /// </summary>
+    /// <param name="parentField">The parent field (the TCP layer) that receives the HTTP/2 container.</param>
+    /// <param name="data">The TCP segment payload; the container keeps a view of it (no copy) for lazy population.</param>
+    /// <param name="context">The parse context used to record protocol and index group presence.</param>
+    /// <returns>
+    /// The number of bytes consumed (the whole segment), or a parse error when the segment neither starts with the
+    /// 24-octet client connection preface nor holds a complete 9-octet frame header. Only the first frame header (after
+    /// the preface, if any) is read here for the packet summary.
+    /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
-        if (data.Length < Http2FrameHeader.Size)
-        {
-            return ParseError.InsufficientDataWithInfo(ProtocolName, Http2FrameHeader.Size, (ulong)data.Length);
-        }
+        // The client connection preface (24 octets) is not a frame: reading it as a frame header would show a length of
+        // 0x505249 and a type of 0x20. It is skipped here and shown as the magic field; the frames follow after it.
+        int prefaceLength = _PrefaceLength(data.Span);
 
-        if (!Http2FrameHeader.TryParse(data.Span, out Http2FrameHeader firstFrame))
+        // The first frame header, if one is completely present after the preface. A segment that is neither long enough
+        // for a frame header nor the preface is not HTTP/2 data we can show.
+        bool hasFirstFrame = Http2FrameHeader.TryParse(data.Span[prefaceLength..], out Http2FrameHeader firstFrame);
+        if (!hasFirstFrame && prefaceLength == 0)
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, Http2FrameHeader.Size, (ulong)data.Length);
         }
@@ -170,21 +213,24 @@ public sealed partial class Http2Protocol : IProtocol
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_Http2GroupId);
 
-        // Build summary from first frame
-        string typeText = Http2DisplayTables.GetFrameTypeDisplayText(firstFrame.Type);
-
+        // Build summary from first frame (or from the preface when no frame header follows it)
+        string typeText = hasFirstFrame
+            ? Http2DisplayTables.GetFrameTypeDisplayText(firstFrame.Type)
+            : "Magic";
 
         parentField.SetPacketInfo(ZA.Lazy("HTTP/2 ", typeText));
 
         // Eagerly scan every frame in the segment to record exactly the index groups whose fields
-        // the lazy populator will emit. The relevant groups depend on each frame's type and payload
+        // the lazy populator will emit. Index state can only be recorded here: a LazyPopulator receives no
+        // ParseContext, so it cannot record presence when the fields are materialized later.
+        // The relevant groups depend on each frame's type and payload
         // length (and, for HEADERS/CONTINUATION, on the decoded HPACK header count), and a segment
         // may carry several frames — so the decision requires walking all frames and mirroring the
         // populator's per-frame emission guards. This keeps the presence index content-consistent
         // with materialization and free of false positives, at the deliberate cost of repeating the
         // frame walk (and HPACK decode) that the populator performs lazily.
         _DetectFrameGroups(
-            data.Span,
+            data.Span[prefaceLength..],
             out bool hasFlags, out bool hasPayload, out bool hasSettings, out bool hasGoaway,
             out bool hasPing, out bool hasWindowUpdate, out bool hasRstStream, out bool hasHeader);
 
@@ -221,11 +267,30 @@ public sealed partial class Http2Protocol : IProtocol
             context.RecordGroupPresence(_Http2HeaderGroupId);
         }
 
-        parentField.AppendLazyWithCustomText(
-            _ProtocolFieldId, FieldValue.NewBytes(data), "HTTP/2 ", typeText, ", Stream: ", firstFrame.StreamId, ", Length: ", firstFrame.Length, _Populator);
+        // The container stores the segment bytes and the shared populator; the frame fields are built only when the
+        // container is first expanded.
+        if (hasFirstFrame)
+        {
+            parentField.AppendLazyWithCustomText(
+                _ProtocolFieldId, FieldValue.NewBytes(data), "HTTP/2 ", typeText, ", Stream: ", firstFrame.StreamId, ", Length: ",
+                firstFrame.Length, _Populator);
+        }
+        else
+        {
+            parentField.AppendLazyWithCustomText(_ProtocolFieldId, FieldValue.NewBytes(data), "HTTP/2 ", typeText, _Populator);
+        }
 
         return data.Length;
     }
+
+    /// <summary>
+    /// Returns the length of the client connection preface at the start of <paramref name="span"/>, or 0 when the span
+    /// does not start with it.
+    /// </summary>
+    private static int _PrefaceLength(ReadOnlySpan<byte> span) =>
+        span.StartsWith(ConnectionPreface)
+            ? ConnectionPreface.Length
+            : 0;
 
     /// <summary>
     /// Eagerly walks every HTTP/2 frame in the segment and reports which optional index groups
@@ -248,6 +313,8 @@ public sealed partial class Http2Protocol : IProtocol
         hasRstStream = false;
         hasHeader = false;
 
+        // One iteration per frame header that is completely present. The loop must visit exactly the frames that
+        // _PopulateHttp2Fields visits.
         int offset = 0;
         while (offset + Http2FrameHeader.Size <= span.Length)
         {
@@ -262,6 +329,9 @@ public sealed partial class Http2Protocol : IProtocol
                 hasFlags = true;
             }
 
+            // The payload length comes from the wire (24 bits). It is clamped to the bytes in this segment, so a
+            // hostile length can neither read out of range nor cause an allocation; the sum cannot overflow an int
+            // (Length < 2^24 and the span is one TCP segment, far below int.MaxValue). A frame that continues in the next segment is cut here.
             int payloadStart = offset + Http2FrameHeader.Size;
             int payloadEnd = Math.Min(payloadStart + frame.Length, span.Length);
             if (payloadEnd > payloadStart)
@@ -269,7 +339,8 @@ public sealed partial class Http2Protocol : IProtocol
                 ReadOnlySpan<byte> payload = span[payloadStart..payloadEnd];
 
                 // structured == _ParseFramePayload's return value: true when the payload is parsed
-                // into structured fields (so no raw http2.payload field), false otherwise.
+                // into structured fields (so no raw http2.payload field), false otherwise. The length guards
+                // below are copied from _ParseFramePayload and must stay identical to it.
                 bool structured;
                 switch (frame.Type)
                 {
@@ -322,6 +393,8 @@ public sealed partial class Http2Protocol : IProtocol
     /// </summary>
     private static bool _DetectHpackHeaders(byte frameType, byte flags, ReadOnlySpan<byte> payload, ref bool hasHeader)
     {
+        // Same layout walk as _ParseFramePayload (optional pad length, optional priority block, fragment, padding).
+        // Returns false exactly where _ParseFramePayload returns false: a malformed frame keeps its raw payload field.
         int hpackOffset = 0;
         int padLength = 0;
 
@@ -353,6 +426,8 @@ public sealed partial class Http2Protocol : IProtocol
             }
         }
 
+        // The decode result is thrown away: only whether it has at least one header matters here. This is the second
+        // decode of the block (the populator decodes it again lazily), the accepted cost named in _DetectFrameGroups.
         int hpackEnd = payload.Length - padLength;
         if (hpackOffset < hpackEnd && HpackDecoder.Decode(payload[hpackOffset..hpackEnd]).Count > 0)
         {
@@ -365,6 +440,8 @@ public sealed partial class Http2Protocol : IProtocol
     /// Populates all HTTP/2 frame fields from the stored data.
     /// Processes multiple frames in the same segment if present.
     /// </summary>
+    /// <param name="container">The lazy HTTP/2 container whose value holds the segment bytes.</param>
+    /// <returns>0 on success (the value is not significant for a populator), or an error when the container holds no bytes.</returns>
     private ParseResult _PopulateHttp2Fields(in MutField container)
     {
         if (!container.Value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> http2Data))
@@ -373,7 +450,13 @@ public sealed partial class Http2Protocol : IProtocol
         }
 
         ReadOnlySpan<byte> span = http2Data.Span;
-        int offset = 0;
+
+        // The connection preface is shown as the magic field; the frames start after it (same skip as in Parse).
+        int offset = _PrefaceLength(span);
+        if (offset > 0)
+        {
+            container.Append(_MagicFieldId, FieldValue.NewBytes(http2Data[..offset]));
+        }
 
         // Process all HTTP/2 frames in the segment
         while (offset + Http2FrameHeader.Size <= span.Length)
@@ -408,7 +491,8 @@ public sealed partial class Http2Protocol : IProtocol
             // Interpret per-type flags
             _AppendFrameFlags(in frameContainer, frame.Type, frame.Flags);
 
-            // Payload (if any) — parse type-specific content for known frame types
+            // Payload (if any) — parse type-specific content for known frame types. The length is clamped to the
+            // segment exactly as in _DetectFrameGroups (wire-controlled, never trusted for allocation).
             int payloadStart = offset + Http2FrameHeader.Size;
             int payloadEnd = Math.Min(payloadStart + frame.Length, span.Length);
             if (payloadEnd > payloadStart)
@@ -475,6 +559,16 @@ public sealed partial class Http2Protocol : IProtocol
     /// Parses type-specific payload content for known frame types.
     /// Returns true if the payload was parsed as structured fields.
     /// </summary>
+    /// <param name="frameContainer">The frame field that receives the payload fields.</param>
+    /// <param name="frameType">The frame type octet.</param>
+    /// <param name="flags">The frame flags octet.</param>
+    /// <param name="payload">The payload bytes present in the segment (possibly shorter than the declared length).</param>
+    /// <param name="payloadMemory">The same bytes as memory, for fields that keep a view instead of a copy.</param>
+    /// <returns>
+    /// <see langword="true"/> when the payload became structured fields; <see langword="false"/> when the caller must
+    /// add the raw payload (unknown type, or a payload too short or malformed for its type). The length guards are
+    /// deliberately lenient (for example RST_STREAM accepts more than 4 bytes) because a segment can hold a cut-off frame.
+    /// </returns>
     private bool _ParseFramePayload(
         in MutField frameContainer, byte frameType, byte flags,
         ReadOnlySpan<byte> payload, ReadOnlyMemory<byte> payloadMemory)
@@ -490,8 +584,10 @@ public sealed partial class Http2Protocol : IProtocol
                     return true;
                 }
 
-            case 4 when payload.Length >= 6: // SETTINGS: parameters in 6-byte entries
+            case 4 when payload.Length >= 6: // SETTINGS: parameters in 6-byte entries (16-bit id + 32-bit value)
                 {
+                    // Only complete entries are emitted; a trailing partial entry (a cut-off or malformed frame) is
+                    // ignored. The number of entries is bounded by the payload present in the segment.
                     int pos = 0;
                     while (pos + 6 <= payload.Length)
                     {

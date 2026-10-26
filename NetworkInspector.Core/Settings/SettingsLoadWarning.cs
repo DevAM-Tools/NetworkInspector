@@ -7,8 +7,9 @@ namespace NetworkInspector.Core.Settings;
 /// via <see cref="SettingsManager.Load"/>.
 /// <para>
 /// Load warnings do not prevent the application from starting — invalid or
-/// incompatible persisted values are silently skipped and the affected settings
-/// keep their default or previously applied values.
+/// incompatible persisted values are skipped (not applied, and reported only through these warnings) and the affected
+/// settings keep their default or previously applied values. A damaged file therefore never blocks startup, and the caller
+/// decides how to surface the problem.
 /// </para>
 /// </summary>
 /// <param name="Kind">The category of the load issue.</param>

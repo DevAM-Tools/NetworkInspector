@@ -26,8 +26,13 @@ internal static class DependencyAnalyzer
     /// Analyzes a program. Stateful programs always return <see cref="DependencyUnknown"/> so a
     /// caller cannot accidentally skip packets that a flank tracker needs to observe.
     /// </summary>
+    /// <param name="program">The parsed program.</param>
+    /// <param name="resolver">Resolver of the current compilation; unknown names become <see cref="DependencyUnknown"/>.</param>
+    /// <returns>The presence tree, which is a conservative superset description (see <see cref="DependencyNode"/>).</returns>
     public static DependencyNode Analyze(FilterProgram program, SymbolResolver resolver)
     {
+        // A flank tracker keeps state across packets, so skipping any packet would change what later packets see.
+        // Pruning is therefore switched off for the whole program, not just for the flank sub-expression.
         if (program.IsStateful)
         {
             return DependencyUnknown.Instance;
@@ -39,6 +44,11 @@ internal static class DependencyAnalyzer
 
     #region Visitor
 
+    /// <summary>
+    /// Maps one AST node. Every case must return a superset of the packets the node can match; anything not listed
+    /// falls through to <see cref="DependencyUnknown"/>, which is always sound. Recursion depth is the expression depth
+    /// (bounded by the parser's nesting limit).
+    /// </summary>
     private static DependencyNode _Visit(FilterNode node, SymbolResolver resolver)
     {
         switch (node)
@@ -46,6 +56,8 @@ internal static class DependencyAnalyzer
             case PresenceNode presence:
                 return _Leaf(presence.Name, resolver);
 
+            // Value predicates hold when ANY occurrence of the field satisfies them, so even != and "not in" need the
+            // field to be present: a packet without the field cannot match, and presence is a valid necessary condition.
             case CompareNode compare:
                 return _Leaf(compare.Left.Name, resolver);
 
@@ -58,6 +70,7 @@ internal static class DependencyAnalyzer
             case StringPredicateNode stringPredicate:
                 return _Leaf(stringPredicate.Left.Name, resolver);
 
+            // Short-circuit order does not matter here: the tree describes which packets can match, not how to evaluate.
             case LogicalNode logical:
             {
                 DependencyNode left = _Visit(logical.Left, resolver);
@@ -67,6 +80,8 @@ internal static class DependencyAnalyzer
                     : new DependencyAny([left, right]);
             }
 
+            // The scope matches only inside a hit of its anchor, and the hit's subtree is part of the same packet, so the
+            // packet must contain the anchor and everything the body reads. The occurrence index [i] only narrows further.
             case ScopeNode scope:
             {
                 DependencyNode anchor = _Leaf(scope.Name, resolver);
@@ -74,11 +89,17 @@ internal static class DependencyAnalyzer
                 return new DependencyAll([anchor, body]);
             }
 
+            // NotNode, BoolConstantNode and FlankNode land here: negation inverts "needs the field" into "may lack it",
+            // constants say nothing about presence, and flank is stateful (handled in Analyze).
             default:
                 return DependencyUnknown.Instance;
         }
     }
 
+    /// <summary>
+    /// Leaf for one name. A name the resolver does not know yields <see cref="DependencyUnknown"/> instead of an error:
+    /// binding reports unknown names, the analyzer only has to stay sound.
+    /// </summary>
     private static DependencyNode _Leaf(string name, SymbolResolver resolver)
     {
         FilterSymbol? symbol = resolver.Resolve(name);

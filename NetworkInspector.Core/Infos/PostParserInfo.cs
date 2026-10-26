@@ -6,13 +6,15 @@ namespace NetworkInspector.Core.Infos;
 /// Metadata for a registered post-parser.
 /// <para>
 /// Post-parsers run after the main protocol dispatch, before <c>packet.info</c> is appended and
-/// before the packet is sealed. They are sorted deterministically at build time: ascending by
+/// before the packet is sealed. They are sorted deterministically by the builder (when registering and again at
+/// build time, so the per-packet parse path only iterates an already ordered array): ascending by
 /// <see cref="Priority"/> first, then ascending by <see cref="Id"/> (registration order) as a
 /// stable tie-breaker. A lower <see cref="Priority"/> value therefore runs earlier.
 /// </para>
 /// <para>
 /// Error policy: a <see cref="ParseResult"/> error or an exception thrown by a post-parser is
-/// recorded as a packet-level error and does not suppress the remaining post-parsers.
+/// recorded as a packet-level error and does not suppress the remaining post-parsers. The post-parsers still run
+/// when the main dispatch threw.
 /// </para>
 /// <para>
 /// Concurrency: post-parsers execute within the single-writer parse path. The same

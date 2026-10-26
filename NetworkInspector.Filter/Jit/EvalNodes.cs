@@ -7,13 +7,14 @@ namespace NetworkInspector.Filter.Jit;
 /// shared <see cref="FilterRuntime"/> helpers. Every operand is a typed field resolved at compile time.
 /// <para>
 /// <b>Why a node tree.</b> The previous back end generated code from an expression tree at every compile, which dominated
-/// the cost of compiling a filter. Building these objects is plain allocation, and evaluation stays as fast: every node is
-/// <c>sealed</c> and holds its operands in typed fields, so the call is direct, and <see cref="ValueEvalNode{TPredicate}"/> is
+/// the cost of compiling a filter. Building these objects is plain allocation, and evaluation stays fast: every node is
+/// <c>sealed</c> and holds its operands in typed fields, so there are no dictionary lookups, casts or boxing on the packet
+/// path (the cost is one virtual <see cref="Evaluate"/> call per tree edge), and <see cref="ValueEvalNode{TPredicate}"/> is
 /// generic over a struct predicate so the JIT inlines the test into the value walk. See
 /// <see cref="EvalTreeCodegen"/> for the shape and the evaluation order.
 /// </para>
-/// <para><b>Thread-safety:</b> immutable after compilation; flank and scope leaves carry the single-threaded state of
-/// their filter.</para>
+/// <para><b>Thread-safety:</b> the tree shape is immutable after compilation, but a tree is not thread-safe: value
+/// accessors own a reusable slice buffer, and flank and scope leaves carry the single-threaded state of their filter.</para>
 /// </summary>
 internal abstract class EvalNode
 {
@@ -158,7 +159,8 @@ internal sealed class ValueEvalNode<TPredicate>(ValueAccessor accessor, TPredica
 
     private readonly ValueAccessor _Accessor = accessor;
 
-    // Not readonly: AnyValueMatches takes the predicate by ref. Every predicate used here is immutable.
+    // Not readonly: AnyValueMatches takes the predicate by ref, and a ref to a readonly struct field would be a defensive
+    // copy per call. Every predicate used here is immutable, so the walk never changes it.
     private TPredicate _Predicate = predicate;
 
     #endregion

@@ -5,9 +5,10 @@ namespace NetworkInspector.Filter.Lexer;
 /// <summary>
 /// Classifies each token produced by <see cref="FilterLexer"/>.
 /// <para>
-/// The v1 token set deliberately omits the Dev tokens for <c>seq</c>, <c>stream</c>,
-/// <c>window</c>, <c>nav</c>, <c>step</c>, <c>let</c>, <c>where</c> and
-/// <c>group</c>. Those words lex as ordinary <see cref="Identifier"/> tokens; the parser
+/// The v1 token set deliberately has no keyword tokens for the removed constructs <c>seq</c>,
+/// <c>stream</c>, <c>window</c>, <c>nav</c>, <c>step</c>, <c>let</c>, <c>where</c> and
+/// <c>group</c>. Those words lex as ordinary <see cref="Identifier"/> tokens (so field paths such as
+/// <c>tcp.window_size</c> keep working); the parser
 /// rejects them with <see cref="FilterErrorKind.UnsupportedFeature"/> when they appear in
 /// their removed syntactic position. The identifier <c>by</c> is a named <c>flank</c>
 /// argument (<c>by:</c>), not a removed call.
@@ -17,7 +18,10 @@ internal enum TokenKind : byte
 {
     #region Literals
 
-    /// <summary>Integer literal: <c>80</c>, <c>0xFF</c>, <c>0b1010</c>, <c>0o755</c>.</summary>
+    /// <summary>
+    /// Integer literal: <c>80</c>, <c>0xFF</c>, <c>0b1010</c>, <c>0o755</c>, <c>1_000</c> (digit separators) or a
+    /// decimal with a leading minus such as <c>-2</c>.
+    /// </summary>
     Integer = 0,
 
     /// <summary>Floating-point literal: <c>3.14</c>.</summary>

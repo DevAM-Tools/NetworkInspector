@@ -13,6 +13,17 @@ namespace NetworkInspector.Core.Fields;
 /// packet; that was already unsupported for any field handle.
 /// </para>
 /// <para>
+/// <b>Failure containment:</b> an observer is user code running inside the parse. An exception thrown from
+/// <see cref="BeginPacket"/> or <see cref="OnField"/> does not fail the parse: the packet catches it, records it as a
+/// caught error, and stops all further observer calls for that packet. Implementations should therefore not rely on
+/// throwing to abort a parse and must tolerate being muted after a failure.
+/// </para>
+/// <para>
+/// <b>Cost:</b> <see cref="OnField"/> runs once per accepted field on the parse path. Which fields are accepted is decided
+/// by the <see cref="FieldWatch"/> paired with the observer in <see cref="ParseObserver"/> before the visit is built, so an
+/// observer should be paired with the narrowest watch it needs.
+/// </para>
+/// <para>
 /// <b>Thread-safety:</b> the parse calls one observer from the thread that called
 /// <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>.
 /// Do not pass one instance into two overlapping parses.

@@ -35,7 +35,11 @@ public sealed partial class Icmpv6Protocol : IProtocol
     /// <summary>ICMPv6 protocol number for pseudo-header computation.</summary>
     private const byte _Icmpv6ProtocolNumber = 58;
 
-    /// <summary>ICMPv6 header size in bytes (always 8).</summary>
+    /// <summary>
+    /// Minimum ICMPv6 message size in bytes that this parser accepts: the 4-byte header (type, code, checksum) plus
+    /// the 4 bytes of message-specific data that every message type handled here carries (identifier and sequence
+    /// number for Echo, reserved bytes or other type-specific words for the rest). Shorter input is a parse error.
+    /// </summary>
     private const int _HeaderSize = 8;
 
     /// <summary>
@@ -193,16 +197,18 @@ public sealed partial class Icmpv6Protocol : IProtocol
     [IPv6Field("icmpv6.nd.opt.rdnss", "DNS Server", IndexGroup = "icmpv6.nd.opt.rdnss")]
     private FieldId _NdOptRdnssAddressFieldId;
 
-    // Settings
+    // Settings. Loaded once when the stack starts and constant while it runs; Parse and the lazy populator both read it.
     [BoolSetting("icmpv6.verify_checksum", "Verify Checksum", "icmpv6", Default = false)]
     private bool _VerifyChecksum;
 
     #endregion
 
     #region Cross-Protocol Field References
-    // Resolved during OnStart for checksum pseudo-header lookup via sibling walk
-    // (same path as UDP/TCP — first occurrence in the flat array would be the outermost
-    // tunneled IPv6 header, which is the wrong address pair).
+    // Resolved during OnStart for the checksum pseudo-header lookup. They are the fallback when the per-thread IPv6
+    // address cache does not hold this packet (see _ValidateChecksum): the lazy populator can run long after the
+    // parse, on another thread. The fallback walks siblings (same path as UDP/TCP) rather than scanning the flat
+    // field array, because the first occurrence in the flat array would be the outermost tunneled IPv6 header,
+    // which is the wrong address pair. FieldId.Invalid marks a protocol that is not part of the stack.
 
     /// <summary>FieldId of the IPv4 container field ("ip").</summary>
     private FieldId _IpContainerFieldId;
@@ -222,12 +228,17 @@ public sealed partial class Icmpv6Protocol : IProtocol
     /// <summary>FieldId of ipv6.dst (resolved at startup).</summary>
     private FieldId _Ipv6DstFieldId;
 
-    // Pre-allocated populator delegate
+    // Pre-allocated populator delegate: one instance for all packets, so Parse does not allocate a closure per packet.
     private LazyPopulator _Populator = null!;
 
     /// <summary>NDP field IDs struct populated in _OnStartCustom.</summary>
     private Icmpv6NdpFieldIds _NdpFieldIds;
 
+    /// <summary>
+    /// Resolves the cross-protocol field ids for the checksum lookup, creates the shared populator delegate and
+    /// bundles the NDP field ids. Runs once, single-threaded, before any packet is parsed; the results are only
+    /// read afterwards.
+    /// </summary>
     partial void _OnStartCustom(Stack stack)
     {
         _IpContainerFieldId = stack.GetFieldId("ip") ?? FieldId.Invalid;
@@ -272,6 +283,11 @@ public sealed partial class Icmpv6Protocol : IProtocol
 
     /// <summary>
     /// Populates ICMPv6 child fields lazily from stored datagram bytes.
+    /// <para>
+    /// Thread safety: reads only the immutable container bytes and start-time state, so it may run concurrently for
+    /// different packets. The emission conditions below are mirrored by the index groups recorded in
+    /// <c>Parse</c>; keep both in step.
+    /// </para>
     /// </summary>
     private ParseResult _PopulateIcmpv6Fields(in MutField container)
     {
@@ -285,6 +301,7 @@ public sealed partial class Icmpv6Protocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, _HeaderSize, (ulong)icmpData.Length);
         }
 
+        // ICMPv6 header (RFC 4443 section 2.1): type(1), code(1), checksum(2); all multi-byte values are big endian.
         ReadOnlySpan<byte> span = icmpData.Span;
         byte type = span[0];
         byte code = span[1];
@@ -301,14 +318,20 @@ public sealed partial class Icmpv6Protocol : IProtocol
         string csumText = DisplayTables.FormatHexU16(checksum);
         container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(checksum), csumText);
 
-        // Checksum validation (uses IPv6 pseudo-header)
+        // Checksum validation (uses IPv6 pseudo-header, RFC 4443 section 2.3). The status field is always emitted when
+        // verification is on, because Parse records its index group from the setting alone (whether an IPv6 layer
+        // exists is not known there). When the enclosing IPv6 addresses cannot be determined, the status is
+        // "[Unverified]" (the same text UDP uses) instead of a missing field that the index would still announce.
         if (_VerifyChecksum)
         {
             bool? valid = _ValidateChecksum(in container, icmpData.Span);
-            if (valid is bool v)
+            string statusText = valid switch
             {
-                container.Append(_ChecksumStatusFieldId, FieldValue.NewString(v ? "[Good]" : "[Bad]"));
-            }
+                true => "[Good]",
+                false => "[Bad]",
+                null => "[Unverified]",
+            };
+            container.Append(_ChecksumStatusFieldId, FieldValue.NewString(statusText));
         }
 
         // Echo Request/Reply: identifier and sequence number
@@ -323,7 +346,9 @@ public sealed partial class Icmpv6Protocol : IProtocol
             container.Append(_EchoSeqFieldId, FieldValue.NewU64(seq));
         }
 
-        // MLD messages (types 130-132): parse multicast listener fields
+        // MLD messages (types 130-132): parse multicast listener fields. Only the MLDv1 layout of 24 bytes (RFC 2710)
+        // is decoded; an MLDv2 Query (type 130, longer than 24 bytes) is shown with the same first 24 bytes and its
+        // extra fields are not decoded.
         bool isMld = type is >= _TypeMldQuery and <= _TypeMldDone;
         if (isMld && icmpData.Length >= 24)
         {
@@ -354,9 +379,10 @@ public sealed partial class Icmpv6Protocol : IProtocol
     }
 
     /// <summary>
-    /// Parses a Icmpv6 protocol unit from the supplied <paramref name="data"/> buffer,
-    /// appending decoded fields under <paramref name="parentField"/> and dispatching any
-    /// payload via the surrounding <paramref name="context"/>.
+    /// Parses an ICMPv6 message from the supplied <paramref name="data"/> buffer. Eagerly it only reads the type and
+    /// records the index groups; all other fields are created by the lazy populator when the container's
+    /// children are first accessed. ICMPv6 has no payload protocol, so nothing is dispatched.
+    /// <para>Thread safety: stateless apart from start-time settings; may be called concurrently.</para>
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
     /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
@@ -377,7 +403,9 @@ public sealed partial class Icmpv6Protocol : IProtocol
 
         // Record optional index groups. Each group is gated on the exact same condition under
         // which the lazy populator emits a field in that group, so the presence index never
-        // contains a false positive (a recorded group with no emitted field).
+        // contains a false positive (a recorded group with no emitted field). The checksum status group below follows
+        // the setting only, because whether an IPv6 layer is found is not known at this point; the populator therefore
+        // emits the status field whenever the setting is on.
         bool isEcho = type == _TypeEchoRequest || type == _TypeEchoReply;
         if (isEcho && data.Length >= 8)
         {
@@ -393,6 +421,8 @@ public sealed partial class Icmpv6Protocol : IProtocol
         {
             ReadOnlySpan<byte> ndpBody = span[_NdpHeaderSize..];
 
+            // The numeric types (134 RA, 135 NS, 136 NA, 137 Redirect) and the minimum body sizes (12, 20, 20, 36)
+            // repeat the fixed-header sizes in Icmpv6NdpParser; they are the same guards the emitting helpers use.
             if (type == 134 && ndpBody.Length >= 12) // Router Advertisement
             {
                 context.RecordGroupPresence(_Icmpv6NdRaGroupId);
@@ -453,13 +483,13 @@ public sealed partial class Icmpv6Protocol : IProtocol
             context.RecordGroupPresence(_Icmpv6DataGroupId);
         }
 
-        // Summary text
-
-        // Packet info
+        // Packet info (summary column text): the type display text is the whole ICMPv6 summary.
         parentField.SetPacketInfo(new LazyString(
             DisplayTables.GetIcmpv6TypeDisplayText(type)));
 
-        // Store entire ICMPv6 message for lazy populator
+        // Store entire ICMPv6 message for lazy populator; the checksum (which covers the whole message) is validated
+        // from it later. The representation is a constant text, so no string is formatted per packet; it names the
+        // minimum message size, not the length of the stored message.
         FieldValue containerValue = FieldValue.NewBytes(data)
             .WithCustomRepresentation(new LazyString("8 bytes"));
         parentField.AppendLazyWithCustomText(_ProtocolFieldId, containerValue, "Internet Control Message Protocol v6, ",
@@ -475,16 +505,28 @@ public sealed partial class Icmpv6Protocol : IProtocol
     /// in storage order — the outermost header in a tunnel — and compute the wrong checksum.
     /// Returns <see langword="null"/> when no IPv6 layer is found.
     /// </summary>
+    /// <param name="container">The ICMPv6 container; provides the packet id and the field tree for the fallback.</param>
+    /// <param name="icmpSpan">The whole ICMPv6 message including the transmitted checksum.</param>
+    /// <returns>Whether the checksum is valid, or <see langword="null"/> when it cannot be determined.</returns>
     private bool? _ValidateChecksum(in MutField container, ReadOnlySpan<byte> icmpSpan)
     {
+        // Fast path: the per-thread cache is written by IPv6Protocol.Parse and only matches while it still holds
+        // this packet's id. This populator runs lazily, so the entry is often gone (other packet, other thread); that
+        // is expected and handled by the field tree walk below. The upper-layer length of the pseudo header (RFC 8200
+        // section 8.1) is the ICMPv6 message length; the sum of message plus pseudo header is 0 when valid.
         if (IPv6Protocol.TryGetCachedAddresses(container.Packet.Id, out IPv6Address src, out IPv6Address dst))
         {
-            ushort icmpLen = (ushort)icmpSpan.Length;
+            // The pseudo header carries a 32-bit upper-layer length (RFC 8200 section 8.1); a 16-bit cast would wrap for a
+            // message of 64 KiB or more. A span length is never negative, so the conversion to uint is exact.
+            uint icmpLen = (uint)icmpSpan.Length;
             ulong pseudoSum = InternetChecksum.ComputeIPv6PseudoHeaderSum(
                 src.High, src.Low, dst.High, dst.Low, _Icmpv6ProtocolNumber, icmpLen);
             return InternetChecksum.ComputeWithPseudoHeader(icmpSpan, pseudoSum) == 0;
         }
 
+        // Fallback: without a field tree (no sibling to read) the pseudo header cannot be built, so the result is
+        // "unknown" rather than a guess. Otherwise take the nearest preceding IPv6 layer; an IPv4 layer found first
+        // (ICMPv6 is never valid over IPv4) leaves 'ipv6' empty and also yields "unknown".
         if (!container.HasFieldTree)
         {
             return null;
@@ -507,7 +549,7 @@ public sealed partial class Icmpv6Protocol : IProtocol
 
         IPv6Address srcAddr = ipv6.Value.Src;
         IPv6Address dstAddr = ipv6.Value.Dst;
-        ushort len = (ushort)icmpSpan.Length;
+        uint len = (uint)icmpSpan.Length; // 32-bit upper-layer length, see the cache branch above
         ulong sum = InternetChecksum.ComputeIPv6PseudoHeaderSum(
             srcAddr.High, srcAddr.Low, dstAddr.High, dstAddr.Low, _Icmpv6ProtocolNumber, len);
         return InternetChecksum.ComputeWithPseudoHeader(icmpSpan, sum) == 0;

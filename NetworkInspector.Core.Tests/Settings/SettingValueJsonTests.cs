@@ -121,6 +121,20 @@ internal sealed class SettingValueJsonTests
     }
 
     [Test]
+    public async Task WriteOfAValueWithAnUndefinedTypeThrowsAndWritesNothing()
+    {
+        Setting setting = Setting.Bool("t.bool", "Bool", "t", false);
+        SettingValue undefinedType = SettingsTestHelpers.WithSettingValueField(SettingValue.Bool(true), "_Type", (SettingType)99);
+        using MemoryStream stream = new();
+        using Utf8JsonWriter writer = new(stream);
+
+        await Assert.That(() => SettingValueJson.Write(writer, setting, undefinedType)).Throws<InvalidOperationException>();
+        writer.Flush();
+
+        await Assert.That(stream.Length).IsEqualTo(0L);
+    }
+
+    [Test]
     public async Task AnUndefinedElementIsRefusedAndNullArgumentsThrow()
     {
         Setting setting = Setting.Bool("t.bool", "Bool", "t", false);

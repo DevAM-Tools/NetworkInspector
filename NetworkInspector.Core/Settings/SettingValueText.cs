@@ -24,6 +24,9 @@ public static class SettingValueText
     /// <summary>
     /// Deepest nesting accepted in the JSON array form. An array of scalars needs depth 1; the limit only keeps hostile
     /// nesting from reaching the JSON reader's recursion (the text is a trust boundary).
+    /// Limit record: value 64 · threat: deeply nested text exhausting the stack or time of the JSON reader · constant, because
+    /// the legitimate form never nests (no host needs a different value) · secure by default. A deeper text is refused as
+    /// "not a valid JSON array". The length of the text is not limited here; the caller that receives the text bounds it.
     /// </summary>
     private const int _MaxJsonDepth = 64;
 
@@ -34,7 +37,14 @@ public static class SettingValueText
     /// <summary>Reader options of the JSON array form.</summary>
     private static readonly JsonDocumentOptions _JsonOptions = new() { MaxDepth = _MaxJsonDepth };
 
-    /// <summary>Writer options of the compact array form: readable (no <c>'</c> escapes) and without indentation.</summary>
+    /// <summary>
+    /// Writer options of the compact array form: readable (no <c>'</c> escapes) and without indentation.
+    /// Security decision: <c>UnsafeRelaxedJsonEscaping</c> leaves characters such as <c>&lt;</c>, <c>&amp;</c>, and <c>'</c>
+    /// unescaped, which is unsafe inside HTML or script. That is acceptable because this text is for the command line, MCP
+    /// text, and text inputs, and is never embedded in markup by this library; the default encoder was rejected because it
+    /// would print <c>'</c> for every apostrophe in a list the user is meant to read and retype. Residual risk: a front end
+    /// that places the text into HTML must encode it itself.
+    /// </summary>
     private static readonly JsonWriterOptions _WriterOptions = new()
     {
         Indented = false,
@@ -312,6 +322,9 @@ public static class SettingValueText
             return problem;
         }
 
+        // Each element is parsed with the scalar parser of the element type, so an array and a scalar refuse a bad value with
+        // the same words, prefixed by the 1-based element position. The first bad element ends the parse. The bounds are
+        // checked afterwards by SettingValidation, per element, in TryParse.
         switch (setting.Type)
         {
             case SettingType.StringArray:
@@ -450,6 +463,9 @@ public static class SettingValueText
     /// <summary>Formats an array value as compact JSON.</summary>
     private static string _FormatArray(SettingValue value)
     {
+        // Not a hot path (display and command line): a growable buffer plus one string per call is fine. The writer is disposed,
+        // which flushes it, before the buffer is read below; reading earlier would miss buffered bytes. An unexpected value type
+        // yields "[]".
         ArrayBufferWriter<byte> buffer = new();
         using (Utf8JsonWriter writer = new(buffer, _WriterOptions))
         {

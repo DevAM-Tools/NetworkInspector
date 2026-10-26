@@ -122,7 +122,7 @@ internal sealed class PacketProtocol : IProtocol
         Packet packet = parentField.Packet;
         Stack stack = context.Stack!;
 
-        // Record protocol and index group presence for cross-packet indexing
+        // Record index group presence for cross-packet indexing (no-op when the parse has no index).
         context.RecordGroupPresence(_PacketGroupId);
 
         // Append the packet container field eagerly (NOT lazy — packet.info must
@@ -163,7 +163,7 @@ internal sealed class PacketProtocol : IProtocol
             catch (Exception ex)
             {
                 // Record main-dispatch exception as a packet error using the same
-                // IncludeExceptionStackTrace policy as ParseAndSeal for consistency.
+                // IncludeExceptionStackTrace policy as the outer parse guard (Packet.BuildCaughtExceptionText).
                 // Already-appended fields stay in the tree and in the value cache (Ethernet
                 // must survive a later UDP throw). Post-parsers still run.
                 packet.RecordCaughtError(0, Packet.BuildCaughtExceptionText(ex, stack.IncludeExceptionStackTrace));
@@ -192,6 +192,8 @@ internal sealed class PacketProtocol : IProtocol
             }
         }
 
+        // Keep the bytes the frame protocol left over (only after a successful dispatch: after an error the consumed
+        // count is unknown, so no tail can be derived). The slice shares the frame memory, no copy.
         if (frameSucceeded && frameConsumed < data.Length)
         {
             context.RecordGroupPresence(_UnparsedGroupId);
@@ -200,14 +202,18 @@ internal sealed class PacketProtocol : IProtocol
 
         // After dispatch and post-parsers: append packet.info as a lazy string value.
         // Sub-protocols set Packet.InfoLazy (a LazyString) via SetPacketInfo during parsing.
-        // By wrapping it in a LazyStringValue (heap-resident reference type), the factory
-        // is not evaluated here — evaluation is deferred to first access via Packet.Info,
-        // TryGetFieldValue("packet.info"), or any exporter that reads the field value.
-        // The LazyStringValue caches the result in-heap so all copies of the FieldValueData
-        // share one factory invocation.
+        // The LazyString is stored boxed in the field value (a heap-resident reference), so its factory is not
+        // evaluated here: the summary text is built only on first access via Packet.Info,
+        // TryGetFieldValue("packet.info"), or any exporter that reads the field value, and packets whose info is never
+        // read never pay for the string. The boxed LazyString caches the result in-heap, so all copies of the
+        // FieldValueData share one factory invocation.
+        // The storage index is recorded so Packet.Info can read the field directly; in Skip mode this is a no-op and
+        // Info falls back to Packet.InfoLazy.
         MutField infoField = packetContainer.Append(_InfoFieldId, FieldValue.NewLazyString(packet.InfoLazy));
         packet.SetInfoFieldIndex(infoField.StorageIndex);
 
+        // The packet protocol accounts for the whole buffer: the unconsumed tail (if any) is stored as packet.unparsed_data
+        // above and dispatch errors are stored as packet.error fields, so the full length is reported as consumed.
         return data.Length;
     }
 

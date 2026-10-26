@@ -7,7 +7,8 @@ namespace NetworkInspector.Core.Fields;
 /// <para>
 /// <b>Layout (x64):</b><br/>
 /// <c>_Data</c> (8 bytes) — inline value storage for numeric and address types, or packed
-/// offset|length for Bytes. For 128-bit types (IPv6, Uuid) stores the high 64 bits.<br/>
+/// offset|length for Bytes (offset in the low 32 bits, length in the high 32 bits). For 128-bit types
+/// (IPv6, Uuid) stores the high 64 bits.<br/>
 /// <c>_Data1</c> (8 bytes) — second inline value for 128-bit types (low 64 bits). Zero for
 /// all other types.<br/>
 /// <c>_Ref</c> (8 bytes) — type discriminant via static marker singletons, or payload carrier:
@@ -24,6 +25,20 @@ namespace NetworkInspector.Core.Fields;
 /// Values are accessed exclusively through <c>TryGetAs*</c> methods which combine type
 /// checking and value extraction in a single operation.
 /// </para>
+/// <para>
+/// <b>Why this shape:</b> a field value is created for every produced field of every parsed frame, so the struct is
+/// kept small and free of per-value heap objects. A stored <see cref="FieldType"/> byte next to the three 8-byte
+/// words would pad the struct to 32 bytes; deriving the type from the identity of <c>_Ref</c> keeps it at 24 bytes.
+/// Scalars, addresses and timestamps (including the 128-bit ones) therefore never allocate, because the marker
+/// objects are shared statics. Only String and Bytes carry a heap payload.
+/// </para>
+/// <para>
+/// <b>Aliasing:</b> a Bytes value references the caller's array without copying (see <c>NewBytes</c>). The array
+/// must not be mutated while the value is in use.
+/// </para>
+/// <para><b>Thread-safety:</b> an immutable value that may be shared across threads. A lazy string payload caches its
+/// result with a compare-exchange inside the shared box; concurrent first readers may each run the factory, one
+/// result wins and all readers see that same string (see <c>NewLazyString</c>).</para>
 /// </summary>
 [StructLayout(LayoutKind.Auto)]
 public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<FieldValueData>, ISpanFormattable, IUtf8SpanFormattable, IStringSize
@@ -70,41 +85,59 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValueData NewF64(double value) => new(BitConverter.DoubleToUInt64Bits(value), F64Marker.Instance);
 
-    /// <summary>Creates a string field value from a <see cref="string"/>.</summary>
+    /// <summary>
+    /// Creates a string field value from a <see cref="string"/>. A <see langword="null"/> argument is stored as the empty
+    /// string (no exception) so that a stored String value never has a null payload.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValueData NewString(string value) => new(0, value ?? string.Empty);
 
     /// <summary>
     /// Creates a string field value whose content is deferred until first access via <see cref="TryGetAsString"/>.
-    /// The <see cref="LazyString"/> is boxed so all copies of this <see cref="FieldValueData"/>
-    /// share one heap object; <see cref="LazyString.AsString"/> is called via
-    /// <see cref="Unsafe.Unbox{T}"/> so the CAS-based caching persists to the heap-resident struct.
     /// </summary>
+    /// <remarks>
+    /// <see cref="LazyString"/> is a struct that caches its evaluated result by replacing its own inner reference, and
+    /// that cache lives only in the storage location that was evaluated; evaluating a copy does not update the original.
+    /// The <see cref="LazyString"/> is therefore boxed once here: every copy of this <see cref="FieldValueData"/> copies only
+    /// the reference to the one box, and <see cref="LazyString.AsString"/> is invoked on the box in place via
+    /// <see cref="Unsafe.Unbox{T}"/> so the cached string persists for all copies. The naive alternative (unboxing to a
+    /// local copy) would re-run the factory on every read. Costs one box allocation per lazy value.
+    /// </remarks>
     internal static FieldValueData NewLazyString(LazyString lazy) => new(0, (object)lazy);
 
     /// <summary>
     /// Creates a string field value from a <see cref="ReadOnlyMemory{Char}"/>.
-    /// The memory is materialized into a string.
+    /// The memory is materialized into a new string (one allocation and copy), because a string payload must not alias
+    /// memory the caller may reuse.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValueData NewString(ReadOnlyMemory<char> value) => new(0, new string(value.Span));
 
     /// <summary>Creates a <see cref="FieldType.Bytes"/> field value from a <see cref="ReadOnlyMemory{T}"/> of bytes.
-    /// Attempts zero-copy via ArraySegment; falls back to a copy if the memory is not array-backed.</summary>
+    /// Attempts zero-copy via ArraySegment; falls back to a copy if the memory is not array-backed.
+    /// In the zero-copy case the value aliases the caller's array, so the array must not be mutated while the value is in use.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValueData NewBytes(ReadOnlyMemory<byte> value)
     {
+        // Zero-copy: keep the backing array and remember the slice as offset (low 32 bits) | length (high 32 bits)
+        // in _Data. Rejected alternative: always copy, which would allocate per value on the parse path.
+        // Offset and Count are non-negative ints, so the (uint) casts only reinterpret them.
         if (MemoryMarshal.TryGetArray(value, out ArraySegment<byte> segment))
         {
             ulong packed = (ulong)(uint)segment.Offset | ((ulong)(uint)segment.Count << 32);
             return new(packed, segment.Array);
         }
+
+        // Memory that is not array-backed (for example a MemoryManager or native memory) cannot be referenced by
+        // a byte[] discriminant, so it is copied. Offset is 0, only the length is packed.
         byte[] copy = value.ToArray();
         ulong packedCopy = (ulong)(uint)copy.Length << 32;
         return new(packedCopy, copy);
     }
 
-    /// <summary>Creates a bytes field value directly from a <c>byte[]</c> (zero-copy).</summary>
+    /// <summary>Creates a bytes field value directly from a <c>byte[]</c> (zero-copy). The array is aliased, not copied,
+    /// so it must not be mutated while the value is in use.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValueData NewBytes(byte[] value)
     {
@@ -219,7 +252,8 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
             return FieldType.Bytes;
         }
 
-        // Should never happen with well-formed FieldValueData instances.
+        // Unreachable for instances built through the factory methods (the only way to set _Ref);
+        // an unknown payload degrades to None rather than throwing.
         return FieldType.None;
     }
 
@@ -227,6 +261,9 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
 
     #region TryGetAs* — type check + value extraction in a single operation
     // These are the only public accessors for extracting typed values.
+    // Each one is a single reference-identity test on the marker singleton followed by reinterpreting the
+    // inline bits (signed values and timestamps are stored as the raw bits of their 64-bit two's complement
+    // value, doubles via BitConverter). Check and extraction are one Try call so the type is classified only once.
 
     /// <summary>Returns <c>true</c> if this value is <see cref="FieldType.Bool"/>, extracting the value.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -301,12 +338,14 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         return false;
     }
 
-    /// <summary>Returns <c>true</c> if this value is <see cref="FieldType.Bytes"/>, extracting the value.</summary>
+    /// <summary>Returns <c>true</c> if this value is <see cref="FieldType.Bytes"/>, extracting the value.
+    /// The returned memory aliases the stored array (no copy).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetAsBytes(out ReadOnlyMemory<byte> value)
     {
         if (_Ref is byte[] array)
         {
+            // Unpack the slice written by NewBytes: offset in the low 32 bits, length in the high 32 bits.
             int offset = (int)(_Data & 0xFFFFFFFF);
             int length = (int)(_Data >> 32);
             value = new ReadOnlyMemory<byte>(array, offset, length);
@@ -399,6 +438,8 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
     /// <summary>
     /// Extracts the string value from <paramref name="refValue"/>.
     /// Returns the string directly or evaluates the lazy string on demand.
+    /// Returns the empty string for any other payload. Must be called on the stored <c>_Ref</c> object, not on a copy of the
+    /// <see cref="LazyString"/>, so the cached result is shared (see <c>NewLazyString</c>).
     /// </summary>
     private static string _ExtractString(object? refValue)
     {
@@ -416,20 +457,35 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
 
     #region Equality
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Value equality. Two values are equal only when they have the same <see cref="FieldType"/> and the same content:
+    /// an I64 never equals a U64 or F64 with the same number (unlike <see cref="CompareTo"/>, which orders across numeric
+    /// types). F64 values are compared by their IEEE-754 bit pattern, so +0 and -0 differ and a NaN equals a NaN with
+    /// identical bits. Strings use ordinal comparison; Bytes compare by content.
+    /// </summary>
     public bool Equals(FieldValueData other)
     {
-        // Fast path for reference payloads and None: when both sides share the same _Ref
-        // object, compare inline storage only. Marker singletons fall through to the switch
-        // so each type arm stays reachable (same _Ref is always the canonical marker instance).
+        // Fast path for None and the heap payloads: when both sides hold the very same _Ref object (or both null),
+        // no content comparison is needed and only the inline words are compared. For a shared string or lazy-string
+        // box _Data is 0 on both sides; for a shared byte[] _Data holds the offset|length slice. Marker singletons
+        // are not handled here; they fall through to the type switch below, which compares the inline words.
         if (ReferenceEquals(_Ref, other._Ref))
         {
-            if (_Ref is null or string or byte[] or LazyString)
+            if (_Ref is null or string or LazyString)
             {
                 return _Data == other._Data && _Data1 == other._Data1;
             }
+
+            // Two slices of one shared byte[]: the same slice is equal at once. A different offset or length is not a
+            // verdict, because the two slices can still hold the same bytes (CompareTo and GetHashCode compare by content).
+            // Returning false here would break the Equals/GetHashCode contract, so it falls through to the content comparison.
+            if (_Ref is byte[] && _Data == other._Data && _Data1 == other._Data1)
+            {
+                return true;
+            }
         }
 
+        // Different types are never equal; the same type is compared by content.
         FieldType thisType = Type;
         FieldType otherType = other.Type;
         if (thisType != otherType)
@@ -441,8 +497,9 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
             FieldType.None => true,
             FieldType.String => string.Equals(_ExtractString(_Ref), _ExtractString(other._Ref), StringComparison.Ordinal),
             FieldType.Bytes => _ExtractBytesSpan().SequenceEqual(other._ExtractBytesSpan()),
-            // IPv6 and Uuid are now inline: compare both _Data and _Data1
+            // The 128-bit types keep their value in both inline words, so both must match.
             FieldType.IPv6Address or FieldType.Uuid => _Data == other._Data && _Data1 == other._Data1,
+            // All other inline types (and Bool) keep the whole value in _Data.
             _ => _Data == other._Data,
         };
     }
@@ -450,7 +507,11 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
     /// <inheritdoc/>
     public override bool Equals(object? obj) => obj is FieldValueData other && Equals(other);
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Hash code consistent with <see cref="Equals(FieldValueData)"/>: the type is part of the hash, strings hash by
+    /// ordinal content, Bytes by content (not by array identity), and the 128-bit types by both inline words.
+    /// The value is process-specific (<see cref="HashCode"/> is randomly seeded) and must not be persisted.
+    /// </summary>
     public override int GetHashCode()
     {
         FieldType type = Type;
@@ -458,12 +519,13 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         {
             FieldType.String => HashCode.Combine(type, StringComparer.Ordinal.GetHashCode(_ExtractString(_Ref))),
             FieldType.Bytes => _BytesHashCode(),
-            // IPv6 and Uuid are inline: hash both _Data and _Data1
+            // Both inline words participate in equality for IPv6 and Uuid, so both are hashed.
             FieldType.IPv6Address or FieldType.Uuid => HashCode.Combine(type, _Data, _Data1),
             _ => HashCode.Combine(type, _Data),
         };
     }
 
+    /// <summary>Hashes the sliced content of a Bytes value so equal slices of different arrays hash equally.</summary>
     private int _BytesHashCode()
     {
         HashCode hash = new();
@@ -476,7 +538,18 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
 
     #region IComparable
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Orders two values. Same-type values compare by content: signed for I64 and Timestamp,
+    /// <see cref="double.CompareTo(double)"/> for F64 (NaN sorts below every other value), ordinal for String,
+    /// lexicographic for Bytes, unsigned numeric for the remaining inline types.
+    /// Different numeric types (I64, U64, F64) compare by numeric value; MacAddress and Eui64 compare by raw value;
+    /// IPv4 sorts before IPv6. Any other mix is ordered by the <see cref="FieldType"/> discriminant.
+    /// </summary>
+    /// <remarks>
+    /// This ordering is intentionally more lenient than <see cref="Equals(FieldValueData)"/>: values of different types
+    /// can compare as 0 while not being equal. Comparing I64 or U64 with F64 converts the integer to <see cref="double"/>,
+    /// which loses precision above 2^53, so those cross-type comparisons are approximate for very large integers.
+    /// </remarks>
     public int CompareTo(FieldValueData other)
     {
         FieldType thisType = Type;
@@ -499,7 +572,8 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
             };
         }
 
-        // Cross-type numeric comparisons (I64, U64, F64)
+        // Cross-type numeric comparisons (I64, U64, F64). I64 versus U64 is exact (no widening to double);
+        // the pairs involving F64 convert the integer to double and so lose precision above 2^53.
         return (thisType, otherType) switch
         {
             (FieldType.I64, FieldType.U64) => _CompareSignedToUnsigned((long)_Data, other._Data),
@@ -508,7 +582,8 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
             (FieldType.U64, FieldType.F64) => ((double)_Data).CompareTo(BitConverter.UInt64BitsToDouble(other._Data)),
             (FieldType.F64, FieldType.I64) => BitConverter.UInt64BitsToDouble(_Data).CompareTo((double)(long)other._Data),
             (FieldType.F64, FieldType.U64) => BitConverter.UInt64BitsToDouble(_Data).CompareTo((double)other._Data),
-            // Cross-type address comparisons
+            // Cross-type address comparisons: a MAC (48-bit) and an EUI-64 compare by raw numeric value;
+            // IPv4 sorts before IPv6 regardless of value.
             (FieldType.MacAddress, FieldType.Eui64) => _Data.CompareTo(other._Data),
             (FieldType.Eui64, FieldType.MacAddress) => _Data.CompareTo(other._Data),
             (FieldType.IPv4Address, FieldType.IPv6Address) => -1,
@@ -518,6 +593,7 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         };
     }
 
+    /// <summary>Exact comparison of a signed and an unsigned 64-bit integer without widening (every negative value is smaller).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int _CompareSignedToUnsigned(long signed, ulong unsigned)
     {
@@ -549,6 +625,13 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
     /// Formats the value into a character span.
     /// Dispatches directly based on <c>_Ref</c> identity, avoiding double classification.
     /// </summary>
+    /// <remarks>
+    /// The <paramref name="format"/> argument is ignored: every type has exactly one display form. Integers and doubles are always
+    /// formatted with <see cref="CultureInfo.InvariantCulture"/> regardless of <paramref name="provider"/>, so the displayed
+    /// text never depends on the host locale. Returns <see langword="false"/> with <c>0</c> chars written when
+    /// <paramref name="destination"/> is too small. The order of the identity checks mirrors <c>_ClassifyRef</c>
+    /// (most frequent types first); it is a speed choice only. The same dispatch exists for UTF-8 below and the two must stay in sync.
+    /// </remarks>
     public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
         object? refValue = _Ref;
@@ -623,6 +706,8 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
     /// <summary>
     /// Formats the value into a UTF-8 byte span.
     /// Dispatches directly based on <c>_Ref</c> identity, avoiding double classification.
+    /// Same rules as the character overload: <paramref name="format"/> is ignored, numbers use the invariant culture,
+    /// and <see langword="false"/> with <c>0</c> bytes written means the destination is too small.
     /// </summary>
     public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
@@ -696,6 +781,8 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
     /// Returns the formatted string representation of the value.
     /// Delegates to <see cref="ToTempString"/> which uses <see cref="ZA.String(FieldValueData)"/>
     /// with <see cref="CultureInfo.InvariantCulture"/> for numeric formatting.
+    /// String values return the stored string itself (no allocation); every other type allocates exactly one result string,
+    /// the formatting itself runs in a pooled thread-static buffer.
     /// </summary>
     public override string ToString()
     {
@@ -719,7 +806,7 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         return temp.ToString();
     }
 
-    /// <summary>Returns the formatted string representation of the value.</summary>
+    /// <summary>Returns the formatted string representation of the value. Both arguments are ignored (see <see cref="ToString()"/>).</summary>
     public string ToString(string? format, IFormatProvider? formatProvider) => ToString();
 
     #endregion
@@ -729,9 +816,15 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
     /// <summary>
     /// Tries to determine the number of characters needed to format this value.
     /// Returns <c>true</c> for types where the size can be determined without formatting;
-    /// returns <c>false</c> for F64 whose character count depends on the actual value.
+    /// returns <c>false</c> for F64 whose character count depends on the actual value, and for a Bytes value whose
+    /// hex form would not fit in a 32-bit length.
     /// Dispatches directly on <c>_Ref</c> to avoid double classification.
     /// </summary>
+    /// <remarks>
+    /// The size is exact for most types but a tight upper bound for I64 and U64 (the maximum width, not the digit count), so the
+    /// caller can pre-size a buffer in O(1). A lazy string is evaluated (and cached) here, because its length is only known
+    /// after evaluation.
+    /// </remarks>
     public bool TryGetStringSize(ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
     {
         object? refValue = _Ref;
@@ -748,7 +841,7 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         }
         if (ReferenceEquals(refValue, I64Marker.Instance) || ReferenceEquals(refValue, U64Marker.Instance))
         {
-            size = 20; // upper bound for 64-bit integer
+            size = 20; // Upper bound: long.MinValue is "-" plus 19 digits and ulong.MaxValue is 20 digits.
             return true;
         }
         if (ReferenceEquals(refValue, F64Marker.Instance))
@@ -797,7 +890,7 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
             int length = (int)(_Data >> 32);
             return _TryGetHexFormattedByteCharCount(length, out size);
         }
-        // Should not happen with well-formed instances
+        // Unreachable for instances built through the factory methods; mirrors the None answer of _ClassifyRef.
         size = 0;
         return true;
     }
@@ -814,26 +907,31 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
     /// </summary>
     public TempString ToTempString()
     {
-        // Fast path: None — empty result without buffer acquisition
+        // Fast path: None — empty result without buffer acquisition ([] is the shared empty array, so nothing is allocated
+        // and Dispose has no thread-static buffer to release).
         if (_Ref is null)
         {
             return new TempString([], 0, false);
         }
-        // Fast path: plain string — copy chars into ZA-managed buffer directly
+        // Fast path: plain string — copy chars into the ZeroAlloc thread-static buffer directly. A nested TempString on the
+        // same thread makes AcquireCharBuffer hand out a heap buffer instead (isThreadStatic is false then), which TempString
+        // handles; the caller's Dispose releases the thread-static buffer. The acquire epoch must be passed to TempString: a
+        // thread-static owner built without it (epoch 0) never matches on Dispose, so the buffer would stay locked on that thread
+        // for good and every later TempString there would silently fall back to a heap allocation.
         if (_Ref is string str)
         {
-            char[] buffer = ZeroAllocHelper.AcquireCharBuffer(str.Length, out bool isThreadStatic);
+            char[] buffer = ZeroAllocHelper.AcquireCharBuffer(str.Length, true, out bool isThreadStatic, out int epoch);
             str.CopyTo(buffer);
-            return new TempString(buffer, str.Length, isThreadStatic);
+            return new TempString(buffer, str.Length, isThreadStatic, epoch);
         }
         // Fast path: boxed LazyString — evaluate via Unsafe.Unbox so caching persists to the heap-resident struct, then copy
         if (_Ref is LazyString)
         {
             ref LazyString ls = ref Unsafe.Unbox<LazyString>(_Ref!);
             string evaluated = ls.AsString;
-            char[] lazyBuffer = ZeroAllocHelper.AcquireCharBuffer(evaluated.Length, out bool lazyIsThreadStatic);
+            char[] lazyBuffer = ZeroAllocHelper.AcquireCharBuffer(evaluated.Length, true, out bool lazyIsThreadStatic, out int lazyEpoch);
             evaluated.CopyTo(lazyBuffer);
-            return new TempString(lazyBuffer, evaluated.Length, lazyIsThreadStatic);
+            return new TempString(lazyBuffer, evaluated.Length, lazyIsThreadStatic, lazyEpoch);
         }
         // General path: use ZA.String which leverages ISpanFormattable + IStringSize
         return ZA.String(this);
@@ -843,6 +941,7 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
 
     #region Char formatting helpers
 
+    /// <summary>Writes "True" or "False" (the same text as <see cref="bool.ToString()"/>) if it fits.</summary>
     private bool _TryFormatBool(Span<char> destination, out int charsWritten)
     {
         ReadOnlySpan<char> text = _Data != 0 ? "True" : "False";
@@ -856,6 +955,7 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         return true;
     }
 
+    /// <summary>Copies <paramref name="text"/> into the destination if it fits; writes nothing otherwise.</summary>
     private static bool _TryFormatString(string text, Span<char> destination, out int charsWritten)
     {
         if (destination.Length < text.Length)
@@ -868,8 +968,15 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         return true;
     }
 
+    /// <summary>
+    /// Writes a Bytes value as uppercase hexadecimal pairs separated by single spaces ("0A FF 00"). Nothing is written
+    /// unless the whole text fits.
+    /// </summary>
     private bool _TryFormatBytes(Span<char> destination, out int charsWritten)
     {
+        // Size check first: the exact required length is computed in O(1) and checked once, so the loop below needs
+        // no per-character bounds handling and never leaves a partially written destination. A length whose text
+        // would exceed int.MaxValue chars is reported as "does not fit" rather than overflowing.
         int length = (int)(_Data >> 32);
         if (!_TryGetHexFormattedByteCharCount(length, out int required))
         {
@@ -882,6 +989,8 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
             charsWritten = 0;
             return false;
         }
+
+        // Write "XX" per byte with a leading space for every byte except the first.
         int pos = 0;
         for (int i = 0; i < bytes.Length; i++)
         {
@@ -901,6 +1010,7 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
 
     #region UTF-8 formatting helpers
 
+    /// <summary>UTF-8 variant of <see cref="_TryFormatBool"/> using <c>u8</c> literals (no encoding step).</summary>
     private bool _TryFormatBoolUtf8(Span<byte> destination, out int bytesWritten)
     {
         ReadOnlySpan<byte> text = _Data != 0 ? "True"u8 : "False"u8;
@@ -914,8 +1024,11 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         return true;
     }
 
+    /// <summary>Encodes <paramref name="text"/> as UTF-8 into the destination if the encoded form fits; writes nothing otherwise.</summary>
     private static bool _TryFormatStringUtf8(string text, Span<byte> destination, out int bytesWritten)
     {
+        // Count first so that a too-small destination is rejected without a partial write (costs one extra pass over the text).
+        // Lone surrogates are replaced by U+FFFD by the encoder; the count already includes the replacement.
         int byteCount = Encoding.UTF8.GetByteCount(text);
         if (destination.Length < byteCount)
         {
@@ -926,8 +1039,10 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         return true;
     }
 
+    /// <summary>UTF-8 twin of <see cref="_TryFormatBytes"/>: hex pairs separated by single spaces, ASCII only (one byte per character).</summary>
     private bool _TryFormatBytesUtf8(Span<byte> destination, out int bytesWritten)
     {
+        // Hex digits and spaces are ASCII, so the required byte count equals the character count.
         int length = (int)(_Data >> 32);
         if (!_TryGetHexFormattedByteCharCount(length, out int required))
         {
@@ -982,6 +1097,9 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
             return true;
         }
 
+        // Each byte needs two hex digits plus one separator, except the last (no trailing space): 3 * n - 1 characters.
+        // Overflow guard: with n = floor((int.MaxValue + 1) / 3) = 715,827,882 the result 3 * n - 1 = 2,147,483,645
+        // still fits in an int, whereas n + 1 would give 2,147,483,648. The long cast keeps the bound itself from overflowing.
         if (byteCount > (int)(((long)int.MaxValue + 1) / 3))
         {
             charCount = 0;
@@ -992,12 +1110,15 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         return true;
     }
 
+    /// <summary>Maps a nibble (0 to 15) to its uppercase hexadecimal digit. The caller guarantees the range (value is masked or shifted).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static char _GetHexChar(int value) => (char)(value < 10 ? '0' + value : 'A' + value - 10);
 
+    /// <summary>UTF-8 (ASCII) variant of <see cref="_GetHexChar"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static byte _GetHexByte(int value) => (byte)(value < 10 ? '0' + value : 'A' + value - 10);
 
+    /// <summary>The None value formats to the empty text: writes nothing and succeeds for any destination size.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _TryFormatEmpty(out int written)
     {

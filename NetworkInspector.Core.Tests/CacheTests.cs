@@ -801,6 +801,42 @@ internal sealed class CacheTests
         await Assert.That((bool)evictAm!.Invoke(cache, null)!).IsTrue();
     }
 
+    [Test]
+    public async Task TwoQueueCache_WeightsWhoseSumExceedsIntRange_StillEvictAndStayWithinBudget()
+    {
+        // Two entries of 1.5 billion do not fit into a budget of int.MaxValue; an int sum would wrap to a negative total and
+        // let both stay.
+        TwoQueueCache<int, int> cache = TwoQueueCache.CreateBounded<int, int>(int.MaxValue, new ValueIsWeightWeigher());
+
+        cache.Put(1, 1_500_000_000);
+        cache.Put(2, 1_500_000_000);
+
+        await Assert.That(cache.Count).IsEqualTo(1);
+        await Assert.That(cache.TotalWeight).IsEqualTo(1_500_000_000);
+        await Assert.That(cache.TryGet(2, out _)).IsTrue();
+    }
+
+    [Test]
+    public async Task TwoQueueCache_UnboundedTotalWeightAboveIntRange_ReportsIntMaxValueInsteadOfWrapping()
+    {
+        TwoQueueCache<int, int> cache = TwoQueueCache.CreateUnbounded<int, int>(new ValueIsWeightWeigher());
+
+        cache.Put(1, 1_500_000_000);
+        cache.Put(2, 1_500_000_000);
+        int beforeRemove = cache.TotalWeight;
+        bool removed = cache.Remove(1);
+
+        await Assert.That(beforeRemove).IsEqualTo(int.MaxValue);
+        await Assert.That(removed).IsTrue();
+        await Assert.That(cache.TotalWeight).IsEqualTo(1_500_000_000);
+    }
+
+    /// <summary>Custom weigher that uses the int value itself as weight.</summary>
+    private sealed class ValueIsWeightWeigher : IWeigher<int, int>
+    {
+        public int Weigh(int key, int value) => value;
+    }
+
     /// <summary>Custom weigher that uses string length as weight.</summary>
     private sealed class StringLengthWeigher : IWeigher<string, string>
     {

@@ -14,11 +14,16 @@ namespace NetworkInspector.Core.ValueCaches;
 /// interface type, or pass it to a non-generic parameter of that type. Those conversions box.
 /// Prefer this struct (or a generic constraint) at call sites.
 /// </para>
+/// <para>
+/// Thread safety: the struct is immutable (one reference); every member forwards to the owning
+/// <see cref="ValueCacheSeries"/> and is as thread-safe as it is (single writer, any number of readers).
+/// </para>
 /// </summary>
 public readonly struct ReadOnlyValueCacheSeries : IReadOnlyValueCacheSeries
 {
     #region Fields
 
+    /// <summary>The series this view reads. Non-null for any view made with the public constructor; a <c>default</c> view has none.</summary>
     private readonly ValueCacheSeries _Owner;
 
     #endregion

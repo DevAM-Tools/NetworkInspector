@@ -11,8 +11,9 @@ internal static class SettingsFileAccess
     #region Constants
 
     /// <summary>
-    /// Manifest of group JSON file names last written by <see cref="SettingsManager.Save"/>.
-    /// Not a <c>.json</c> file so <see cref="SettingsManager.Load"/> will not treat it as a group.
+    /// Manifest of group JSON file names written by <see cref="SettingsManager.Save"/> and <see cref="SettingsManager.SaveChanged"/>:
+    /// the group files that settings managers wrote and own, so stale cleanup never deletes unrelated JSON in the folder.
+    /// Not a <c>.json</c> file so <see cref="SettingsManager.Load"/> (which enumerates <c>*.json</c>) will not treat it as a group.
     /// </summary>
     internal const string OwnedGroupManifestFileName = ".ni-settings-owned";
 
@@ -22,17 +23,46 @@ internal static class SettingsFileAccess
 
     /// <summary>
     /// Opens <paramref name="path"/> for sequential read while allowing other processes
-    /// to read the same file (<see cref="FileShare.Read"/>).
+    /// to read the same file (<see cref="FileShare.Read"/>: others may read, but nobody may write to the file while this stream
+    /// is open) and to replace or delete it (<see cref="FileShare.Delete"/>).
     /// </summary>
     internal static FileStream OpenSharedRead(string path)
     {
+        // FileShare.Delete matters on Windows: a save replaces a group file with a move over it, and Windows refuses that
+        // (access denied) while any handle without delete sharing is open, for example a Load in another process. The reader
+        // is not affected: the handle keeps reading the old content, and writers still cannot modify the file under it.
+        // The settings and manifest files are parsed once, front to back, so the stream is opened with the sequential-scan hint
+        // (the OS can read ahead and need not keep the pages cached for reuse). The 4 MiB buffer makes a large file arrive in few
+        // system calls instead of many small reads of the default 4 KiB buffer.
         return new FileStream(
             path,
             FileMode.Open,
             FileAccess.Read,
-            FileShare.Read,
+            FileShare.Read | FileShare.Delete,
             bufferSize: 4 * 1024 * 1024,
             FileOptions.SequentialScan);
+    }
+
+    /// <summary>
+    /// Replaces <paramref name="targetPath"/> with the complete temporary file <paramref name="tempPath"/> in one step, or
+    /// moves the temporary file into place when the target does not exist yet. A reader sees the old or the new content,
+    /// never half of one.
+    /// </summary>
+    /// <param name="tempPath">The temporary file, in the same folder as the target.</param>
+    /// <param name="targetPath">The file to replace or create.</param>
+    internal static void ReplaceFile(string tempPath, string targetPath)
+    {
+        // File.Replace and not File.Move(overwrite: true): on Windows a move over a file that a reader has open fails with
+        // access denied even when the reader allows deleting (see OpenSharedRead), while File.Replace succeeds and leaves the
+        // reader on the old content. File.Replace needs an existing target, so a missing one is created by a plain move.
+        try
+        {
+            File.Replace(tempPath, targetPath, destinationBackupFileName: null);
+        }
+        catch (FileNotFoundException) when (!File.Exists(targetPath) && File.Exists(tempPath))
+        {
+            File.Move(tempPath, targetPath);
+        }
     }
 
     /// <summary>
@@ -128,8 +158,11 @@ internal sealed class BoundedReadStream : Stream
             return 0;
         }
 
-        // Allow exactly one byte past the cap so the overrun is observable. remaining >= 0 here, and the +1 is applied
-        // only when remaining is below the buffer length (an int), so nothing overflows even for long.MaxValue.
+        // Allow exactly one byte past the cap so the overrun is observable: a reader that gets maxBytes + 1 bytes knows the
+        // input is larger than the cap, and once that extra byte is delivered every later read returns end of stream (the
+        // guard above), so the parser sees a truncated document and the caller checks Exceeded. remaining >= 0 here, and the +1
+        // is applied only when remaining is below the buffer length (an int), so nothing overflows even for long.MaxValue and
+        // toRead never exceeds buffer.Length.
         long remaining = _MaxBytes - _Total;
         int toRead = remaining >= buffer.Length ? buffer.Length : (int)remaining + 1;
         int read = _Inner.Read(buffer[..toRead]);

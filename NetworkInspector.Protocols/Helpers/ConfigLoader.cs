@@ -6,10 +6,17 @@ namespace NetworkInspector.Protocols.Helpers;
 /// Shared utility for loading JSON configuration files used by
 /// config-driven protocols (CAN, Signal Message, PDU Transport, SOME/IP).
 /// <para>
-/// Protocols store a file path in a string setting, then call
-/// <see cref="Load{T}"/> during <c>OnStartCustom</c> to deserialize the JSON.
-/// Uses <see cref="JsonTypeInfo{T}"/> for AOT-compatible deserialization.
+/// Protocols store a file path in a string setting and deserialize the JSON during registration.
+/// Uses <see cref="JsonTypeInfo{T}"/> (source-generated metadata) instead of reflection so that loading stays
+/// trim- and AOT-compatible.
 /// </para>
+/// <para>
+/// Note: the protocols in this assembly currently load their files through
+/// <c>SettingsManagerExtensions.TryLoadReferencedJsonConfig</c> in <c>NetworkInspector.Core</c>, which also applies
+/// the configured size cap and path rules. <see cref="Load{T}"/> has neither: it reads any readable file of any size,
+/// which is acceptable only because the path comes from an operator-controlled setting and not from packet data.
+/// </para>
+/// <para><b>Thread safety:</b> stateless; safe for concurrent use.</para>
 /// </summary>
 internal static class ConfigLoader
 {
@@ -24,8 +31,9 @@ internal static class ConfigLoader
     /// <param name="error">
     /// When the method returns <see langword="null"/> and the path was non-empty,
     /// contains a human-readable description of the failure; otherwise <see langword="null"/>.
+    /// A file whose JSON content is the literal <c>null</c> also returns <see langword="null"/> with no error.
     /// </param>
-    /// <returns>The deserialized config, or <see langword="null"/> on failure.</returns>
+    /// <returns>The deserialized config, or <see langword="null"/> on failure or when no path is configured.</returns>
     internal static T? Load<T>(string? filePath, JsonTypeInfo<T> typeInfo, out string? error) where T : class
     {
         if (string.IsNullOrWhiteSpace(filePath))
@@ -48,15 +56,20 @@ internal static class ConfigLoader
             return null;
         }
 
+        // Existence is checked first only to give a precise "not found" message. The file can still vanish before
+        // it is opened; that race surfaces as an IOException below and is reported as a read failure, not thrown.
         if (!File.Exists(resolvedPath))
         {
             error = $"Configuration file not found: {resolvedPath}";
             return null;
         }
 
+        // Every expected failure (malformed JSON, access denied, I/O) becomes an error string so that a bad
+        // configuration file never aborts stack construction.
         try
         {
-            // Read and deserialize — use stream for efficiency on large configs
+            // Deserialize straight from the stream instead of reading the file into a string or byte array first,
+            // so a large config does not allocate a second copy of itself.
             using FileStream stream = File.OpenRead(resolvedPath);
             T? result = JsonSerializer.Deserialize(stream, typeInfo);
             error = null;

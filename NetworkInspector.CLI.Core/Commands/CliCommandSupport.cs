@@ -11,7 +11,10 @@ internal static class CliCommandSupport
 {
     #region Internal API
 
-    /// <summary>Applies the BLF cache option to BLF sources that do not set it themselves.</summary>
+    /// <summary>
+    /// Applies the BLF cache option (<c>--blf-cache-size</c>) to BLF sources that do not set it themselves. The command-line
+    /// option is only a default: a <c>cacheBudgetBytes</c> given in the source spec wins, and sources of other kinds never see it.
+    /// </summary>
     /// <param name="config">The parsed source.</param>
     /// <param name="blfCacheBudgetBytes">The budget in bytes; 0 leaves the source as it is.</param>
     /// <returns>The source with the default option, or <paramref name="config"/> itself.</returns>
@@ -20,7 +23,10 @@ internal static class CliCommandSupport
             ? config.WithDefaultOption("cacheBudgetBytes", blfCacheBudgetBytes.ToString(CultureInfo.InvariantCulture))
             : config;
 
-    /// <summary>Creates, registers, and starts every source; one error line and an exit code when one fails.</summary>
+    /// <summary>
+    /// Creates, registers, and starts every source in the order given (the order is the round-robin order of the loops); one
+    /// error line and an exit code when one fails, and the sources after it are not opened.
+    /// </summary>
     /// <param name="configs">The parsed sources.</param>
     /// <param name="stack">The stack whose settings the sources read.</param>
     /// <param name="frames">The registry that gives each source its id.</param>
@@ -34,6 +40,8 @@ internal static class CliCommandSupport
         {
             try
             {
+                // An expected failure comes back as an error value: an invalid option text is the user's mistake (exit 1), anything
+                // else (missing file, bad header) is a source that cannot be opened (exit 2).
                 if (!config.TryCreateSource(stack.Settings, out IFrameSource? source, out PluginError? error))
                 {
                     io.Error.WriteLine(error.Value.Code == PluginErrorCode.InvalidOption
@@ -44,6 +52,8 @@ internal static class CliCommandSupport
                         : (int)ExitCode.SourceOpenError;
                 }
 
+                // The source goes into the caller's list before it is registered and started, so the caller disposes it even
+                // when RegisterSource or Start throws. The registry gives the source its id; Start needs the id and the registry.
                 sources.Add(source);
                 FrameSourceId sourceId = frames.RegisterSource(source);
                 source.Start(sourceId, frames);
@@ -51,6 +61,7 @@ internal static class CliCommandSupport
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // A plugin's source is plugin code: whatever it throws ends this command with an error line, never the process.
+                // A cancellation is excluded on purpose: it is not an open failure and propagates to the cancelling command.
                 io.Error.WriteLine($"Error opening source: {ex.Message}");
                 return (int)ExitCode.SourceOpenError;
             }
@@ -61,10 +72,13 @@ internal static class CliCommandSupport
 
     /// <summary>The text for a target that cannot be used; an existing output also says how to replace it.</summary>
     /// <param name="error">The error of <see cref="ExportTargets.TryPrepare"/> or <see cref="ExportTargets.TryCheck"/>.</param>
-    /// <param name="outputPath">The path as the user typed it.</param>
+    /// <param name="outputPath">The path that was checked or prepared (a split path in a split run), as the caller built it.</param>
     /// <returns>One line of English text.</returns>
     internal static string TargetText(PluginError? error, string outputPath)
     {
+        // Only the plain "Output '...' exists." refusal gets the hint. The other refusals share the error code but are not cured by
+        // --overwrite (a folder where a file is wanted, a foreign non-empty folder), so they keep their own text. The text is the
+        // only thing that tells them apart, hence the suffix test.
         if (error is { Code: PluginErrorCode.TargetExists } existing && existing.Message.EndsWith(" exists.", StringComparison.Ordinal))
         {
             return Invariant($"Output '{Path.GetFullPath(outputPath)}' exists; pass --overwrite to replace it.");
@@ -87,11 +101,16 @@ internal static class CliCommandSupport
         CancellationToken cancellationToken)
     {
         using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        // Ctrl+C is turned into a cooperative cancellation: e.Cancel keeps the process alive so that the command can dispose its
+        // listener, delete the unfinished output, and give replaced outputs back. Without it the runtime
+        // would kill the process in the middle of a write and leave a partial output behind. The handler runs on a console
+        // thread, not on the command's thread.
         ConsoleCancelEventHandler cancelHandler = (_, e) =>
         {
             e.Cancel = true;
             _Cancel(cts, io.Error);
-            io.Error.WriteLine("Cancellation requested...");
+            WriteLocked(io.Error, "Cancellation requested...");
         };
         Console.CancelKeyPress += cancelHandler;
         try
@@ -100,7 +119,27 @@ internal static class CliCommandSupport
         }
         finally
         {
+            // The handler is removed before the token source is disposed (end of the using); a key press in between is absorbed
+            // by the ObjectDisposedException guard of _Cancel.
             Console.CancelKeyPress -= cancelHandler;
+        }
+    }
+
+    /// <summary>
+    /// Writes one line to the error writer from a thread that is not the command's thread (the console thread of Ctrl+C). The
+    /// plugin log and the session lock the error writer itself, because a text writer is not thread-safe and only the console
+    /// writer is synchronized by the runtime; an injected writer is not. Without the same lock the notice could interleave with
+    /// a plugin's line and tear it. Only the write happens under the lock.
+    /// </summary>
+    /// <param name="error">The error writer of the command; the lock object shared with <see cref="CliPluginLog"/>.</param>
+    /// <param name="line">The line without line break.</param>
+    internal static void WriteLocked(TextWriter error, string line)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        ArgumentNullException.ThrowIfNull(line);
+        lock (error)
+        {
+            error.WriteLine(line);
         }
     }
 
@@ -116,11 +155,14 @@ internal static class CliCommandSupport
     internal static void DiscardUnfinished<TListener>(ref TListener? listener, ref string? currentPath, bool isDirectory, TextWriter error)
         where TListener : class
     {
+        // The state is passed by reference and reset at the end, so the caller cannot discard the same output twice (the call is
+        // safe to repeat); a null listener means there is nothing unfinished.
         if (listener is null)
         {
             return;
         }
 
+        // Dispose first: the Core exporters complete their file on Dispose, so only after it is there a final file to delete.
         try
         {
             (listener as IDisposable)?.Dispose();
@@ -131,6 +173,8 @@ internal static class CliCommandSupport
             error.WriteLine($"Warning: closing the unfinished output failed: {ex.Message}");
         }
 
+        // Then delete whatever is at the output path. A finished output is never passed here: the loops reset the path when they
+        // finish a listener, so only the output still being written is removed.
         if (currentPath is not null)
         {
             string? problem = ExportTargets.DeletePartial(Path.GetFullPath(currentPath), isDirectory);
@@ -147,6 +191,7 @@ internal static class CliCommandSupport
     /// <summary>
     /// Ends the replacement of old outputs after a run: a new output that survived replaced the old one for good, a missing one
     /// (cancelled, failed, never opened) gets the old one back. Problems are warnings that name where the old output is kept.
+    /// Call it from a <c>finally</c> block, so the old output is never left under a hidden backup name, whatever the run did.
     /// </summary>
     /// <param name="replacements">The replacements that <see cref="ExportTargets.TryPrepare"/> returned during the run.</param>
     /// <param name="error">Receives the warnings.</param>
@@ -193,7 +238,7 @@ internal static class CliCommandSupport
         }
         catch (AggregateException ex)
         {
-            error.WriteLine("Warning: a cancellation callback failed: " + ex.InnerException?.Message);
+            WriteLocked(error, "Warning: a cancellation callback failed: " + ex.InnerException?.Message);
         }
         catch (ObjectDisposedException)
         {

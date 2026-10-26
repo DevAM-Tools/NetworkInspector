@@ -30,7 +30,10 @@ internal static class CandidateBitmapBuilder
 {
     #region Entry point
 
-    /// <summary>Builds a candidate bitmap, or reports that pruning is not possible.</summary>
+    /// <summary>Builds a candidate bitmap, or reports that pruning is not possible. Thread-safe only while the index does not grow.</summary>
+    /// <typeparam name="TIndex">
+    /// Reader type; kept generic so a struct view is passed without boxing and its calls can be inlined.
+    /// </typeparam>
     /// <param name="node">The dependency tree.</param>
     /// <param name="index">The index to read presence bitmaps from.</param>
     /// <param name="candidates">Receives the candidate superset on success.</param>
@@ -48,6 +51,11 @@ internal static class CandidateBitmapBuilder
 
     #region Recursion
 
+    /// <summary>
+    /// Dispatches on the node type. Invariant of every <c>_TryBuild*</c> method: a returned bitmap is a fresh, privately
+    /// owned copy, never a view of the index, because the parent combines it in place (<c>AndWith</c> / <c>OrWith</c>).
+    /// Recursion depth equals the tree depth, which the filter parser bounds.
+    /// </summary>
     private static bool _TryBuild<TIndex>(
         DependencyNode node,
         TIndex index,
@@ -71,6 +79,10 @@ internal static class CandidateBitmapBuilder
         }
     }
 
+    /// <summary>
+    /// Conjunction: intersect every child that resolves, skip the others. Skipping is sound because a dropped conjunct only
+    /// widens the superset. Fails only when no child resolves (then nothing can be pruned).
+    /// </summary>
     private static bool _TryBuildAll<TIndex>(
         DependencyNode[] children,
         TIndex index,
@@ -85,6 +97,8 @@ internal static class CandidateBitmapBuilder
                 continue;
             }
 
+            // The first resolved child is adopted as the accumulator (it is an owned copy, see _TryBuild), which saves
+            // one clone; later children are intersected into it in place instead of allocating a result bitmap per step.
             if (accumulated is null)
             {
                 accumulated = childBitmap;
@@ -98,6 +112,10 @@ internal static class CandidateBitmapBuilder
         return accumulated is not null;
     }
 
+    /// <summary>
+    /// Disjunction: union of all children. One unresolvable child fails the whole node, because that disjunct may match
+    /// any packet, so no bitmap short of "everything" would still be a superset. An empty child list also fails.
+    /// </summary>
     private static bool _TryBuildAny<TIndex>(
         DependencyNode[] children,
         TIndex index,
@@ -126,6 +144,11 @@ internal static class CandidateBitmapBuilder
         return accumulated is not null;
     }
 
+    /// <summary>
+    /// Leaf: the packets that contain the protocol, the field's index group, or any member field of an alias. A missing
+    /// bitmap means "the index cannot tell" (id out of range, or the field has no index group), not "no packet has it",
+    /// so it is reported as unresolvable instead of as an empty set: treating it as empty would drop matching packets.
+    /// </summary>
     private static bool _TryBuildLeaf<TIndex>(
         FilterSymbol symbol,
         TIndex index,
@@ -153,6 +176,8 @@ internal static class CandidateBitmapBuilder
             return true;
         }
 
+        // Alias group (or a field without a usable group bitmap): the union of its members. Every member must resolve, for
+        // the same soundness reason as in _TryBuildAny.
         RoaringBitmap? accumulated = null;
         foreach (FieldId fieldId in symbol.Fields)
         {

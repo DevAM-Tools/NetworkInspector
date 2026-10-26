@@ -36,7 +36,9 @@ internal static class ExporterBuild
     {
         ArgumentNullException.ThrowIfNull(build);
 
-        // DirectoryNotFoundException and FileNotFoundException derive from IOException, so they come first.
+        // Catch order matters: DirectoryNotFoundException and FileNotFoundException derive from IOException, so their clause
+        // must precede the IOException clause or they would be reported as unreadable instead of not found. Only these
+        // expected failure types are caught; anything else is a bug in the builder or the registration and propagates.
         try
         {
             // The Core exporters open their output with the first item, so a missing folder would surface late and in the
@@ -58,6 +60,9 @@ internal static class ExporterBuild
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
         {
+            // The Core builders reject a value they cannot write (an out-of-range option, an invalid path) with these types.
+            // The registration cannot tell which option was at fault here, so no option name is attached; registrations
+            // that can name the option check it themselves before calling this step.
             error = new PluginError(PluginErrorCode.InvalidOption, exception.Message);
         }
 

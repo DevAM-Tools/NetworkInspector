@@ -10,6 +10,11 @@ namespace NetworkInspector.Core.Interfaces;
 /// update this from in-memory counters only — never by probing the filesystem.
 /// </para>
 /// <para>
+/// Why in-memory: a size-based split policy reads this value for every exported item, so it must cost a few
+/// instructions and no I/O; and the file size on disk would not include data still sitting in write buffers, so a
+/// split would come late.
+/// </para>
+/// <para>
 /// <b>Thread safety:</b> Not thread-safe. Read from the same thread that drives the export.
 /// </para>
 /// </summary>

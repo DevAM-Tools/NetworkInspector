@@ -177,6 +177,8 @@ internal sealed class LiteralParserTests
     [Arguments("2m", 120_000_000_000L)]
     [Arguments("1h", 3_600_000_000_000L)]
     [Arguments("1.5s", 1_500_000_000L)]
+    [Arguments("1_000ms", 1_000_000_000L)]
+    [Arguments("1_5.2_5s", 15_250_000_000L)]
     public async Task ParseWindow_Durations(string text, long expectedNanos)
     {
         FilterResult<FlankWindow> result = LiteralParser.ParseWindow(_Token(TokenKind.Duration, text));
@@ -189,6 +191,7 @@ internal sealed class LiteralParserTests
     [Test]
     [Arguments("1packet", 1)]
     [Arguments("10packets", 10)]
+    [Arguments("1_000packets", 1000)]
     public async Task ParseWindow_PacketCounts(string text, int expected)
     {
         FilterResult<FlankWindow> result = LiteralParser.ParseWindow(_Token(TokenKind.Duration, text));

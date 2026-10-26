@@ -23,8 +23,10 @@ internal static class Ipv4Wire
     /// <summary>IP protocol number of UDP.</summary>
     internal const byte ProtocolUdp = 17;
 
+    /// <summary>192.0.2.1 as a number; equal to <c>EthernetFrames.SourceAddress</c>, repeated here because this class writes raw bytes.</summary>
     private const uint _SourceAddress = 0xC0000201;
 
+    /// <summary>192.0.2.2 as a number; equal to <c>EthernetFrames.DestinationAddress</c>.</summary>
     private const uint _DestinationAddress = 0xC0000202;
 
     #endregion
@@ -35,17 +37,23 @@ internal static class Ipv4Wire
     /// Writes the Ethernet header (destination 02:00:00:00:00:02, source 02:00:00:00:00:01, EtherType IPv4) and the IPv4 header
     /// with its checksum: version 4, header length 5, identification 0, don't fragment, TTL 64, from 192.0.2.1 to 192.0.2.2.
     /// </summary>
-    /// <param name="frame">The frame; at least 34 bytes.</param>
+    /// <param name="frame">
+    /// The frame; at least 34 bytes and zero-initialized: every header byte that is not set below (DSCP, identification, and
+    /// the checksum field while the checksum is computed) is left as it is and must be 0.
+    /// </param>
     /// <param name="ipTotalLength">Value of the IPv4 total length field (it need not match the frame on purpose).</param>
     /// <param name="protocol">IP protocol number.</param>
     internal static void WriteEthernetAndIpv4(Span<byte> frame, int ipTotalLength, byte protocol)
     {
+        // Ethernet header: destination 02:00:00:00:00:02, source 02:00:00:00:00:01 (locally administered, as EthernetFrames).
         frame[0] = 0x02;
         frame[5] = 0x02;
         frame[6] = 0x02;
         frame[11] = 0x01;
         BinaryPrimitives.WriteUInt16BigEndian(frame[12..], 0x0800);
 
+        // IPv4 header: 0x45 is version 4 with a 5-word header; 0x4000 is the don't-fragment flag. The total length is written
+        // as given and not derived from the frame, because recipes use it to build deliberately inconsistent datagrams.
         Span<byte> ip = frame[EthernetHeaderLength..];
         ip[0] = 0x45;
         BinaryPrimitives.WriteUInt16BigEndian(ip[2..], (ushort)ipTotalLength);
@@ -54,6 +62,8 @@ internal static class Ipv4Wire
         ip[9] = protocol;
         BinaryPrimitives.WriteUInt32BigEndian(ip[12..], _SourceAddress);
         BinaryPrimitives.WriteUInt32BigEndian(ip[16..], _DestinationAddress);
+
+        // The checksum goes last: the field (bytes 10 and 11) is still zero, as the algorithm requires, while it is summed.
         BinaryPrimitives.WriteUInt16BigEndian(ip[10..], OnesComplementChecksum(ip[..Ipv4HeaderLength], 0));
     }
 

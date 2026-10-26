@@ -10,12 +10,23 @@ namespace NetworkInspector.Filter.Parser;
 /// through the same cross-type ordering the core already implements, instead of a parallel
 /// value union.
 /// </para>
+/// <para>
+/// Cost model: runs at compile time only (one call per literal in the expression), so it allocates freely.
+/// Thread safety: static and stateless, safe to call from any thread. Invalid literals are returned as
+/// <see cref="FilterError"/> values with the token's span; nothing here throws for bad input.
+/// </para>
 /// </summary>
 internal static class LiteralParser
 {
     #region Literals
 
-    /// <summary>Parses a literal token into a field value.</summary>
+    /// <summary>
+    /// Parses a literal token into a field value. Number typing: a non-negative integer (decimal or radix-prefixed) is
+    /// <c>U64</c>, a negative one is <c>I64</c>, a decimal fraction is <c>F64</c>; the cross-type comparison in
+    /// <see cref="FieldValueData"/> means the literal's type need not equal the compared field's type.
+    /// </summary>
+    /// <param name="token">A token for which <see cref="IsLiteralStart"/> is true; any other kind yields a syntax error.</param>
+    /// <returns>The value, or an error positioned on <paramref name="token"/>.</returns>
     public static FilterResult<FieldValueData> Parse(in Token token)
     {
         switch (token.Kind)
@@ -71,7 +82,10 @@ internal static class LiteralParser
         }
     }
 
-    /// <summary>Whether <paramref name="kind"/> can start a literal value.</summary>
+    /// <summary>
+    /// Whether <paramref name="kind"/> can start a literal value. <see cref="TokenKind.Duration"/> is deliberately not a
+    /// literal: it is valid only as the <c>within:</c> argument of a flank (see <see cref="ParseWindow"/>).
+    /// </summary>
     public static bool IsLiteralStart(TokenKind kind) => kind
         is TokenKind.Integer
         or TokenKind.Float
@@ -87,7 +101,13 @@ internal static class LiteralParser
 
     #region Flank window
 
-    /// <summary>Parses the <c>within:</c> argument of a flank expression.</summary>
+    /// <summary>
+    /// Parses the <c>within:</c> argument of a flank expression into either a time window in nanoseconds or a packet
+    /// count. Time units are <c>ns</c>, <c>us</c>, <c>ms</c>, <c>s</c>, <c>m</c> (minutes) and <c>h</c>; a fractional
+    /// amount is allowed for time (<c>1.5s</c>) but not for packets.
+    /// </summary>
+    /// <param name="token">The token after <c>within:</c>; must be a <see cref="TokenKind.Duration"/>.</param>
+    /// <returns>The window, or an error positioned on <paramref name="token"/>.</returns>
     public static FilterResult<FlankWindow> ParseWindow(in Token token)
     {
         if (token.Kind != TokenKind.Duration)
@@ -98,6 +118,8 @@ internal static class LiteralParser
                 Math.Max(token.Length, 1));
         }
 
+        // Split "<number><unit>" at the last digit. The lexer guarantees the number part ends in a digit and the unit
+        // is a known identifier suffix, so scanning back over the non-digits isolates the unit.
         string text = token.Text;
         int suffixStart = text.Length;
         while (suffixStart > 0 && !char.IsAsciiDigit(text[suffixStart - 1]))
@@ -105,15 +127,21 @@ internal static class LiteralParser
             suffixStart--;
         }
 
-        string numberPart = text[..suffixStart];
+        // The lexer accepts "_" digit separators in durations ("1_000ms") just like in integers. double.TryParse does not,
+        // so the separators are removed first; otherwise a duration the lexer accepted would fail here as an invalid amount.
+        string numberPart = text[..suffixStart].Replace("_", string.Empty, StringComparison.Ordinal);
         string suffix = text[suffixStart..];
 
+        // Parse the amount as a double so fractions work; a negative amount is rejected (the lexer never produces
+        // one, the check keeps this method correct on its own).
         if (!double.TryParse(numberPart, NumberStyles.Float, CultureInfo.InvariantCulture, out double amount)
             || amount < 0)
         {
             return FilterError.InvalidValue($"Invalid window amount '{text}'", token.Position, token.Length);
         }
 
+        // Packet-count window: a whole number of packets, capped at the largest packet id so the (int) cast and the
+        // later "now id - reference id" distance cannot overflow.
         if (suffix is "packet" or "packets")
         {
             if (amount != Math.Floor(amount))
@@ -132,6 +160,7 @@ internal static class LiteralParser
             return FlankWindow.FromPackets((int)amount);
         }
 
+        // Time window: convert to nanoseconds, the unit packet timestamps use.
         double nanosPerUnit = suffix switch
         {
             "ns" => 1d,
@@ -168,6 +197,11 @@ internal static class LiteralParser
 
     #region Helpers
 
+    /// <summary>
+    /// Converts an integer token. Digit separators (<c>_</c>) are removed first. A leading minus gives <c>I64</c>;
+    /// everything else is <c>U64</c>, so the full unsigned 64-bit range of hex masks such as <c>0xFFFFFFFFFFFFFFFF</c>
+    /// is representable. Values outside the 64-bit range are an error, never wrapped.
+    /// </summary>
     private static FilterResult<FieldValueData> _ParseInteger(in Token token)
     {
         string text = token.Text.Replace("_", string.Empty, StringComparison.Ordinal);
@@ -182,6 +216,7 @@ internal static class LiteralParser
             return FilterError.InvalidValue($"Invalid integer '{token.Text}'", token.Position, token.Length);
         }
 
+        // Radix prefixes need at least one digit after them ("0x" alone falls through to the decimal parse and fails).
         if (text.Length > 2 && text[0] == '0')
         {
             char prefix = char.ToLowerInvariant(text[1]);
@@ -221,6 +256,9 @@ internal static class LiteralParser
             {
                 return FilterError.InvalidValue($"Invalid integer '{token.Text}'", token.Position, token.Length);
             }
+
+            // Overflow guard: result * radix + digit <= ulong.MaxValue exactly when
+            // result <= (ulong.MaxValue - digit) / radix (integer division). Checked before multiplying.
             if (result > (ulong.MaxValue - (ulong)digit) / (ulong)radix)
             {
                 return FilterError.InvalidValue($"Integer '{token.Text}' does not fit in 64 bits", token.Position, token.Length);
@@ -231,8 +269,14 @@ internal static class LiteralParser
         return FieldValueData.NewU64(result);
     }
 
+    /// <summary>
+    /// Converts a colon-separated hex byte sequence (<c>00:11:22</c>) into a byte array value. The lexer only
+    /// produces this token for two-digit groups, so the validation here is a defensive re-check that keeps the method
+    /// correct on its own. The array is allocated once per literal at compile time and is shared by every evaluation.
+    /// </summary>
     private static FilterResult<FieldValueData> _ParseHexBytes(in Token token)
     {
+        // The number of colons + 1 is the byte count, which sizes the array exactly.
         string text = token.Text;
         int groups = 1;
         foreach (char c in text)
@@ -269,6 +313,7 @@ internal static class LiteralParser
         return FieldValueData.NewBytes(bytes);
     }
 
+    /// <summary>Value of an ASCII hex digit (either case), or -1 for any other character. Culture-independent.</summary>
     private static int _HexValue(char c)
     {
         if (char.IsAsciiDigit(c))

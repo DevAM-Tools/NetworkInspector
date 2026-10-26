@@ -8,18 +8,31 @@ namespace NetworkInspector.Core.Settings;
 ///
 /// NaN-safe f64 comparison is implemented to prevent infinite dirty-tracking loops.
 /// Two <c>F64(NaN)</c> values are considered equal.
+/// <para>
+/// Immutable and therefore thread-safe. <c>default(SettingValue)</c> is <c>Bool(false)</c> (the type discriminant 0 is
+/// <see cref="SettingType.Bool"/>). The formatting members (<see cref="ToString()"/>, <c>TryFormat</c>) produce short display
+/// labels, not the persistence or command-line forms; those live in <see cref="SettingValueJson"/> and
+/// <see cref="SettingValueText"/>.
+/// </para>
 /// </summary>
 public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable, IUtf8SpanFormattable, IStringSize
 {
-    // Storage layout:
+    // Storage layout (a tagged union: one 8-byte payload word, one reference, one discriminant, so no value is boxed and the
+    // scalar types need no allocation):
     // Bool:   _Bits = 0 or 1, _ReferenceValue = null
     // F64:    _Bits = BitConverter bits, _ReferenceValue = null
-    // U64:    _Bits = (long)value, _ReferenceValue = null
+    // U64:    _Bits = (long)value, _ReferenceValue = null   (bit reinterpretation; read back with (ulong)_Bits)
     // I64:    _Bits = value, _ReferenceValue = null
     // String: _Bits = 0, _ReferenceValue = string
     // Bytes:  _Bits = 0, _ReferenceValue = byte[]
     // Enum:   _Bits = numeric value, _ReferenceValue = string (name)
     // BoolArray/StringArray/F64Array/U64Array/I64Array: _Bits = 0, _ReferenceValue = T[] (privately owned copy)
+    //
+    // Arrays are copied on the way in (factories) and on the way out (TryGetAs*), by design: copying a struct copies only the
+    // reference, so every copy of a SettingValue (the current and the pending value of a setting, a registration result, a
+    // view) shares one array. A caller that could mutate it would change all holders at once and break equality, hashing, and
+    // the immutable snapshot a Setting publishes to lock-free readers. The price is one allocation per array read; a caller
+    // that needs the array repeatedly should keep the copy it received.
 
     /// <summary>Returns the type discriminant for this value.</summary>
     public SettingType Type { get; }
@@ -27,6 +40,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     private readonly long _Bits;
     private readonly object? _ReferenceValue;
 
+    /// <summary>Assembles a value from its three storage parts; the factories guarantee that they match <paramref name="type"/>.</summary>
     private SettingValue(SettingType type, long bits, object? referenceValue)
     {
         Type = type;
@@ -338,6 +352,12 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
 
     #region Equality
 
+    // Equality is by content, not by reference, and never throws. F64 (scalar and array) compares the IEEE bit patterns:
+    // that makes NaN equal to NaN (a value-compare would make a NaN differ from itself, so dirty-tracking never settles) at the price that 0.0
+    // and -0.0 are different and NaNs with different payloads are different. GetHashCode uses the same bits so that equal
+    // values hash equally. String comparisons are ordinal. Hash codes are only for in-process use: string hashing is
+    // randomized per process, so they must not be persisted.
+
     /// <inheritdoc/>
     public bool Equals(SettingValue other)
     {
@@ -399,6 +419,14 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     #endregion
 
     #region ISpanFormattable
+
+    // Display form (for logs and UI labels), written straight into the caller's buffer so formatting allocates nothing:
+    //   Bool "True"/"False" (capitalized, unlike the text form), numbers in the invariant culture, String as is,
+    //   Bytes "[N bytes]", Enum "Name (value)", arrays "[N type]" (only the element count, never the elements).
+    // The provider argument is ignored on purpose: a setting value must read the same in every locale, so numbers always use
+    // CultureInfo.InvariantCulture. When the destination is too small the member returns false with 0 written (it never throws),
+    // which is how callers probe with a stack buffer and fall back to a larger one. TryGetStringSize must report exactly the
+    // lengths produced here; change the labels in both places.
 
     /// <inheritdoc/>
     public bool TryFormat(
@@ -492,6 +520,9 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
 
     #region IUtf8SpanFormattable
 
+    // Same display form and same rules as the char overload above, written as UTF-8 bytes. The labels use u8 literals so no
+    // transcoding is needed; String and Enum names are encoded by _TryEncodeUtf8 and _TryFormatEnumLabelUtf8.
+
     /// <inheritdoc/>
     public bool TryFormat(
         Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
@@ -566,6 +597,10 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     /// </summary>
     public bool TryGetStringSize(ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
     {
+        // The numbers below are the lengths of the literals TryFormat writes: "True" 4, "False" 5, and the array suffixes
+        // " bool]" 6, " string]" 8, " f64]" / " u64]" / " i64]" 5 (the count and the opening bracket are added by the helper).
+        // An exact size lets Format() and FormatTemp() size a buffer once and never retry. F64 has no exact size because its
+        // shortest round-trip text depends on the value; a custom format string changes integer lengths as well.
         switch (Type)
         {
             case SettingType.Bool:
@@ -636,7 +671,10 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     /// </summary>
     private const int _F64DefaultMaxChars = 32;
 
-    /// <summary>Stack threshold before switching to a ZeroAlloc-managed buffer.</summary>
+    /// <summary>
+    /// Largest character count formatted into a <c>stackalloc</c> buffer (256 chars = 512 bytes of stack); a longer result goes
+    /// through a thread-static or pooled buffer from <c>ZeroAllocHelper</c>. Bounds the stack use per call.
+    /// </summary>
     private const int _StackFormatLimit = 256;
 
     /// <summary>Writes the formatted label into <paramref name="destination"/>. Returns characters written (0 if the span is too small).</summary>
@@ -654,6 +692,8 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     /// </remarks>
     public TempString FormatTemp()
     {
+        // A string value is copied into the rented buffer so the caller gets one uniform disposable type; the empty string
+        // needs no buffer at all.
         if (Type == SettingType.String && _ReferenceValue is string str)
         {
             if (str.Length == 0)
@@ -661,11 +701,15 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
                 return new TempString([], 0, false);
             }
 
-            char[] stringBuffer = ZeroAllocHelper.AcquireCharBuffer(str.Length, out bool stringThreadStatic);
+            // The acquire epoch goes to TempString so that Dispose can release the thread-static buffer; without it the buffer
+            // stays locked on this thread and every later TempString there falls back to a heap allocation.
+            char[] stringBuffer = ZeroAllocHelper.AcquireCharBuffer(str.Length, true, out bool stringThreadStatic, out int stringEpoch);
             str.CopyTo(stringBuffer);
-            return new TempString(stringBuffer, str.Length, stringThreadStatic);
+            return new TempString(stringBuffer, str.Length, stringThreadStatic, stringEpoch);
         }
 
+        // Size the buffer once: exact when known, otherwise the F64 upper bound (the only type without an exact size for the
+        // default format). TryFormat then reports how much of the buffer is used.
         int size;
         if (!TryGetStringSize(default, CultureInfo.InvariantCulture, out size))
         {
@@ -677,9 +721,10 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
             return new TempString([], 0, false);
         }
 
-        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(size, out bool isThreadStatic);
+        // Epoch for TempString.Dispose: see the string case above.
+        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(size, true, out bool isThreadStatic, out int epoch);
         TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
-        return new TempString(buffer, written, isThreadStatic);
+        return new TempString(buffer, written, isThreadStatic, epoch);
     }
 
     /// <summary>Returns the formatted label as a new string.</summary>
@@ -694,6 +739,8 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
             return str;
         }
 
+        // Small results of known size are formatted on the stack so the only allocation is the result string itself; F64 (no
+        // exact size) and long results go through FormatTemp's reusable buffer, again with one string allocation at the end.
         if (TryGetStringSize(default, CultureInfo.InvariantCulture, out int size) && size <= _StackFormatLimit)
         {
             if (size == 0)
@@ -713,29 +760,35 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     /// <summary>Formats with a non-empty format string into a sized buffer, then allocates the result string.</summary>
     private string _FormatToString(ReadOnlySpan<char> format, IFormatProvider provider)
     {
+        // Exact size known (non-numeric types): one sized buffer, no retry.
         if (TryGetStringSize(format, provider, out int size))
         {
             return _FormatKnownSizeToString(format, provider, size);
         }
 
+        // Size unknown (F64, or an integer with a format string): try a fixed stack buffer first. A 256-char buffer holds any
+        // double or 64-bit integer text, so the heap fallback below is only a safety net for unusual format strings.
         Span<char> stack = stackalloc char[_StackFormatLimit];
         if (TryFormat(stack, out int written, format, provider))
         {
             return new string(stack[..written]);
         }
 
+        // The fallback formats with the invariant culture too, not with the caller's provider: TryFormat ignores the provider on
+        // purpose (a setting value reads the same in every locale), so the same value must not come out differently only
+        // because its text is longer than the stack buffer.
         string formatString = format.ToString();
         if (Type == SettingType.F64)
         {
-            return BitConverter.Int64BitsToDouble(_Bits).ToString(formatString, provider);
+            return BitConverter.Int64BitsToDouble(_Bits).ToString(formatString, CultureInfo.InvariantCulture);
         }
 
         if (Type == SettingType.U64)
         {
-            return ((ulong)_Bits).ToString(formatString, provider);
+            return ((ulong)_Bits).ToString(formatString, CultureInfo.InvariantCulture);
         }
 
-        return _Bits.ToString(formatString, provider);
+        return _Bits.ToString(formatString, CultureInfo.InvariantCulture);
     }
 
     /// <summary>Formats a value whose character count is already known.</summary>
@@ -753,9 +806,10 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
             return new string(stack[..written]);
         }
 
-        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(size, out bool isThreadStatic);
+        // Epoch for TempString.Dispose: without it the thread-static buffer would stay locked on this thread.
+        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(size, true, out bool isThreadStatic, out int epoch);
         TryFormat(buffer, out int writtenLarge, format, provider);
-        using TempString temp = new(buffer, writtenLarge, isThreadStatic);
+        using TempString temp = new(buffer, writtenLarge, isThreadStatic, epoch);
         return temp.ToString();
     }
 
@@ -763,6 +817,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
 
     #region Formatting helpers
 
+    /// <summary>Writes the label <c>[N bytes]</c>; returns <see langword="false"/> with 0 written when the span is too small.</summary>
     private static bool _TryFormatBytesLabel(int byteCount, Span<char> destination, out int charsWritten)
     {
         int total = _BytesLabelCharCount(byteCount);
@@ -779,6 +834,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
         return true;
     }
 
+    /// <summary>UTF-8 counterpart of <see cref="_TryFormatBytesLabel"/>; the label is ASCII, so its char count is its byte count.</summary>
     private static bool _TryFormatBytesLabelUtf8(int byteCount, Span<byte> destination, out int bytesWritten)
     {
         int total = _BytesLabelCharCount(byteCount);
@@ -839,6 +895,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     private static int _ArrayCountLabelCharCount(int count, int suffixLength) =>
         1 + _UInt64DigitCount((ulong)(uint)count) + suffixLength;
 
+    /// <summary>Writes the label <c>Name (value)</c>; returns <see langword="false"/> with 0 written when the span is too small.</summary>
     private static bool _TryFormatEnumLabel(
         ReadOnlySpan<char> name, ulong numericValue, Span<char> destination, out int charsWritten)
     {
@@ -860,10 +917,14 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
         return true;
     }
 
+    /// <summary>UTF-8 counterpart of <see cref="_TryFormatEnumLabel"/>; the name may contain non-ASCII characters.</summary>
     private static bool _TryFormatEnumLabelUtf8(
         ReadOnlySpan<char> name, ulong numericValue, Span<byte> destination, out int bytesWritten)
     {
         int digits = _UInt64DigitCount(numericValue);
+
+        // ASCII names (the usual case) are narrowed char by char: the byte count equals the char count, so the size check needs
+        // no encoder pass. Any other name takes the general path below, which asks the UTF-8 encoder for the exact byte count.
         if (System.Text.Ascii.IsValid(name))
         {
             int total = name.Length + 3 + digits;
@@ -979,6 +1040,8 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
             return _UInt64DigitCount((ulong)value);
         }
 
+        // Negating long.MinValue overflows (its magnitude is 2^63, one more than long.MaxValue), so it is answered directly:
+        // "-9223372036854775808" is 1 + 19 = 20 characters.
         if (value == long.MinValue)
         {
             return 20;

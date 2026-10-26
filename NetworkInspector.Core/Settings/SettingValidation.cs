@@ -25,11 +25,16 @@ internal static class SettingValidation
     /// <returns>The problem, or <see langword="null"/> when the value is valid.</returns>
     internal static SettingProblem? Validate(IReadOnlySetting setting, SettingValue value)
     {
+        // The type is compared first so that the checks below can rely on the value holding the payload of the setting type.
         if (setting.Type != value.Type)
         {
             return new SettingProblem(SettingProblemKind.WrongType, setting.Name, $"expected {setting.Type}, got {value.Type}");
         }
 
+        // Only numeric types, enumerations, and their arrays carry constraints; Bool, String, Bytes, BoolArray, and StringArray
+        // accept every value of their type (the final null arm). Array settings apply the bounds of the setting to each
+        // element. The element delegates capture the setting and allocate per call; that is accepted because validation runs on
+        // edits, loads, and text parsing, never on the read path of a setting.
         return setting.Type switch
         {
             SettingType.F64 when value.TryGetAsF64(out double f64v) => ValidateF64(setting, f64v),
@@ -49,6 +54,8 @@ internal static class SettingValidation
     /// <summary>Checks one floating-point number: finite, then inside the bounds.</summary>
     internal static SettingProblem? ValidateF64(IReadOnlySetting setting, double v)
     {
+        // Finiteness is checked before the bounds: every comparison with NaN is false, so NaN would otherwise pass the range
+        // check and be stored (and later fail to serialize, because JSON has no NaN or infinity).
         if (!double.IsFinite(v))
         {
             return new SettingProblem(SettingProblemKind.NotFinite, setting.Name,
@@ -100,6 +107,7 @@ internal static class SettingValidation
     /// <summary>Checks that the number of an enumeration value is one of the allowed values.</summary>
     internal static SettingProblem? ValidateEnum(IReadOnlySetting setting, SettingValue value)
     {
+        // Without metadata there is no allowed set to check against; a setting created through the factories always has it.
         if (setting.EnumMetadata is null)
         {
             return null;
@@ -148,6 +156,8 @@ internal static class SettingValidation
                     (setting.MaxValue is not null && setting.MaxValue.Value.TryGetAsI64(out long iMax) ? iMax : long.MaxValue)
                         .ToString(CultureInfo.InvariantCulture));
             default:
+                // -double.MaxValue, not negative infinity: a setting never holds an infinite number, so the finite type range
+                // is the range the user can actually enter.
                 return (
                     FormatF64(setting.MinValue is not null && setting.MinValue.Value.TryGetAsF64(out double fMin) ? fMin : -double.MaxValue),
                     FormatF64(setting.MaxValue is not null && setting.MaxValue.Value.TryGetAsF64(out double fMax) ? fMax : double.MaxValue));

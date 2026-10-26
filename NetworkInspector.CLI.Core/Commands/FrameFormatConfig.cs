@@ -14,7 +14,9 @@ internal sealed class FrameFormatConfig
     private const string _FallbackFormat = "PCAPNG";
 
     /// <summary>
-    /// Spellings of the BLF <c>compression</c> option that earlier versions accepted, mapped to the names of the option.
+    /// Spellings of the BLF <c>compression</c> option that earlier versions accepted, mapped to the names of the option. Applied
+    /// to the BLF format only, so existing scripts that write <c>blf:compression=off</c> keep working while the option itself
+    /// takes the Core names. Keys are compared ignoring case.
     /// </summary>
     private static readonly FrozenDictionary<string, string> _LegacyCompression = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -59,6 +61,8 @@ internal sealed class FrameFormatConfig
     {
         ArgumentNullException.ThrowIfNull(registry);
         FormatSpec.Split(spec, out string format, out List<KeyValuePair<string, string>> pairs);
+
+        // "pcap" was always written as PCAPNG, so the old spelling stays an alias.
         if (string.Equals(format, "pcap", StringComparison.OrdinalIgnoreCase))
         {
             format = _FallbackFormat;
@@ -75,7 +79,8 @@ internal sealed class FrameFormatConfig
             throw new ArgumentException(problem);
         }
 
-        // Older spellings of the BLF compression levels keep working.
+        // Older spellings of the BLF compression levels keep working: a value found in the legacy table is replaced by the
+        // current name, every other pair is kept as typed.
         if (string.Equals(registration.Format, "BLF", StringComparison.OrdinalIgnoreCase))
         {
             pairs = [.. pairs.Select(static pair => string.Equals(pair.Key, "compression", StringComparison.OrdinalIgnoreCase)
@@ -97,7 +102,8 @@ internal sealed class FrameFormatConfig
         ArgumentNullException.ThrowIfNull(extension);
         ArgumentNullException.ThrowIfNull(registry);
 
-        // The legacy extension .pcap was always written as PCAPNG.
+        // The legacy extension .pcap was always written as PCAPNG, so it selects the PCAPNG format (whose registered extension is
+        // .pcapng).
         string wanted = string.Equals(extension, ".pcap", StringComparison.OrdinalIgnoreCase)
             ? ".pcapng"
             : extension;
@@ -110,7 +116,8 @@ internal sealed class FrameFormatConfig
             }
         }
 
-        // Unknown extension (for example ".out" or a directory stem without extension): the default format.
+        // Unknown extension (for example ".out" or a directory stem without extension): the default format. This differs from
+        // the packet formats, which have no default and refuse an unknown extension.
         if (!registry.TryGetFrameExporter(_FallbackFormat, out ExporterRegistration<IFrameListener>? fallback, out string? problem))
         {
             throw new InvalidOperationException(problem);

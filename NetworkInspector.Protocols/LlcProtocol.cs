@@ -5,10 +5,11 @@ namespace NetworkInspector.Protocols;
 /// <summary>
 /// IEEE 802.2 LLC (Logical Link Control) protocol parser with SNAP extension.
 /// Handles the sub-layer between IEEE 802.3 Ethernet and upper protocols.
-/// <para>Frame types and control field widths (per IEEE 802.2):</para>
+/// <para>Frame types and control field widths (per IEEE 802.2; the bit patterns are written with the
+/// low-order bit of the first control byte on the right, as in <c>control &amp; 0x03</c>):</para>
 /// <code>
 /// U-frame (bits 1:0 = 11): 1-byte control  → used for SNAP (UI, 0x03)
-/// S-frame (bits 1:0 = 10): 2-byte control  → supervisory (RR, RNR, REJ)
+/// S-frame (bits 1:0 = 01): 2-byte control  → supervisory (RR, RNR, REJ)
 /// I-frame (bit 0 = 0):     2-byte control  → information transfer
 /// </code>
 /// <para>Field tree structure:</para>
@@ -22,20 +23,24 @@ namespace NetworkInspector.Protocols;
 /// </code>
 /// </summary>
 /// <remarks>
-/// <para><b>Thread safety:</b> Not thread-safe; designed for single-threaded use within a
-/// protocol stack. Each <see cref="Stack"/> instance is owned by exactly one parsing thread.</para>
+/// <para><b>Thread safety:</b> <see cref="IProtocol.Parse"/> keeps no mutable state outside local variables and the
+/// field ids and dispatch cache fixed at start (the cache is only read afterwards), so it may be called
+/// concurrently on the same instance.</para>
 /// </remarks>
 [Protocol("llc", "Logical-Link Control", Description = "IEEE 802.2 LLC")]
 [RegisterAtTable(EthernetProtocol.Ieee8023TableName, Ieee8023Key)]
 public sealed partial class LlcProtocol : IProtocol
 {
-    /// <summary>Catch-all key for IEEE 802.3 frames dispatched from Ethernet.</summary>
+    /// <summary>
+    /// Key under which this protocol is registered in the Ethernet IEEE 802.3 table: a catch-all for frames whose
+    /// type/length field is a length (not an EtherType), so the payload starts with an LLC header.
+    /// </summary>
     public const ulong Ieee8023Key = 1;
 
     /// <summary>DSAP/SSAP value indicating a SNAP extension follows.</summary>
     private const byte _SnapSap = 0xAA;
 
-    /// <summary>Minimum LLC header size (DSAP + SSAP + Control).</summary>
+    /// <summary>Minimum LLC header size (DSAP + SSAP + Control with the 1-byte U-frame control field).</summary>
     private const int _MinHeaderSize = 3;
 
     /// <summary>SNAP extension size (3 bytes OUI + 2 bytes Type).</summary>
@@ -86,16 +91,19 @@ public sealed partial class LlcProtocol : IProtocol
     [ProtocolTableU64(DsapTableName, "LLC DSAP")]
     private ProtocolTableId _DsapTableId;
 
-    // Sparse dispatch cache for EtherType (SNAP) dispatch
+    // Sparse dispatch cache for EtherType (SNAP) dispatch: only keys with exactly one registered protocol. The
+    // EtherType domain is 16 bits, too big for a dense array, but few protocols are registered, so a linear scan over
+    // this short array is cheaper than a dictionary lookup per packet. Built once at start, only read afterwards.
     private (ulong Key, ProtocolId Id)[] _EtherTypeSparseCache = [];
 
     partial void _OnStartCustom(Stack stack) =>
         _EtherTypeSparseCache = stack.BuildU64SparseIdCache(_EtherTypeTableId);
 
     /// <summary>
-    /// Parses a Llc protocol unit from the supplied <paramref name="data"/> buffer,
-    /// appending decoded fields under <paramref name="parentField"/> and dispatching any
-    /// payload via the surrounding <paramref name="context"/>.
+    /// Parses an LLC header (with the optional SNAP extension) from the supplied <paramref name="data"/> buffer,
+    /// appending decoded fields under <paramref name="parentField"/> and dispatching the payload: SNAP frames by
+    /// EtherType (only for OUI 0), all others by the DSAP.
+    /// <para>Thread safety: stateless; may be called concurrently.</para>
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
     /// <param name="data">Raw protocol bytes starting at this protocol's first header byte.</param>
@@ -129,12 +137,16 @@ public sealed partial class LlcProtocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, _MinHeaderSize + 1, (ulong)data.Length);
         }
 
-        // Full control field value: 1 byte for U-frames, 2 bytes (LE) for I/S-frames.
+        // Full control field value: 1 byte for U-frames, 2 bytes (LE) for I/S-frames. Little endian is deliberate: the
+        // first control byte carries the low-order bits (frame type and N(S)), the second byte N(R) and the poll/final
+        // bit, which is not network byte order of a multi-byte integer.
         ushort controlValue = isUFrame ? control : BinaryPrimitives.ReadUInt16LittleEndian(span[2..]);
 
         // LLC header occupies 3 bytes for U-frames, 4 bytes for I/S-frames.
         int llcHeaderSize = isUFrame ? _MinHeaderSize : _MinHeaderSize + 1;
 
+        // SNAP (RFC 1042 / IEEE 802.1a) is signalled by both SAPs 0xAA and an Unnumbered Information control (0x03).
+        // An 0xAA SAP with any other control value is not SNAP and goes through the DSAP table.
         bool isSnap = dsap == _SnapSap && ssap == _SnapSap && control == 0x03;
 
         int headerSize = llcHeaderSize;
@@ -218,8 +230,13 @@ public sealed partial class LlcProtocol : IProtocol
 
     /// <summary>
     /// Dispatches to the next protocol by EtherType using the sparse cache.
-    /// Falls back to full table dispatch for unknown EtherTypes.
+    /// Falls back to full table dispatch for EtherTypes without a single cached protocol (unknown ones, or ones with
+    /// several protocols registered).
     /// </summary>
+    /// <param name="parentField">Field that receives the dispatched protocol as sibling.</param>
+    /// <param name="etherType">The SNAP protocol type.</param>
+    /// <param name="payload">The bytes after the SNAP header.</param>
+    /// <param name="context">The parse context.</param>
     private ParseResult _DispatchEtherType(
         in MutField parentField, ulong etherType, ReadOnlyMemory<byte> payload, in ParseContext context)
     {

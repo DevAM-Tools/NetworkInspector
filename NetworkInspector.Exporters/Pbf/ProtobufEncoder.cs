@@ -4,8 +4,18 @@ namespace NetworkInspector.Exporters.Pbf;
 
 /// <summary>
 /// Manual protobuf wire format encoder. Zero allocations after warm-up.
-/// Supports varint (LEB128), fixed32, fixed64, length-delimited, and zigzag sint64.
+/// Supports varint (LEB128), fixed64 (doubles), length-delimited, and zigzag sint64.
 /// Writes to <see cref="PooledBuffer"/> for zero-allocation hot path.
+/// <para>
+/// Why hand-written instead of a protobuf library: the PBF layout is encoded straight from the packet field tree into
+/// pooled buffers, per packet and per field value. A generated message class would need an object graph per packet,
+/// which is the allocation this exporter avoids. The encoder implements only the wire types the format uses
+/// (0 = varint, 1 = 64-bit, 2 = length-delimited). Field numbers must be positive and below 2^29 (the protobuf limit);
+/// they come from <see cref="PbfFieldNumbers"/> and are not validated here.
+/// </para>
+/// <para>
+/// Thread safety: stateless; safe from any thread as long as each caller uses its own <see cref="PooledBuffer"/>.
+/// </para>
 /// </summary>
 internal static class ProtobufEncoder
 {
@@ -16,6 +26,9 @@ internal static class ProtobufEncoder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void WriteVarint(ref PooledBuffer buffer, ulong value)
     {
+        // The varint is assembled in a stack buffer and appended with a single Write, so the buffer's capacity check
+        // runs once per number instead of once per byte. 7 payload bits go into each byte; the high bit (0x80) marks
+        // "more bytes follow", least-significant group first.
         Span<byte> scratch = stackalloc byte[_MaxVarintLength];
         int pos = 0;
         while (value > 0x7F)
@@ -40,7 +53,11 @@ internal static class ProtobufEncoder
         WriteVarint(ref buffer, value);
     }
 
-    /// <summary>Writes a length-delimited field (tag + length varint + data).</summary>
+    /// <summary>
+    /// Writes a length-delimited field (tag + length varint + data). Nested messages are written by encoding the
+    /// child into its own buffer first, because the length prefix must precede the content and is unknown until the
+    /// child is complete.
+    /// </summary>
     internal static void WriteLengthDelimited(ref PooledBuffer buffer, int fieldNumber, ReadOnlySpan<byte> data)
     {
         WriteTag(ref buffer, fieldNumber, 2); // wire type 2 = length-delimited
@@ -55,7 +72,11 @@ internal static class ProtobufEncoder
         WriteVarint(ref buffer, ZigZagEncode(value));
     }
 
-    /// <summary>Zigzag encodes a signed int64 for efficient variable-length encoding.</summary>
+    /// <summary>
+    /// Zigzag encodes a signed int64 for efficient variable-length encoding: 0, -1, 1, -2, 2 map to 0, 1, 2, 3, 4.
+    /// A plain two's-complement negative would always occupy 10 varint bytes; zigzag keeps small magnitudes short
+    /// regardless of sign, which matters for delta-encoded timestamps and parent node IDs of -1.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static ulong ZigZagEncode(long value) => (ulong)((value << 1) ^ (value >> 63));
 
@@ -69,6 +90,11 @@ internal static class ProtobufEncoder
         // encoded straight into the output buffer. No intermediate scratch buffer is needed, so nothing
         // outlives the exporter. GetByteCount and GetBytes apply the same replacement-fallback rules, so the
         // reserved span is always filled completely.
+        // Rejected alternative: encode into a thread-static scratch buffer and copy; that keeps a buffer alive per
+        // thread after the export ends and costs a second copy of every string. The price of this approach is a
+        // second pass over the text (count, then encode), which is cheap next to the copy.
+        // Reserve already advances Length, and the destination span is filled before any other write to the
+        // buffer, so a growth of the buffer cannot invalidate it.
         int byteCount = Encoding.UTF8.GetByteCount(value);
         WriteTag(ref buffer, fieldNumber, 2); // wire type 2 = length-delimited
         WriteVarint(ref buffer, (ulong)byteCount);
@@ -86,6 +112,8 @@ internal static class ProtobufEncoder
     internal static void WriteDouble(ref PooledBuffer buffer, int fieldNumber, double value)
     {
         WriteTag(ref buffer, fieldNumber, 1); // wire type 1 = 64-bit
+        // Protobuf fixes fixed64 as little-endian regardless of the host byte order, hence the explicit conversion
+        // (also correct on big-endian hosts).
         Span<byte> scratch = stackalloc byte[8];
         BinaryPrimitives.WriteDoubleLittleEndian(scratch, value);
         buffer.Write(scratch);

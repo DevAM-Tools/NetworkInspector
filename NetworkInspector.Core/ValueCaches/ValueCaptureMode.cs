@@ -11,11 +11,17 @@ namespace NetworkInspector.Core.ValueCaches;
 /// </summary>
 public enum ValueCaptureMode : byte
 {
-    /// <summary>Only the first occurrence is stored (default; densest).</summary>
+    /// <summary>
+    /// Only the first occurrence is stored (default; densest). The series implements this by skipping a record whose
+    /// packet id equals the packet id of the last stored row, so it relies on the writer recording packets one after
+    /// another and on "first" meaning the first occurrence delivered to the series (see the order remark above).
+    /// </summary>
     FirstOccurrence = 0,
 
     /// <summary>
-    /// Every occurrence is stored as its own row with the same packet id and timestamp.
+    /// Every occurrence is stored as its own row with the same packet id and timestamp. Rows of one packet are adjacent,
+    /// so with packets recorded in id order the packet ids stay non-decreasing and a range lookup covers all duplicates. The per-packet count is bounded by
+    /// the packet field capacity, so no extra counter is needed.
     /// </summary>
     AllOccurrences = 1,
 }

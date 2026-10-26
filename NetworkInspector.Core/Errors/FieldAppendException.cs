@@ -6,12 +6,19 @@ namespace NetworkInspector.Core.Errors;
 /// Exception thrown when a field tree mutation fails (e.g., maximum field count exceeded).
 /// <para>
 /// This is an <em>unexpected</em> failure — under normal operation, field appends always succeed.
-/// The only realistic trigger is exceeding the per-packet field limit (65 534).
+/// The only realistic trigger is exceeding the per-packet field limit (65 534). Regular appends stop one slot earlier,
+/// so that the error field describing the failure still fits into the tree.
 /// </para>
 /// <para>
 /// Caught at parse boundaries (<see cref="Packet._ParseFrameInternal"/>,
 /// <see cref="Packet.MaterializeLazyField"/>)
 /// and converted into a packet-level error string.
+/// </para>
+/// <para>
+/// Because an append failure is unexpected, it is signaled by an exception that unwinds the parser to the nearest
+/// parse boundary rather than by a result every append call site would have to check. The wrapped
+/// <see cref="ParseError"/> keeps the structured reason. The type has a private constructor and an internal factory, so
+/// only the core can raise it.
 /// </para>
 /// </summary>
 public sealed class FieldAppendException : Exception

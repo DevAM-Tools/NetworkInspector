@@ -28,7 +28,12 @@ internal sealed class FrameSlabAllocator
     /// <summary>Smallest slab size the options accept (1 KiB).</summary>
     internal const int MinSlabSize = 1024;
 
-    /// <summary>Largest slab size the options accept (16 MiB): bounds what one held frame can keep alive.</summary>
+    /// <summary>
+    /// Largest slab size the options accept (16 MiB): bounds what one held frame can keep alive. The slab size is chosen by
+    /// the code that opens a source (a <c>FrameSlabSize</c> option, default 0 = off), never read from a file, so the
+    /// range only guards against a misconfigured option. Constant range, the chosen size is configurable; opt-in, so an
+    /// untouched configuration pins no slab.
+    /// </summary>
     internal const int MaxSlabSize = 16 * 1024 * 1024;
 
     /// <summary>Frames longer than <c>SlabSize / BypassDivisor</c> bypass the slab.</summary>

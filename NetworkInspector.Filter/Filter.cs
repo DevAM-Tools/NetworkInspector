@@ -112,6 +112,8 @@ public sealed class Filter : IFilter
     /// <param name="expression">The filter expression.</param>
     /// <param name="stack">The stack to bind names against; may be <see langword="null"/> only for empty expressions.</param>
     /// <param name="options">Optional compilation inputs.</param>
+    /// <returns>The compiled filter, or the lexer, parser, bind or code-generation error (expected failures are never thrown).</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="expression"/> is <see langword="null"/>.</exception>
     public static FilterResult<Filter> Compile(
         string expression,
         IStack? stack,
@@ -370,6 +372,8 @@ public sealed class Filter : IFilter
     {
         ArgumentNullException.ThrowIfNull(packet);
 
+        // Cheap exits first, in this order: the shared always-match singleton is never touched (it is immutable), a packet
+        // without a field tree cannot be evaluated, and a poisoned filter keeps returning its sticky error.
         if (IsAlwaysMatch)
         {
             matched = true;
@@ -391,6 +395,8 @@ public sealed class Filter : IFilter
             return false;
         }
 
+        // Cached verdict before the ordering guard: re-querying an already evaluated packet is allowed on a stateful filter
+        // and must not feed the flank tracker a second time.
         MatchCache cache = _Cache!;
         if (_EnableMatchCache && cache.TryGet(packet.Id, out bool cached))
         {
@@ -399,12 +405,17 @@ public sealed class Filter : IFilter
             return true;
         }
 
+        // Stateful filters (flank) are only correct when packets arrive in ascending order, because the tracker carries
+        // state from one packet to the next. Going backwards poisons the filter until ResetState instead of returning a
+        // verdict computed from the wrong history.
         int packetId = packet.Id.Value;
         if (IsStateful && packetId < _HighestEvaluatedId)
         {
             return _Poison(FilterError.OutOfOrder(packetId, _HighestEvaluatedId), out matched, out failure);
         }
 
+        // Evaluate. The eval context is reused for every packet (no per-packet allocation); the outer finally always
+        // unbinds it so a finished evaluation does not pin the packet.
         FilterEvalContext context = _Context!;
         bool result;
         context.Bind(packet, index);
@@ -427,12 +438,15 @@ public sealed class Filter : IFilter
                     out failure);
             }
 
+            // A runtime fault recorded during the walk (for example a regex timeout) makes the verdict meaningless, so it is
+            // neither cached nor counted as evaluated; the filter is poisoned instead.
             FilterError? runtimeError = context.Error;
             if (runtimeError is not null)
             {
                 return _Poison(runtimeError, out matched, out failure);
             }
 
+            // Success: remember the verdict and advance the highest evaluated id (used by the ascending-order guard).
             if (_EnableMatchCache)
             {
                 cache.Store(packet.Id, result);
@@ -465,6 +479,8 @@ public sealed class Filter : IFilter
             return false;
         }
 
+        // Identifier values are only comparable within one stack's registry; a bitmap built from an index of another stack
+        // would select unrelated fields. Reference equality is the contract: a rebuilt but equal stack is a different stack.
         if (!ReferenceEquals(index.Stack, Stack))
         {
             candidates = null;
@@ -480,7 +496,8 @@ public sealed class Filter : IFilter
     {
         _ThrowIfNullReader(index);
 
-        // Always-match keeps no plan; stateful and never-prunable programs have none either.
+        // Always-match keeps no plan; stateful and never-prunable programs have none either. A foreign-stack index is
+        // refused for the same reason as in TryBuildCandidates. "False" means "cannot prune, evaluate the packet".
         if (_Prune is null || !ReferenceEquals(index.Stack, Stack))
         {
             isCandidate = true;
@@ -588,7 +605,9 @@ public sealed class Filter : IFilter
             return true;
         }
 
-        // Keep the caller's cache policy across rebinds (forward-only convert stays forward-only).
+        // Keep the caller's cache policy across rebinds (forward-only convert stays forward-only). Only the cache policy
+        // is carried: the regex timeout lives in the retained program (patterns are compiled at parse time), and the name
+        // callback is irrelevant because the program is not parsed again.
         FilterCompileOptions deriveOptions = new() { EnableMatchCache = _EnableMatchCache };
         FilterResult<Filter> result = _Bind(Expression, _Program!, stack, deriveOptions);
         if (result.TryGetValue(out Filter? filter))
@@ -637,6 +656,15 @@ public sealed class Filter : IFilter
 
     private static FilterResult<FilterProgram> _Parse(string expression, FilterCompileOptions? options)
     {
+        // Check the option before lexing: an out-of-range regex timeout would otherwise make the regular-expression
+        // constructor throw and be reported as an invalid pattern, blaming the user's expression for a bad option. It is
+        // rejected for every expression, with or without a matches operator, so the failure does not depend on the text.
+        TimeSpan regexTimeout = options?.RegexTimeout ?? FilterBinder.DefaultRegexTimeout;
+        if (!FilterBinder.TryValidateRegexTimeout(regexTimeout, out FilterError? timeoutFailure))
+        {
+            return FilterResult.Fail<FilterProgram>(timeoutFailure);
+        }
+
         FilterLexer lexer = new(expression);
         FilterResult<List<Token>> tokens = lexer.Tokenize();
         if (!tokens.TryGetValue(out List<Token>? tokenList))
@@ -648,7 +676,7 @@ public sealed class Filter : IFilter
             tokenList,
             expression,
             options?.OnFieldNameSpan,
-            options?.RegexTimeout ?? FilterBinder.DefaultRegexTimeout);
+            regexTimeout);
         return parser.Parse();
     }
 
@@ -667,6 +695,7 @@ public sealed class Filter : IFilter
             return FilterResult.Fail<Filter>(compiled.Error);
         }
 
+        // Presence analysis uses the same resolver as code generation, so both see identical symbols.
         DependencyNode dependencies = DependencyAnalyzer.Analyze(program, resolver);
 
         // A stateful program needs the cache to keep the documented "re-query never replays the tracker"
@@ -683,6 +712,7 @@ public sealed class Filter : IFilter
             enableMatchCache);
     }
 
+    /// <summary>Whether any node of the tree is a <c>matches</c> predicate, including a flank <c>when:</c> gate and scope bodies.</summary>
     private static bool _ContainsMatches(FilterNode node) => node switch
     {
         StringPredicateNode text => text.Op == StringOp.Matches,
@@ -693,6 +723,10 @@ public sealed class Filter : IFilter
         _ => false,
     };
 
+    /// <summary>
+    /// Stores the sticky failure and fills the <c>TryIsMatch</c> outputs. Cleared only by <see cref="ResetState"/>; the
+    /// cache keeps its earlier verdicts, which were produced before the fault.
+    /// </summary>
     private bool _Poison(FilterError reason, out bool matched, out FilterError? failure)
     {
         PoisonError = reason;

@@ -17,6 +17,24 @@ namespace NetworkInspector.Core.Fields;
 /// More than 16 ids build a bitset whose word count is <c>(stack.FieldCount + 63) / 64</c>, so
 /// the allocation is bounded by the stack the caller already built, not by a raw field id.
 /// </para>
+/// <para>
+/// <b>Why three shapes:</b> <see cref="Accepts"/> runs on the parse path for every produced field, so the common cases avoid any
+/// lookup structure. One id is a single integer compare. A handful of ids is a linear scan over a small contiguous array (no hashing,
+/// no extra indirection). Only a large set pays for a bitset, which makes the test one shift and one mask. The value cache
+/// uses the same "scan up to 16, otherwise bitset" cut-off for its recorded field ids. Watches are built once and reused
+/// because the factories allocate (the id copy and the bitset); testing a field against a watch allocates nothing.
+/// </para>
+/// <para>
+/// <b>Deferred groups:</b> a watch also decides whether a deferred (lazily populated) container is expanded during the parse
+/// (internal <c>Expands</c>). Expanding costs parse time, so only a watch that can actually receive a child of the container
+/// triggers it; <see cref="None"/> never does and <see cref="All"/> always does.
+/// </para>
+/// <para>
+/// <b>Trust boundary:</b> field ids are validated against the issuing stack when the watch is built (callers pass ids from
+/// their own code or from user input such as a filter expression). <see cref="Accepts"/> still bounds-checks the bitset word,
+/// because a watch tested with an id from a stack with more fields must answer "no" instead of reading out of range. A watch
+/// is only meaningful for the stack it was built from; the same ids on another stack name other fields.
+/// </para>
 /// <para><b>Thread-safety:</b> immutable after construction. Safe to share across threads.</para>
 /// </remarks>
 public readonly struct FieldWatch : IEquatable<FieldWatch>
@@ -29,6 +47,7 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     /// </summary>
     public const int SpanLimit = 16;
 
+    /// <summary>Representation of a watch. Chosen once by the factory so <see cref="Accepts"/> only switches on it.</summary>
     private enum WatchKind : byte
     {
         None = 0,
@@ -42,6 +61,10 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
 
     #region Fields
 
+    // Only the members that belong to _Kind are populated; the default struct is the None watch (kind 0, all null).
+    // _One: the id of a One watch. _Ids: the id copy for Span and Bitset (Bitset keeps it for Equals and Expands).
+    // _Bits: the membership bitset of a Bitset watch, one bit per field id. The arrays are never mutated after
+    // construction, which is what makes sharing a watch across threads safe.
     private readonly WatchKind _Kind;
     private readonly int _One;
     private readonly FieldId[]? _Ids;
@@ -59,10 +82,10 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
         _Bits = bits;
     }
 
-    /// <summary>Accepts nothing. Does not expand a deferred group.</summary>
+    /// <summary>Accepts nothing. Does not expand a deferred group. This is <c>default(FieldWatch)</c>.</summary>
     public static FieldWatch None => default;
 
-    /// <summary>Accepts every produced field and expands every deferred group.</summary>
+    /// <summary>Accepts every produced field and expands every deferred group. Expanding every group is the expensive choice.</summary>
     public static FieldWatch All { get; } = new(WatchKind.All, 0, null, null);
 
     /// <summary>Accepts one field the stack assigned.</summary>
@@ -85,16 +108,22 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     public static FieldWatch Only(IStack stack, params ReadOnlySpan<FieldId> fieldIds)
     {
         ArgumentNullException.ThrowIfNull(stack);
+
+        // An empty list is rejected rather than treated as None: an empty watch would silently deliver nothing, which
+        // hides a caller bug. Callers who want "nothing" use FieldWatch.None.
         if (fieldIds.Length == 0)
         {
             throw new ArgumentException("A field watch needs at least one field id.", nameof(fieldIds));
         }
 
+        // One id takes the allocation-free One shape.
         if (fieldIds.Length == 1)
         {
             return Only(stack, fieldIds[0]);
         }
 
+        // Validate every id against the stack while copying. The input is a span the caller may reuse or mutate after
+        // this call, so the watch keeps its own copy; the watch must never alias caller memory.
         FieldId[] copy = new FieldId[fieldIds.Length];
         for (int i = 0; i < fieldIds.Length; i++)
         {
@@ -102,11 +131,15 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
             copy[i] = fieldIds[i];
         }
 
+        // Small set: scan the copy. Duplicate ids are harmless (they only repeat a comparison).
         if (fieldIds.Length <= SpanLimit)
         {
             return new FieldWatch(WatchKind.Span, 0, copy, null);
         }
 
+        // Large set: one bit per field id of the stack, rounded up to whole 64-bit words. The size depends on
+        // stack.FieldCount (a trusted, already-built stack), never on the largest requested id, so a hostile id cannot
+        // force a huge allocation: ids at or above FieldCount were rejected above.
         int words = (stack.FieldCount + 63) / 64;
         ulong[] bits = new ulong[words];
         for (int i = 0; i < copy.Length; i++)
@@ -132,10 +165,15 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
 
     #region Public API
 
-    /// <summary>Whether a produced field with <paramref name="fieldId"/> is delivered.</summary>
+    /// <summary>
+    /// Whether a produced field with <paramref name="fieldId"/> is delivered. Never throws and never allocates; an id outside
+    /// the watched set (including an invalid id) simply answers <see langword="false"/>.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Accepts(FieldId fieldId)
     {
+        // Parse-path check, called once per produced field per observer: inlined, switch on the pre-chosen shape,
+        // no virtual call, no delegate, no allocation.
         int value = fieldId.Value;
         switch (_Kind)
         {
@@ -144,7 +182,7 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
             case WatchKind.One:
                 return value == _One;
             case WatchKind.Span:
-                FieldId[] ids = _Ids!;
+                FieldId[] ids = _Ids!; // Invariant: the factory sets _Ids for kind Span (at most SpanLimit entries).
                 for (int i = 0; i < ids.Length; i++)
                 {
                     if (ids[i].Value == value)
@@ -155,20 +193,28 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
 
                 return false;
             case WatchKind.Bitset:
-                ulong[] bits = _Bits!;
+                ulong[] bits = _Bits!; // Invariant: the factory sets _Bits for kind Bitset.
                 int word = value >> 6;
+
+                // Single unsigned compare rejects both a negative word (FieldId.Invalid is -1, and -1 >> 6 stays negative)
+                // and an id beyond the stack's field count at the time of building (more words than were allocated).
                 if ((uint)word >= (uint)bits.Length)
                 {
                     return false;
                 }
 
+                // Bit position within the word is the low six bits of the id (64 bits per word).
                 return (bits[word] & (1UL << (value & 63))) != 0;
             default:
                 return false;
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Two watches are equal when they have the same shape and the same ids in the same order. A watch built from
+    /// the ids (a, b) therefore differs from one built from (b, a) although they accept the same fields. The bitset is
+    /// derived from the ids and is not compared.
+    /// </summary>
     public bool Equals(FieldWatch other)
     {
         if (_Kind != other._Kind || _One != other._One)
@@ -202,7 +248,7 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     /// <inheritdoc />
     public override bool Equals(object? obj) => obj is FieldWatch other && Equals(other);
 
-    /// <inheritdoc />
+    /// <summary>Hash code consistent with <see cref="Equals(FieldWatch)"/>: shape, single id, and the ordered id list.</summary>
     public override int GetHashCode()
     {
         HashCode hash = new();
@@ -233,8 +279,19 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     /// <summary>
     /// Whether a deferred container should expand because this watch names it or a field in its index group.
     /// </summary>
+    /// <remarks>
+    /// Called by the packet when a deferred container is registered during a parse, once per container per observer.
+    /// Expanding runs the container's populator immediately so a watched child is reported during this parse instead of on a
+    /// later walk (and, on a skip parse where no tree is kept, so the child is not lost). A watched field expands the container
+    /// only when both belong to the same index group: for example naming <c>tcp.seq</c> expands the TCP group's container,
+    /// while naming <c>tcp.seq_raw</c>, which is not in that index group, does not.
+    /// This keeps the populator cost away from parses whose watch does not name the container or a member of its group.
+    /// </remarks>
+    /// <param name="stack">The stack that owns the field ids; used for the index-group lookup.</param>
+    /// <param name="containerFieldId">Field id of the deferred container being registered.</param>
     internal bool Expands(Stack stack, FieldId containerFieldId)
     {
+        // The two constant shapes decide without touching the stack.
         if (_Kind == WatchKind.All)
         {
             return true;
@@ -245,11 +302,14 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
             return false;
         }
 
+        // The container itself is watched.
         if (Accepts(containerFieldId))
         {
             return true;
         }
 
+        // Otherwise expand only if a watched field shares the container's index group. A container without a group
+        // cannot hold a watched child that is discoverable this way.
         IndexGroupId group = stack.GetFieldIndexGroup(containerFieldId);
         if (!group.IsValid)
         {
@@ -261,7 +321,7 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
             return stack.GetFieldIndexGroup(new FieldId(_One)) == group;
         }
 
-        FieldId[] ids = _Ids!;
+        FieldId[] ids = _Ids!; // Invariant: the only kinds left here are Span and Bitset, and both keep their id copy.
         for (int i = 0; i < ids.Length; i++)
         {
             if (stack.GetFieldIndexGroup(ids[i]) == group)
@@ -273,8 +333,12 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
         return false;
     }
 
+    /// <summary>Throws <see cref="ArgumentException"/> unless <paramref name="fieldId"/> is a valid id that <paramref name="stack"/> assigned.</summary>
+    /// <exception cref="ArgumentException">The id is the invalid sentinel or is not below <c>stack.FieldCount</c>.</exception>
     private static void _Reject(IStack stack, FieldId fieldId)
     {
+        // Ids are issued densely from 0, so "assigned by this stack" is exactly "valid and below FieldCount". This also
+        // guarantees the bitset index computed later stays inside the stack-sized allocation.
         if (!fieldId.IsValid || fieldId.Value >= stack.FieldCount)
         {
             throw new ArgumentException(

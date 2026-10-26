@@ -2,7 +2,10 @@
 
 namespace NetworkInspector.Core.Errors;
 
-/// <summary>Discriminant for the kind of parse error.</summary>
+/// <summary>
+/// Discriminant for the kind of parse error. The <see cref="byte"/> underlying type keeps
+/// <see cref="ParseError.Kind"/> to one byte inside the compact <see cref="ParseError"/> struct.
+/// </summary>
 public enum ParseErrorKind : byte
 {
     #region Enum Values
