@@ -285,6 +285,21 @@ internal struct FieldBody
         }
     }
 
+    /// <summary>
+    /// Whether a populator of this field is still to run <i>or is running right now</i> on some thread. This is the guard
+    /// of every reader that is about to read the child list with <c>materialize: true</c>: such a reader must enter
+    /// <see cref="Packet.MaterializeLazyField"/> also while another thread is populating, because that is where it waits
+    /// for the populator to finish. Rejected: guarding with <see cref="NeedsMaterialization"/> (false while another thread
+    /// populates), which let a second reader skip the wait and read a child list the first thread had not finished
+    /// (found as a rare missing-children failure of the eight-thread lazy-growth test). Residual risk: the wait is a spin,
+    /// bounded by the length of one populator; a populator never waits (see <see cref="Packet.MaterializeLazyField"/>).
+    /// </summary>
+    internal bool IsLazyPending
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => ReadLazyIndexVolatile() != 0;
+    }
+
     /// <summary>Volatile read of the raw lazy-index word (includes materializing marker).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ushort ReadLazyIndexVolatile() => (ushort)_LazyIndex;

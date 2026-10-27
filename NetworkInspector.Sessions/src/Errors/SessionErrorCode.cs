@@ -51,10 +51,10 @@ public enum SessionErrorCode
     /// <summary>
     /// A mapped frame could not be re-read (<see cref="IRandomAccessFrameSource.FrameById"/>
     /// returned <see langword="null"/>, the mapping slot is missing, or the source is not
-    /// random-access). Restart and ValueCache PullFill fail closed (they throw a
-    /// <see cref="SessionException"/>) instead of compressing PacketIds or skipping rows, because ids must stay
-    /// dense and aligned with the packet-to-frame mapping. Packet and frame reads report it as a
-    /// <see cref="SessionFailure"/>.
+    /// random-access). A restart (which then leaves the session <see cref="SessionPhase.Faulted"/> and reports it as a
+    /// <see cref="SessionFailure"/>) and ValueCache PullFill (which throws a <see cref="SessionException"/>) fail closed
+    /// instead of compressing PacketIds or skipping rows, because ids must stay dense and aligned with the packet-to-frame
+    /// mapping. Packet and frame reads report it as a <see cref="SessionFailure"/>.
     /// </summary>
     FrameUnavailable,
 
@@ -112,6 +112,55 @@ public enum SessionErrorCode
     /// that are not identifiers are <see cref="ValueCacheInvalidFieldName"/>.
     /// </summary>
     ValueCacheInvalidRequest,
+
+    /// <summary>
+    /// A stack-bound job was refused because a restart is between its job check and its end: a job added then would extend
+    /// the restart's wait or run on into the swap. Reported as a <see cref="SessionFailure"/> by <c>TryAddJob</c>; an
+    /// <see cref="Jobs.JobStackBinding.Independent"/> job is accepted. Retry after the restart returned.
+    /// </summary>
+    RestartPending,
+
+    /// <summary>
+    /// A restart was refused because it was called from the thread of a running stack-bound job: under
+    /// <see cref="RestartJobPolicy.WaitThenCancel"/> it would wait for itself, under <see cref="RestartJobPolicy.CancelNow"/> it
+    /// would cancel itself. Use an <see cref="Jobs.JobStackBinding.Independent"/> job or a worker thread. Reported as a
+    /// <see cref="SessionFailure"/> by <c>TryRestart</c>; nothing changed.
+    /// </summary>
+    RestartFromJob,
+
+    /// <summary>
+    /// A restart was refused under <see cref="RestartJobPolicy.Refuse"/> because stack-bound jobs are running; the message names
+    /// them. Reported as a <see cref="SessionFailure"/> by <c>TryRestart</c>; nothing changed.
+    /// </summary>
+    JobsRunning,
+
+    /// <summary>
+    /// The session is <see cref="SessionPhase.Faulted"/>: a restart failed after the stack was swapped. Every <c>Try*</c> call
+    /// except <c>TryRestart</c> and <c>Shutdown</c> and every packet read reports this code; the message carries the original
+    /// fault (<see cref="ISessionReader.Fault"/>). Reported as a <see cref="SessionFailure"/>.
+    /// </summary>
+    SessionFaulted,
+
+    /// <summary>
+    /// Parse options were built for another stack generation than the one the session reads with now (see
+    /// <see cref="ISessionReader.TryGetPacket(PacketId, in ParseOptions, StackView, Packet?, out Packet?, out SessionFailure?)"/>);
+    /// the message names both generations. Rebuild the options on <see cref="ISessionReader.CurrentStack"/>. Reported as a
+    /// <see cref="SessionFailure"/>.
+    /// </summary>
+    OptionsStackMismatch,
+
+    /// <summary>
+    /// A restart was refused because another restart is running. Reported as a <see cref="SessionFailure"/> by
+    /// <c>TryRestart</c> (two UI commands can race, so it is an expected outcome, not an exception).
+    /// </summary>
+    RestartInProgress,
+
+    /// <summary>
+    /// A restart option is outside its documented range (<see cref="RestartOptions.JobWaitTimeout"/>: 1 s .. 1 h); the message
+    /// names the option, the value and the range. Reported as a <see cref="SessionFailure"/> by <c>TryRestart</c>; nothing
+    /// changed.
+    /// </summary>
+    RestartOptionOutOfRange,
 
     #endregion
 }

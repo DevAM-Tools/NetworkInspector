@@ -21,6 +21,7 @@ internal sealed class ProbeProtocol : IProtocol
     private FieldId _ContainerFieldId;
     private FieldId _ChildFieldId;
     private volatile Action? _ParseHook;
+    private volatile Packet? _LastParsedPacket;
     private int _ShutdownCount;
     private int _ActiveParses;
     private int _ParseCount;
@@ -47,6 +48,9 @@ internal sealed class ProbeProtocol : IProtocol
 
     /// <summary>How many parses entered <see cref="Parse"/>.</summary>
     internal int ParseCount => Volatile.Read(ref _ParseCount);
+
+    /// <summary>The packet of the most recent parse that entered <see cref="Parse"/>; the ingest recycle for a source frame.</summary>
+    internal Packet? LastParsedPacket => _LastParsedPacket;
 
     /// <summary>Field id of the eagerly appended value.</summary>
     internal FieldId EagerFieldId => _EagerFieldId;
@@ -75,6 +79,7 @@ internal sealed class ProbeProtocol : IProtocol
     /// <inheritdoc/>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        _LastParsedPacket = parentField.Packet;
         _ = Interlocked.Increment(ref _ActiveParses);
         _ = Interlocked.Increment(ref _ParseCount);
         try

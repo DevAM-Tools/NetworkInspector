@@ -272,8 +272,16 @@ internal sealed class IPv6AddressTests
     public async Task FormatTemp()
     {
         IPv6Address ip = new(0, 1);
-        TempString temp = ip.FormatTemp();
-        await Assert.That(temp.ToString()).IsEqualTo("::1");
+
+        // The TempString owns the thread-static char buffer until it is disposed; read the text before any await and
+        // dispose on this thread, otherwise the buffer stays locked for every later test on this pool thread.
+        string formatted;
+        using (TempString temp = ip.FormatTemp())
+        {
+            formatted = temp.ToString();
+        }
+
+        await Assert.That(formatted).IsEqualTo("::1");
     }
 
     [Test]

@@ -101,7 +101,7 @@ internal sealed class NotifyFlagsTests
         slot.Start();
         WaitHelper.WaitUntil(() => listener.PhaseChanged >= 1 && listener.JobsChanged >= 1
             && listener.SourcesChanged >= 1 && listener.AllSourcesCompleted >= 1);
-        slot.Cancel();
+        slot.Cancel(JobEndReason.UserCancelled);
         slot.Join();
 
         int expected = (int)(NotifyFlags.SourceAdded | NotifyFlags.AllSourcesCompleted | NotifyFlags.JobAdded | NotifyFlags.PhaseChanged);
@@ -128,7 +128,7 @@ internal sealed class NotifyFlagsTests
         _RunProducers(8, 2_000, _ => slot.Notify(NotifyFlags.JobStatusChanged));
         _RunProducers(8, 1, _ => slot.Notify(NotifyFlags.SourceCompleted));
         WaitHelper.WaitUntil(() => listener.SourcesChanged >= 1);
-        slot.Cancel();
+        slot.Cancel(JobEndReason.UserCancelled);
         slot.Join();
 
         await Assert.That(listener.SourcesChanged).IsGreaterThanOrEqualTo(1);

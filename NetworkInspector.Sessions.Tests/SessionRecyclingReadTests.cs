@@ -202,6 +202,81 @@ internal sealed class SessionRecyclingReadTests
         await Assert.That(listener2.Misses).IsEqualTo(0);
     }
 
+    /// <summary>
+    /// A restart replaces the stack but keeps the frame registry, so a buffer of recycled packets of the old stack is rebound
+    /// to the new one: the same instances come back, parsed on the new stack. The steady-state read after the restart costs
+    /// what it cost before it (what is left is the parse itself); a fresh packet per slot would add the packet and its field
+    /// storage to every slot.
+    /// </summary>
+    [Test]
+    public async Task ABufferReadBeforeARestartComesBackAsTheSameInstancesOnTheNewStackAtTheSameAllocationCost()
+    {
+        const int slots = 64;
+        using RestartRig rig = new(frameCount: slots);
+        Packet?[] buffer = new Packet?[slots];
+        int firstRead = rig.Session.ReadPackets(0, buffer);
+        Packet?[] originals = new Packet?[slots];
+        buffer.CopyTo(originals, 0);
+
+        // Steady state before the restart: the second recycled read.
+        _ = rig.Session.ReadPackets(0, buffer);
+        long start = GC.GetAllocatedBytesForCurrentThread();
+        _ = rig.Session.ReadPackets(0, buffer);
+        long steadyBefore = GC.GetAllocatedBytesForCurrentThread() - start;
+
+        Stack newStack = rig.RestartOntoStandard();
+        _ = rig.Session.ReadPackets(0, buffer); // The rebind read: warms up the new stack's parse paths.
+        start = GC.GetAllocatedBytesForCurrentThread();
+        int secondRead = rig.Session.ReadPackets(0, buffer);
+        long steadyAfter = GC.GetAllocatedBytesForCurrentThread() - start;
+
+        await Assert.That(firstRead).IsEqualTo(slots);
+        await Assert.That(secondRead).IsEqualTo(slots);
+        for (int i = 0; i < slots; i++)
+        {
+            await Assert.That(ReferenceEquals(buffer[i], originals[i])).IsTrue();
+            await Assert.That(ReferenceEquals(buffer[i]!.Stack, newStack)).IsTrue();
+        }
+
+        // 16 B per slot absorb tiering and cache effects; a fresh packet per slot is at least 400 B.
+        await Assert.That(steadyAfter).IsLessThanOrEqualTo(steadyBefore + (slots * 16L));
+    }
+
+    /// <summary>
+    /// The source thread keeps one recycle packet across frames. A restart replaces the stack under it; the next frame it
+    /// ingests must be parsed into that same instance, rebound to the new stack.
+    /// </summary>
+    [Test]
+    public async Task TheIngestRecyclePacketOfASourceThreadSurvivesARestart()
+    {
+        using Stack initial = TestHarness.CreateStack();
+        using GatedRandomAccessSource source = new(freeFrames: 4, totalFrames: 6);
+        using Session session = new(initial);
+        _ = session.TryAddFrameSource(source, out _, out _);
+        _ = session.TryStart(out _);
+        WaitHelper.WaitUntil(() => session.PacketCount == 4 && source.Waiting.IsSet);
+
+        // First restart onto a probe; the released frame is the first ingest after it and records the recycle instance.
+        ProbeProtocol? first = null;
+        _ = session.RestartOrThrow(registry => ProbeStack.Create(registry, out first));
+        source.ReleaseNextFrame();
+        WaitHelper.WaitUntil(() => session.PacketCount == 5);
+        Packet? beforeSecondRestart = first!.LastParsedPacket; // Non-null: the factory ran.
+
+        // Second restart onto another probe: the same instance must arrive there, now bound to the second stack.
+        ProbeProtocol? second = null;
+        Stack? secondStack = null;
+        _ = session.RestartOrThrow(registry => secondStack = ProbeStack.Create(registry, out second));
+        source.ReleaseNextFrame();
+        WaitHelper.WaitUntil(() => session.PacketCount == 6);
+        Packet? afterSecondRestart = second!.LastParsedPacket; // Non-null: the factory ran.
+        session.Shutdown(TimeSpan.FromSeconds(30));
+
+        await Assert.That(beforeSecondRestart).IsNotNull();
+        await Assert.That(ReferenceEquals(beforeSecondRestart, afterSecondRestart)).IsTrue();
+        await Assert.That(ReferenceEquals(afterSecondRestart!.Stack, secondStack)).IsTrue();
+    }
+
     private static List<int> _ReadFieldCounts(Session session, int frameCount, ref Packet? recycle)
     {
         List<int> counts = [];

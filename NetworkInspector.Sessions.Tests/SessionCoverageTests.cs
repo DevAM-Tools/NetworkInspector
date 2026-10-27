@@ -121,7 +121,7 @@ internal sealed class SessionCoverageTests
 
         try
         {
-            session.Restart(_ =>
+            session.RestartOrThrow(_ =>
             {
                 SettingsManager settings = new();
                 try

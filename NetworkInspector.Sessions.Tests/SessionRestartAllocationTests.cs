@@ -21,7 +21,7 @@ internal sealed class SessionRestartAllocationTests
         WaitHelper.WaitUntil(() => session.PacketCount == frameCount && session.Phase == SessionPhase.Stopped);
 
         long before = GC.GetAllocatedBytesForCurrentThread();
-        session.Restart(registry => TestHarness.CreateStack(registry));
+        session.RestartOrThrow(registry => TestHarness.CreateStack(registry));
         long after = GC.GetAllocatedBytesForCurrentThread();
         return after - before;
     }

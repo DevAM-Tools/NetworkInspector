@@ -72,7 +72,7 @@ internal sealed class PacketExitPointTests
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
         Packet packet = new(new PacketId(1), stack, frame);
 
-        RecycleError? err = packet.PrepareForReuse(new PacketId(2), frame, FieldTreeMode.Build);
+        RecycleError? err = packet.PrepareForReuse(new PacketId(2), stack, frame, FieldTreeMode.Build);
         await Assert.That(err).IsEqualTo(RecycleError.NotFinalized);
     }
 
@@ -100,7 +100,7 @@ internal sealed class PacketExitPointTests
         }
         Frame frame2 = _MakeFrame(otherStack, FrameBuilders.GenerateStaticUdpFrame(64), 2);
 
-        RecycleError? err = packet.PrepareForReuse(new PacketId(2), frame2, FieldTreeMode.Build);
+        RecycleError? err = packet.PrepareForReuse(new PacketId(2), stack, frame2, FieldTreeMode.Build);
         await Assert.That(err).IsEqualTo(RecycleError.RegistryMismatch);
     }
 

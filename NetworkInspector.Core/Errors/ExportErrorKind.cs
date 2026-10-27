@@ -27,5 +27,13 @@ public enum ExportErrorKind
     /// <summary>Other recoverable error.</summary>
     Other,
 
+    /// <summary>
+    /// A packet was parsed on another protocol stack than the one the export's catalog was built from (a session restart
+    /// replaced the stack mid-export). A catalog exporter (PBF columnar, Parquet, DuckDB) refuses the packet instead of writing
+    /// field ids that name other fields in its catalog; the export stops and the earlier packets stay a valid dataset. Start a
+    /// new export on the new stack. Appended after the earlier members so their numbers stay stable.
+    /// </summary>
+    StackMismatch,
+
     #endregion
 }

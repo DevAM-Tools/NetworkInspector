@@ -105,7 +105,7 @@ internal sealed class SlotLifecycleTests
             _WaitUntilBlocked(listener.SlotThread!);
 
             slot.Notify(NotifyFlags.ShuttingDown);
-            slot.Cancel();
+            slot.Cancel(JobEndReason.UserCancelled);
             slot.Join();
 
             lost += 1 - listener.ShuttingDownCount;
@@ -150,7 +150,7 @@ internal sealed class SlotLifecycleTests
             _WaitUntilBlocked(listener.SlotThread!);
 
             slot.Notify(NotifyFlags.ShuttingDown);
-            slot.Cancel();
+            slot.Cancel(JobEndReason.UserCancelled);
             slot.Join();
 
             lost += 1 - listener.ShuttingDownCount;
@@ -176,7 +176,7 @@ internal sealed class SlotLifecycleTests
         await Assert.That(listener.JobsChanged.Wait(_Timeout)).IsTrue();
 
         slot.Notify(NotifyFlags.ShuttingDown);
-        slot.Cancel();
+        slot.Cancel(JobEndReason.UserCancelled);
         hold.Set();
         slot.Join();
 
@@ -270,7 +270,7 @@ internal sealed class SlotLifecycleTests
         Exception? thrown = null;
         try
         {
-            slot.Cancel();
+            slot.Cancel(JobEndReason.UserCancelled);
         }
         catch (Exception ex)
         {

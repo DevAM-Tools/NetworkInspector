@@ -21,7 +21,9 @@ namespace NetworkInspector.Core;
 /// scans, profiling, per-listener re-parsing), use the <c>TryParse(Packet recycle, …)</c>
 /// overloads to reuse an existing, sealed Packet object instead of allocating a new one. The
 /// internal slab storage is cleared and reused in place, eliminating the heap allocation and its
-/// associated GC pressure entirely. The <see cref="PrepareForReuse"/> method performs this reset.
+/// associated GC pressure entirely. The <see cref="PrepareForReuse"/> method performs this reset. The recycle packet may
+/// belong to another stack of the same <see cref="FrameInterfaceRegistry"/> (a restart replaces the stack but keeps the
+/// registry): it is rebound to the stack of the new parse, which saves one allocation per buffer slot per restart.
 /// A recycle target belongs exclusively to the thread that passes it in — never recycle a packet
 /// another thread might still be reading. Holding a <see cref="Field"/> across
 /// <c>TryParse(recycle)</c> is unsupported; <see cref="Field"/> storage indexes refer to
@@ -79,11 +81,21 @@ public sealed class Packet
     private const int _LazyPopulatorSlabCapacity = 512;
 
     // Id, Timestamp, Frame and FrameSourceId use private set to support PrepareForReuse().
-    // Stack is get-only: recycling requires the same stack (validated in PrepareForReuse).
+    // Stack is rebound only by PrepareForReuse, and only onto a stack of the same frame registry (see there).
     // Per-thread bump allocator: multiple packets share a single backing array.
     // When a slab is full, a new one is created; the old stays alive via consumer references.
     [ThreadStatic]
     private static SlabAllocator<LazyPopulator>? _LazyPopulatorSlab;
+
+    // How many lazy populators the current thread is executing right now (nesting counts). A thread inside a populator never
+    // waits for another lazy field that is being populated: the field in progress may be the one it is populating itself
+    // (post-Seal a populator that reads its own container would spin for ever), and two populators waiting for each other's
+    // field would deadlock. Such a read sees the children linked so far, as it did before readers waited at all. Thread-static
+    // because the answer is about the calling thread; read only on the rare "someone else is populating" path, written once
+    // per populator call. Rejected: a thread id in the field body (a layout change on the hottest struct for a rare case) and
+    // a try/finally-free counter (an exception in a populator would leave the thread "inside" for good).
+    [ThreadStatic]
+    private static int _PopulatorDepth;
 
     // Field slots: embedded struct, so a field access needs no extra object hop. Build mode only; a Skip-only
     // packet never initializes it.
@@ -195,19 +207,28 @@ public sealed class Packet
     /// must be in progress. Call from a single thread only.
     /// </para>
     /// <para>
-    /// The <see cref="Stack"/> is not a parameter: a recycled packet always belongs to the
-    /// same stack as its previous parse. Passing a frame from a different stack's registry
-    /// is detected via <see cref="RecycleError.RegistryMismatch"/>.
+    /// <b>Rebinding to another stack:</b> the packet is bound to <paramref name="stack"/>, which may differ from its current
+    /// <see cref="Stack"/> when both share the same <see cref="FrameInterfaceRegistry"/>. A session restart replaces the stack
+    /// but keeps the registry, and a buffer of recycled packets would otherwise cost one allocation per slot per restart. This
+    /// is safe because everything in a packet that is specific to a stack is reset here anyway: the field slots (their
+    /// <see cref="FieldId"/>s name fields of the old stack), the root slot (re-seeded with the new stack's root id), the lazy
+    /// populators (closures over the old protocol instances), the additional buffers, the first-protocol override and the
+    /// active value cache. What stays is the field storage layout (chunks of <c>FieldBody</c>), which is stack-independent.
+    /// A stack of another registry is refused (<see cref="RecycleError.StackMismatch"/>): its interface and source ids would
+    /// not match the frame. A refused call leaves the packet exactly as it was.
     /// </para>
     /// </summary>
     /// <param name="id">New packet identifier.</param>
-    /// <param name="frame">New frame to parse. Must share the same <see cref="FrameInterfaceRegistry"/> as this packet's stack.</param>
+    /// <param name="stack">
+    /// The stack of the next parse; must use the same <see cref="FrameInterfaceRegistry"/> as the packet's current stack.
+    /// </param>
+    /// <param name="frame">New frame to parse. Must share the <see cref="FrameInterfaceRegistry"/> of <paramref name="stack"/>.</param>
     /// <param name="fieldTree">Whether the next parse writes FieldBodies. Skip leaves the slab unused.</param>
     /// <returns>
     /// <see langword="null"/> on success; a <see cref="RecycleError"/> value when a
-    /// precondition is violated (not finalized, materializer active, or registry mismatch).
+    /// precondition is violated (not finalized, materializer active, registry mismatch, or a stack of another registry).
     /// </returns>
-    internal RecycleError? PrepareForReuse(PacketId id, Frame frame, FieldTreeMode fieldTree)
+    internal RecycleError? PrepareForReuse(PacketId id, Stack stack, Frame frame, FieldTreeMode fieldTree)
     {
         // Exclusive recycle vs concurrent MaterializeAll: take the gate first so a materializer
         // that observes the gate cannot claim a field while Array.Clear runs.
@@ -239,11 +260,35 @@ public sealed class Packet
             return err;
         }
 
-        // Validate registry consistency (same check as the constructor).
-        if (!ReferenceEquals(frame.Registry, Stack.FrameInterfaceRegistry))
+        // Registry checks against the NEW stack, before anything is reset: a refused rebind leaves the packet exactly as it
+        // was (same id, same stack, same fields). The common case, the packet's own stack (every ingest and read loop of a
+        // session between two restarts), costs one reference compare and writes nothing: the registry comparison and the
+        // rebind below are only reached when the stack really changed.
+        bool rebind = !ReferenceEquals(stack, Stack);
+        if (rebind && !ReferenceEquals(stack.FrameInterfaceRegistry, Stack.FrameInterfaceRegistry))
+        {
+            // A stack of another registry cannot be adopted: its interface and source ids would not match the frame.
+            _RecycleGate = 0;
+            return RecycleError.StackMismatch;
+        }
+
+        // Then the frame against that stack (same check as the constructor).
+        if (!ReferenceEquals(frame.Registry, stack.FrameInterfaceRegistry))
         {
             _RecycleGate = 0;
             return RecycleError.RegistryMismatch;
+        }
+
+        // Rebind BEFORE the first use of Stack below (RootFieldId for slot 0, FrameInterfaceRegistry for the source id): slot 0
+        // must carry the new stack's root id, and every Stack read from here on is by inspection the new stack. An old stack
+        // read after this line would put the old root field id into slot 0 and show the old field names in the tree.
+        // Rejected: leaving Stack alone and allocating a fresh packet in the session (one allocation per slot per restart), and
+        // storing the stack unconditionally (a reference store costs a GC write barrier on every recycled parse for no change).
+        // Residual risk: a stack-specific cache added to Packet later must be reset above, or a rebound packet would carry the
+        // old stack's state; the field layout (chunks of FieldBody) is the only thing deliberately kept.
+        if (rebind)
+        {
+            Stack = stack;
         }
 
         // FieldTreeMode is validated by TryParse before this method; constructor still throws.
@@ -325,8 +370,12 @@ public sealed class Packet
     /// <summary>Packet timestamp.</summary>
     public Timestamp Timestamp { get; private set; }
 
-    /// <summary>The protocol stack that owns this packet.</summary>
-    public Stack Stack { get; }
+    /// <summary>
+    /// The protocol stack that owns this packet. Rebound by a recycling parse onto a stack of the same frame registry (a
+    /// restart of a session replaces the stack); never changes while the packet is read, because a recycle needs exclusive
+    /// access to the packet.
+    /// </summary>
+    public Stack Stack { get; private set; }
 
     /// <summary>The captured frame.</summary>
     public Frame Frame { get; private set; }
@@ -980,7 +1029,10 @@ public sealed class Packet
     /// <b>Post-Seal (concurrent):</b> Counts the materializer in
     /// <c>_ActiveLazyMaterializations</c> before re-reading the recycle gate, then per-field CAS
     /// so exactly one thread executes each populator; other threads spin until the field's lazy
-    /// index clears.
+    /// index clears, so every caller returns with a finished child list. Callers must therefore enter this method while the
+    /// field is merely <i>in progress</i> as well (<see cref="FieldBody.IsLazyPending"/>, not
+    /// <see cref="FieldBody.NeedsMaterialization"/>). A thread that is itself inside a populator does not wait (it could be
+    /// waiting for its own field).
     /// </para>
     /// </summary>
     internal bool MaterializeLazyField(ushort fieldIndex)
@@ -1016,8 +1068,9 @@ public sealed class Packet
                     return false;
                 }
 
-                // Another thread is materializing this field — spin until complete.
-                if (body.IsLazyMaterializationInProgress())
+                // Another thread is materializing this field — spin until complete, so the caller reads a finished child
+                // list. Not from inside a populator (see _PopulatorDepth): there the field in progress may be our own.
+                if (_PopulatorDepth == 0 && body.IsLazyMaterializationInProgress())
                 {
                     SpinWait spin = default;
                     while (body.IsLazyMaterializationInProgress())
@@ -1042,6 +1095,13 @@ public sealed class Packet
                     }
 
                     if (body.ReadLazyIndexVolatile() == 0)
+                    {
+                        break;
+                    }
+
+                    // Another thread won the claim in the meantime and is populating. Wait for it, except from inside a
+                    // populator of our own (see _PopulatorDepth).
+                    if (_PopulatorDepth != 0)
                     {
                         break;
                     }
@@ -1075,6 +1135,7 @@ public sealed class Packet
                 lazyTable.Buffer[arrayIndex] = null!;
 
                 MutField containerField = new(this, fieldIndex, GetFieldRef(fieldIndex).FieldId);
+                _PopulatorDepth++;
                 try
                 {
                     ParseResult result = populator(in containerField);
@@ -1095,6 +1156,8 @@ public sealed class Packet
                 }
                 finally
                 {
+                    _PopulatorDepth--;
+
                     // Decrement pending count AFTER the populator has finished appending all
                     // child fields. Always Interlocked so the volatile field never uses compound RMW.
                     Interlocked.Decrement(ref _PendingLazyCount);
@@ -1123,7 +1186,8 @@ public sealed class Packet
     /// </para>
     /// <para>
     /// <b>Post-Seal:</b> Thread-safe. Multiple threads may call concurrently; each waits
-    /// until all lazy fields are fully populated before returning.
+    /// until all lazy fields are fully populated before returning. A thread that is itself inside a populator does not
+    /// wait for the fields that are still in progress (one of them may be its own container).
     /// </para>
     /// </summary>
     public void MaterializeAll()
@@ -1219,11 +1283,13 @@ public sealed class Packet
             // added by the concurrent populator need a new outer-loop pass).
             if (!progress && _PendingLazyCount > 0)
             {
-                if (_ActiveLazyMaterializations <= 1)
+                // Stop rather than freeze the caller when (a) a nested RegisterLazyPopulator leaked a pending count
+                // without a live field materializer (this session holds the remaining 1), or (b) the calling thread is
+                // itself inside a populator (see _PopulatorDepth): the remaining pending count may be its own container,
+                // which only finishes after this call returns. It leaves with what is linked so far, as
+                // MaterializeLazyField does for a populator thread.
+                if (_ActiveLazyMaterializations <= 1 || _PopulatorDepth != 0)
                 {
-                    // Nested RegisterLazyPopulator leaked a pending count without a live
-                    // field materializer (this session holds the remaining 1). Stop rather
-                    // than freeze the caller.
                     break;
                 }
 
@@ -1425,8 +1491,10 @@ public sealed class Packet
 
                 for (int i = 0; i < count; i++)
                 {
+                    // A container another thread is populating right now counts as well: MaterializeLazyField waits for it,
+                    // so its fields are searched, not skipped (skipping would answer "not found" for a field that exists).
                     ref readonly FieldBody fb = ref GetFieldRef(i);
-                    if (!fb.NeedsMaterialization)
+                    if (!fb.IsLazyPending)
                     {
                         continue;
                     }
@@ -2509,9 +2577,13 @@ public sealed class Packet
     /// The recycle packet must be sealed and exclusively owned by the calling thread; see the recycling remarks on
     /// <see cref="Packet"/>. A failed recycle (for example a gate held by a materializer) leaves the packet untouched.
     /// </summary>
-    /// <param name="recycle">A sealed packet of the same stack whose storage is reused for this parse.</param>
+    /// <param name="recycle">
+    /// A sealed packet whose storage is reused for this parse. It may belong to another stack as long as that stack uses the
+    /// same <see cref="FrameInterfaceRegistry"/> as <paramref name="stack"/>; it is then rebound to <paramref name="stack"/>
+    /// (see <see cref="Stack"/>). A packet of a stack with another registry is refused with <see cref="ParseFailure.StackMismatch"/>.
+    /// </param>
     /// <param name="id">Packet id. Must be valid and not jump past the stack's next first-parse id.</param>
-    /// <param name="stack">The protocol stack that owns <paramref name="recycle"/>.</param>
+    /// <param name="stack">The protocol stack of this parse; the packet belongs to it afterwards.</param>
     /// <param name="frame">The captured frame. Its registry must be the stack's frame-interface registry.</param>
     /// <param name="options">Field tree mode, cache, index, first protocol, and observers for this parse.</param>
     /// <param name="failure">Why nothing was parsed; <see cref="ParseFailure.None"/> on success.</param>
@@ -2534,7 +2606,13 @@ public sealed class Packet
             return false;
         }
 
-        if (!ReferenceEquals(recycle.Stack, stack))
+        // The recycle packet may belong to another stack as long as that stack uses the same frame registry (a session restart
+        // replaces the stack and keeps the registry): PrepareForReuse rebinds the packet then. A stack of another registry is
+        // refused here, first and cheaply, exactly where the old same-stack refusal stood, so the answer for a packet of a
+        // foreign registry does not depend on the id or the frame. Why by registry and not by instance: ids and the interface
+        // ids inside a frame are registry-relative, so the registry is the real compatibility boundary.
+        if (!ReferenceEquals(recycle.Stack, stack)
+            && !ReferenceEquals(recycle.Stack.FrameInterfaceRegistry, stack.FrameInterfaceRegistry))
         {
             failure = ParseFailure.StackMismatch;
             return false;
@@ -2557,7 +2635,7 @@ public sealed class Packet
             return false;
         }
 
-        RecycleError? prepared = recycle.PrepareForReuse(id, frame, options.FieldTree);
+        RecycleError? prepared = recycle.PrepareForReuse(id, stack, frame, options.FieldTree);
         if (prepared is RecycleError recycleError)
         {
             failure = recycleError switch

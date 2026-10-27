@@ -152,8 +152,16 @@ internal sealed class UuidTests
     public async Task FormatTemp()
     {
         Uuid uuid = new(0x550E8400E29B41D4, 0xA716446655440000);
-        TempString temp = uuid.FormatTemp();
-        await Assert.That(temp.ToString()).IsEqualTo("550E8400-E29B-41D4-A716-446655440000");
+
+        // The TempString owns the thread-static char buffer until it is disposed; read the text before any await and
+        // dispose on this thread, otherwise the buffer stays locked for every later test on this pool thread.
+        string formatted;
+        using (TempString temp = uuid.FormatTemp())
+        {
+            formatted = temp.ToString();
+        }
+
+        await Assert.That(formatted).IsEqualTo("550E8400-E29B-41D4-A716-446655440000");
     }
 
     [Test]

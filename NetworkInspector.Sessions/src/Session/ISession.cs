@@ -83,9 +83,10 @@ public interface ISession : ISessionReader, IDisposable
     /// <see cref="NetworkInspector.Filter.Filter.AlwaysMatch"/>.
     /// A filter compiled against the session's current <see cref="ISessionReader.Stack"/> is installed as is.
     /// A filter compiled against any other stack (another session, or this session before a
-    /// <see cref="Restart"/>) is never evaluated against the wrong field ids: the session installs a re-bound
+    /// restart (<see cref="TryRestart(Func{FrameInterfaceRegistry, Stack}, RestartOptions, out RestartReport?, out SessionFailure?)"/>))
+    /// is never evaluated against the wrong field ids: the session installs a re-bound
     /// copy from <see cref="NetworkInspector.Filter.Filter.TryDerive"/> and leaves the caller's instance
-    /// untouched. A later <see cref="Restart"/> re-binds the installed filter the same way.
+    /// untouched. A later restart re-binds the installed filter the same way.
     /// </para>
     ///
     /// <para>
@@ -174,17 +175,49 @@ public interface ISession : ISessionReader, IDisposable
     // ── Job management ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Attempts to add a user-defined background job. The job starts immediately
-    /// on a dedicated thread if successful. Allowed in every phase until shutdown starts, including
+    /// Attempts to add a user-defined background job that depends on the stack
+    /// (<see cref="JobStackBinding.StackBound"/>: this overload is the secure default, see
+    /// <see cref="TryAddJob(string, string, JobStackBinding, Action{JobContext}, out JobInfo?, out SessionFailure?)"/>). The
+    /// job starts immediately on a dedicated thread if successful. Allowed in every phase until shutdown starts, including
     /// <see cref="SessionPhase.Stopped"/> after all sources finished (for example an export job).
     /// Returns <see langword="false"/> with <see cref="SessionErrorCode.InvalidPhase"/> once
-    /// <see cref="Shutdown"/> has started, also after it finished: nobody would cancel or join the job.
+    /// <see cref="Shutdown"/> has started, also after it finished: nobody would cancel or join the job. Returns
+    /// <see langword="false"/> with <see cref="SessionErrorCode.RestartPending"/> while a restart is between its job check and
+    /// its end (a stack-bound job added then would extend the restart's wait or run on into the swap), and with
+    /// <see cref="SessionErrorCode.SessionFaulted"/> while the session is <see cref="SessionPhase.Faulted"/>.
     /// </summary>
     /// <exception cref="SessionException">
     /// <see cref="SessionErrorCode.JobUiNameEmpty"/> when <paramref name="uiName"/> is null or whitespace.
     /// <see cref="SessionErrorCode.JobIdExhausted"/> when the job ID limit is reached.
     /// </exception>
     bool TryAddJob(string uiName, string description, Action<CancellationToken> work,
+        [NotNullWhen(true)] out JobInfo? info, [NotNullWhen(false)] out SessionFailure? failure);
+
+    /// <summary>
+    /// Attempts to add a user-defined background job that declares whether it depends on the stack, and hands its work a
+    /// <see cref="JobContext"/> (token, the <see cref="StackView"/> it started in, the reader).
+    ///
+    /// <para>
+    /// A <see cref="JobStackBinding.StackBound"/> job reads session data or holds field ids, filters, caches or catalogs; a
+    /// restart cancels it with <see cref="JobEndReason.StackReplaced"/>, waits for it, or is refused while it runs, as the
+    /// caller of <c>TryRestart</c> chose. Its <see cref="JobInfo.Generation"/> is the generation current when it was added.
+    /// An <see cref="JobStackBinding.Independent"/> job (generation -1) is never touched by a restart. The owner of a job
+    /// that was ended by a restart sees <see cref="JobEndReason.StackReplaced"/> in the same snapshot as the terminal
+    /// status and can re-create the job on the new stack.
+    /// </para>
+    ///
+    /// <para>
+    /// Phase rules and refusals are those of
+    /// <see cref="TryAddJob(string, string, Action{CancellationToken}, out JobInfo?, out SessionFailure?)"/>; the
+    /// <see cref="SessionErrorCode.RestartPending"/> refusal applies to <see cref="JobStackBinding.StackBound"/> jobs only.
+    /// </para>
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="binding"/> is not a defined value.</exception>
+    /// <exception cref="SessionException">
+    /// <see cref="SessionErrorCode.JobUiNameEmpty"/> when <paramref name="uiName"/> is null or whitespace.
+    /// <see cref="SessionErrorCode.JobIdExhausted"/> when the job ID limit is reached.
+    /// </exception>
+    bool TryAddJob(string uiName, string description, JobStackBinding binding, Action<JobContext> work,
         [NotNullWhen(true)] out JobInfo? info, [NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
@@ -257,123 +290,239 @@ public interface ISession : ISessionReader, IDisposable
     bool WaitForCompletion(TimeSpan? timeout = null);
 
     /// <summary>
-    /// Swaps the protocol stack and re-parses all existing frames in ascending
-    /// order, without stopping running frame sources.
+    /// Swaps the protocol stack and re-parses all existing frames in ascending order, without stopping running frame
+    /// sources, with <see cref="RestartOptions.Default"/> (cancel stack-bound jobs now). See
+    /// <see cref="TryRestart(Func{FrameInterfaceRegistry, Stack}, RestartOptions, out RestartReport?, out SessionFailure?)"/>
+    /// for everything this call does and every way it can be refused.
+    /// </summary>
+    /// <param name="stackFactory">
+    /// A factory that receives the session's <see cref="FrameInterfaceRegistry"/> and returns a new <see cref="Stack"/> built
+    /// with that registry.
+    /// </param>
+    /// <param name="report">What the restart did; set exactly when the call returns <see langword="true"/>.</param>
+    /// <param name="failure">Why the restart did not happen or did not finish; set exactly when the call returns <see langword="false"/>.</param>
+    /// <returns><see langword="true"/> when the new stack serves reads.</returns>
+    bool TryRestart(
+        Func<FrameInterfaceRegistry, Stack> stackFactory,
+        [NotNullWhen(true)] out RestartReport? report,
+        [NotNullWhen(false)] out SessionFailure? failure);
+
+    /// <summary>
+    /// Swaps the protocol stack and re-parses all existing frames in ascending order, without stopping running frame
+    /// sources. This is the one restart call; every expected refusal is a result (<see langword="false"/> plus a
+    /// <see cref="SessionFailure"/>), never an exception, so a host can show it to the user and an MCP tool can return it.
     ///
     /// <para>
-    /// <b>Concurrency:</b>
-    /// Source threads are temporarily gated (kernel-level wait, no CPU burn) so
-    /// they continue capturing frames via <see cref="IFrameSource.NextFrame"/>
-    /// but do not parse until the re-parse is complete. No data is lost.
+    /// <b>Generation:</b> the swap raises <see cref="ISessionReader.Generation"/> by one while reads are still disabled;
+    /// reads are enabled again only after listener filters and cursors were rebound. A caller that polls only the
+    /// generation and <see cref="ISessionReader.QueriesEnabled"/> sees stable (N, enabled), in progress (N + 1, disabled),
+    /// done (N + 1, enabled). A <see cref="StackView"/> taken before the call keeps naming the old stack.
     /// </para>
     ///
     /// <para>
-    /// <b>Re-parse ordering:</b>
-    /// All previously parsed frames are re-parsed in the original PacketId order
-    /// (0 … N-1) from the bound source’s <see cref="IRandomAccessFrameSource.FrameById"/>.
-    /// Stream sources are wrapped at add time, so their past frames remain readable.
-    /// An <see cref="IRandomAccessFrameSource"/> added without
-    /// <see cref="FrameSourceAddOptions.CacheRandomAccess"/> is re-parsed from that
-    /// inner source. A mapping miss, a source that is not random-access, or a
-    /// <see langword="null"/> <see cref="IRandomAccessFrameSource.FrameById"/> result
-    /// throws <see cref="SessionException"/> with
-    /// <see cref="SessionErrorCode.FrameUnavailable"/> (fail closed; PacketIds are not compressed).
-    /// After that throw, pull queries stay disabled so
-    /// <see cref="ISessionReader.TryGetPacket(PacketId, out Packet?, out SessionFailure?)"/>
-    /// cannot read a partial rewrite; <see cref="ISessionReader.PacketCount"/> may be less than
-    /// the pre-restart count. Call <see cref="Shutdown"/> to tear down.
+    /// <b>Order of one restart:</b>
+    /// <list type="number">
+    ///   <item>Claim: phase check (<see cref="SessionPhase.Running"/>, <see cref="SessionPhase.Stopped"/> or
+    ///         <see cref="SessionPhase.Faulted"/>), no shutdown, no restart running.</item>
+    ///   <item>Job check: the <see cref="JobStackBinding.StackBound"/> jobs that are pending or running are snapshotted;
+    ///         under <see cref="RestartJobPolicy.Refuse"/> any of them refuses the restart (nothing changed). From here on no
+    ///         stack-bound job can be added (<see cref="SessionErrorCode.RestartPending"/>), so the snapshot stays complete.</item>
+    ///   <item>The factory runs, outside every lock. A factory that throws costs no job: ending a job is the only step that
+    ///         cannot be undone, so it comes after the step that most often fails.</item>
+    ///   <item>Job phase: <see cref="RestartJobPolicy.CancelNow"/> cancels the snapshotted jobs with
+    ///         <see cref="JobEndReason.StackReplaced"/>; <see cref="RestartJobPolicy.WaitThenCancel"/> waits up to
+    ///         <see cref="RestartOptions.JobWaitTimeout"/> (observing <see cref="RestartOptions.WaitCancellation"/> and a
+    ///         starting shutdown) and cancels the rest.</item>
+    ///   <item>Swap, re-parse of every packet from id 0, listener filters re-bound, queries enabled, listeners woken with
+    ///         <see cref="NotifyFlags.StackChanged"/> followed by <see cref="NotifyFlags.NewPackets"/> (cursor reset to 0), the
+    ///         <see cref="Restarted"/> notification posted.</item>
+    /// </list>
+    /// The policies, in one table (what you lose):
+    /// <list type="table">
+    ///   <listheader><term>Policy</term><description>Effect and what you lose</description></listheader>
+    ///   <item><term>CancelNow</term><description>Stack-bound jobs are cancelled at once. You lose their unfinished work.</description></item>
+    ///   <item><term>WaitThenCancel</term><description>The call blocks up to the bound; jobs that end in time keep their result,
+    ///   the rest are cancelled. You lose time (and the unfinished work of jobs that outlast the bound).</description></item>
+    ///   <item><term>Refuse</term><description>No restart while a stack-bound job runs; the failure names the jobs.
+    ///   You lose the restart until the jobs end.</description></item>
+    /// </list>
     /// </para>
     ///
     /// <para>
-    /// <b>Listener notification:</b>
-    /// After re-parsing, listeners receive <see cref="NotifyFlags.StackChanged"/>
-    /// followed by <see cref="NotifyFlags.NewPackets"/> (with the cursor reset to
-    /// 0, so the full re-parsed range is delivered). Listeners should discard any
-    /// cached protocol/field state when they receive
-    /// <see cref="ISessionListener.OnStackChanged"/>.
+    /// <b>Concurrency:</b> source threads are temporarily gated (kernel-level wait, no CPU burn) so they continue capturing
+    /// frames via <see cref="IFrameSource.NextFrame"/> but do not parse until the re-parse is complete. No data is lost.
+    /// A read that started before the swap finishes on the stack it leased (one read call parses on one generation); a read
+    /// that starts after it is refused until the re-parse ended.
     /// </para>
     ///
     /// <para>
-    /// The factory receives the session's internal <see cref="FrameInterfaceRegistry"/>
-    /// so the new stack can be built with the same registry. This keeps source and
-    /// interface IDs stable without exposing the registry publicly.
-    /// The factory must not call <see cref="Shutdown"/>, <see cref="Restart"/>,
-    /// <see cref="IDisposable.Dispose"/>, or <see cref="TryStart"/>.
+    /// <b>Re-parse ordering and failure:</b> all previously parsed frames are re-parsed in the original <see cref="PacketId"/>
+    /// order (0 … N-1) from the bound source's <see cref="IRandomAccessFrameSource.FrameById"/>. A mapping miss, a source
+    /// that is not random-access, or a <see langword="null"/> <c>FrameById</c> result fails the restart with
+    /// <see cref="SessionErrorCode.FrameUnavailable"/> after the swap: the call returns <see langword="false"/>, the session
+    /// is <see cref="SessionPhase.Faulted"/> (<see cref="ISessionReader.Fault"/> keeps the failure), reads and new work are
+    /// refused with <see cref="SessionErrorCode.SessionFaulted"/>, and ingest stays parked. Another <c>TryRestart</c> (which
+    /// re-parses from 0 and makes the counters agree again) or <see cref="Shutdown"/> are the only ways out.
     /// </para>
     ///
     /// <para>
-    /// <b>Failure before any change:</b> the ingest value cache of <see cref="SessionOptions.ValueCache"/>
-    /// and the packet index are built on the new stack before the phase, the parse gate, or the queries
-    /// change. A request field the new stack does not define therefore throws
-    /// (<see cref="SessionErrorCode.ValueCacheUnknownField"/> /
-    /// <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/>) and leaves the session exactly as it was:
-    /// same stack, same phase, queries enabled. The session disposes the unused new stack.
+    /// <b>Jobs ended before a later failure:</b> the job phase runs after the factory succeeded and after every refusal that
+    /// depends only on the new stack (the ingest value-cache request, see below), so a refused restart never costs a running
+    /// job. If the restart is abandoned later (shutdown started during the wait) or faulted in the re-parse, the jobs
+    /// already ended stay ended (<see cref="JobEndReason.StackReplaced"/> in the job list); no report is returned.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Listener notification:</b> listeners receive <see cref="NotifyFlags.StackChanged"/> followed by
+    /// <see cref="NotifyFlags.NewPackets"/> (cursor reset to 0, so the full re-parsed range is delivered). Listeners should
+    /// discard any cached protocol/field state when they receive <see cref="ISessionListener.OnStackChanged"/>. Two restarts
+    /// that a slow listener observes in one wake-up show as one callback with a generation two higher.
+    /// </para>
+    ///
+    /// <para>
+    /// The factory receives the session's internal <see cref="FrameInterfaceRegistry"/> so the new stack can be built with
+    /// the same registry. This keeps source and interface IDs stable without exposing the registry publicly. The factory must
+    /// not call <see cref="Shutdown"/>, <c>TryRestart</c>, <see cref="IDisposable.Dispose"/>, or <see cref="TryStart"/>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Failure before any change:</b> the ingest value cache of <see cref="SessionOptions.ValueCache"/> and the packet
+    /// index are built on the new stack before the job phase, the phase, the parse gate, or the queries change. A request
+    /// field the new stack does not define therefore refuses the restart (<see cref="SessionErrorCode.ValueCacheUnknownField"/>,
+    /// <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/>, <see cref="SessionErrorCode.ValueCacheInvalidRequest"/>)
+    /// and leaves the session as it was: same stack, same phase, queries enabled, every job running. The session disposes
+    /// the unused new stack.
     /// From the stack swap on, the session owns the new stack, also when a later step fails.
     /// </para>
     ///
     /// <para>
     /// <b>Replaced stack:</b> a stack the session created itself (an earlier restart factory) is disposed as soon as it can
-    /// safely be: right after the swap when no session read is parsing on it, otherwise by the thread whose read is the
-    /// last one that ends. <see cref="Restart"/> does not wait for those reads. The stack passed to the
-    /// <see cref="Session"/> constructor stays the caller's and is never disposed by the session. A
-    /// <see cref="Packet"/> handed out before the restart keeps its materialised fields; its still unmaterialised lazy
-    /// containers run on the replaced protocol instances and may report a failed population (an error child) once the
-    /// stack was disposed, so materialise what you need before the restart or re-read after
-    /// <see cref="ISessionListener.OnStackChanged"/>. <see cref="Shutdown"/> disposes the current stack and any replaced
-    /// one that is still in use, waiting for those reads within its timeout budget.
+    /// safely be: right after the swap when no session read is parsing on it, otherwise by the thread whose read is the last
+    /// one that ends. The call does not wait for those reads. The stack passed to the <see cref="Session"/> constructor
+    /// stays the caller's and is never disposed by the session. A <see cref="Packet"/> handed out before the restart keeps
+    /// its materialised fields; its still unmaterialised lazy containers run on the replaced protocol instances and may
+    /// report a failed population (an error child) once the stack was disposed, so materialise what you need before the
+    /// restart or re-read after <see cref="ISessionListener.OnStackChanged"/>. <see cref="Shutdown"/> disposes the current
+    /// stack and any replaced one that is still in use, waiting for those reads within its timeout budget.
     /// </para>
     ///
     /// <para>
-    /// <b>Runtime value caches:</b> slots added with <see cref="TryAddValueCache"/> rebuild their cache
-    /// from the stored request on their own thread when they receive <see cref="NotifyFlags.StackChanged"/>.
-    /// A request field the new stack does not define fails that slot (its job ends
-    /// <see cref="JobStatus.Failed"/>), not the restart.
+    /// <b>Runtime value caches:</b> slots added with <see cref="TryAddValueCache"/> rebuild their cache from the stored
+    /// request on their own thread when they receive <see cref="NotifyFlags.StackChanged"/>. A request field the new stack
+    /// does not define fails that slot (its job ends <see cref="JobStatus.Failed"/>), not the restart.
     /// </para>
     ///
     /// <para>
-    /// <b>Blocking:</b> the call returns after every frame was re-parsed. Run it off a UI thread; while it
-    /// runs, <see cref="ISessionReader.QueriesEnabled"/> is <see langword="false"/> and pull reads are refused.
+    /// <b>Blocking:</b> the call returns after every frame was re-parsed (and, under
+    /// <see cref="RestartJobPolicy.WaitThenCancel"/>, after the wait). Run it off a UI thread; while it runs,
+    /// <see cref="ISessionReader.QueriesEnabled"/> is <see langword="false"/> and pull reads are refused. It may be called
+    /// from a listener callback (listeners are not waited for), but a worker thread is preferred.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Refusals</b> (all returned as <paramref name="failure"/>): <see cref="SessionErrorCode.InvalidPhase"/> (Idle, shutting
+    /// down, or abandoned because shutdown started), <see cref="SessionErrorCode.RestartInProgress"/>,
+    /// <see cref="SessionErrorCode.RestartOptionOutOfRange"/>, <see cref="SessionErrorCode.JobsRunning"/>,
+    /// <see cref="SessionErrorCode.RestartFromJob"/> (the calling thread is the thread of a running stack-bound job: it would
+    /// wait for itself or cancel itself), the ingest value-cache codes above (nothing changed), and
+    /// <see cref="SessionErrorCode.FrameUnavailable"/> (the session is now faulted).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What still throws</b> (caller bugs and the factory's own failure): <see cref="ArgumentNullException"/> for a null
+    /// argument, <see cref="SessionException"/> with <see cref="SessionErrorCode.Disposed"/> on a disposed session,
+    /// <see cref="InvalidOperationException"/> when the factory returns <see langword="null"/>,
+    /// <see cref="ArgumentException"/> when the factory's stack uses another <see cref="FrameInterfaceRegistry"/>, and any
+    /// exception the factory itself throws, unchanged. A bug in a parser during the re-parse faults the session and then
+    /// propagates.
     /// </para>
     ///
     /// <example>
     /// <code>
-    /// session.Restart(registry =>
+    /// RestartOptions options = new() { JobPolicy = RestartJobPolicy.WaitThenCancel, JobWaitTimeout = TimeSpan.FromSeconds(10) };
+    /// if (!session.TryRestart(
+    ///         registry =>
+    ///         {
+    ///             StackBuilder builder = new(newSettings, registry);
+    ///             builder.RegisterStandardProtocols();
+    ///             return builder.Build();
+    ///         },
+    ///         options,
+    ///         out RestartReport? report,
+    ///         out SessionFailure? failure))
     /// {
-    ///     StackBuilder builder = new(newSettings, registry);
-    ///     builder.RegisterStandardProtocols();
-    ///     return builder.Build();
-    /// });
+    ///     ShowError(failure.Message);
+    ///     return;
+    /// }
+    ///
+    /// ShowInfo($"Restarted to generation {report.Generation}; cancelled {report.JobsCancelled.Count} jobs.");
     /// </code>
     /// </example>
     /// </summary>
     /// <param name="stackFactory">
-    /// A factory that receives the session's <see cref="FrameInterfaceRegistry"/> and
-    /// returns a new <see cref="Stack"/> built with that registry.
+    /// A factory that receives the session's <see cref="FrameInterfaceRegistry"/> and returns a new <see cref="Stack"/> built
+    /// with that registry.
     /// </param>
+    /// <param name="options">The job policy, the wait bound and the wait cancellation. Not <see langword="null"/>.</param>
+    /// <param name="report">What the restart did; set exactly when the call returns <see langword="true"/>.</param>
+    /// <param name="failure">Why the restart did not happen or did not finish; set exactly when the call returns <see langword="false"/>.</param>
+    /// <returns><see langword="true"/> when the new stack serves reads.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="stackFactory"/> or <paramref name="options"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// The stack returned by <paramref name="stackFactory"/> uses a different
-    /// <see cref="FrameInterfaceRegistry"/> than the one passed to the factory.
+    /// The stack returned by <paramref name="stackFactory"/> uses a different <see cref="FrameInterfaceRegistry"/> than the one
+    /// passed to the factory.
     /// </exception>
-    /// <exception cref="InvalidOperationException">
-    /// A restart is already in progress, or the factory returned <see langword="null"/>.
-    /// </exception>
+    /// <exception cref="InvalidOperationException">The factory returned <see langword="null"/>.</exception>
+    /// <exception cref="SessionException"><see cref="SessionErrorCode.Disposed"/> when the session was disposed.</exception>
+    bool TryRestart(
+        Func<FrameInterfaceRegistry, Stack> stackFactory,
+        RestartOptions options,
+        [NotNullWhen(true)] out RestartReport? report,
+        [NotNullWhen(false)] out SessionFailure? failure);
+
+    /// <summary>
+    /// Raised after every restart that completed or faulted, on a thread of the session and never on the restarting thread.
+    ///
+    /// <para>
+    /// <b>One slot per handler:</b> each handler added has its own queue, its own thread, and an
+    /// <see cref="JobStackBinding.Independent"/> job named <c>restart-event</c> in <see cref="ISessionReader.GetJobs"/>. A
+    /// handler that blocks delays only its own notifications; a handler that throws ends only its own job
+    /// (<see cref="JobStatus.Failed"/> with <see cref="JobInfo.FailureException"/>, <see cref="NotifyFlags.JobStatusChanged"/>
+    /// raised) and receives nothing more; the restart, the session's reads and the other handlers are unaffected.
+    /// Notifications are never merged: a handler sees one per restart, in generation order. When the handler runs, the
+    /// session already reads the generation of the notification with reads enabled (after a successful restart).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Cost:</b> one idle thread per subscription. <b>Do not</b> call <see cref="Shutdown"/> or <see cref="IDisposable.Dispose"/>
+    /// from a handler (they join every subscription, including the calling one). A handler that removes itself from inside
+    /// its own callback (<c>-=</c>, or <see cref="TryUnsubscribe"/> of its job) is refused, because the removal would join
+    /// the calling thread: <c>-=</c> throws <see cref="InvalidOperationException"/>, <see cref="TryUnsubscribe"/> returns
+    /// <see langword="false"/> with <see cref="SessionErrorCode.InvalidPhase"/>. Remove a handler from another thread.
+    /// <see cref="Shutdown"/> delivers what is queued within its time budget and reports the undelivered count in its
+    /// aggregate message.
+    /// </para>
+    /// </summary>
     /// <exception cref="SessionException">
-    /// <see cref="SessionErrorCode.InvalidPhase"/> when the session is not in the <see cref="SessionPhase.Running"/>
-    /// or <see cref="SessionPhase.Stopped"/> phase, or shutdown has started (also while the factory ran).
-    /// <see cref="SessionErrorCode.ValueCacheUnknownField"/>, <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/> or
-    /// <see cref="SessionErrorCode.ValueCacheInvalidRequest"/> when the new stack cannot satisfy
-    /// <see cref="SessionOptions.ValueCache"/>; thrown before any state changes.
-    /// <see cref="SessionErrorCode.FrameUnavailable"/> when a mapped frame cannot be re-read; queries then stay
-    /// disabled (fail closed).
+    /// On <c>add</c>: <see cref="SessionErrorCode.InvalidPhase"/> once shutdown has started (an event accessor cannot return
+    /// a result), <see cref="SessionErrorCode.Disposed"/> on a disposed session.
     /// </exception>
-    void Restart(Func<FrameInterfaceRegistry, Stack> stackFactory);
+    /// <exception cref="InvalidOperationException">On <c>remove</c>: the handler removes itself from inside its own callback.</exception>
+    event Action<RestartNotification>? Restarted;
 
     /// <summary>
     /// Shuts down the session. The shutdown procedure is:
     /// <list type="number">
     ///   <item>Transition to <see cref="SessionPhase.ShuttingDown"/>.</item>
-    ///   <item>Cancel all source jobs and user jobs (<see cref="TryAddJob"/>).</item>
-    ///   <item>Wait for source jobs and then user jobs to finish (up to <paramref name="timeout"/> if specified).</item>
+    ///   <item>
+    ///     Cancel all source jobs and user jobs
+    ///     (<see cref="TryAddJob(string, string, Action{CancellationToken}, out JobInfo?, out SessionFailure?)"/>).
+    ///   </item>
+    ///   <item>Wait for source jobs and then user jobs to finish (up to <paramref name="timeout"/> if specified), then
+    ///         let every <see cref="Restarted"/> subscription deliver what is queued and exit (within the same budget; the
+    ///         notifications it could not deliver are counted in the aggregate message). A restart that is running is
+    ///         waited for first, and a wait for stack-bound jobs inside it ends at once; a session in
+    ///         <see cref="SessionPhase.Faulted"/> shuts down like any other, its parked sources end Cancelled.</item>
     ///   <item>Cancel and drain all listener slots (queries stay enabled so redissect works). A flag raised before the
     ///         cancellation is still delivered.</item>
     ///   <item>Disable packet queries.</item>

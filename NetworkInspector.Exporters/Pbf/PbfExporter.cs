@@ -56,6 +56,14 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
         Justification = "_DirectStream is a non-owning reference to _Output's stream; _Output.Dispose() handles cleanup.")]
     private Stream? _DirectStream;
 
+    // Columnar format only: the stack of the first packet. The columnar blocks store field ids and a presence bitmap per id, so
+    // every id in the file is an id of that stack. Threat: a packet of another stack (a session restart between two OnPacket
+    // calls) carries ids that name other fields; writing it would corrupt the file silently. Mitigation: the packet is refused
+    // as a fatal, reported error (StackMismatch), the earlier blocks are still finished by OnFinish, and the owner of the export
+    // (whose job a restart ended anyway) starts a new export on the new stack. Rejected: skipping only that packet in Tolerant
+    // mode (every later packet of the new stack would be skipped one by one, each reported). Residual risk: none for columnar.
+    private Stack? _CatalogStack;
+
     // Block builders
     private StandardBlockBuilder? _StandardBuilder;
     private ColumnarBlockBuilder? _ColumnarBuilder;
@@ -223,7 +231,40 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
             return false;
         }
 
+        // One stack per columnar export: see _CatalogStack. The row format writes every packet self-describing (names come
+        // from the packet's own FieldInfo), so it carries no catalog and needs no check.
+        if (_Format == PbfExportFormat.Columnar)
+        {
+            _CatalogStack ??= packet.Stack;
+            if (!ReferenceEquals(packet.Stack, _CatalogStack))
+            {
+                _ReportStackMismatch();
+                return false;
+            }
+        }
+
         return _HandlePacket(packet);
+    }
+
+    /// <summary>
+    /// A packet of another stack than the catalog's arrived: latches the fatal state, counts it, and raises
+    /// <see cref="ItemSkipped"/> with <see cref="ExportErrorKind.StackMismatch"/>. The packet is not written; the blocks of the
+    /// earlier packets are still finished by <see cref="OnFinish"/>.
+    /// </summary>
+    private void _ReportStackMismatch()
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = PacketCount,
+            Kind = ExportErrorKind.StackMismatch,
+            Message = "The packet was parsed on another protocol stack than this export's catalog; start a new export after a session restart.",
+        });
     }
 
     /// <inheritdoc/>
@@ -236,6 +277,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IDisp
             return;
         }
         _Finished = true;
+        _CatalogStack = null; // A finished exporter accepts no packet (OnPacket checks _Finished first); do not keep the stack alive.
 
         // Shared finish sequence: finalize, then release every resource even when a step fails.
         ExporterFinish.Run(

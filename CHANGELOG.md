@@ -68,6 +68,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   [`docs/plugins/protocols.md`](docs/plugins/protocols.md) (protocol, fields, port registration, heuristic parser,
   post-parser), and [`docs/plugins/reference.md`](docs/plugins/reference.md) (one entry per contract type), checked by tests
   against the contract; four design documents imported into [`docs/`](docs/) with import notes.
+- **Sessions: a restart is a generation change.** `ISessionReader.Generation` (0 for the constructor stack, plus one per swap;
+  one volatile read) and `ISessionReader.CurrentStack`, the immutable `StackView(Stack, Generation)` pair with `IsCurrent`.
+  The generation rides on the stack holder that every read already leases, so noticing a restart adds no operation to the
+  read path; a poller that reads only `Generation` and `QueriesEnabled` sees stable, in progress, and done.
+- **Sessions: `TryRestart` with options, a report, and an event.** `RestartOptions` (`RestartJobPolicy`: `CancelNow`,
+  `WaitThenCancel`, `Refuse`; `JobWaitTimeout` 1 s to 1 h, default 30 s; `WaitCancellation`), `RestartReport` (new generation,
+  re-parsed packets, jobs waited for and cancelled, listeners whose filter could not be re-bound, durations), and
+  `ISession.Restarted` with `RestartNotification`: one queue and one thread per handler (an independent job named
+  `restart-event`), so a blocking or throwing handler cannot influence another or the restart.
+- **Sessions: jobs declare a binding and carry an end reason.** `JobStackBinding` (`StackBound` is the default of the old
+  `TryAddJob`, `Independent` is the opt-in), the `TryAddJob(…, binding, Action<JobContext>, …)` overload with `JobContext`
+  (the `StackView` the job started in, the reader, the token), and `JobInfo.Binding`, `Generation`, and `EndReason`
+  (`JobEndReason`: `Completed`, `UserCancelled`, `StackReplaced`, `SessionShutdown`, `Failed`), stored before the terminal
+  status so a snapshot never sees one without the other.
+- **Sessions: a failed restart is a state.** `SessionPhase.Faulted` and `ISessionReader.Fault`: a restart that fails after
+  the swap keeps its failure, refuses reads and new work with `SessionFaulted`, keeps ingest parked, and is left by another
+  `TryRestart` (ids stay dense, ingest resumes without a gap) or `Shutdown`.
+- **Sessions: `TryGetPacket(id, in options, builtFor, recycle, …)`** parses one packet with caller-built `ParseOptions`
+  (observers, first protocol, field-tree mode) under the session's stack lease and refuses options built for another
+  generation with `OptionsStackMismatch`.
+- **`SessionErrorCode`:** `RestartPending`, `RestartFromJob`, `JobsRunning`, `SessionFaulted`, `OptionsStackMismatch`,
+  `RestartInProgress`, `RestartOptionOutOfRange` (appended; existing values are unchanged).
+- **Exporters: `ExportErrorKind.StackMismatch`.** PBF columnar, Parquet, and DuckDB build their catalog from the first packet's
+  stack and now refuse a packet of another stack (reported through `ItemSkipped`, fatal for the export, the earlier rows stay a
+  valid dataset) instead of writing field ids that name other fields.
+- **Profiling: scenario `session-restart-reparse`** measures the restart itself (re-parsed frames per second over a
+  200 000-frame memory source).
 
 ### Changed
 
@@ -108,6 +135,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   child. `Shutdown` now also throws the `OnShutdown` errors of session-owned stacks, which were lost before.
 - **Tests:** no test reads a Markdown file any more. The seven documentation tests of `Plugins.Tests/Docs` were removed;
   the documents are checked by review.
+- **Sessions: one stack lease per read call.** `ReadPackets` (both overloads) and `TryReadPackets` (both modes, including the
+  skip-parse pre-check) take one lease for the whole call instead of one per 64-packet chunk or per packet, so a call parses on
+  one stack generation and never returns packets of two stacks in one buffer; a restart that starts during the call leaves the
+  remaining slots `null`. The cost is that a replaced stack lives until the call returns (bounded by the caller's buffer).
+- **Core: a recycled packet is rebound to the stack of the new parse** when both stacks share the frame registry (a session
+  restart replaces the stack but keeps the registry), so a buffer of recycled packets survives a restart without one allocation
+  per slot. A stack of another registry is still refused (`ParseFailure.StackMismatch`, packet untouched). The internal
+  `Packet.PrepareForReuse` takes the target stack.
+- **Sessions: job end reasons for the session's own slots.** Sources, listener slots, and value-cache slots are independent jobs;
+  `TryUnsubscribe` records `UserCancelled`, the shutdown `SessionShutdown`.
+- **Sessions: `Shutdown` delivers queued `Restarted` notifications** within its time budget and reports the undelivered count in
+  its `AggregateException`.
+- **Documentation:** `SESSION_GUIDE.md` (generation, phases, jobs, restart, faulted state, parse with options, checklist),
+  the Sessions `README.md`, and `EXPORTER_GUIDE.md` ("one stack per export") follow the new contract; the guide samples are
+  compiled by `SessionGuideSamplesTests`.
 
 ### Fixed
 
@@ -122,6 +164,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `FieldValue`, `FieldValueData`, and `SettingValue` formatting are released again; `TwoQueueCache` budget checks no longer
   overflow `int`; `LengthPrefixDetector` reports a total length below the header as invalid; reassembly keeps the first total
   length of a datagram and discards it on a conflicting last fragment.
+- **Values: `FormatTemp()` released nothing.** `IPv4Address`, `IPv6Address`, `MacAddress`, `Eui64`, `Uuid`, and `Timestamp` built
+  their `TempString` without the acquire epoch, so `Dispose` never matched and the thread-static char buffer stayed locked on
+  that thread for good; every later `TempString` there silently fell back to a heap allocation and a buffer check on a reused
+  pool thread failed at random. The epoch now travels into the `TempString`.
+- **Core: concurrent readers of a lazy container** wait for a populator that another thread is running. The `materialize: true`
+  guards of `Field` (`HasChildren`, `ChildCount`, `TryGetFirstChild`, `TryGetLastChild`), of every field iterator, and of
+  `Packet.TryGetNextField` skipped a field that another thread had already claimed, so the second reader could return a child
+  list that was still being built (rarely visible as missing children, about one run in a few hundred of the eight-thread
+  growth test). A thread that is itself inside a populator still does not wait, so a populator that reads its own container
+  cannot block on itself.
 - **Core: settings.** `Save` no longer lets a refused stored value overwrite a registered setting's value, replaces a group
   file that another reader has open (Windows), and reports invalid storage paths as `PersistenceSettingsException`; a
   wrong-type preload reports `TypeMismatch`; `SettingsManager(string)` and `Setting.EnumWithMetadata` reject null;
@@ -184,6 +236,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Protocols: decompression limits.** HTTP bodies and WebSocket permessage-deflate payloads are inflated through a bounded
   buffer that stops at `http.max_decompressed_bytes` and `ws.max_decompressed_bytes` (default 64 MiB, range 1 KiB to
   128 GiB); a hit is reported in a named field instead of truncating silently.
+
+### Breaking
+
+- **`ISession.Restart(factory)` is removed; use `TryRestart`.** Every expected refusal is now a result (`false` plus a
+  `SessionFailure`) instead of an exception: a wrong phase (`InvalidPhase`), a second restart (`RestartInProgress`, was
+  `InvalidOperationException`), running stack-bound jobs under `Refuse` (`JobsRunning`), an ingest value-cache request the new
+  stack cannot satisfy (`ValueCacheUnknownField` and its siblings, decided before any job is ended, nothing changed), and a frame that cannot be re-read
+  (`FrameUnavailable`, the session is `Faulted`). Only caller bugs throw (null arguments, a disposed session, a factory that
+  returns `null` or a stack of another registry); an exception the factory itself throws propagates unchanged. A restart now
+  ends running stack-bound jobs by default (`RestartJobPolicy.CancelNow`); a job added with the old `TryAddJob` overload is
+  stack-bound.
+- **A failed restart no longer resumes ingest.** The session becomes `Faulted` (new `SessionPhase` value) and parks the source
+  threads until another `TryRestart` or `Shutdown`; before, ingest resumed with a counter that contradicted the new stack's
+  watermark (`ParseIdGap`). Code that switches over `SessionPhase` must handle `Faulted`.
+- **New abstract members.** `ISessionReader` gained `Generation`, `CurrentStack`, `Fault`, and the `TryGetPacket` overload with
+  `ParseOptions`; `ISession` gained `TryRestart` (two overloads), `Restarted`, and the `TryAddJob` overload with a binding.
+  Implementations outside this repository must add them.
+- **`ExportErrorKind` has a new member `StackMismatch`;** a columnar exporter that receives a packet of a second stack stops with
+  it instead of writing a mixed dataset.
 
 ---
 

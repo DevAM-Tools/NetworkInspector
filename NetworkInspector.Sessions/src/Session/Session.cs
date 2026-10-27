@@ -50,7 +50,7 @@ namespace NetworkInspector.Sessions;
 ///   <item><c>TryStart</c> -- safe from any thread; exactly one caller wins, the others get <c>InvalidPhase</c>.</item>
 ///   <item><c>PacketCount</c>, <c>FrameCount</c> -- volatile reads, always current.</item>
 ///   <item><c>TryGetPacket</c> -- safe from any thread (re-parse from frame cache or RA source); holds a stack lease while it parses.</item>
-///   <item><c>Restart</c> -- one at a time; does not wait for in-flight reads, the replaced stack is disposed by the last of them.</item>
+///   <item><c>TryRestart</c> -- one at a time; does not wait for in-flight reads, the replaced stack is disposed by the last of them.</item>
 ///   <item><c>TryAddJob</c> -- safe from any thread.</item>
 ///   <item><c>Shutdown</c> / <c>Dispose</c> -- safe to call from any thread.</item>
 /// </list>
@@ -58,7 +58,9 @@ namespace NetworkInspector.Sessions;
 ///
 /// <para>
 /// <b>Stack lifetime (lease scheme):</b>
-/// <see cref="Restart"/> swaps the stack under the parse mutex, but lock-free reads can still be re-parsing on the old one,
+/// A restart
+/// (<see cref="TryRestart(Func{FrameInterfaceRegistry, Stack}, RestartOptions, out RestartReport?, out SessionFailure?)"/>)
+/// swaps the stack under the parse mutex, but lock-free reads can still be re-parsing on the old one,
 /// and <see cref="Stack.Dispose"/> runs every protocol's <c>OnShutdown</c> and releases the settings locks. Every
 /// operation that parses outside the parse mutex (<c>TryGetPacket</c>, <c>ReadPackets</c>, the matching read, the listener
 /// and value-cache pulls) therefore takes a lease on the stack it parses with (one interlocked increment, released with one
@@ -117,7 +119,8 @@ public sealed class Session : ISession, ISessionReader
         ArgumentNullException.ThrowIfNull(stack);
 
         // The caller keeps ownership of the initial stack: the session never disposes it, but it still counts the leases.
-        _Holder = new RetirableStack(stack, ownedBySession: false, _OnStackDisposed);
+        // Generation 0: the number every consumer compares against (see ISessionReader.Generation).
+        _Holder = new RetirableStack(stack, generation: 0, ownedBySession: false, _OnStackDisposed);
 
         // The registry outlives every stack of this session (Restart hands it to the stack factory), so source and
         // interface ids stay valid across a stack swap.
@@ -321,6 +324,31 @@ public sealed class Session : ISession, ISessionReader
     // Set during shutdown after source jobs finish, cleared on restart.
     private volatile bool _QueriesDisabled;
 
+    // The failure that left the session Faulted (a restart failed after the swap), or null. Written by the restarting thread
+    // before it publishes the Faulted phase and cleared by the restart that recovers; read by every refusal that names the
+    // fault. Read lock-free on the already-refused read path only, never on a successful one. SessionFailure is a struct, and
+    // a field of a struct type cannot be volatile, so the value travels in a one-field reference holder that is published
+    // with one volatile store (the reader sees the whole failure or none). Rejected: a lock (the read path takes none) and
+    // two fields for code and message (a reader could pair a code with another fault's message). Residual risk: none; the holder
+    // is immutable, a reader sees one complete failure.
+    private sealed record FaultHolder(SessionFailure Failure);
+
+    private volatile FaultHolder? _FaultHolder;
+
+    /// <summary>The kept fault, or null when the session is not faulted.</summary>
+    private SessionFailure? _Fault => _FaultHolder?.Failure;
+
+    /// <summary>Publishes (or, with <see langword="null"/>, clears) the kept fault.</summary>
+    private void _SetFault(SessionFailure? fault)
+        => _FaultHolder = fault is SessionFailure present
+            ? new FaultHolder(present)
+            : null;
+
+    // One slot per Restarted handler (queue, thread, Independent job). Copy-on-write like the listener registries: the restart
+    // posts to a snapshot without a lock; add and remove publish under _RegistryLock, the lock that also publishes the
+    // shutdown flag, so a subscription is either part of the shutdown's snapshot (cancelled, joined, disposed) or refused.
+    private readonly SnapshotList<RestartEventSlot> _RestartEventSlots = new();
+
     #endregion
 
     #region ISessionReader
@@ -342,6 +370,9 @@ public sealed class Session : ISession, ISessionReader
     /// <inheritdoc/>
     public bool QueriesEnabled => !_QueriesDisabled;
 
+    /// <inheritdoc/>
+    public SessionFailure? Fault => _Fault;
+
     /// <summary>
     /// Ingest never retains a field tree. The first parse only has to advance protocol state and feed the packet index and
     /// the ingest value cache, which <see cref="FieldTreeMode.Skip"/> still does; building a field-body slab for a packet
@@ -355,11 +386,27 @@ public sealed class Session : ISession, ISessionReader
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Valid until the next <see cref="Restart"/>. A stack the session owns (built by a restart factory) is disposed as soon as
+    /// Valid until the next restart; prefer <see cref="CurrentStack"/>, which pairs the stack with its generation. A stack
+    /// the session owns (built by a restart factory) is disposed as soon as
     /// a restart replaced it and the session's own in-flight reads ended; a caller that parses with this stack itself holds no
     /// lease and must read the property again after <c>OnStackChanged</c> instead of keeping the old reference.
     /// </remarks>
     public Stack Stack => _Stack;
+
+    /// <inheritdoc/>
+    public int Generation => _Holder.Generation;
+
+    /// <inheritdoc/>
+    public StackView CurrentStack
+    {
+        get
+        {
+            // One volatile load: stack and generation come from the same holder, so they can never disagree even when a
+            // restart swaps the holder between two property reads of the caller. A readonly record struct: no allocation.
+            RetirableStack holder = _Holder;
+            return new StackView(holder.Stack, holder.Generation);
+        }
+    }
 
     /// <inheritdoc/>
     public ReadOnlyValueCache? IngestValueCache
@@ -423,6 +470,12 @@ public sealed class Session : ISession, ISessionReader
     /// </summary>
     private bool _TryAcceptSource([NotNullWhen(false)] out SessionFailure? failure)
     {
+        if (_FaultedFailureOrNull() is SessionFailure faulted)
+        {
+            failure = faulted;
+            return false;
+        }
+
         if (_State.Phase != SessionPhase.Idle || _ShutdownStarted != 0)
         {
             failure = new SessionFailure(
@@ -469,8 +522,9 @@ public sealed class Session : ISession, ISessionReader
     /// </summary>
     private bool _TryUnsubscribeUserJob(JobInfo job)
     {
-        // Cancel is cooperative: the job's delegate must observe its token, otherwise Join waits for it to finish.
-        job.Cancel();
+        // Cancel is cooperative: the job's delegate must observe its token, otherwise Join waits for it to finish. The reason
+        // is recorded first, so the owner of the job can tell this user cancel from a restart or a shutdown.
+        job.Job.Cancel(JobEndReason.UserCancelled);
         job.Join();
         _NotifyAllListeners(NotifyFlags.JobStatusChanged);
         return true;
@@ -501,7 +555,7 @@ public sealed class Session : ISession, ISessionReader
         // Same order as the listener path: publish the terminal status first so OnUnsubscribed, which runs on the
         // slot thread when the loop exits, observes Unsubscribed.
         info.SetStatus(SubscriptionStatus.Unsubscribed);
-        slot.Cancel();
+        slot.Cancel(JobEndReason.UserCancelled);
 
         // A never-started slot has no thread that could observe the cancellation; start it so the loop exits at once,
         // or, when the start itself fails, make sure the listener is still told. TryStart does the latter itself and
@@ -589,16 +643,10 @@ public sealed class Session : ISession, ISessionReader
         // One budget for the whole set (as documented on ISession): each Join gets what is left, so N slow jobs cannot
         // take N times the timeout. Shutdown passes the timestamp of its own start, so the sources and the user jobs it
         // waits for share one budget.
-        TimeSpan budget = timeout.Value;
         foreach (Job job in jobs)
         {
-            TimeSpan elapsed = Stopwatch.GetElapsedTime(startTimestamp);
-            if (elapsed >= budget)
-            {
-                return false;
-            }
-
-            if (!job.Join(budget - elapsed))
+            TimeSpan remaining = _RemainingBudget(timeout.Value, startTimestamp);
+            if (remaining == TimeSpan.Zero || !job.Join(remaining))
             {
                 return false;
             }
@@ -607,39 +655,100 @@ public sealed class Session : ISession, ISessionReader
         return true;
     }
 
-    /// <inheritdoc/>
-    public void Restart(Func<FrameInterfaceRegistry, Stack> stackFactory)
+    /// <summary>What is left of a shutdown budget that began at <paramref name="startTimestamp"/>; zero once it is spent.</summary>
+    private static TimeSpan _RemainingBudget(TimeSpan budget, long startTimestamp)
     {
-        ArgumentNullException.ThrowIfNull(stackFactory);
-        _ThrowIfDisposed();
+        TimeSpan remaining = budget - Stopwatch.GetElapsedTime(startTimestamp);
+        return remaining < TimeSpan.Zero
+            ? TimeSpan.Zero
+            : remaining;
+    }
 
-        // Claim the restart under the lock: validate the phase, refuse a second concurrent restart, and reset
-        // _RestartIdle so a Shutdown that arrives now waits for this restart instead of tearing the session down under it.
-        lock (_LifecycleLock)
+    /// <summary>
+    /// Waits for a restart-event slot to end within the shutdown budget that began at <paramref name="startTimestamp"/>; no
+    /// budget (<see langword="null"/>) waits without limit.
+    /// </summary>
+    /// <returns><see langword="true"/> when the slot's job reached a terminal state.</returns>
+    private static bool _JoinSlotWithinBudget(RestartEventSlot slot, TimeSpan? timeout, long startTimestamp)
+    {
+        if (timeout is null)
         {
-            if (_ShutdownStarted != 0
-                || _State.Phase is SessionPhase.ShuttingDown or SessionPhase.Idle)
-            {
-                throw new SessionException(
-                    SessionErrorCode.InvalidPhase,
-                    $"Restart() requires a Running or Stopped phase and no shutdown. Current phase: {_State.Phase}.");
-            }
-
-            if (!_RestartIdle.IsSet)
-            {
-                throw new InvalidOperationException("A restart is already in progress.");
-            }
-
-            _RestartIdle.Reset();
+            slot.Join();
+            return true;
         }
 
-        // The factory is user code, so it runs OUTSIDE _LifecycleLock: building a stack may be slow, and holding the lock
-        // would stall every other lifecycle call. _RestartIdle (reset above) is what keeps Shutdown and a second Restart
-        // out meanwhile; it is also why the factory must not call Shutdown, Restart, or Dispose (they would wait for this
-        // restart). 'built' is owned here until _RestartCore hands it to the session.
+        return slot.Join(_RemainingBudget(timeout.Value, startTimestamp));
+    }
+
+    /// <inheritdoc/>
+    public bool TryRestart(
+        Func<FrameInterfaceRegistry, Stack> stackFactory,
+        [NotNullWhen(true)] out RestartReport? report,
+        [NotNullWhen(false)] out SessionFailure? failure)
+        => TryRestart(stackFactory, RestartOptions.Default, out report, out failure);
+
+    /// <inheritdoc/>
+    public bool TryRestart(
+        Func<FrameInterfaceRegistry, Stack> stackFactory,
+        RestartOptions options,
+        [NotNullWhen(true)] out RestartReport? report,
+        [NotNullWhen(false)] out SessionFailure? failure)
+    {
+        ArgumentNullException.ThrowIfNull(stackFactory);
+        ArgumentNullException.ThrowIfNull(options);
+        _ThrowIfDisposed();
+        report = null;
+
+        // Expected refusals are results (Section 4.1): a host shows them, an MCP tool returns them. Only caller bugs throw
+        // (null arguments, a disposed session, a factory that returns null or a stack of another registry), and an exception
+        // the factory itself throws propagates unchanged.
+        // The options are external input (an end user or an MCP peer chooses them), so they are validated before anything
+        // else; a refusal changes nothing.
+        if (!RestartOptions.TryValidate(options, out failure))
+        {
+            return false;
+        }
+
+        // A restart from a StackBound job's own thread would wait for itself under WaitThenCancel and would cancel itself
+        // under CancelNow. Checked before the claim so that nothing changes. Independent jobs and plain threads pass.
+        if (_IsRunningStackBoundJobThread())
+        {
+            failure = new SessionFailure(
+                SessionErrorCode.RestartFromJob,
+                "TryRestart cannot be called from the thread of a running stack-bound job; use an Independent job or a worker thread.");
+            return false;
+        }
+
+        // Claim the restart under the lock: validate the phase, refuse a second concurrent restart, and reset _RestartIdle
+        // so a Shutdown that arrives now waits for this restart instead of tearing the session down under it.
+        lock (_LifecycleLock)
+        {
+            if (!_TryClaimRestart(out failure))
+            {
+                return false;
+            }
+        }
+
+        // 'built' is owned here until _TryRestartCore hands it to the session; the finally disposes it when the restart ended
+        // before the swap. _RestartIdle (reset by the claim) is what keeps Shutdown and a second restart out meanwhile; it is
+        // also why the factory must not call Shutdown, TryRestart, or Dispose (they would wait for this restart).
         Stack? built = null;
         try
         {
+            // Job check BEFORE the factory: Refuse is decided now, and from here on no StackBound job can be added
+            // (_RestartPending), so the snapshot taken here is the complete set the job phase will end or wait for.
+            if (!_TryCheckJobsForRestart(options, out Job[] bound, out failure))
+            {
+                return false;
+            }
+
+            // Factory next, outside every lock (building a stack may be slow). Order decision: ending a job is the only
+            // irreversible step of a restart, and a failing factory (bad settings, a plugin that throws) is the common
+            // failure, so the factory runs while every job is still untouched: a factory exception propagates with no job
+            // lost. Rejected: jobs first (a failed factory would have cost the user a running export for nothing; "a
+            // cancelled job never sees a half-built stack" is no argument, because the built stack is not installed before
+            // the swap). Residual risk: once the jobs are ended they stay ended when a later step refuses or faults the
+            // restart (documented on ISession.TryRestart); the owner re-creates them from JobEndReason.StackReplaced.
             built = stackFactory(_FrameInterfaceRegistry)
                 ?? throw new InvalidOperationException("The stack factory returned null.");
 
@@ -651,113 +760,386 @@ public sealed class Session : ISession, ISessionReader
                     nameof(stackFactory));
             }
 
-            // Second critical section: the swap and the re-parse. Re-check shutdown, because Shutdown may have set its
-            // flag while the factory ran (it then waits on _RestartIdle, which only this restart's finally sets).
+            // Everything that can still refuse the restart is decided HERE, before the first job is touched: the ingest value
+            // cache and the packet index of the new stack. A stack that cannot satisfy the ingest request
+            // (ValueCacheUnknownField, ValueCacheInvalidFieldName, ValueCacheInvalidRequest) is an expected refusal, and a
+            // refused restart must leave running jobs alone. Rejected: building them in _TryRestartCore as before (that runs
+            // after the job phase, so a refusal would have cost the user a running export for nothing, the very argument
+            // that put the factory first). The builders read only 'built' and session options and change no session state,
+            // so building them outside _LifecycleLock is safe; a cache that is built and then not installed (shutdown
+            // during the wait, a throwing swap) holds no registration and is simply collected. Residual risk: the only
+            // refusals left after the job phase are a shutdown that started meanwhile (InvalidPhase) and the re-parse fault
+            // (Faulted); both are documented on ISession.TryRestart.
+            ValueCache? newIngest;
+            PacketIndex? newIndex;
+            try
+            {
+                newIngest = _TryCreateIngestValueCache(built);
+                newIndex = _TryCreatePacketIndex(built);
+            }
+            catch (SessionException ex)
+            {
+                failure = new SessionFailure(ex.Code, ex.Message);
+                return false;
+            }
+
+            // Job phase, outside every lock: cancel now, or wait within the bound and cancel the rest.
+            long waitStart = Stopwatch.GetTimestamp();
+            RestartJobOutcome jobs = _EndJobsForRestart(bound, options);
+            TimeSpan waited = Stopwatch.GetElapsedTime(waitStart);
+
+            // Second critical section: the swap and the re-parse. Re-check shutdown, because Shutdown may have set its flag
+            // while the factory ran or the jobs were waited for (it then waits on _RestartIdle, which only this restart's
+            // finally sets).
             lock (_LifecycleLock)
             {
                 if (_ShutdownStarted != 0)
                 {
-                    throw new SessionException(
-                        SessionErrorCode.InvalidPhase,
-                        "Restart was abandoned because shutdown has started.");
+                    failure = new SessionFailure(SessionErrorCode.InvalidPhase, "Restart was abandoned because shutdown has started.");
+                    return false;
                 }
 
-                // Clears 'built' as soon as the session owns the stack, so the finally below disposes it
-                // only when the restart failed before the swap.
-                _RestartCore(ref built);
+                // False only when the re-parse faulted (the session is Faulted, failure is the fault); the ingest value-cache
+                // request was checked before the job phase.
+                return _TryRestartCore(ref built, newIngest, newIndex, jobs, waited, out report, out failure);
             }
         }
         finally
         {
-            // Non-null only when the restart failed before the swap (see the ref parameter of _RestartCore).
+            // Non-null only when the restart ended before the swap (see the ref parameter of _TryRestartCore).
             built?.Dispose();
             lock (_LifecycleLock)
             {
-                // Wakes a Shutdown that waits for the restart to finish.
+                // New StackBound jobs are accepted again, on every path (a refused, abandoned, faulted or throwing restart
+                // must not leave the session refusing jobs for ever). Then wake a Shutdown that waits for the restart.
+                _RestartPending = false;
                 _RestartIdle.Set();
             }
         }
     }
 
+    /// <summary>What the job phase of a restart did; handed to the core for the report.</summary>
+    private readonly record struct RestartJobOutcome(JobId[] WaitedFor, JobId[] Cancelled);
+
+    // Set while a restart is between its job check and its end. Read by _TryAcceptJob under _RegistryLock: a StackBound job
+    // added during the wait would extend the wait (or run on into the swap), so it is refused with RestartPending; an
+    // Independent job is accepted. Raised under _RegistryLock together with the snapshot of the jobs to end (the snapshot and
+    // the flag must be one step, like Shutdown's flag and its snapshot). Cleared in TryRestart's finally on every path.
+    // Rejected: refusing every job (an independent job cannot extend the wait) and a counter (there is exactly one restart).
+    // Residual risk: a StackBound job that arrives between two restarts is accepted and ended by the next one; that is the
+    // intended behavior of a job of an old generation.
+    private volatile bool _RestartPending;
+
+    /// <summary>The phase rule of a restart. Caller holds <see cref="_LifecycleLock"/>; claims the restart on success.</summary>
+    private bool _TryClaimRestart([NotNullWhen(false)] out SessionFailure? failure)
+    {
+        // Idle has nothing to re-parse and ShuttingDown is on its way out. Faulted is allowed on purpose: a restart is the
+        // way out of it.
+        if (_ShutdownStarted != 0
+            || _State.Phase is SessionPhase.ShuttingDown or SessionPhase.Idle)
+        {
+            failure = new SessionFailure(
+                SessionErrorCode.InvalidPhase,
+                FormattableString.Invariant(
+                    $"TryRestart requires a Running, Stopped or Faulted phase and no shutdown. Current phase: {_State.Phase}."));
+            return false;
+        }
+
+        // Two UI commands can race, so a second restart is an expected refusal (it was an exception once).
+        if (!_RestartIdle.IsSet)
+        {
+            failure = new SessionFailure(SessionErrorCode.RestartInProgress, "A restart is already in progress.");
+            return false;
+        }
+
+        _RestartIdle.Reset();
+        failure = null;
+        return true;
+    }
+
     /// <summary>
-    /// Core restart logic: builds a new stack, gates source threads, swaps the
-    /// stack, re-parses all frames in original order, then resumes source threads.
+    /// Whether the calling thread is the thread of a stack-bound user job that is running. Such a job must not restart the
+    /// session (see <see cref="SessionErrorCode.RestartFromJob"/>).
+    /// </summary>
+    private bool _IsRunningStackBoundJobThread()
+    {
+        foreach (JobInfo info in _UserJobs.Current)
+        {
+            Job job = info.Job;
+            if (job.Binding == JobStackBinding.StackBound && job.Status == JobStatus.Running && job.IsCurrentThread)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The job check of a restart: snapshots the StackBound jobs and decides Refuse. On success no StackBound job can be added
+    /// until the restart's finally. Runs under the registry lock only for the snapshot.
+    /// </summary>
+    private bool _TryCheckJobsForRestart(RestartOptions options, out Job[] bound, [NotNullWhen(false)] out SessionFailure? failure)
+    {
+        // Only user jobs are candidates: listener and value-cache slots rebind on StackChanged, sources keep capturing (the
+        // parse gate parks them), restart-event slots are Independent. Refuse decides under the same lock and before the flag
+        // is raised, so a refused restart never makes TryAddJob answer RestartPending.
+        lock (_RegistryLock)
+        {
+            bound = _CollectRunningStackBoundJobs();
+            if (bound.Length > 0 && options.JobPolicy == RestartJobPolicy.Refuse)
+            {
+                failure = new SessionFailure(SessionErrorCode.JobsRunning, _JobsRunningMessage(bound));
+                return false;
+            }
+
+            _RestartPending = true;
+        }
+
+        failure = null;
+        return true;
+    }
+
+    /// <summary>The pending or running StackBound user jobs. Caller holds <see cref="_RegistryLock"/>.</summary>
+    private Job[] _CollectRunningStackBoundJobs()
+    {
+        List<Job>? found = null;
+        foreach (JobInfo info in _UserJobs.Current)
+        {
+            Job job = info.Job;
+            if (job.Binding == JobStackBinding.StackBound && job.Status is JobStatus.Pending or JobStatus.Running)
+            {
+                (found ??= []).Add(job);
+            }
+        }
+
+        return found is null
+            ? []
+            : [.. found];
+    }
+
+    /// <summary>The most job names a refusal message lists; the rest are counted. Bounds the message size (a message is external output).</summary>
+    private const int _MaxJobNamesInMessage = 10;
+
+    /// <summary>The message of the <see cref="SessionErrorCode.JobsRunning"/> refusal: names the jobs and the way out.</summary>
+    private static string _JobsRunningMessage(Job[] jobs)
+    {
+        System.Text.StringBuilder text = new("Restart refused: stack-bound jobs are running: ");
+        int listed = Math.Min(jobs.Length, _MaxJobNamesInMessage);
+        for (int i = 0; i < listed; i++)
+        {
+            if (i > 0)
+            {
+                _ = text.Append(", ");
+            }
+
+            _ = text.Append(CultureInfo.InvariantCulture, $"'{jobs[i].UiName}'");
+        }
+
+        if (jobs.Length > listed)
+        {
+            _ = text.Append(CultureInfo.InvariantCulture, $" and {jobs.Length - listed} more");
+        }
+
+        _ = text.Append(". Cancel them, or restart with RestartJobPolicy.CancelNow or WaitThenCancel.");
+        return text.ToString();
+    }
+
+    /// <summary>Whether <paramref name="status"/> is a terminal job state.</summary>
+    private static bool _IsTerminal(JobStatus status)
+        => status is JobStatus.Completed or JobStatus.Cancelled or JobStatus.Failed;
+
+    /// <summary>
+    /// The longest single wait of the job phase. Three things end the wait and only one of them is an event (the job's end;
+    /// the other two are the caller's token and the shutdown flag), so the wait is sliced and re-checks both between slices.
+    /// Constant: a latency/overhead trade-off of a rare path (10 wake-ups per second while a restart waits), not
+    /// configurable.
+    /// </summary>
+    private static readonly TimeSpan _WaitSlice = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>Ends or waits for the jobs of the check, after the factory succeeded. Runs outside every session lock.</summary>
+    private RestartJobOutcome _EndJobsForRestart(Job[] bound, RestartOptions options)
+    {
+        if (bound.Length == 0)
+        {
+            return new RestartJobOutcome([], []);
+        }
+
+        if (options.JobPolicy == RestartJobPolicy.WaitThenCancel)
+        {
+            // One budget for all jobs, waited in slices of at most 100 ms on each job's completion event (Job.Join(timeout)),
+            // because three things end the wait and only one of them is an event: the job's end, the caller's
+            // WaitCancellation token, and a shutdown that started meanwhile (_ShutdownStarted is a flag, not a waitable;
+            // Shutdown itself blocks on _RestartIdle until this restart finished, so the slice is what lets it in). A slice
+            // is a kernel wait, not a spin. Rejected: WaitHandle.WaitAny over three handles (would need a shutdown event and
+            // the token's handle per job: allocation and handle churn for a rare path). When the shutdown flag is seen the
+            // wait returns at once and the second critical section abandons the restart (InvalidPhase); shutdown ends the
+            // jobs with SessionShutdown. Cancelling the wait does not abort the restart: it continues as CancelNow.
+            _WaitForJobs(bound, options.JobWaitTimeout, options.WaitCancellation);
+        }
+
+        // A shutdown that started during the wait owns the jobs from now on: the restart will be abandoned (see the second
+        // critical section of TryRestart), and the shutdown cancels the jobs with SessionShutdown. Cancelling them here would
+        // record StackReplaced for a restart that never happens. Nothing is reported for an abandoned restart.
+        if (_ShutdownStarted != 0)
+        {
+            return new RestartJobOutcome([], []);
+        }
+
+        // Whatever is not over now is cancelled, in one pass: jobs that ended during the wait count as waited for, the rest as
+        // cancelled. The reason is stored before the token fires (Job.Cancel(reason)), so the owner reading the terminal
+        // status also reads StackReplaced.
+        List<JobId> waited = [];
+        List<JobId> cancelled = [];
+        foreach (Job job in bound)
+        {
+            if (_IsTerminal(job.Status))
+            {
+                if (options.JobPolicy == RestartJobPolicy.WaitThenCancel)
+                {
+                    waited.Add(job.Id);
+                }
+
+                continue;
+            }
+
+            job.Cancel(JobEndReason.StackReplaced);
+
+            // A Pending job never reaches a terminal state otherwise (the same rule Shutdown applies): start it, the guarded
+            // start is a no-op when TryAddJob's own start won, and its work runs with a token that is already cancelled.
+            if (job.Status == JobStatus.Pending)
+            {
+                _ = job.TryStart(out _);
+            }
+
+            cancelled.Add(job.Id);
+        }
+
+        return new RestartJobOutcome([.. waited], [.. cancelled]);
+    }
+
+    /// <summary>
+    /// Waits until every job in <paramref name="jobs"/> is terminal, the budget is spent, the caller cancelled the wait, or a
+    /// shutdown started.
+    /// </summary>
+    private void _WaitForJobs(Job[] jobs, TimeSpan budget, CancellationToken waitCancellation)
+    {
+        long start = Stopwatch.GetTimestamp();
+        foreach (Job job in jobs)
+        {
+            while (!_IsTerminal(job.Status))
+            {
+                if (waitCancellation.IsCancellationRequested || _ShutdownStarted != 0)
+                {
+                    return;
+                }
+
+                TimeSpan remaining = budget - Stopwatch.GetElapsedTime(start);
+                if (remaining <= TimeSpan.Zero)
+                {
+                    return;
+                }
+
+                TimeSpan slice = remaining < _WaitSlice
+                    ? remaining
+                    : _WaitSlice;
+                _ = job.Join(slice);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Core restart logic: gates source threads, swaps the stack, re-parses all frames in original order, re-binds the
+    /// listeners, then resumes source threads and posts the notification.
     ///
     /// <para>
     /// <b>Concurrency model:</b>
-    /// Source threads are blocked on <see cref="_ParseGate"/> (kernel-level wait,
-    /// no CPU burn) after their current <see cref="IFrameSource.NextFrame"/> call
-    /// returns. This ensures no frame is lost: the source keeps capturing while
-    /// the thread simply waits before parsing. A source thread that passed the gate
-    /// just before it closed finds it closed under <see cref="_ParseMutex"/>, allocates
-    /// nothing, and parks again. After the re-parse finishes and the gate opens, source
-    /// threads resume with the new stack and continue allocating sequential PacketIds
-    /// from where the re-parse left off.
+    /// Source threads are blocked on <see cref="_ParseGate"/> (kernel-level wait, no CPU burn) after their current
+    /// <see cref="IFrameSource.NextFrame"/> call returns. This ensures no frame is lost: the source keeps capturing while the
+    /// thread simply waits before parsing. A source thread that passed the gate just before it closed finds it closed under
+    /// <see cref="_ParseMutex"/>, allocates nothing, and parks again. After the re-parse finishes and the gate opens, source
+    /// threads resume with the new stack and continue allocating sequential PacketIds from where the re-parse left off.
     /// </para>
     ///
     /// <para>
     /// <b>Failure before any change:</b>
-    /// The ingest value cache and the packet index for the new stack are built before
-    /// the phase, the gate, or the queries change. A request the new stack cannot satisfy
-    /// (<see cref="SessionErrorCode.ValueCacheUnknownField"/>,
-    /// <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/>,
-    /// <see cref="SessionErrorCode.ValueCacheInvalidRequest"/>) therefore throws with the
-    /// session exactly as it was; the caller disposes the unused stack.
+    /// The ingest value cache and the packet index for the new stack are built by <c>TryRestart</c> before the job phase, so
+    /// they arrive here ready. A request the new stack cannot satisfy (<see cref="SessionErrorCode.ValueCacheUnknownField"/>,
+    /// <see cref="SessionErrorCode.ValueCacheInvalidFieldName"/>, <see cref="SessionErrorCode.ValueCacheInvalidRequest"/>)
+    /// is refused there, with the session and its jobs exactly as they were.
     /// </para>
     ///
     /// <para>
-    /// <b>Frame ordering guarantee:</b>
-    /// All previously parsed frames are re-parsed in ascending PacketId order
-    /// (0 … N-1) via <see cref="_PacketFrames"/>. A mapping miss, a source
-    /// that is not random-access, or a null <c>FrameById</c> throws
-    /// <see cref="SessionException"/> with <see cref="SessionErrorCode.FrameUnavailable"/>.
-    /// Queries stay disabled after that throw; listeners do not receive
+    /// <b>Frame ordering guarantee and the fault:</b>
+    /// All previously parsed frames are re-parsed in ascending PacketId order (0 … N-1) via <see cref="_PacketFrames"/>. A
+    /// mapping miss, a source that is not random-access, or a null <c>FrameById</c> makes the restart fail with
+    /// <see cref="SessionErrorCode.FrameUnavailable"/> after the swap: the session becomes
+    /// <see cref="SessionPhase.Faulted"/> (see the finally block below), listeners do not receive
     /// <see cref="NotifyFlags.NewPackets"/> for the partial rewrite.
     /// </para>
     /// </summary>
     /// <param name="built">
-    /// The new stack, non-null on entry. Set to <see langword="null"/> in the same step that installs it
-    /// as the session stack: from then on the session owns and disposes it, also when a later step throws.
+    /// The new stack, non-null on entry. Set to <see langword="null"/> in the same step that installs it as the session
+    /// stack: from then on the session owns and disposes it, also when a later step fails.
     /// </param>
-    private void _RestartCore(ref Stack? built)
+    /// <param name="newIngest">The ingest value cache for the new stack, or <see langword="null"/> when none was requested.</param>
+    /// <param name="newIndex">The packet index for the new stack, or <see langword="null"/> when indexing is off.</param>
+    /// <param name="jobs">What the job phase did, for the report.</param>
+    /// <param name="waited">How long the job phase took, for the report.</param>
+    /// <param name="report">The report; set when the call returns <see langword="true"/>.</param>
+    /// <param name="failure">The failure; set when the call returns <see langword="false"/>.</param>
+    private bool _TryRestartCore(
+        ref Stack? built,
+        ValueCache? newIngest,
+        PacketIndex? newIndex,
+        RestartJobOutcome jobs,
+        TimeSpan waited,
+        out RestartReport? report,
+        [NotNullWhen(false)] out SessionFailure? failure)
     {
-        // Caller holds _LifecycleLock and has already validated the registry and checked built for null.
-        Stack newStack = built!; // Non-null: Restart checked the factory result before calling.
-
-        // Build everything the new stack needs before touching session state, so a request the new
-        // stack cannot satisfy leaves the session as it was (old stack, open gate, enabled queries).
-        ValueCache? newIngest = _TryCreateIngestValueCache(newStack);
-        PacketIndex? newIndex = _TryCreatePacketIndex(newStack);
+        // Caller holds _LifecycleLock and has already validated the registry, checked built for null, and built the ingest
+        // value cache and the packet index (the refusals that must come before the job phase).
+        report = null;
+        failure = null;
+        Stack newStack = built!; // Non-null: TryRestart checked the factory result before calling.
 
         // ── Phase 1: Gate source threads and swap the stack ──────────────────
         _State.SetPhase(SessionPhase.Restarting);
         _NotifyAllListeners(NotifyFlags.PhaseChanged);
 
-        // Close the gate. Source threads that finish their current NextFrame()
-        // call block at _ParseGate.Wait(ct) until we Set() below.
+        // Close the gate. Source threads that finish their current NextFrame() call block at _ParseGate.Wait(ct) until we Set()
+        // below (on success only).
         _ParseGate.Reset();
 
         // Disable queries while frames are re-parsed onto the new stack: the counters and the packet index are a partial
         // rewrite until the re-parse finishes, and a pull read would re-parse on a stack whose first parse is incomplete.
         _QueriesDisabled = true;
 
-        // -1 until the swap block read the counter; the fail-closed path restores it only when it is known.
-        int totalToReparse = -1;
+        // The failure that left (or will leave) the session Faulted; set where the exception is in hand, read by the finally.
+        SessionFailure? fault = null;
         bool reparseCompleted = false;
+        int reparsedPackets = 0;
+        TimeSpan reparseDuration = TimeSpan.Zero;
+        ListenerId[] filtersNotRebound = [];
+        RestartReport? succeeded = null;
 
-        // The swap and the re-parse share one try/finally: whatever throws after the gate closed, the
-        // finally reopens it, so source threads never stay parked.
+        // The swap and the re-parse share one try/finally: whatever throws after the gate closed, the finally leaves the
+        // session in a defined state (running again, or Faulted), so source threads never wait on a half-done restart.
         // The holder the swap replaced. Set inside the swap block and cleared by the retirement that follows it; the finally
         // below retires it when something throws between the two, so a replaced stack is never left without a retirement.
         RetirableStack? replaced = null;
         try
         {
+            int totalToReparse;
             lock (_ParseMutex)
             {
-                // Once we own the lock no source thread is inside the parse section. A source thread that
-                // passed the gate before Reset() and waits for this lock re-checks the gate under the lock
-                // and parks again (see _TryIngestFrameUnderLock), so it cannot allocate from the reset counter.
-                totalToReparse = _NextPacketId;
+                // Once we own the lock no source thread is inside the parse section. A source thread that passed the gate
+                // before Reset() and waits for this lock re-checks the gate under the lock and parks again (see
+                // _TryIngestFrameUnderLock), so it cannot allocate from the reset counter.
+                // The number of packets to re-parse is the number of mapped packets, not _NextPacketId: they are equal after a
+                // clean restart, but a restart from the Faulted phase finds _NextPacketId reset to 0 by the failed one while the
+                // map still holds every packet.
+                totalToReparse = _PacketFrames.Count;
 
                 // Swap the protocol stack. Session owns factory-created stacks from here on.
                 // The old stack is NOT disposed here. _QueriesDisabled (set above) only stops reads that start later: a
@@ -767,8 +1149,18 @@ public sealed class Session : ISession, ISessionReader
                 // retirement right after this block disposes the stack when the last of them leaves (at once if none is
                 // inside). Rejected: disposing here (readers do not take this lock, so it only stalls ingest for the
                 // length of the protocol shutdowns) and keeping the old stack until Shutdown (memory, delayed OnShutdown).
-                replaced = _Holder;
-                _Holder = new RetirableStack(newStack, ownedBySession: true, _OnStackDisposed);
+                //
+                // The generation moves with the holder in this one store (see RetirableStack's constructor remarks): from here
+                // on Generation reads N + 1 while _QueriesDisabled is still true, which is the "restart in progress" state a
+                // poller can tell from "stable" (N, enabled) and "done" (N + 1, enabled). Why under the parse mutex: the swap
+                // is serialized with ingest and with a second swap by it, so two holders can never get the same number.
+                // Overflow: a session would need 2^31 restarts; the increment is checked so a wrap would throw instead of
+                // reusing a number a consumer holds. It is computed before 'replaced' is assigned, so that a throw here
+                // leaves the live holder alone (the finally below retires whatever 'replaced' names).
+                RetirableStack current = _Holder;
+                int nextGeneration = checked(current.Generation + 1);
+                replaced = current;
+                _Holder = new RetirableStack(newStack, nextGeneration, ownedBySession: true, _OnStackDisposed);
                 built = null;
 
                 // Old parse results are discarded (the session does not retain packets).
@@ -825,8 +1217,32 @@ public sealed class Session : ISession, ISessionReader
             _RetireStack(retiring);
 
             // ── Phase 2 + 3: Re-parse and resume ─────────────────────────────────
-            _ReparseAllFrames(totalToReparse);
-            reparseCompleted = true;
+            long reparseStart = Stopwatch.GetTimestamp();
+            try
+            {
+                _ReparseAllFrames(totalToReparse);
+                reparsedPackets = totalToReparse;
+                reparseCompleted = true;
+            }
+            catch (SessionException ex)
+            {
+                // An expected failure of the re-parse (FrameUnavailable): recorded here, where the exception is in hand, and
+                // read by the finally below; TryRestart returns it as false + failure (the Try contract) and the session is
+                // Faulted. It is not rethrown.
+                fault = new SessionFailure(ex.Code, ex.Message);
+            }
+            catch (Exception ex)
+            {
+                // A bug in a parser or in the session (InvalidOperationException from _ParseFrameUnderLock): the state is
+                // still recorded so the session is Faulted rather than half-swapped, then the exception propagates (bugs
+                // throw). Top-level boundary of the re-parse: nothing is swallowed.
+                fault = new SessionFailure(SessionErrorCode.SessionFaulted, ex.Message);
+                throw;
+            }
+            finally
+            {
+                reparseDuration = Stopwatch.GetElapsedTime(reparseStart);
+            }
         }
         finally
         {
@@ -836,21 +1252,19 @@ public sealed class Session : ISession, ISessionReader
                 _RetireStack(replaced);
             }
 
-            // Leave Restarting for the phase that matches the sources: Running while any source still ingests, Stopped
-            // when they all ended during the restart (their completion could not set the phase while Restarting).
-            // This holds on the failure path too; there only the queries stay disabled.
             bool sourcesStillActive = _ActiveSourceCount > 0;
-            SessionPhase finalPhase = sourcesStillActive
-                ? SessionPhase.Running
-                : SessionPhase.Stopped;
-            _State.SetPhase(finalPhase);
-
             if (reparseCompleted)
             {
-                // Re-bind every listener filter to the new stack while pull queries are still
-                // disabled. A filter carries field ids resolved against the retired stack, so it must
-                // be replaced before any listener can pull again.
-                _DeriveListenerFilters();
+                // Leave Restarting for the phase that matches the sources: Running while any source still ingests, Stopped
+                // when they all ended during the restart (their completion could not set the phase while Restarting).
+                _State.SetPhase(sourcesStillActive
+                    ? SessionPhase.Running
+                    : SessionPhase.Stopped);
+                _SetFault(null); // A recovery from Faulted clears the kept failure.
+
+                // Re-bind every listener filter to the new stack while pull queries are still disabled. A filter carries
+                // field ids resolved against the retired stack, so it must be replaced before any listener can pull again.
+                filtersNotRebound = _DeriveListenerFilters();
 
                 _QueriesDisabled = false;
 
@@ -863,16 +1277,40 @@ public sealed class Session : ISession, ISessionReader
                 _ResetAllListenerCursors();
                 _ResetAllValueCacheCursors();
                 _NotifyAllListeners(flags);
+
+                succeeded = new RestartReport(
+                    _Holder.Generation,
+                    reparsedPackets,
+                    jobs.WaitedFor,
+                    jobs.Cancelled,
+                    filtersNotRebound,
+                    waited,
+                    reparseDuration);
+                _PostRestartNotification(new RestartNotification(succeeded.Generation, true, succeeded, null));
+
+                // Reopen last, so no source thread stays parked, and only on success. Reopening only after the filter re-bind
+                // and the cursor reset means resumed ingest cannot announce packets to stale cursors.
+                _ParseGate.Set();
             }
             else
             {
-                // Fail closed: the old stack is already retired (disposed once its last read ended) and counters/mapping
-                // are a partial rewrite. Do not re-enable queries or announce NewPackets.
-                // Restore _NextPacketId so a still-running source cannot reuse 0 … N-1.
-                if (totalToReparse >= 0)
-                {
-                    Interlocked.Exchange(ref _NextPacketId, totalToReparse);
-                }
+                // Faulted: the swap happened (Generation is N + 1) but the re-parse did not finish, so counters, map
+                // watermark and index are a partial rewrite. Nothing may read (queries stay disabled) and nothing may ingest
+                // (the gate stays closed: a resumed source would allocate ids the new stack's watermark has not reached, the
+                // ParseIdGap of the earlier design, which also restored _NextPacketId to the old count against a watermark of
+                // the partial rewrite). The failure is kept so every refusal can name it. The only ways out are another
+                // restart (re-parses from 0, which makes watermark and counters agree again) and Shutdown (cancels the parked
+                // sources; their gate wait throws on the token). Rejected: resuming ingest (ids collide), compressing ids
+                // (breaks the map), disposing the new stack here (a retry needs a factory anyway, and the holder is disposed
+                // by the next swap or by shutdown). Residual risk: parked sources keep capturing into their own buffers (a
+                // stream source is cached whole) until the user restarts or shuts down; the fault text tells them to.
+                // 'fault' is null only when something other than the re-parse threw (the overflow check of the generation, for
+                // example); the session is faulted all the same, with a generic message.
+                fault ??= new SessionFailure(
+                    SessionErrorCode.SessionFaulted,
+                    "The restart ended with an unexpected error before the new stack served reads.");
+                _SetFault(fault);
+                _State.SetPhase(SessionPhase.Faulted);
 
                 NotifyFlags flags = NotifyFlags.PhaseChanged;
                 if (!sourcesStillActive)
@@ -881,11 +1319,140 @@ public sealed class Session : ISession, ISessionReader
                 }
 
                 _NotifyAllListeners(flags);
+                _PostRestartNotification(new RestartNotification(_Holder.Generation, false, null, fault));
+            }
+        }
+
+        if (reparseCompleted)
+        {
+            report = succeeded!; // Non-null: the finally built the report in the same branch that set reparseCompleted.
+            failure = null;
+            return true;
+        }
+
+        report = null;
+        failure = fault!; // Non-null: the finally assigned a generic fault when the re-parse did not record one.
+        return false;
+    }
+
+    // -- ISession: Restarted event --
+
+    /// <inheritdoc/>
+    public event Action<RestartNotification>? Restarted
+    {
+        add
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _ThrowIfDisposed();
+            RestartEventSlot slot;
+            lock (_RegistryLock)
+            {
+                // After shutdown started nobody would cancel or join a slot created now (the same rule as TryAddJob); an
+                // event accessor cannot return false, so the refusal is the one SessionException the accessor documents.
+                if (_ShutdownStarted != 0)
+                {
+                    throw new SessionException(SessionErrorCode.InvalidPhase, "Restarted cannot be subscribed once shutdown has started.");
+                }
+
+                slot = new RestartEventSlot(_State.AllocateJobId(), value, _OnJobStatusChanged);
+                _RestartEventSlots.Add(slot);
+                _AllJobs.Add(slot.Info);
             }
 
-            // Reopen last, on success and on failure alike, so no source thread stays parked. Reopening only after the
-            // filter re-bind and the cursor reset means resumed ingest cannot announce packets to stale cursors.
-            _ParseGate.Set();
+            _NotifyAllListeners(NotifyFlags.JobAdded);
+
+            // A thread that cannot be started is recorded on the slot's job (status Failed) and visible in GetJobs(); the
+            // subscription then simply never delivers, like a listener whose thread could not start.
+            _ = slot.TryStart(out _);
+        }
+
+        remove
+        {
+            ArgumentNullException.ThrowIfNull(value);
+
+            // The first slot whose handler equals the delegate (a handler added twice has two slots; remove ends one).
+            RestartEventSlot? slot = _FindRestartEventSlot(value);
+            if (slot is null)
+            {
+                return;
+            }
+
+            // Joining the slot's thread from its own handler would deadlock: the listener rule (never unsubscribe yourself
+            // from your own callback) applies. A thrown exception turns the deadlock into a visible caller bug.
+            if (slot.IsHandlerThread)
+            {
+                throw new InvalidOperationException("A Restarted handler cannot remove itself from inside its own callback.");
+            }
+
+            _EndRestartEventSlot(slot, JobEndReason.UserCancelled);
+        }
+    }
+
+    /// <summary>Finds the first slot created for <paramref name="handler"/>, or <see langword="null"/>.</summary>
+    private RestartEventSlot? _FindRestartEventSlot(Action<RestartNotification> handler)
+    {
+        foreach (RestartEventSlot slot in _RestartEventSlots.Current)
+        {
+            if (slot.Handles(handler))
+            {
+                return slot;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Finds the slot whose job is <paramref name="job"/>, or <see langword="null"/>.</summary>
+    private RestartEventSlot? _FindRestartEventSlot(JobInfo job)
+    {
+        foreach (RestartEventSlot slot in _RestartEventSlots.Current)
+        {
+            if (slot.Owns(job))
+            {
+                return slot;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Ends a subscription: cancels its job with <paramref name="reason"/>, waits for its thread, removes it from the
+    /// registries and disposes it. The caller must not be the slot's own handler thread (the join would wait for itself).
+    /// </summary>
+    private void _EndRestartEventSlot(RestartEventSlot slot, JobEndReason reason)
+    {
+        slot.Cancel(reason);
+
+        // A never-started slot has no thread that could observe the cancellation; start it so the loop exits at once (the
+        // guarded start is a no-op when the add's own start won).
+        if (slot.Status == JobStatus.Pending)
+        {
+            _ = slot.TryStart(out _);
+        }
+
+        slot.Join();
+
+        // The slot leaves both registries. A handler that is added and removed concurrently with a shutdown is either in the
+        // shutdown's snapshot (the shutdown disposes it again; the dispose is idempotent) or not in it at all.
+        _ = _RestartEventSlots.Remove(slot);
+        _ = _AllJobs.Remove(slot.Info);
+        slot.Dispose();
+        _NotifyAllListeners(NotifyFlags.JobRemoved);
+    }
+
+    /// <summary>
+    /// Hands the notification of a restart to every subscription. Never blocks and never runs a handler: each slot only
+    /// enqueues and wakes its own thread. Called after the flags were set and, on success, after reads were enabled, so a
+    /// handler that reads the session reads the generation of its notification.
+    /// </summary>
+    private void _PostRestartNotification(RestartNotification notification)
+    {
+        // The snapshot is complete for this restart: a slot added later gets the next restart's notification, a slot removed
+        // meanwhile ignores the post (its job ended).
+        foreach (RestartEventSlot slot in _RestartEventSlots.Current)
+        {
+            slot.Post(notification);
         }
     }
 
@@ -982,8 +1549,10 @@ public sealed class Session : ISession, ISessionReader
     /// returning every packet.
     /// </para>
     /// </summary>
-    private void _DeriveListenerFilters()
+    /// <returns>The ids of the listeners whose filter could not be re-bound, for <see cref="RestartReport.FiltersNotRebound"/>.</returns>
+    private ListenerId[] _DeriveListenerFilters()
     {
+        List<ListenerId>? notRebound = null;
         ReadOnlySpan<ListenerSlot> slots = _ListenerSlots.Current;
         foreach (ListenerSlot slot in slots)
         {
@@ -1004,8 +1573,19 @@ public sealed class Session : ISession, ISessionReader
                 }
 
                 slot.SetFilterFault(failure);
+
+                // Reported to the caller of the restart, who can tell the user which listener lost its filter. A slot whose
+                // public info is not linked yet is still being registered; its own rebind check handles it.
+                if (slot.ListenerInfo is ListenerInfo info)
+                {
+                    (notRebound ??= []).Add(info.Id);
+                }
             }
         }
+
+        return notRebound is null
+            ? []
+            : [.. notRebound];
     }
 
     /// <summary>
@@ -1254,15 +1834,17 @@ public sealed class Session : ISession, ISessionReader
             _NotifyAllListeners(NotifyFlags.ShuttingDown);
         }
 
-        // Cancel all source jobs and user jobs. They observe this via their CancellationToken.
+        // Cancel all source jobs and user jobs. They observe this via their CancellationToken. The reason is recorded before
+        // the token fires, so a job a restart or a user had already asked to end keeps that (the first reason wins) and every
+        // other job reads SessionShutdown.
         foreach (Job job in sourceJobs)
         {
-            job.Cancel();
+            job.Cancel(JobEndReason.SessionShutdown);
         }
 
         foreach (Job job in userJobs)
         {
-            job.Cancel();
+            job.Cancel(JobEndReason.SessionShutdown);
 
             // A job TryAddJob registered but has not started yet would stay Pending, and a Pending job never reaches a
             // terminal state, so the join below would wait for a thread that does not exist. Start it (the start is
@@ -1279,6 +1861,31 @@ public sealed class Session : ISession, ISessionReader
         // inspect job states via GetJobs() to see which jobs are still running.
         _ = _JoinWithinBudget(sourceJobs, timeout, startTimestamp);
         _ = _JoinWithinBudget(userJobs, timeout, startTimestamp);
+
+        // Restart-event subscriptions follow the user jobs. The snapshot is complete (the flag was published under the registry
+        // lock, which every add re-checks) and no restart runs any more (Shutdown waited for it), so nothing is posted from
+        // here on: each loop delivers what is queued (see RestartEventSlot) and exits. They share the budget; what a handler
+        // that does not return in time leaves undelivered is counted and reported below, never dropped silently.
+        ReadOnlySpan<RestartEventSlot> eventSlots = _RestartEventSlots.Current;
+        foreach (RestartEventSlot slot in eventSlots)
+        {
+            slot.Cancel(JobEndReason.SessionShutdown);
+        }
+
+        int undeliveredNotifications = 0;
+        foreach (RestartEventSlot slot in eventSlots)
+        {
+            // A never-started slot would stay Pending for ever; start it so its loop can drain and exit.
+            if (slot.Status == JobStatus.Pending)
+            {
+                _ = slot.TryStart(out _);
+            }
+
+            if (!_JoinSlotWithinBudget(slot, timeout, startTimestamp))
+            {
+                undeliveredNotifications += slot.PendingCount;
+            }
+        }
 
         // Listeners must still TryGetPacket (including lock-free redissect) while they
         // drain the last NewPackets window. Disable queries only after they exit.
@@ -1307,7 +1914,7 @@ public sealed class Session : ISession, ISessionReader
         ReadOnlySpan<ListenerSlot> listeners = _ListenerSlots.Current;
         foreach (ListenerSlot slot in listeners)
         {
-            slot.Cancel();
+            slot.Cancel(JobEndReason.SessionShutdown);
         }
         foreach (ListenerSlot slot in listeners)
         {
@@ -1341,6 +1948,11 @@ public sealed class Session : ISession, ISessionReader
         // Listeners have drained; from here on no packet reads are served (QueriesEnabled becomes false for good).
         _QueriesDisabled = true;
 
+        // The kept fault is a state of the Faulted phase (ISessionReader.Fault: null while the session is not faulted).
+        // Shutdown leaves Faulted for Stopped, so the failure goes with it: a read on the stopped session is refused with
+        // QueriesDisabled like on every other stopped session, not with "call TryRestart again", which is refused now.
+        _SetFault(null);
+
         // Transition to final state.
         _State.SetPhase(SessionPhase.Stopped);
 
@@ -1373,6 +1985,24 @@ public sealed class Session : ISession, ISessionReader
                 slot.Dispose();
             }
             catch (Exception ex) { (cleanupErrors ??= []).Add(ex); }
+        }
+
+        foreach (RestartEventSlot slot in eventSlots)
+        {
+            try
+            {
+                slot.Dispose();
+            }
+            catch (Exception ex) { (cleanupErrors ??= []).Add(ex); }
+        }
+
+        if (undeliveredNotifications > 0)
+        {
+            (cleanupErrors ??= []).Add(new TimeoutException(
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "{0} restart notifications were not delivered within the shutdown budget.",
+                    undeliveredNotifications)));
         }
 
         foreach (ValueCacheSlot slot in _ValueCacheSlots.Current)
@@ -1504,10 +2134,14 @@ public sealed class Session : ISession, ISessionReader
 
             // The job delegate captures the source and its info; the job thread runs _RunSourceLoop with them. The job is
             // only created here and started by _StartInternal.
+            // Independent, generation -1: a source keeps capturing across a restart (the parse gate parks its thread while the
+            // frames are re-parsed), so a restart must neither cancel nor wait for it.
             Job job = new(
                 jobId,
                 uiName,
                 $"Source: {uiName}",
+                JobStackBinding.Independent,
+                generation: -1,
                 ct => _RunSourceLoop(source, sourceInfo, ct),
                 _OnJobStatusChanged);
 
@@ -1561,7 +2195,9 @@ public sealed class Session : ISession, ISessionReader
             {
                 if (_ShutdownStarted != 0 || _State.Phase != SessionPhase.Idle)
                 {
-                    failure = new SessionFailure(SessionErrorCode.InvalidPhase, "TryStart requires the Idle phase.");
+                    // A faulted session is not Idle either, but its refusal names the fault and the way out.
+                    failure = _FaultedFailureOrNull()
+                        ?? new SessionFailure(SessionErrorCode.InvalidPhase, "TryStart requires the Idle phase.");
                     return false;
                 }
 
@@ -2095,7 +2731,7 @@ public sealed class Session : ISession, ISessionReader
         ReadOnlySpan<ValueCacheSlot> slots = _ValueCacheSlots.Current;
         foreach (ValueCacheSlot slot in slots)
         {
-            slot.Cancel();
+            slot.Cancel(JobEndReason.SessionShutdown);
         }
 
         foreach (ValueCacheSlot slot in slots)
@@ -2120,6 +2756,13 @@ public sealed class Session : ISession, ISessionReader
     /// again instead of allocating an id. Diagnostic; tests use it to prove the restart race was taken.
     /// </summary>
     internal int IngestGateRefusalCount => _IngestGateRefusals;
+
+    /// <summary>
+    /// Whether the parse gate is open, i.e. whether source threads may ingest. Diagnostic: a faulted session keeps it closed
+    /// (a resumed source would allocate ids the new stack's watermark has not reached), and tests assert exactly that without
+    /// having to wait for something that must not happen.
+    /// </summary>
+    internal bool ParseGateIsOpen => _ParseGate.IsSet;
 
     /// <summary>
     /// Fail-closed path when a freshly allocated packet id cannot be recorded in the map.
@@ -2694,9 +3337,11 @@ public sealed class Session : ISession, ISessionReader
             return false;
         }
 
+        // A faulted session also has its queries disabled; the helper answers with the fault in that case, so the caller
+        // learns the reason and the way out instead of a bare "queries are disabled".
         if (_QueriesDisabled)
         {
-            failure = new SessionFailure(SessionErrorCode.QueriesDisabled, "Packet queries are disabled.");
+            failure = _RefusedReadFailure();
             return false;
         }
 
@@ -2832,6 +3477,117 @@ public sealed class Session : ISession, ISessionReader
         return _TryGetPacketCore(ref sources, id, recycle, out packet, out failure);
     }
 
+    /// <inheritdoc/>
+    public bool TryGetPacket(
+        PacketId id,
+        in ParseOptions options,
+        StackView builtFor,
+        Packet? recycle,
+        [NotNullWhen(true)] out Packet? packet,
+        [NotNullWhen(false)] out SessionFailure? failure)
+    {
+        // Same guards and frame read as the plain single read, then the leased parse below. The frame is read before the
+        // lease, so a slow source never holds a retired stack alive.
+        RandomAccessLookup sources = new(_RandomAccessSources);
+        if (!_TryReadCapturedFrame(ref sources, id, out Frame frame, out failure))
+        {
+            packet = null;
+            return false;
+        }
+
+        if (!_TryLeaseStackForRead(out StackLease lease))
+        {
+            packet = null;
+            failure = _RefusedReadFailure();
+            return false;
+        }
+
+        using (lease)
+        {
+            // The options carry ids (FieldWatch, FirstProtocol) and objects (Cache, Index) of exactly one stack; the caller
+            // says which with builtFor. One integer compare (plus one reference compare against a view of another session)
+            // against the LEASED holder, never _Holder: a restart may have swapped _Holder after this lease was granted on the
+            // old one, and the lease is what pins the stack the parse runs on. Rejected: comparing every option field with the
+            // stack (the generation is what the caller has, and an observer's watch has no stack to compare). Residual risk: a
+            // caller that builds the options on one view and passes another view of the same generation (a copy of the same
+            // pair) is correct by construction; one that passes a view it did not build the ids on is a caller bug the check
+            // cannot see.
+            if (builtFor.Generation != lease.Generation || !ReferenceEquals(builtFor.Stack, lease.Stack))
+            {
+                packet = null;
+                failure = new SessionFailure(
+                    SessionErrorCode.OptionsStackMismatch,
+                    string.Format(
+                        CultureInfo.InvariantCulture,
+                        "The parse options were built for generation {0}; the session reads with generation {1}. Rebuild the options on CurrentStack.",
+                        builtFor.Generation,
+                        lease.Generation));
+                return false;
+            }
+
+            // The caller's index wins when given; otherwise the session's index of this stack (never another stack's).
+            ParseOptions effective = options.Index is null
+                ? options with { Index = SelectIndexFor(_PacketIndex, lease.Stack) }
+                : options;
+            return _TryParseWithOptions(lease.Stack, frame, id, in effective, recycle, out packet, out failure);
+        }
+    }
+
+    /// <summary>
+    /// The parse of <see cref="TryGetPacket(PacketId, in ParseOptions, StackView, Packet?, out Packet?, out SessionFailure?)"/>
+    /// on a stack the caller holds a lease on. A value cache or packet index of another stack inside the options is a caller
+    /// mistake with a defined answer (<see cref="SessionErrorCode.OptionsStackMismatch"/>); any other rejection of the parser is
+    /// a broken invariant and throws, like <see cref="_ReparseOnStack"/>.
+    /// </summary>
+    private static bool _TryParseWithOptions(
+        Stack stack,
+        Frame frame,
+        PacketId id,
+        in ParseOptions options,
+        Packet? recycle,
+        [NotNullWhen(true)] out Packet? packet,
+        [NotNullWhen(false)] out SessionFailure? failure)
+    {
+        // A rejected recycle falls through to a fresh allocation, as everywhere else; only the options' own stack mismatches
+        // end the call, because a fresh parse would reject them the same way.
+        ParseFailure recycleFailure = ParseFailure.None;
+        if (recycle is not null && Packet.TryParse(recycle, id, stack, frame, in options, out recycleFailure))
+        {
+            packet = recycle;
+            failure = null;
+            return true;
+        }
+
+        if (recycleFailure is ParseFailure.CacheStackMismatch or ParseFailure.IndexStackMismatch)
+        {
+            packet = null;
+            failure = _OptionsOfAnotherStack();
+            return false;
+        }
+
+        if (!Packet.TryParse(id, stack, frame, in options, out Packet? created, out ParseFailure parseFailure) || created is null)
+        {
+            if (parseFailure is ParseFailure.CacheStackMismatch or ParseFailure.IndexStackMismatch)
+            {
+                packet = null;
+                failure = _OptionsOfAnotherStack();
+                return false;
+            }
+
+            throw new InvalidOperationException(parseFailure.ToString());
+        }
+
+        packet = created;
+        failure = null;
+        return true;
+    }
+
+    /// <summary>The refusal for a value cache or packet index of another stack inside caller-built parse options.</summary>
+    private static SessionFailure _OptionsOfAnotherStack()
+        => new(
+            SessionErrorCode.OptionsStackMismatch,
+            "The parse options carry a value cache or packet index of another stack. Rebuild them on CurrentStack.");
+
     /// <summary>
     /// Per-id body shared by <see cref="TryGetPacket(PacketId, Packet?, out Packet?, out SessionFailure?)"/>
     /// and the read loops. <paramref name="sources"/> is a snapshot the caller takes once per call, so a loop
@@ -2848,35 +3604,63 @@ public sealed class Session : ISession, ISessionReader
         [NotNullWhen(true)] out Packet? packet,
         [NotNullWhen(false)] out SessionFailure? failure)
     {
+        if (!_TryReadCapturedFrame(ref sources, id, out Frame frame, out failure))
+        {
+            packet = null;
+            return false;
+        }
+
+        // The lease check inside the re-parse is the authoritative queries check: the early one in the frame read is only
+        // a cheap short cut, a restart can disable the queries between the two.
+        if (!_TryReparseFrame(frame, id, recycle, out packet))
+        {
+            failure = _RefusedReadFailure();
+            return false;
+        }
+
+        failure = null;
+        return true;
+    }
+
+    /// <summary>
+    /// The guards and the frame read shared by every packet read: the restart/shutdown pause, the id itself, the map, and
+    /// the source's <see cref="IRandomAccessFrameSource.FrameById"/>. Takes no lease; a caller that parses takes one for the
+    /// parse only, so a slow source never holds a retired stack alive (single read) or the caller already holds one for its
+    /// whole call (batch and matching reads).
+    /// </summary>
+    private bool _TryReadCapturedFrame(
+        ref RandomAccessLookup sources,
+        PacketId id,
+        out Frame frame,
+        [NotNullWhen(false)] out SessionFailure? failure)
+    {
+        frame = default;
+
         // Guards first (cheap, no I/O): the restart/shutdown pause, then the id itself, then the map. An id that is
         // not in the map has not been announced (yet).
         if (_QueriesDisabled)
         {
-            packet = null;
-            failure = new SessionFailure(SessionErrorCode.QueriesDisabled, "Packet queries are disabled.");
+            failure = _RefusedReadFailure();
             return false;
         }
 
         if (!id.IsValid)
         {
-            packet = null;
             failure = new SessionFailure(SessionErrorCode.PacketNotFound, "Packet id is not valid.");
             return false;
         }
 
         if (!_TryGetPacketFrame(id, out FrameId frameId, out FrameSourceId sourceId))
         {
-            packet = null;
             failure = new SessionFailure(
                 SessionErrorCode.PacketNotFound,
                 string.Format(CultureInfo.InvariantCulture, "Packet id {0} is not in the announced range.", id.Value));
             return false;
         }
 
-        // Re-read the captured frame from its source (the session keeps no packets), then re-parse it below.
+        // Re-read the captured frame from its source (the session keeps no packets), then the caller re-parses it.
         if (!sources.TryGet(sourceId, out IRandomAccessFrameSource? raSource))
         {
-            packet = null;
             failure = new SessionFailure(SessionErrorCode.FrameUnavailable, "The frame source for this packet is not available.");
             return false;
         }
@@ -2884,21 +3668,48 @@ public sealed class Session : ISession, ISessionReader
         Frame? raFrame = raSource.FrameById(frameId);
         if (raFrame is null)
         {
-            packet = null;
             failure = new SessionFailure(SessionErrorCode.FrameUnavailable, "The captured frame could not be re-read.");
             return false;
         }
 
-        // The lease check inside the re-parse is the authoritative queries check: the early one above is only a cheap
-        // short cut, a restart can disable the queries between the two.
-        if (!_TryReparseFrame(raFrame.Value, id, recycle, out packet))
-        {
-            failure = new SessionFailure(SessionErrorCode.QueriesDisabled, "Packet queries are disabled.");
-            return false;
-        }
-
+        frame = raFrame.Value;
         failure = null;
         return true;
+    }
+
+    /// <summary>
+    /// The failure of a read that was refused because queries are not served right now. One place, so a restart that is
+    /// running and one that failed report through the same door: a faulted session answers with the fault (one extra
+    /// volatile read, on the already-refused path only), every other pause with <see cref="SessionErrorCode.QueriesDisabled"/>.
+    /// </summary>
+    private SessionFailure _RefusedReadFailure()
+    {
+        if (_Fault is SessionFailure fault)
+        {
+            return _FaultedFailure(fault);
+        }
+
+        return new SessionFailure(SessionErrorCode.QueriesDisabled, "Packet queries are disabled.");
+    }
+
+    /// <summary>The refusal every call except Shutdown and TryRestart gives while the session is faulted; carries the original text.</summary>
+    private static SessionFailure _FaultedFailure(SessionFailure fault)
+        => new(
+            SessionErrorCode.SessionFaulted,
+            "The session is faulted by a failed restart; call TryRestart again or Shutdown. Fault: " + fault.Message);
+
+    /// <summary>
+    /// The faulted refusal when the session is faulted, otherwise <see langword="null"/>. For the <c>Try*</c> members that
+    /// check the phase before anything else.
+    /// </summary>
+    private SessionFailure? _FaultedFailureOrNull()
+    {
+        if (_Fault is SessionFailure fault)
+        {
+            return _FaultedFailure(fault);
+        }
+
+        return null;
     }
 
     /// <inheritdoc/>
@@ -2907,7 +3718,7 @@ public sealed class Session : ISession, ISessionReader
         if (_QueriesDisabled)
         {
             frame = default;
-            failure = new SessionFailure(SessionErrorCode.QueriesDisabled, "Packet queries are disabled.");
+            failure = _RefusedReadFailure();
             return false;
         }
 
@@ -2967,14 +3778,32 @@ public sealed class Session : ISession, ISessionReader
         // FrameById per packet. The chunk buffers are stack arrays (see FrameBatch), so a read of any length allocates
         // nothing beyond the packets the caller did not supply for recycling.
         int total = Math.Min(buffer.Length, limit - fromIndex);
-        RandomAccessLookup sources = new(_RandomAccessSources);
-        for (int done = 0; done < total; done += _FrameBatchSize)
+
+        // One lease for the whole call (was: one per 64-packet chunk; the matching read even leased per packet). Why: a call
+        // is the unit a consumer reasons about, so a call must parse on exactly one stack generation; with a lease per chunk
+        // a restart that ended between two chunks produced packets of two stacks in one buffer. Cost: the old stack stays
+        // alive until this call returns, bounded by the caller's buffer (a replaced stack is disposed by the last lease, see
+        // RetirableStack); gain: two interlocked operations per call instead of per chunk. The per-packet _QueriesDisabled
+        // check inside the chunk stays: it ends a call early when a restart starts, so the retired stack is released as soon
+        // as the call notices. Rejected: a generation compare per packet (a second load on the hot path for no gain, the
+        // lease already pins one holder). Residual risk: a source whose FrameById blocks keeps a retired stack alive for as
+        // long as it blocks; Shutdown's time budget covers that case.
+        if (!_TryLeaseStackForRead(out StackLease lease))
         {
-            int length = Math.Min(_FrameBatchSize, total - done);
-            _ReadPacketChunk(ref sources, fromIndex + done, buffer.Slice(done, length));
+            return 0;
         }
 
-        return total;
+        using (lease)
+        {
+            RandomAccessLookup sources = new(_RandomAccessSources);
+            for (int done = 0; done < total; done += _FrameBatchSize)
+            {
+                int length = Math.Min(_FrameBatchSize, total - done);
+                _ReadPacketChunk(ref sources, lease.Stack, fromIndex + done, buffer.Slice(done, length));
+            }
+
+            return total;
+        }
     }
 
     /// <inheritdoc/>
@@ -2996,28 +3825,38 @@ public sealed class Session : ISession, ISessionReader
         // The ids of a plain range read are consecutive, so the layout is always Contiguous (only the Matching mode of
         // TryReadPackets can skip ids).
         int total = Math.Min(destination.Length, limit - startId);
-        RandomAccessLookup sources = new(_RandomAccessSources);
-        PacketBatch batch = default;
-        for (int done = 0; done < total; done += _FrameBatchSize)
+
+        // One lease for the whole call, for the reasons given at the Packet overload above.
+        if (!_TryLeaseStackForRead(out StackLease lease))
         {
-            int length = Math.Min(_FrameBatchSize, total - done);
-            Span<Packet?> chunk = batch;
-            chunk = chunk[..length];
-
-            // Recycle the packets the caller's slots carry, read the chunk, and hand the results back with their ids.
-            for (int i = 0; i < length; i++)
-            {
-                chunk[i] = destination[done + i].Packet;
-            }
-
-            _ReadPacketChunk(ref sources, startId + done, chunk);
-            for (int i = 0; i < length; i++)
-            {
-                destination[done + i] = new PacketRef(new PacketId(startId + done + i), chunk[i]);
-            }
+            return 0;
         }
 
-        return total;
+        using (lease)
+        {
+            RandomAccessLookup sources = new(_RandomAccessSources);
+            PacketBatch batch = default;
+            for (int done = 0; done < total; done += _FrameBatchSize)
+            {
+                int length = Math.Min(_FrameBatchSize, total - done);
+                Span<Packet?> chunk = batch;
+                chunk = chunk[..length];
+
+                // Recycle the packets the caller's slots carry, read the chunk, and hand the results back with their ids.
+                for (int i = 0; i < length; i++)
+                {
+                    chunk[i] = destination[done + i].Packet;
+                }
+
+                _ReadPacketChunk(ref sources, lease.Stack, startId + done, chunk);
+                for (int i = 0; i < length; i++)
+                {
+                    destination[done + i] = new PacketRef(new PacketId(startId + done + i), chunk[i]);
+                }
+            }
+
+            return total;
+        }
     }
 
     /// <summary>
@@ -3165,10 +4004,11 @@ public sealed class Session : ISession, ISessionReader
 
     /// <summary>
     /// Re-parses packets <paramref name="startId"/> … into <paramref name="packets"/> (≤ 64 slots; a non-null slot is
-    /// that slot's recycle packet, a failed slot becomes null). The queries-disabled check stays per packet, as in
-    /// <see cref="_TryGetPacketCore"/>.
+    /// that slot's recycle packet, a failed slot becomes null) on <paramref name="stack"/>, the stack the caller holds a
+    /// lease on for its whole read call. The queries-disabled check stays per packet, as in
+    /// <see cref="_TryReadCapturedFrame"/>: it is the one volatile load that ends a call early when a restart starts.
     /// </summary>
-    private void _ReadPacketChunk(ref RandomAccessLookup sources, int startId, Span<Packet?> packets)
+    private void _ReadPacketChunk(ref RandomAccessLookup sources, Stack stack, int startId, Span<Packet?> packets)
     {
         // Read the whole chunk's frames first (batched per source), then re-parse them one by one on this thread.
         FrameBatch frames = default;
@@ -3177,29 +4017,17 @@ public sealed class Session : ISession, ISessionReader
         Span<FrameBatchMiss> misses = stackalloc FrameBatchMiss[_FrameBatchSize];
         _ReadFrameBatch(ref sources, startId, chunk, misses[..packets.Length]);
 
-        // One lease for the whole chunk instead of one per packet: an interlocked pair per 64 packets, and the chunk is short
-        // (the per-packet queries check below ends it early when a restart starts). The frames were read before the lease, so
-        // a slow source never holds a retired stack alive.
-        if (!_TryLeaseStackForRead(out StackLease lease))
+        for (int i = 0; i < packets.Length; i++)
         {
-            packets.Clear();
-            return;
-        }
-
-        using (lease)
-        {
-            for (int i = 0; i < packets.Length; i++)
+            if (_QueriesDisabled || chunk[i] is not Frame frame)
             {
-                if (_QueriesDisabled || chunk[i] is not Frame frame)
-                {
-                    packets[i] = null;
-                    continue;
-                }
-
-                packets[i] = _ReparseOnStack(lease.Stack, frame, new PacketId(startId + i), packets[i], out Packet? packet)
-                    ? packet
-                    : null;
+                packets[i] = null;
+                continue;
             }
+
+            packets[i] = _ReparseOnStack(stack, frame, new PacketId(startId + i), packets[i], out Packet? packet)
+                ? packet
+                : null;
         }
     }
 
@@ -3233,7 +4061,7 @@ public sealed class Session : ISession, ISessionReader
 
         if (_QueriesDisabled)
         {
-            sessionFailure = new SessionFailure(SessionErrorCode.QueriesDisabled, "Packet queries are disabled.");
+            sessionFailure = _RefusedReadFailure();
             return false;
         }
 
@@ -3266,7 +4094,7 @@ public sealed class Session : ISession, ISessionReader
                 return true;
             }
 
-            return _TryReadMatching(slot, filter, startId, destination, out count, out idLayout, out failure);
+            return _TryReadMatching(slot, filter, startId, destination, out count, out idLayout, out failure, out sessionFailure);
         }
     }
 
@@ -3286,11 +4114,57 @@ public sealed class Session : ISession, ISessionReader
     /// mode with an equivalent observer, which may rule it out and records that verdict in the filter. The field-tree
     /// filter stays the authority for every returned packet: both stages only rule packets out.
     /// </para>
+    /// <para>
+    /// One stack lease covers the whole scan (was: one per id, up to two with the pre-check), so a matching call parses on
+    /// exactly one generation and takes two interlocked operations instead of up to four per candidate packet.
+    /// </para>
     /// <para>Caller holds <c>slot.FilterGate</c>.</para>
     /// </summary>
     private bool _TryReadMatching(
         ListenerSlot slot,
         PacketFilter filter,
+        int startId,
+        Span<PacketRef> destination,
+        out int count,
+        out PacketIdLayout idLayout,
+        out FilterError? failure,
+        out SessionFailure? sessionFailure)
+    {
+        count = 0;
+        idLayout = PacketIdLayout.Contiguous;
+        failure = null;
+        sessionFailure = null;
+
+        if (filter.PoisonError is FilterError poison)
+        {
+            failure = poison;
+            return false;
+        }
+
+        // One lease for the whole scan, taken after the gate and the fault checks (a refused matching read must not pin a
+        // stack). A refusal here is the restart/shutdown pause the caller's early check raced with: report it like that
+        // check does, as a session failure, not as a filter failure.
+        // Rejected: leasing per id as before (up to four interlocked operations per candidate and a scan that could straddle
+        // two generations). Residual risk: as for ReadPackets, a blocking source keeps a retired stack alive meanwhile.
+        if (!_TryLeaseStackForRead(out StackLease lease))
+        {
+            sessionFailure = _RefusedReadFailure();
+            return false;
+        }
+
+        using (lease)
+        {
+            return _ScanMatching(slot, filter, lease.Stack, startId, destination, out count, out idLayout, out failure);
+        }
+    }
+
+    /// <summary>
+    /// The scan of <see cref="_TryReadMatching"/> on <paramref name="stack"/>, the stack the caller holds a lease on.
+    /// </summary>
+    private bool _ScanMatching(
+        ListenerSlot slot,
+        PacketFilter filter,
+        Stack stack,
         int startId,
         Span<PacketRef> destination,
         out int count,
@@ -3301,15 +4175,14 @@ public sealed class Session : ISession, ISessionReader
         idLayout = PacketIdLayout.Contiguous;
         failure = null;
 
-        if (filter.PoisonError is FilterError poison)
-        {
-            failure = poison;
-            return false;
-        }
-
-        // Setup: one view of the live index, one load of the count (every id below it is mapped), and the scan state.
+        // Setup: one snapshot of the index that belongs to the leased stack, one load of the count (every id below it is
+        // mapped), and the scan state. The snapshot is the session's live index only while it was built for the leased
+        // stack; a lease on a stack a restart just replaced gets none (pruning is skipped, which is correct and short-lived
+        // because the per-id _QueriesDisabled check ends the scan). The prune view and the evaluation use this one object,
+        // never a second volatile load of _PacketIndex that a restart could have swapped in between.
         // `skipped` records whether any scanned id was left out, which is what makes the returned layout Gapped.
-        PacketIndexReaderView? indexView = _PacketIndex?.AsReadOnlyView();
+        PacketIndex? index = SelectIndexFor(_PacketIndex, stack);
+        PacketIndexReaderView? indexView = index?.AsReadOnlyView();
         int limit = _PacketCount;
         int first = Math.Max(startId, 0);
         bool skipped = false;
@@ -3353,7 +4226,7 @@ public sealed class Session : ISession, ISessionReader
             {
                 if (precheck.IsActive)
                 {
-                    if (!_TryPrecheck(ref sources, precheck, packetId, out bool maybeMatch, out Frame read))
+                    if (!_TryPrecheck(ref sources, stack, precheck, packetId, out bool maybeMatch, out Frame read))
                     {
                         // Frame unavailable or queries disabled: exactly the outcome of the re-parse miss below.
                         skipped = true;
@@ -3376,24 +4249,28 @@ public sealed class Session : ISession, ISessionReader
                 }
             }
 
-            // Authority: build re-parse and field-tree evaluation, unchanged. A frame the pre-check read is parsed as is.
+            // Authority: build re-parse and field-tree evaluation, on the leased stack. A frame the pre-check read is parsed
+            // as is; any other id is read from its source first. A refusal (queries disabled, frame unreadable) skips the id,
+            // exactly as the per-id lease refusal did before.
             Packet? recycle = destination[filled].Packet;
-            Packet? packet;
+            Frame frame;
             if (prechecked is Frame ready)
             {
-                if (!_TryReparsePacketCore(ready, packetId, recycle, out packet))
-                {
-                    skipped = true;
-                    continue;
-                }
+                frame = ready;
             }
-            else if (!_TryGetPacketCore(ref sources, packetId, recycle, out packet, out _))
+            else if (!_TryReadCapturedFrame(ref sources, packetId, out frame, out _))
             {
                 skipped = true;
                 continue;
             }
 
-            if (!filter.TryIsMatch(packet, _PacketIndex, out bool matched, out FilterError? evalFailure))
+            if (_QueriesDisabled || !_ReparseOnStack(stack, frame, packetId, recycle, out Packet? packet))
+            {
+                skipped = true;
+                continue;
+            }
+
+            if (!filter.TryIsMatch(packet, index, out bool matched, out FilterError? evalFailure))
             {
                 count = 0;
                 failure = evalFailure;
@@ -3444,66 +4321,35 @@ public sealed class Session : ISession, ISessionReader
     /// <paramref name="sources"/> is the snapshot the matching read takes once per call, as in <see cref="_TryGetPacketCore"/>.
     /// </remarks>
     private bool _TryPrecheck(
-        ref RandomAccessLookup sources, MatchingPrecheck precheck, PacketId id, out bool maybeMatch, out Frame frame)
+        ref RandomAccessLookup sources, Stack stack, MatchingPrecheck precheck, PacketId id, out bool maybeMatch, out Frame frame)
     {
         maybeMatch = true;
-        frame = default;
 
         // Same per-id guards as TryGetFrame and the build path: a miss here is the outcome of the re-parse miss.
-        if (_QueriesDisabled
-            || !id.IsValid
-            || !_TryGetPacketFrame(id, out FrameId frameId, out FrameSourceId sourceId)
-            || !sources.TryGet(sourceId, out IRandomAccessFrameSource? raSource)
-            || raSource.FrameById(frameId) is not Frame read)
+        if (!_TryReadCapturedFrame(ref sources, id, out frame, out _))
         {
             return false;
         }
 
-        frame = read;
+        // No lease of its own: the matching read holds one on 'stack' for the whole scan (was: a second lease per id here).
 
-        // Stack lease per id: the same restart guard as the build re-parse, and it keeps the stack alive for the parse.
-        if (!_TryLeaseStackForRead(out StackLease lease))
+        // Skip-mode parse into the pre-check's own recycled packet (never the caller's, never published), so the
+        // pre-check allocates only when the recycle is rejected. A rejected parse leaves maybeMatch true: only a
+        // successful parse whose observer says "no match" may rule an id out.
+        Packet? recycle = precheck.Recycle;
+        if (recycle is null || !Packet.TryParse(recycle, id, stack, frame, in precheck.Options, out _))
         {
-            return false;
-        }
-
-        using (lease)
-        {
-            Stack stack = lease.Stack;
-
-            // Skip-mode parse into the pre-check's own recycled packet (never the caller's, never published), so the
-            // pre-check allocates only when the recycle is rejected. A rejected parse leaves maybeMatch true: only a
-            // successful parse whose observer says "no match" may rule an id out.
-            Packet? recycle = precheck.Recycle;
-            if (recycle is null || !Packet.TryParse(recycle, id, stack, frame, in precheck.Options, out _))
+            if (!Packet.TryParse(id, stack, frame, in precheck.Options, out Packet? created, out _))
             {
-                if (!Packet.TryParse(id, stack, frame, in precheck.Options, out Packet? created, out _))
-                {
-                    return true;
-                }
-
-                precheck.Recycle = created;
+                return true;
             }
 
-            // The observer cannot give a verdict (TryReadMatch false) -> treat as "maybe", never as a rejection.
-            maybeMatch = !precheck.Observer.TryReadMatch(out bool matched, out _) || matched;
-            return true;
-        }
-    }
-
-    /// <summary>
-    /// The tail of <see cref="_TryGetPacketCore"/> for a frame the caller already holds: the queries-disabled guard and
-    /// the build re-parse. Shared so a pre-checked id is not read from its source twice.
-    /// </summary>
-    private bool _TryReparsePacketCore(Frame frame, PacketId id, Packet? recycle, [NotNullWhen(true)] out Packet? packet)
-    {
-        if (_QueriesDisabled)
-        {
-            packet = null;
-            return false;
+            precheck.Recycle = created;
         }
 
-        return _TryReparseFrame(frame, id, recycle, out packet);
+        // The observer cannot give a verdict (TryReadMatch false) -> treat as "maybe", never as a rejection.
+        maybeMatch = !precheck.Observer.TryReadMatch(out bool matched, out _) || matched;
+        return true;
     }
 
     /// <summary>
@@ -3543,6 +4389,28 @@ public sealed class Session : ISession, ISessionReader
         [NotNullWhen(false)] out SessionFailure? failure)
     {
         ArgumentNullException.ThrowIfNull(work);
+
+        // Secure by default: a job that does not declare what it reads is StackBound, so a restart ends it (or waits for it)
+        // instead of letting it keep running on field ids that name other fields on the new stack. Independent is the
+        // explicit opt-in of the overload below.
+        return TryAddJob(uiName, description, JobStackBinding.StackBound, context => work(context.CancellationToken), out info, out failure);
+    }
+
+    /// <inheritdoc/>
+    public bool TryAddJob(
+        string uiName,
+        string description,
+        JobStackBinding binding,
+        Action<JobContext> work,
+        [NotNullWhen(true)] out JobInfo? info,
+        [NotNullWhen(false)] out SessionFailure? failure)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        if (!Enum.IsDefined(binding))
+        {
+            throw new ArgumentOutOfRangeException(nameof(binding), binding, "Unknown job stack binding.");
+        }
+
         _ThrowIfDisposed();
         info = null;
         failure = null;
@@ -3556,28 +4424,49 @@ public sealed class Session : ISession, ISessionReader
 
         // Refuse once shutdown has started, also after it finished: nobody would cancel or join the job. This is the cheap
         // early refusal; the registration below decides under the registry lock.
-        if (!_TryAcceptJob(out failure))
+        if (!_TryAcceptJob(binding, out failure))
         {
             return false;
         }
 
         JobId jobId = _State.AllocateJobId();
-        Job job = new(jobId, uiName, description, work, _OnJobStatusChanged);
-        JobInfo jobInfo = new(job);
 
         // Register before start, so the job is visible in GetJobs() (and cancellable) from its first instruction. The
         // shutdown check and the publication share the registry lock that Shutdown publishes its flag under: a job
         // published here is in Shutdown's snapshot (cancelled, joined, disposed), a job that comes later is refused. Without
         // that, a job added in the instant shutdown starts would run on with nobody left to cancel it.
+        // The same lock publishes a restart's job snapshot and its pending flag (_TryCheckJobsForRestart), so a StackBound
+        // job registered here is either in that snapshot (the restart ends it) or was refused with RestartPending.
+        Job job;
+        JobInfo jobInfo;
         lock (_RegistryLock)
         {
-            if (!_TryAcceptJob(out failure))
+            if (!_TryAcceptJob(binding, out failure))
             {
-                job.Dispose();
                 info = null;
                 return false;
             }
 
+            // The generation is read under the lock, after the pending flag was checked: a restart that has not passed its
+            // job check yet will find this job in its snapshot (generation N is then right), and a restart that already
+            // finished has raised the generation before it cleared the flag (N + 1 is right). Read outside the lock, a job
+            // could pair the old number with a restart that had already taken its snapshot and be neither ended nor
+            // refused. An independent job belongs to no generation (-1).
+            int generation = binding == JobStackBinding.StackBound
+                ? Generation
+                : -1;
+
+            // The context is built when the job's thread starts, not now: its stack view must be the one the job really
+            // begins with. The closure is one allocation per job, not per packet.
+            job = new Job(
+                jobId,
+                uiName,
+                description,
+                binding,
+                generation,
+                token => work(new JobContext(CurrentStack, this, token)),
+                _OnJobStatusChanged);
+            jobInfo = new JobInfo(job);
             _AllJobs.Add(jobInfo);
             _UserJobs.Add(jobInfo);
         }
@@ -3593,14 +4482,33 @@ public sealed class Session : ISession, ISessionReader
         return true;
     }
 
-    /// <summary>The phase rule for a new user job: shutdown has not started. Decides only under the registry lock.</summary>
-    private bool _TryAcceptJob([NotNullWhen(false)] out SessionFailure? failure)
+    /// <summary>
+    /// The rule for a new user job: shutdown has not started, the session is not faulted, and a stack-bound job is not added
+    /// while a restart is between its job check and its end. Decides only under the registry lock.
+    /// </summary>
+    private bool _TryAcceptJob(JobStackBinding binding, [NotNullWhen(false)] out SessionFailure? failure)
     {
         if (_ShutdownStarted != 0 || _State.Phase == SessionPhase.ShuttingDown)
         {
             failure = new SessionFailure(
                 SessionErrorCode.InvalidPhase,
                 "Jobs cannot be added once the session has started shutting down.");
+            return false;
+        }
+
+        if (_FaultedFailureOrNull() is SessionFailure faulted)
+        {
+            failure = faulted;
+            return false;
+        }
+
+        // A StackBound job added now would extend the restart's wait or run on into the swap. An Independent job cannot do
+        // either, so it is accepted. Retry after the restart returned.
+        if (binding == JobStackBinding.StackBound && _RestartPending)
+        {
+            failure = new SessionFailure(
+                SessionErrorCode.RestartPending,
+                "A stack-bound job cannot be added while a restart is pending; retry after the restart or add an Independent job.");
             return false;
         }
 
@@ -3617,7 +4525,11 @@ public sealed class Session : ISession, ISessionReader
     {
         ArgumentNullException.ThrowIfNull(job);
         _ThrowIfDisposed();
-        failure = null;
+        failure = _FaultedFailureOrNull();
+        if (failure is not null)
+        {
+            return false;
+        }
 
         // Removing a pending or running job is refused (the caller must cancel and wait first, see ISession.TryRemoveJob).
         // It is an expected condition: the caller can poll for it while a job winds down, so it is returned as a failure
@@ -3658,6 +4570,12 @@ public sealed class Session : ISession, ISessionReader
             return false;
         }
 
+        failure = _FaultedFailureOrNull();
+        if (failure is not null)
+        {
+            return false;
+        }
+
         if (job.Status is JobStatus.Completed or JobStatus.Cancelled or JobStatus.Failed)
         {
             failure = new SessionFailure(SessionErrorCode.JobTerminal, "The job is already in a terminal state.");
@@ -3683,6 +4601,23 @@ public sealed class Session : ISession, ISessionReader
         if (valueCacheSlot is not null && valueCacheInfo is not null)
         {
             return _TryUnsubscribeValueCache(valueCacheSlot, valueCacheInfo);
+        }
+
+        // A restart-event subscription is unsubscribed through its job like a listener: the handler stops, the job leaves the
+        // list. Not from the handler's own thread (the join would wait for itself).
+        RestartEventSlot? eventSlot = _FindRestartEventSlot(job);
+        if (eventSlot is not null)
+        {
+            if (eventSlot.IsHandlerThread)
+            {
+                failure = new SessionFailure(
+                    SessionErrorCode.InvalidPhase,
+                    "A Restarted handler cannot be unsubscribed from inside its own callback.");
+                return false;
+            }
+
+            _EndRestartEventSlot(eventSlot, JobEndReason.UserCancelled);
+            return true;
         }
 
         // Must be a user job — cancel only if owned by this session.
@@ -3811,7 +4746,7 @@ public sealed class Session : ISession, ISessionReader
         entry.Info.ClearStopCallback();
 
         // Cancel the source job — sets the CancellationToken that _RunSourceLoop observes.
-        entry.Job.Cancel();
+        entry.Job.Cancel(JobEndReason.UserCancelled);
 
         // Wait for the source thread to reach a terminal state.
         // _RunSourceLoop's finally block decrements _ActiveSourceCount and
@@ -3835,7 +4770,7 @@ public sealed class Session : ISession, ISessionReader
         info.SetStatus(SubscriptionStatus.Unsubscribed);
 
         // Cancel the slot — sets the CancellationToken observed by RunLoop.
-        slot.Cancel();
+        slot.Cancel(JobEndReason.UserCancelled);
 
         // If the slot was never started (Pending), start it so RunLoop can
         // observe cancellation and exit cleanly. The Job CAS guard prevents

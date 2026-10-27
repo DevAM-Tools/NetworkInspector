@@ -26,7 +26,7 @@ internal sealed class ExitPointCoverageTests
         object originalStack = stackField.GetValue(session)!;
         try
         {
-            stackField.SetValue(session, new RetirableStack(wrongStack, ownedBySession: false, static (_, _) => { }));
+            stackField.SetValue(session, new RetirableStack(wrongStack, generation: 0, ownedBySession: false, static (_, _) => { }));
 
             InvalidOperationException? caught = null;
             try

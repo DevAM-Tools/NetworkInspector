@@ -7,12 +7,20 @@ namespace NetworkInspector.Sessions;
 /// leases) and the rule for when a replaced stack may be disposed: as soon as it is retired and the last lease ended.
 ///
 /// <para>
-/// <b>Why:</b> <see cref="Session.Restart"/> replaces the stack while lock-free reads (<c>TryGetPacket</c>,
+/// <b>Why:</b> a restart (<see cref="ISession.TryRestart(Func{FrameInterfaceRegistry, Stack}, out RestartReport?, out SessionFailure?)"/>)
+/// replaces the stack while lock-free reads (<c>TryGetPacket</c>,
 /// <c>ReadPackets</c>, listener and value-cache pulls) may still be re-parsing on the old one. <see cref="Stack.Dispose"/>
 /// runs every protocol's <c>OnShutdown</c> and releases the settings locks, so a parse that is still running would use shut
 /// down protocol instances and a disposed lock. Disposing under the parse mutex does not help (readers do not take it), and
 /// keeping every retired stack until <c>Shutdown</c> would hold its memory and delay <c>OnShutdown</c> for the whole session.
 /// Counting the users closes the gap at the price of two interlocked operations per read call.
+/// </para>
+///
+/// <para>
+/// <b>Generation:</b> the holder also carries the number of the session generation it serves (see
+/// <see cref="Generation"/>). A lease therefore pins a stack and its generation together, which is what lets a read call
+/// promise "one call, one generation" and lets <c>TryGetPacket</c> with parse options compare the caller's view with the
+/// leased holder instead of with the session's current one.
 /// </para>
 ///
 /// <para>
@@ -75,6 +83,13 @@ internal sealed class RetirableStack
     /// Wraps <paramref name="stack"/>.
     /// </summary>
     /// <param name="stack">The stack to guard.</param>
+    /// <param name="generation">
+    /// The session generation this stack serves: 0 for the constructor stack, the replaced holder's generation + 1 for a
+    /// restart stack. It lives on the holder so that the stack and its number are published by one volatile store and read by
+    /// one volatile load (the lease path loads the holder anyway). Rejected: a second field on the session, which a reader
+    /// could pair with the wrong stack between two loads, and a per-packet generation compare, which would add a load to the
+    /// path the lease was designed to keep cheap. Residual risk: none; the value is immutable after construction.
+    /// </param>
     /// <param name="ownedBySession">
     /// <see langword="true"/> when the session created the stack (a restart factory built it) and therefore disposes it;
     /// <see langword="false"/> for the stack the caller passed to the session constructor, which the caller disposes.
@@ -85,15 +100,19 @@ internal sealed class RetirableStack
     /// </param>
     /// <param name="disposeStack">What disposes the stack; <see langword="null"/> uses <see cref="Stack.Dispose"/>.</param>
     /// <exception cref="ArgumentNullException"><paramref name="stack"/> or <paramref name="onDisposed"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="generation"/> is negative.</exception>
     internal RetirableStack(
         Stack stack,
+        int generation,
         bool ownedBySession,
         Action<RetirableStack, Exception[]> onDisposed,
         Action<Stack>? disposeStack = null)
     {
         ArgumentNullException.ThrowIfNull(stack);
         ArgumentNullException.ThrowIfNull(onDisposed);
+        ArgumentOutOfRangeException.ThrowIfNegative(generation);
         Stack = stack;
+        Generation = generation;
         OwnedBySession = ownedBySession;
         _OnDisposed = onDisposed;
         _DisposeStack = disposeStack ?? _DefaultDispose;
@@ -105,6 +124,9 @@ internal sealed class RetirableStack
 
     /// <summary>The guarded stack. Usable by whoever holds a lease, and for lookups at any time (the stack tables are immutable).</summary>
     internal Stack Stack { get; }
+
+    /// <summary>The session generation this stack serves. Immutable; see the constructor remarks for why it lives here.</summary>
+    internal int Generation { get; }
 
     /// <summary>Whether the session disposes <see cref="Stack"/> (it built it) or the caller does.</summary>
     internal bool OwnedBySession { get; }

@@ -105,7 +105,7 @@ internal sealed class SessionBatchReadTests
             source.OnFrameById = null;
         };
 
-        session.Restart(static registry => TestHarness.CreateStack(registry));
+        session.RestartOrThrow(static registry => TestHarness.CreateStack(registry));
         _ = session.WaitForCompletion();
         session.Shutdown();
 
@@ -130,7 +130,7 @@ internal sealed class SessionBatchReadTests
         _ = session.WaitForCompletion();
         List<(int Id, byte[] Data)> before = _Snapshot(session, total);
 
-        session.Restart(static registry => TestHarness.CreateStack(registry));
+        session.RestartOrThrow(static registry => TestHarness.CreateStack(registry));
         _ = session.WaitForCompletion();
         List<(int Id, byte[] Data)> after = _Snapshot(session, session.PacketCount);
 
@@ -158,7 +158,7 @@ internal sealed class SessionBatchReadTests
         SessionException? thrown = null;
         try
         {
-            session.Restart(static registry => TestHarness.CreateStack(registry));
+            session.RestartOrThrow(static registry => TestHarness.CreateStack(registry));
         }
         catch (SessionException exception)
         {
@@ -268,7 +268,7 @@ internal sealed class SessionBatchReadTests
         log.Clear();
         int singleReadsBefore = source.FrameByIdCalls;
 
-        session.Restart(static registry => TestHarness.CreateStack(registry));
+        session.RestartOrThrow(static registry => TestHarness.CreateStack(registry));
         _ = session.WaitForCompletion();
         session.Shutdown();
 

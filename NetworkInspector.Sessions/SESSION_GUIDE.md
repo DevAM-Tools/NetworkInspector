@@ -9,7 +9,7 @@ know what it does, in which order to call it, and what to watch for.
 language: [`FILTER_GUIDE.md`](../NetworkInspector.Filter/FILTER_GUIDE.md). Columnar values:
 [`VALUECACHE_GUIDE.md`](../NetworkInspector.Core/VALUECACHE_GUIDE.md).
 
-The listener and reader code of sections 2, 8.1, 8.2 and 8.4 is compiled and run by
+The listener, reader, job, and restart code of sections 2, 8.1, 8.2, 8.4, 8.5 and 9 is compiled and run by
 [`SessionGuideSamplesTests.cs`](../NetworkInspector.Sessions.Tests/SessionGuideSamplesTests.cs) (with a test
 source instead of a capture file).
 
@@ -27,7 +27,8 @@ at the same time.
   stay readable.
 - **Consumers pull.** A listener is woken with coalesced flags and then reads what it needs through
   `ISessionReader`. Nothing is pushed, nothing is copied per listener.
-- **Restart** swaps the protocol stack and re-parses every frame, without stopping running sources.
+- **Restart** swaps the protocol stack and re-parses every frame, without stopping running sources. It is a
+  **generation change** the session publishes (section 6): every stack-bound thing you hold is of the old generation.
 
 ```mermaid
 graph TD
@@ -93,7 +94,7 @@ sealed class CountingListener : ISessionListener
 4. Add listeners, value caches, and jobs. This is allowed before or after start.
 5. `TryStart` starts every source thread and every pending listener thread.
 6. Read through `ISessionReader` from your listener callbacks or from any other thread.
-7. `Restart(factory)` whenever the stack must change (section 9).
+7. `TryRestart(factory)` whenever the stack must change (section 9).
 8. `Shutdown()` or `Dispose()` cancels everything and disposes the sources and the stacks the session owns.
 
 ## 4. Lifecycle and phases
@@ -105,13 +106,17 @@ graph TD
     Restarting["Restarting"]
     Stopped["Stopped"]
     ShuttingDown["ShuttingDown"]
+    Faulted["Faulted"]
     Idle -->|"TryStart, sources"| Running
     Idle -->|"TryStart, no sources"| Stopped
     Running -->|"last source done"| Stopped
-    Running -->|"Restart"| Restarting
-    Stopped -->|"Restart"| Restarting
+    Running -->|"TryRestart"| Restarting
+    Stopped -->|"TryRestart"| Restarting
     Restarting -->|"sources active"| Running
     Restarting -->|"no source active"| Stopped
+    Restarting -->|"re-parse failed"| Faulted
+    Faulted -->|"TryRestart"| Restarting
+    Faulted -->|"Shutdown"| ShuttingDown
     Idle -->|"Shutdown"| ShuttingDown
     Running -->|"Shutdown"| ShuttingDown
     ShuttingDown -->|"teardown done"| Stopped
@@ -121,15 +126,22 @@ graph TD
 `Shutdown` (reads are disabled). `QueriesEnabled` tells the two apart. `Shutdown` on a `Stopped` session keeps
 the phase `Stopped`; listeners receive `OnShuttingDown` without a phase change.
 
+`Faulted` is the state after a restart that failed once the stack was swapped (a frame could not be re-read):
+`session.Fault` keeps the failure, reads and new work are refused with `SessionFaulted` (the message carries the
+original fault text), and ingest stays parked, because a resumed source would allocate ids the half-rewritten state
+cannot hold. The two ways out are another `TryRestart` (it re-parses from id 0, so packet ids stay dense and the parked
+sources resume without a gap) and `Shutdown`.
+
 | Operation | Allowed | Refused (`false` + `SessionFailure`) |
 |-----------|---------|--------------------------------------|
 | `TryAddFrameSource` | `Idle` | any other phase: `InvalidPhase` |
-| `TryAddListener`, `TryAddValueCache` | `Idle`, `Running`, `Stopped` | shutting down: `InvalidPhase`; restart running or failed, after shutdown: `QueriesDisabled` |
-| `TryAddJob` | every phase until shutdown | once `Shutdown` started (also after it): `InvalidPhase` |
+| `TryAddListener`, `TryAddValueCache` | `Idle`, `Running`, `Stopped` | shutting down: `InvalidPhase`; restart running, after shutdown: `QueriesDisabled` |
+| `TryAddJob` | every phase until shutdown | once `Shutdown` started (also after it): `InvalidPhase`; stack-bound job while a restart is pending: `RestartPending` |
 | `TryStart` | `Idle`, once (of several concurrent callers exactly one wins) | otherwise: `InvalidPhase` |
-| `Restart` | `Running`, `Stopped` | throws (section 9) |
+| `TryRestart` | `Running`, `Stopped`, `Faulted` | every expected refusal is a result (section 9) |
 | `TryUnsubscribe` | every phase except `ShuttingDown` | `ShuttingDown`: `InvalidPhase`; foreign job: `JobNotFound`; finished job: `JobTerminal` |
-| reads (`TryGetPacket`, …) | while `QueriesEnabled` | restart running or failed, after shutdown: `QueriesDisabled` |
+| reads (`TryGetPacket`, …) | while `QueriesEnabled` | restart running, after shutdown: `QueriesDisabled` |
+| every `Try*` except `TryRestart`, `Shutdown` while `Faulted` | — | `SessionFaulted` |
 
 A listener or value cache added after packets exist is notified at once for the whole existing range.
 
@@ -143,11 +155,17 @@ A listener or value cache added after packets exist is notified at once for the 
 - `ISessionReader` is thread-safe. Reads may run on any thread, also outside callbacks. The lists from `GetJobs()`,
   `GetListeners()`, `GetFrameSources()`, and `GetValueCaches()` are read-only views of an immutable snapshot: a later
   change gives a new list, the one you hold stays valid and cannot be modified.
-- **Never call these from a callback:** `Shutdown`, `Dispose` (they wait for the listener threads, including
+- **Never call these from a callback or a `Restarted` handler:** `Shutdown`, `Dispose` (they wait for the listener and handler threads, including
   the calling one), and `TryUnsubscribe` / `ListenerInfo.Unsubscribe` / `ValueCacheInfo.Unsubscribe` of the
   **own** listener (it waits for its own thread). Unsubscribing a different listener is fine.
-- `Restart` blocks until every frame is re-parsed. Call it from a worker thread (or a session job,
-  `TryAddJob`), never from a UI thread.
+- `TryRestart` blocks until every frame is re-parsed (and, under `WaitThenCancel`, until the jobs ended or the bound
+  elapsed). Call it from a worker thread or an `Independent` session job, never from a UI thread, and never from a
+  stack-bound job (it is refused with `RestartFromJob`: it would wait for itself).
+- Every handler of `session.Restarted` has its **own thread** too (an `Independent` job named `restart-event`,
+  thread `session-job-{id}-restart-event`). The handler runs there, one notification at a time; a handler that
+  blocks delays only its own notifications. Never remove your own handler from inside it: `-=` throws
+  `InvalidOperationException` and `TryUnsubscribe` of its job answers `InvalidPhase`, because the removal would wait for
+  the calling thread; remove it from another thread.
 - An exception thrown by a callback fails only that listener's job (`JobStatus.Failed`,
   `JobInfo.FailureException`). The listener then gets `OnUnsubscribed`; the session and the other listeners
   continue.
@@ -174,6 +192,29 @@ one large window. The windows of `OnNewPackets` are gap-free and ascending for a
 Notifications are never filtered. A listener with a filter still gets every window and applies its filter
 when it pulls (section 8.2).
 
+### Generation: how to notice a restart without a callback
+
+The **generation** is the number of the stack that serves reads now: 0 for the stack you constructed the session
+with, plus one for every swap. `session.Generation` is one volatile read; `session.CurrentStack` returns the
+current `Stack` together with its generation as one immutable `StackView` (taken from one load, so the two
+never disagree), and `view.IsCurrent(session)` compares. A view stays what it was: after a restart the view you
+took before still names the old stack and the old number, nothing is re-pointed behind your back.
+
+Field ids are dense counters **per stack**: id 17 names another field after a restart. Keep the **names**
+(`"ip.ttl"`), resolve them to ids on `view.Stack`, keep the view next to the ids, and compare it before you use
+them again. The generation moves at the swap, before reads are enabled, so polling `Generation` and
+`QueriesEnabled` tells the three states apart:
+
+| `Generation` / `QueriesEnabled` | State |
+|---------------------------------|-------|
+| N / true | stable: everything derived from N is valid |
+| N + 1 / false | a restart is in progress (swapped, re-parsing): reads are refused |
+| N + 1 / true | done: reads serve N + 1; rebuild whatever you derived from N |
+
+Two restarts that a slow listener sees in one wake-up show as a jump of two (`OnStackChanged` is called once):
+compare for inequality, never assume "old + 1". **One read call parses on one generation**: a restart that starts
+during `ReadPackets` leaves the remaining slots `null` instead of mixing two stacks in one buffer.
+
 ## 7. Reading packets
 
 ### 7.1 Read shapes
@@ -182,7 +223,8 @@ when it pulls (section 8.2).
 |------|---------|-----|
 | `TryGetPacket(id, out packet, out failure)` | one packet with a field tree | detail view of one row |
 | `TryGetPacket(id, recycle, out packet, out failure)` | same, reusing `recycle` | detail view without allocation |
-| `TryGetFrame(id, out frame, out failure)` | the raw frame, no parse | hex view, own parse (section 8.4) |
+| `TryGetPacket(id, in options, view, recycle, out packet, out failure)` | one packet parsed with your observers, under the session's lease | field observers (section 8.4) |
+| `TryGetFrame(id, out frame, out failure)` | the raw frame, no parse | hex view |
 | `ReadPackets(from, Span<Packet?>)` | contiguous packets | simple list fill |
 | `ReadPackets(from, Span<PacketRef>, out layout)` | `(id, packet)` pairs, contiguous | list fill that keeps ids |
 | `TryReadPackets(listenerId, from, dest, mode, …)` | `All`: like above; `Matching`: only packets the listener's filter accepts | filtered list |
@@ -194,14 +236,17 @@ owns `dest`. Reads stop at the `PacketCount` they saw when they started.
 
 | Code | Meaning | What to do |
 |------|---------|------------|
-| `QueriesDisabled` | restart running or failed, or shutdown finished | wait for `OnStackChanged`; check `QueriesEnabled` |
+| `QueriesDisabled` | restart running, or shutdown finished | wait for `OnStackChanged`; check `QueriesEnabled` |
+| `SessionFaulted` | a restart failed after the swap; the message carries the original fault | show it; `TryRestart` again or `Shutdown` |
+| `OptionsStackMismatch` | parse options built for another generation (section 8.4) | take `CurrentStack` again and rebuild the options |
 | `PacketNotFound` | id invalid or not announced yet | read only ids below `PacketCount` |
 | `FrameUnavailable` | the source cannot re-read that frame | show the row as unavailable |
 | `ListenerNotFound` | `TryReadPackets` with an unknown `ListenerId` | use the id from `ListenerInfo` |
 
 `ReadPackets` returns 0 while queries are disabled. A `PacketRef.Packet` or `Packet?` slot is `null` when that
 id could not be re-read. A `false` read, a `null` slot, or a 0 count means "no row" **only** while
-`QueriesEnabled` is true; otherwise a restart interrupted the read and a fresh window follows.
+`QueriesEnabled` is true; otherwise a restart interrupted the read and a fresh window follows. A range read parses on
+one stack generation (section 6): the packets of one call never come from two stacks.
 
 ### 7.3 Filtered pulls
 
@@ -226,34 +271,44 @@ every match exactly once. Re-scanned ids are answered from the filter's match ca
 - Keep two kinds of buffers apart: a **list buffer** that each pull recycles, and a **detail packet** for the
   selected row that only the detail view recycles.
 - Packets returned by the session are yours; the session keeps no reference.
+- A recycled packet of an earlier stack is **rebound** to the current one when both share the frame registry (every stack
+  of one session does): after a restart the same buffer comes back with the same instances, parsed on the new stack, and a
+  restart costs no allocation per slot. A packet of another session (another registry) is refused and a fresh packet is
+  allocated instead.
 
 ## 8. Recipes
 
-### 8.1 Packet list with field trees
+### 8.1 Packet list with columns (generation-aware)
+
+Columns are declared by **name**; the ids are resolved on the current stack and re-resolved when the generation
+moved (section 6). The listener keeps the `StackView` its ids belong to next to them:
 
 ```csharp
-sealed class PacketListListener : ISessionListener
+sealed class ColumnListener : ISessionListener
 {
-    private readonly PacketRef[] _Buffer = new PacketRef[256];   // recycled by every pull
+    private readonly string[] _ColumnNames = ["ip.ttl", "udp.dstport"];   // names survive a restart, ids do not
+    private readonly PacketRef[] _Buffer = new PacketRef[256];            // recycled by every pull
+    private StackView _View;                                              // the generation the ids below belong to
+    private FieldId?[] _ColumnIds = [];
 
     // Touched only on this listener's thread; a UI copies rows out by posting them.
-    internal List<(int Id, Timestamp Time)> Rows { get; } = [];
+    internal List<(int Id, ulong?[] Cells)> Rows { get; } = [];
 
     public string UiName => "packet list";
 
     public void OnNewPackets(ISessionReader session, int fromIndex, int toIndexExclusive)
     {
+        _EnsureColumns(session);                                          // re-resolve when the generation moved
         for (int start = fromIndex; start < toIndexExclusive; start += _Buffer.Length)
         {
             int filled = session.ReadPackets(start, _Buffer, out PacketIdLayout _);
             for (int i = 0; i < filled && _Buffer[i].Id.Value < toIndexExclusive; i++)
             {
-                Packet? packet = _Buffer[i].Packet;
+                Packet? packet = _Buffer[i].Packet;                       // null: a restart overtook this call
                 if (packet is not null)
                 {
-                    // Build the row (time, addresses, protocol, info) from the field tree here,
-                    // then post the row data (not the packet) to the UI thread.
-                    Rows.Add((packet.Id.Value, packet.Timestamp));
+                    // Build the row from the field tree here, then post the row data (not the packet) to the UI thread.
+                    Rows.Add((packet.Id.Value, _ReadCells(packet)));
                 }
             }
         }
@@ -261,8 +316,36 @@ sealed class PacketListListener : ISessionListener
 
     public void OnStackChanged(ISessionReader session)
     {
-        // The next OnNewPackets starts at 0 with the re-parsed packets.
-        Rows.Clear();
+        Rows.Clear();                                                     // the next OnNewPackets starts at 0
+        _EnsureColumns(session);
+    }
+
+    private void _EnsureColumns(ISessionReader session)
+    {
+        StackView current = session.CurrentStack;                         // stack and generation from one load
+        if (_ColumnIds.Length != 0 && _View.Generation == current.Generation)
+        {
+            return;
+        }
+
+        _View = current;
+        _ColumnIds = [.. _ColumnNames.Select(name => current.Stack.GetFieldId(name))];   // null: the new stack lacks it
+    }
+
+    private ulong?[] _ReadCells(Packet packet)
+    {
+        ulong?[] cells = new ulong?[_ColumnIds.Length];
+        for (int column = 0; column < cells.Length; column++)
+        {
+            if (_ColumnIds[column] is FieldId id
+                && packet.TryGetFieldValue(id, out FieldValue value, materialize: true)
+                && value.Data.TryGetAsU64(out ulong cell))
+            {
+                cells[column] = cell;
+            }
+        }
+
+        return cells;
     }
 }
 ```
@@ -301,79 +384,184 @@ charts: they read values once and do not build field trees.
 
 ### 8.4 One packet with field observers
 
-The session has no read overload that takes `ParseOptions`. Read the frame and parse it yourself with the
-session's stack; observers are passed through `ParseOptions.Observers`. This parse runs outside the session's own reads, so
-it holds no stack lease: a `Restart` that runs at the same time can dispose the stack under it. Do not restart while you
-parse this way, and read `session.Stack` again after `OnStackChanged`:
+`TryGetPacket(id, in options, view, recycle, …)` parses one packet with your `ParseOptions` (observers, a
+first-protocol override, the field-tree mode) **under the session's own stack lease**, and refuses options that were
+built for another generation. Take a `StackView`, resolve ids on `view.Stack`, build the options from them, and pass the
+same view as `builtFor`:
 
 ```csharp
-if (session.TryGetFrame(id, out Frame frame, out SessionFailure? failure))
+StackView view = session.CurrentStack;                              // stack and generation from one load
+FieldId ipTtlFieldId = view.Stack.GetFieldId("ip.ttl")!.Value;      // resolve by name on exactly this stack
+ParseObserver[] observers =
+[
+    new ParseObserver { Observer = myObserver, Watch = FieldWatch.Only(view.Stack, ipTtlFieldId) },
+];
+ParseOptions options = new(FieldTreeMode.Skip, observers: observers);
+if (session.TryGetPacket(id, in options, view, recycle: null, out Packet? packet, out SessionFailure? failure))
 {
-    Stack stack = session.Stack;                               // read once; never keep it across a restart
-    ParseObserver[] observers =
-    [
-        new ParseObserver { Observer = myObserver, Watch = FieldWatch.Only(stack, ipTtlFieldId) },
-    ];
-    ParseOptions options = new(FieldTreeMode.Skip, observers: observers);
-    if (Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure parseFailure))
-    {
-        // myObserver saw BeginPacket and every watched field.
-    }
+    // myObserver saw BeginPacket and every watched field.
+}
+else if (failure!.Value.Code == SessionErrorCode.OptionsStackMismatch)
+{
+    // A restart happened since you took the view: take CurrentStack again and rebuild the options.
 }
 ```
 
-Rules: only parse ids below `PacketCount` (announced ids may be re-parsed on any thread); `FieldWatch.Only`
-and a `FilterObserver` hold field ids of one stack, so rebuild them in `OnStackChanged`; one observer instance
-per parse at a time.
+One integer compare against the generation of the stack the call leases decides, so a restart between building the
+options and the call cannot feed your observer ids of the wrong stack, and cannot dispose the stack under the parse.
+A `Cache` or `Index` of another stack inside the options is answered with the same code, not an exception. The
+raw `session.Stack` is for lookups (names, ids, infos); parsing with it directly holds no lease and validates nothing.
+
+Rules: only parse ids below `PacketCount`; `FieldWatch.Only` and a `FilterObserver` hold field ids of one stack, so
+rebuild them when the generation moved; one observer instance per parse at a time. Other refusals:
+`QueriesDisabled` while a restart runs, `SessionFaulted`, `PacketNotFound`, `FrameUnavailable`.
 
 ### 8.5 Background work
 
 `TryAddJob(uiName, description, work, …)` runs `work(cancellationToken)` on its own thread and shows it in
 `GetJobs()` (exports, statistics). It is allowed until shutdown starts; `Shutdown` cancels it, waits for it (within
 the shutdown time budget), and disposes it, so the work must observe its token. It must not call `Shutdown`,
-`Restart`, or `WaitForCompletion` once shutdown has begun (`Shutdown` waits for the job while it holds the lock
+`TryRestart`, or `WaitForCompletion` once shutdown has begun (`Shutdown` waits for the job while it holds the lock
 those calls need). `TryUnsubscribe(job)` cancels it early; `TryRemoveJob` removes a finished job from the list and
 refuses a pending or running one (`false` with `JobStillRunning`).
 
-## 9. Restart (re-parse with a new stack)
-
-Use `Restart` when the protocol settings or the protocol set change but the captured frames stay. Sources keep
-running; no frame is lost.
+**Binding.** A job declares whether it depends on the stack:
 
 ```csharp
-session.Restart(registry =>
+session.TryAddJob("export rows", "rows to out.csv", JobStackBinding.StackBound,
+    context => Export(context.Stack, context.Session, context.CancellationToken), out JobInfo? job, out _);
+```
+
+- `StackBound` (the default of the overload without a binding) reads session data or holds field ids, filters, caches,
+  or an exporter catalog. A restart cancels it, waits for it, or is refused while it runs, as the caller of
+  `TryRestart` chose. `JobInfo.Generation` is the generation it was added in; the `JobContext` hands it the
+  `StackView` it started in.
+- `Independent` (generation -1) reads no session data: a restart never touches it. Sources, listeners, value caches,
+  and restart-event subscriptions are independent jobs.
+
+**End reason.** `JobInfo.EndReason` says why a job ended, and it is stored before the terminal status, so a snapshot
+that sees `Cancelled` also sees why: `Completed`, `UserCancelled`, `StackReplaced` (a restart ended it; re-create it
+on the new stack), `SessionShutdown`, or `Failed` (see `FailureException`). The first reason wins, except that a job
+that fails is always `Failed`.
+
+## 9. Restart (re-parse with a new stack)
+
+Use `TryRestart` when the protocol settings or the protocol set change but the captured frames stay. Sources keep
+running; no frame is lost. Every expected refusal is a result (`false` plus a `SessionFailure`), never an exception;
+only caller bugs throw (null arguments, a disposed session, a factory that returns nothing or a stack of another
+registry) and the factory's own exceptions propagate unchanged.
+
+```csharp
+RestartOptions options = new()
 {
-    StackBuilder builder = new(newSettings, registry);   // must use the registry passed in
-    builder.RegisterStandardProtocols();
-    return builder.Build();
-});
+    JobPolicy = RestartJobPolicy.WaitThenCancel,                // default: CancelNow
+    JobWaitTimeout = TimeSpan.FromSeconds(10),                  // 1 s .. 1 h, default 30 s
+};
+if (!session.TryRestart(
+        registry =>
+        {
+            StackBuilder builder = new(newSettings, registry);  // must use the registry passed in
+            builder.RegisterStandardProtocols();
+            return builder.Build();
+        },
+        options,
+        out RestartReport? report,
+        out SessionFailure? failure))
+{
+    ShowError(failure.Value.Message);                           // JobsRunning, InvalidPhase, RestartInProgress, the fault, …
+    return;
+}
+
+ShowInfo($"Restarted to generation {report.Generation}; cancelled {report.JobsCancelled.Count} jobs.");
 ```
 
 What happens, in order:
 
-1. The ingest value cache and the packet index are built on the new stack. A request field the new stack does
-   not define throws `ValueCacheUnknownField` / `ValueCacheInvalidFieldName` here, **before anything
-   changed**; the session disposes the unused stack.
-2. Phase `Restarting`, source threads park before their next parse, queries are disabled.
-3. The stack is swapped (the session owns it from now on). The replaced stack, when the session created it, is retired:
-   disposed at once if no session read is parsing on it, otherwise by the last such read when it ends. `Restart`
-   never waits for those reads and never keeps the old stack until `Shutdown`.
-4. Every frame is re-parsed in id order with its original id.
-5. Listener filters are re-bound to the new stack; a filter that cannot be re-bound makes that listener's
-   `Matching` pulls fail with its `FilterError`.
-6. Queries are enabled, cursors reset, and every listener gets `OnStackChanged` followed by
-   `OnNewPackets(0, PacketCount)`. Sources resume and continue with the next id.
+```mermaid
+graph TD
+    Claim["1 Claim: phase, no shutdown, no restart running"]
+    Check["2 Job check: snapshot of the stack-bound jobs, Refuse decided"]
+    Factory["3 Factory runs, outside every lock"]
+    Jobs["4 Job phase: cancel now, or wait then cancel the rest"]
+    Swap["5 Swap: generation + 1, queries stay disabled"]
+    Reparse["6 Re-parse every packet from id 0"]
+    Rebind["7 Listener filters re-bound, cursors reset, queries enabled"]
+    Wake["8 Listeners woken, Restarted posted"]
+    Claim --> Check
+    Check --> Factory
+    Factory --> Jobs
+    Jobs --> Swap
+    Swap --> Reparse
+    Reparse --> Rebind
+    Rebind --> Wake
+```
 
-| Failure | Thrown | State afterwards |
-|---------|--------|------------------|
-| wrong phase, shutdown started | `SessionException(InvalidPhase)` | unchanged |
-| second restart at the same time | `InvalidOperationException` | unchanged |
-| factory used another registry | `ArgumentException` | unchanged |
-| ingest request not satisfiable | `SessionException(ValueCacheUnknownField / …InvalidFieldName / …InvalidRequest)` | unchanged |
-| a frame cannot be re-read | `SessionException(FrameUnavailable)` | queries stay disabled; only `Shutdown` remains |
+1. **Claim.** The phase must be `Running`, `Stopped` or `Faulted`, no shutdown started, no other restart running.
+2. **Job check.** The stack-bound jobs that are pending or running are snapshotted. Under `Refuse` any of them
+   refuses the restart (`JobsRunning`, the message names them) and nothing changed. From here on no stack-bound job can
+   be added (`RestartPending`), so the snapshot stays complete; independent jobs are still accepted.
+3. **Factory.** The factory runs while every job is still untouched: a factory that throws costs no job, because ending
+   a job is the only step that cannot be undone and it comes after the step that most often fails. The ingest value
+   cache and the packet index are then built on the new stack before anything changes. A request field the new stack does
+   not define refuses the restart (`ValueCacheUnknownField` / `ValueCacheInvalidFieldName` / `ValueCacheInvalidRequest`),
+   the session is as it was, and the unused stack is disposed.
+4. **Job phase.** See the policy table below.
+5. **Swap.** Phase `Restarting`, source threads park before their next parse, queries are disabled, the stack is
+   swapped (the session owns it from now on) and `Generation` becomes N + 1. The replaced stack, when the session created it,
+   is retired: disposed at once if no session read is parsing on it, otherwise by the last such read when it ends. The restart
+   never waits for those reads and never keeps the old stack until `Shutdown`.
+6. **Re-parse.** Every frame is re-parsed in id order with its original id.
+7. **Rebind.** Listener filters are re-bound to the new stack; a filter that cannot be re-bound makes that listener's
+   `Matching` pulls fail with its `FilterError` (the listener is named in `report.FiltersNotRebound`). Queries are enabled.
+8. **Wake.** Every listener gets `OnStackChanged` followed by `OnNewPackets(0, PacketCount)`, the `Restarted` handlers
+   get their notification, sources resume and continue with the next id.
+
+| `RestartOptions.JobPolicy` | What happens to stack-bound jobs | What you lose |
+|----------------------------|----------------------------------|---------------|
+| `CancelNow` (default) | cancelled at once (`StackReplaced`), after the factory returned | their unfinished work; the restart does not wait |
+| `WaitThenCancel` | the call waits up to `JobWaitTimeout` for them, then cancels the rest | time: the call blocks; jobs that outlast the bound lose their unfinished work |
+| `Refuse` | nothing; the restart is refused while they run (`JobsRunning`) | the restart, until the jobs end |
+
+`JobWaitTimeout` is one budget for all jobs, 1 s to 1 h (default 30 s); a value outside the range is refused with
+`RestartOptionOutOfRange` and a message that names the range. `RestartOptions.WaitCancellation` cuts the wait short:
+the rest is cancelled at once and the restart **continues** (it does not abort). A shutdown that starts during the
+wait ends it and abandons the restart (`InvalidPhase`); the shutdown ends the jobs with `SessionShutdown`.
+
+**The report.** `RestartReport` says what the restart did: the new `Generation`, `ReparsedPackets`, `JobsWaitedFor` (ended in
+time), `JobsCancelled`, `FiltersNotRebound` (listeners that lost their filter), and the two durations. A host shows it
+instead of reconstructing it from job lists.
+
+**The event.** `session.Restarted += notification => …` delivers a `RestartNotification` (generation, `Succeeded`, the
+report or the fault) for every restart that got past the swap. Each handler has its own queue and thread, so handlers
+never influence each other: a blocked handler delays only itself, a throwing handler ends only its own subscription (its
+job is `Failed` with the exception) and the others and the session go on. Notifications are never merged and arrive in
+generation order; when the handler runs, the session already reads the generation of its notification with reads
+enabled. A restart refused before any change raises nothing. Do not remove a handler from inside itself; `Shutdown`
+delivers what is queued within its time budget and reports the rest.
+
+| Refusal (`false`) | Cause | State afterwards |
+|-------------------|-------|------------------|
+| `InvalidPhase` | `Idle`, shutting down, or abandoned because shutdown started | unchanged (abandoned: jobs left to the shutdown) |
+| `RestartInProgress` | another restart runs | unchanged |
+| `RestartOptionOutOfRange` | a restart option outside its range | unchanged |
+| `JobsRunning` | `Refuse` and stack-bound jobs running | unchanged |
+| `RestartFromJob` | called from the thread of a running stack-bound job | unchanged |
+| `ValueCacheUnknownField`, `…InvalidFieldName`, `…InvalidRequest` | the new stack cannot satisfy the ingest request | unchanged, every job keeps running; the new stack is disposed |
+| `FrameUnavailable` | a frame cannot be re-read | **`Faulted`**, the failure is `session.Fault` |
+
+Everything that depends only on the new stack (the ingest request above) is decided before the job phase, so a refused
+restart never costs a running job. A job that was already ended (`CancelNow`, or a wait that timed out) stays ended when
+a later step abandons or faults the restart (shutdown started during the wait, `FrameUnavailable`); the job list shows
+`StackReplaced`, no report is returned.
+
+**Faulted.** After the `FrameUnavailable` fault the phase is `Faulted`, `session.Fault` keeps the failure, every read and
+every `Try*` except `TryRestart` and `Shutdown` is refused with `SessionFaulted`, and ingest stays parked. Call
+`TryRestart` again (fix the cause first, for example reopen the source) or `Shutdown`. A successful restart from `Faulted`
+re-parses from id 0, clears the fault, resumes ingest without a gap in the ids, and wakes listeners once.
 
 While a restart runs, `QueriesEnabled` is false and reads are refused: show a busy state and wait for
-`OnStackChanged`. Restart and shutdown never run at the same time; a shutdown waits for a running restart.
+`OnStackChanged` (or poll the generation, section 6). Restart and shutdown never run at the same time; a shutdown waits
+for a running restart.
 
 ## 10. Unsubscribe, shutdown, ownership
 
@@ -382,6 +570,7 @@ While a restart runs, `QueriesEnabled` is false and reads are refused: show a bu
 | caller | the stack passed to the constructor | the caller, after the session |
 | session | every added frame source | `Shutdown` |
 | session | every stack built by a restart factory | the restart that replaces it (once its last in-flight read ended) or `Shutdown` |
+| session | the thread and job of every `Restarted` handler | `-=` on the event, `TryUnsubscribe` of its job, or `Shutdown` (it delivers what is queued first) |
 | caller | listener objects, filters, observers | the caller |
 
 - `TryUnsubscribe(job)`: a source stops reading (its frames stay readable until `Shutdown`); a listener or value
@@ -399,18 +588,28 @@ While a restart runs, `QueriesEnabled` is false and reads are refused: show a bu
 
 ## 11. Error model
 
-- Expected refusals return `false` with a `SessionFailure(Code, Message)`; see the tables above.
+- Expected refusals return `false` with a `SessionFailure(Code, Message)`; see the tables above. `SessionFailure` is a
+  struct: the out parameter is `SessionFailure?`, read `failure.Value.Code` after a `false`. This includes every
+  refusal of `TryRestart`.
 - Caller bugs and hard limits throw `SessionException(Code)`: empty `UiName`, a disposed session, exhausted
   ids (`JobIdExhausted`, `ListenerIdExhausted`, `ValueCacheIdExhausted`, `PacketIdExhausted`), invalid or
   unknown value-cache names (`ValueCacheInvalidFieldName`, `ValueCacheUnknownField`), and a value-cache request that
   cannot be built (`ValueCacheInvalidRequest`: empty, a field that records nothing, a duplicate series, `ChunkShift`
   outside 4…20). Null arguments throw `ArgumentNullException`.
-- Listener and value-cache callback exceptions fail only their own job.
+- The codes a restart and its neighbours added, and where they are returned: `RestartPending` (`TryAddJob`, stack-bound job
+  while a restart is pending), `RestartFromJob`, `JobsRunning`, `RestartInProgress`, `RestartOptionOutOfRange`
+  (`TryRestart`), `SessionFaulted` (every `Try*` and read while `Faulted`), `OptionsStackMismatch`
+  (`TryGetPacket` with options). `TryRestart` throws only for caller bugs: a null argument, a disposed session, a factory
+  that returns `null` (`InvalidOperationException`) or a stack of another registry (`ArgumentException`); the factory's own
+  exception propagates unchanged.
+- Listener, value-cache, and `Restarted` handler exceptions fail only their own job.
 
 ## 12. Performance
 
 - **No copies per listener:** flags plus pulls; a slow listener costs only its own re-parses.
-- **Recycle** packets in your buffers; the read loops reuse them and allocate nothing.
+- **Recycle** packets in your buffers; the read loops reuse them and allocate nothing, also across a restart.
+- A read call takes **one** stack lease for the whole call (two interlocked operations), not one per chunk or per packet;
+  the generation rides on the lease's holder, so noticing a restart costs the read path nothing.
 - **Columns from value caches**, details from `TryGetPacket`: field trees only for what the user looks at.
 - `SessionOptions.RedissectOnly` turns the packet index off when nobody needs presence pruning; filtered pulls
   then evaluate every packet.
@@ -428,12 +627,25 @@ While a restart runs, `QueriesEnabled` is false and reads are refused: show a bu
 - Packet, job, listener, and value-cache ids are `0 … ArrayIndexIdRange.MaxValue`; the next allocation throws
   the matching `…IdExhausted`.
 - One first parse at a time (shared lock); re-parses of announced ids run in parallel.
+- `RestartOptions.JobWaitTimeout`: 1 s … 1 h, default 30 s. It bounds how long `TryRestart` may block waiting for
+  stack-bound jobs; a value outside the range is refused with `RestartOptionOutOfRange` and a message that names the
+  range. Open by default (a local tool, the caller chooses to wait); a host that takes the value from an end user or a
+  remote peer should cap it itself.
+- A `Restarted` subscription costs one idle thread and one queue entry per restart the handler has not consumed
+  (restarts are rare and serialized; `Shutdown` drains within its budget and reports the rest).
 
 ## 14. Checklist
 
 - [ ] Initial stack disposed by you, after the session.
 - [ ] Callbacks marshal to the UI thread and never call `Shutdown`, `Dispose`, or their own `Unsubscribe`.
-- [ ] `Restart` runs off the UI thread; the UI shows a busy state until `OnStackChanged`.
+- [ ] `TryRestart` runs off the UI thread (never from a stack-bound job); its result is shown, not caught; the UI shows a
+      busy state until `OnStackChanged`.
+- [ ] Derived state (ids, filters, caches, exporter catalogs) keeps the `StackView` it was built on and is rebuilt when
+      the generation moved; never assume "old + 1".
+- [ ] Jobs declare their binding: `StackBound` if they read session data, `Independent` only if they do not; a job ended
+      with `StackReplaced` is re-created on the new stack.
+- [ ] Parse options with observers are built from a `StackView` and passed with it (`TryGetPacket` with options).
+- [ ] A `Faulted` session is answered with `TryRestart` or `Shutdown`.
 - [ ] `OnStackChanged` clears rows, filters-derived state, `FieldWatch` / observer objects bound to the old stack.
 - [ ] Reads treat `false` / `null` / 0 as "no row" only while `QueriesEnabled`.
 - [ ] Filtered pulls use a watermark; one filter per listener.

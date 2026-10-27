@@ -1110,7 +1110,7 @@ Sticky poison keeps Sessions/CLI fail-closed: once a filter cannot decide, later
 ### 8.4 Derive for new stack
 
 ```csharp
-// Session.Restart replaced the protocol stack
+// Session.TryRestart replaced the protocol stack
 if (!oldFilter.TryDerive(newStack, out Filter? rebound, out FilterError? err))
 {
     // fail closed — do not keep the old FieldId evaluation tree
@@ -1192,9 +1192,10 @@ read exactly one of `failure` and `sessionFailure` is set.
 ### 9.4 Stack restart
 
 ```text
-Session.Restart(...)
+Session.TryRestart(...)
   → for each listener: TryDerive(newStack) → replace slot filter
-                       (failure → slot filter dropped, Matching reads report it)
+                       (failure → slot filter dropped, Matching reads report it,
+                        the listener is named in RestartReport.FiltersNotRebound)
   → OnStackChanged
   → OnNewPackets from 0
 ```

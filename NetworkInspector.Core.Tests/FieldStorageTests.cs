@@ -70,7 +70,7 @@ internal sealed class FieldStorageTests
     /// <summary>Recycles <paramref name="packet"/> and fills it with <paramref name="count"/> children.</summary>
     private static void _Recycle(Fields fields, Packet packet, int id, int count, int valueOffset, FieldTreeMode mode = FieldTreeMode.Build)
     {
-        RecycleError? error = packet.PrepareForReuse(new PacketId(id), _Frame(fields.Stack, id), mode);
+        RecycleError? error = packet.PrepareForReuse(new PacketId(id), fields.Stack, _Frame(fields.Stack, id), mode);
         if (error is not null)
         {
             throw new InvalidOperationException(error.Value.ToString());
@@ -761,6 +761,112 @@ internal sealed class FieldStorageTests
         return (finals, Volatile.Read(ref foreign));
     }
 
+    /// <summary>
+    /// A sealed packet with one lazy container whose populator appends one child, signals <paramref name="inPopulator"/>, parks
+    /// until <paramref name="release"/> opens, then appends two more children.
+    /// </summary>
+    private static Packet _ParkedPopulatorPacket(Fields fields, ManualResetEventSlim inPopulator, ManualResetEventSlim release)
+    {
+        Packet packet = new(new PacketId(0), fields.Stack, _Frame(fields.Stack, 0));
+        MutField root = packet.RootFieldMut();
+        _ = root.AppendLazy(fields.Container, FieldValue.NewU64(1), (in MutField container) =>
+        {
+            _ = container.Append(fields.Child, FieldValue.NewU64(10));
+            inPopulator.Set();
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+            _ = container.Append(fields.Child, FieldValue.NewU64(11));
+            _ = container.Append(fields.Child, FieldValue.NewU64(12));
+            return 0;
+        });
+        packet.Seal();
+        return packet;
+    }
+
+    /// <summary>Counts the children of the packet's only container, materializing it first.</summary>
+    private static int _MaterializedChildCount(Packet packet)
+    {
+        _ = packet.RootField().TryGetFirstChild(out Field container, materialize: false);
+        return container.ChildCount(materialize: true);
+    }
+
+    [Test]
+    public async Task AReaderWaitsForAPopulatorThatAnotherThreadIsRunning()
+    {
+        // The thread that wins the claim parks inside the populator. A second reader that asks for the children with
+        // materialize: true must not return the half-built list (here: one child); it waits until the populator is done.
+        Fields fields = _BuildStack();
+        using Stack stack = fields.Stack;
+        using ManualResetEventSlim inPopulator = new(false);
+        using ManualResetEventSlim release = new(false);
+        Packet packet = _ParkedPopulatorPacket(fields, inPopulator, release);
+
+        Task<int> populating = Task.Run(() => _MaterializedChildCount(packet));
+        await Assert.That(inPopulator.Wait(TimeSpan.FromSeconds(30))).IsTrue();
+        Task<int> waiting = Task.Run(() => _MaterializedChildCount(packet));
+
+        // The smallest wait that can show "still blocked": a reader that does not wait finishes within microseconds.
+        bool returnedWhileParked = await Task.WhenAny(waiting, Task.Delay(TimeSpan.FromMilliseconds(50))) == waiting;
+        release.Set();
+        int populatingCount = await populating.WaitAsync(TimeSpan.FromSeconds(30));
+        int waitingCount = await waiting.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(returnedWhileParked).IsFalse();
+        await Assert.That(populatingCount).IsEqualTo(3);
+        await Assert.That(waitingCount).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task APopulatorThatReadsItsOwnContainerDoesNotWaitForItself()
+    {
+        // A populator reads its own container with materialize: true. The container is "in progress" (by this very thread),
+        // so waiting would spin for ever; the read must return what is linked so far.
+        Fields fields = _BuildStack();
+        using Stack stack = fields.Stack;
+        int seenInside = -1;
+        Packet packet = new(new PacketId(0), stack, _Frame(stack, 0));
+        MutField root = packet.RootFieldMut();
+        Packet captured = packet;
+        _ = root.AppendLazy(fields.Container, FieldValue.NewU64(1), (in MutField container) =>
+        {
+            _ = container.Append(fields.Child, FieldValue.NewU64(10));
+            _ = captured.RootField().TryGetFirstChild(out Field self, materialize: false);
+            seenInside = self.ChildCount(materialize: true);
+            return 0;
+        });
+        packet.Seal();
+
+        int total = await Task.Run(() => _MaterializedChildCount(packet)).WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(seenInside).IsEqualTo(1);
+        await Assert.That(total).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task APopulatorThatCallsMaterializeAllDoesNotWaitForItself()
+    {
+        // MaterializeAll post-Seal waits until no lazy field is pending; from inside a populator the pending field may be
+        // the caller's own container, so it must return with what is linked so far instead of spinning for ever.
+        Fields fields = _BuildStack();
+        using Stack stack = fields.Stack;
+        bool returned = false;
+        Packet packet = new(new PacketId(0), stack, _Frame(stack, 0));
+        MutField root = packet.RootFieldMut();
+        Packet captured = packet;
+        _ = root.AppendLazy(fields.Container, FieldValue.NewU64(1), (in MutField container) =>
+        {
+            _ = container.Append(fields.Child, FieldValue.NewU64(10));
+            captured.MaterializeAll();
+            returned = true;
+            return 0;
+        });
+        packet.Seal();
+
+        int total = await Task.Run(() => _MaterializedChildCount(packet)).WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(returned).IsTrue();
+        await Assert.That(total).IsEqualTo(1);
+    }
+
     [Test]
     public async Task PostSealLazyGrowthIntoChunksUnderEightThreads()
     {
@@ -777,10 +883,34 @@ internal sealed class FieldStorageTests
         await Assert.That(foreign).IsEqualTo(0);
         await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(reference.FieldCount(materialize: false));
         await Assert.That(packet.FieldCount(materialize: false)).IsGreaterThan(FieldStorage.FirstChunkSize * 10);
-        foreach (List<(int FieldId, ulong Value)> walk in finals)
+        for (int w = 0; w < finals.Length; w++)
         {
-            await Assert.That(walk.SequenceEqual(expected)).IsTrue();
+            await Assert.That(_DescribeFirstDifference(w, finals[w], expected)).IsEqualTo("same");
         }
+    }
+
+    /// <summary>
+    /// "same" when the walk equals the expected walk; otherwise the worker, both lengths and the first differing entry, so a
+    /// rare concurrency failure names what went missing instead of only "expected true".
+    /// </summary>
+    private static string _DescribeFirstDifference(
+        int worker, List<(int FieldId, ulong Value)> walk, List<(int FieldId, ulong Value)> expected)
+    {
+        if (walk.SequenceEqual(expected))
+        {
+            return "same";
+        }
+
+        int first = 0;
+        while (first < walk.Count && first < expected.Count && walk[first] == expected[first])
+        {
+            first++;
+        }
+
+        string walkEntry = first < walk.Count ? walk[first].ToString() : "(end)";
+        string expectedEntry = first < expected.Count ? expected[first].ToString() : "(end)";
+        return $"worker {worker}: {walk.Count} fields, expected {expected.Count}; first difference at {first}: "
+            + $"got {walkEntry}, expected {expectedEntry}";
     }
 
     [Test]

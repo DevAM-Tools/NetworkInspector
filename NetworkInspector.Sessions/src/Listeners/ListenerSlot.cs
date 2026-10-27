@@ -70,10 +70,14 @@ internal sealed class ListenerSlot : IDisposable
     {
         _Listener = listener;
         _SessionReader = sessionReader;
+        // Independent, generation -1: a listener is never ended by a restart. It rebinds on StackChanged and keeps
+        // delivering; waiting for it (or cancelling it) would stop the very notification that tells it about the new stack.
         _Job = new Job(
             jobId,
             listener.UiName,
             $"Listener: {listener.UiName}",
+            JobStackBinding.Independent,
+            generation: -1,
             _RunLoop,
             onStatusChanged);
         // Create the public view once so the same reference can be registered
@@ -218,9 +222,10 @@ internal sealed class ListenerSlot : IDisposable
     /// Requests cancellation of the listener slot and wakes the run loop. Safe on a disposed slot (shutdown may cancel a slot
     /// from its snapshot that a concurrent unsubscribe has already disposed).
     /// </summary>
-    internal void Cancel()
+    /// <param name="reason">Why the slot is ended; recorded before the token fires (see <see cref="Job.Cancel(JobEndReason)"/>).</param>
+    internal void Cancel(JobEndReason reason)
     {
-        _Job.Cancel();
+        _Job.Cancel(reason);
         _Wake.Set();
     }
     /// <summary>Current job status.</summary>

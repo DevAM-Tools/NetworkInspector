@@ -529,8 +529,16 @@ internal sealed class ValueTypeTests
     public async Task MacAddress_FormatTemp()
     {
         MacAddress mac = MacAddress.FromBytes([0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45]);
-        TempString temp = mac.FormatTemp();
-        await Assert.That(temp.ToString()).IsEqualTo("AB:CD:EF:01:23:45");
+
+        // The TempString owns the thread-static char buffer until it is disposed; read the text before any await and
+        // dispose on this thread, otherwise the buffer stays locked for every later test on this pool thread.
+        string formatted;
+        using (TempString temp = mac.FormatTemp())
+        {
+            formatted = temp.ToString();
+        }
+
+        await Assert.That(formatted).IsEqualTo("AB:CD:EF:01:23:45");
     }
 
     [Test]
@@ -682,8 +690,16 @@ internal sealed class ValueTypeTests
     public async Task IPv4Address_FormatTemp()
     {
         IPv4Address ip = IPv4Address.FromBytes([10, 0, 0, 1]);
-        TempString temp = ip.FormatTemp();
-        await Assert.That(temp.ToString()).IsEqualTo("10.0.0.1");
+
+        // The TempString owns the thread-static char buffer until it is disposed; read the text before any await and
+        // dispose on this thread, otherwise the buffer stays locked for every later test on this pool thread.
+        string formatted;
+        using (TempString temp = ip.FormatTemp())
+        {
+            formatted = temp.ToString();
+        }
+
+        await Assert.That(formatted).IsEqualTo("10.0.0.1");
     }
 
     [Test]
@@ -853,8 +869,16 @@ internal sealed class ValueTypeTests
     public async Task Timestamp_FormatTemp()
     {
         Timestamp ts = Timestamp.FromSecs(0);
-        TempString temp = ts.FormatTemp();
-        await Assert.That(temp.ToString()).IsEqualTo("1970-01-01T00:00:00.000000000Z");
+
+        // The TempString owns the thread-static char buffer until it is disposed; read the text before any await and
+        // dispose on this thread, otherwise the buffer stays locked for every later test on this pool thread.
+        string formatted;
+        using (TempString temp = ts.FormatTemp())
+        {
+            formatted = temp.ToString();
+        }
+
+        await Assert.That(formatted).IsEqualTo("1970-01-01T00:00:00.000000000Z");
     }
 
     [Test]

@@ -202,7 +202,7 @@ public readonly struct Field : IEquatable<Field>
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
-            if (body.NeedsMaterialization)
+            if (body.IsLazyPending)
             {
                 Packet.MaterializeLazyField(StorageIndex);
             }
@@ -227,7 +227,7 @@ public readonly struct Field : IEquatable<Field>
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
-            if (body.NeedsMaterialization)
+            if (body.IsLazyPending)
             {
                 Packet.MaterializeLazyField(StorageIndex);
             }
@@ -287,7 +287,7 @@ public readonly struct Field : IEquatable<Field>
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
-            if (body.NeedsMaterialization)
+            if (body.IsLazyPending)
             {
                 Packet.MaterializeLazyField(StorageIndex);
             }
@@ -322,7 +322,7 @@ public readonly struct Field : IEquatable<Field>
         if (materialize)
         {
             ref readonly FieldBody body = ref Packet.GetFieldRef(StorageIndex);
-            if (body.NeedsMaterialization)
+            if (body.IsLazyPending)
             {
                 Packet.MaterializeLazyField(StorageIndex);
             }

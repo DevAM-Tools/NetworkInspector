@@ -10,7 +10,8 @@ namespace NetworkInspector.Core;
 /// maps that code to <see cref="ParseFailure"/> without throwing.
 /// </para>
 /// <para>
-/// Only <see cref="NotFinalized"/>, <see cref="MaterializerActive"/>, and <see cref="RegistryMismatch"/> are produced by
+/// Only <see cref="NotFinalized"/>, <see cref="MaterializerActive"/>, <see cref="RegistryMismatch"/>, and
+/// <see cref="StackMismatch"/> are produced by
 /// <see cref="Packet.PrepareForReuse"/> itself. The other members mirror conditions that
 /// <c>Packet.TryParse</c> checks before it calls <see cref="Packet.PrepareForReuse"/>; they exist so the mapping to
 /// <see cref="ParseFailure"/> stays total if an internal caller skips those checks.
@@ -39,9 +40,9 @@ public enum RecycleError
     RegistryMismatch,
 
     /// <summary>
-    /// The <c>recycle</c> packet belongs to a different
-    /// <see cref="Stack"/> than the one supplied to the factory method.
-    /// The <c>stack</c> argument must be reference-equal to the recycle packet's stack.
+    /// The stack supplied to the recycling parse uses another <see cref="FrameInterfaceRegistry"/> than the stack the
+    /// <c>recycle</c> packet belongs to, so its interface and source ids would not match the frame.
+    /// A different stack of the same registry is accepted: the packet is rebound to it (see <see cref="Packet.Stack"/>).
     /// </summary>
     StackMismatch,
 

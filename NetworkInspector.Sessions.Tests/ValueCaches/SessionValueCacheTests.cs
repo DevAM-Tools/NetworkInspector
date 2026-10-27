@@ -553,7 +553,7 @@ internal sealed class SessionValueCacheTests
         await Assert.That(added).IsTrue();
         await Assert.That(oldIngest.IsAbandoned).IsFalse();
 
-        session.Restart(registry => TestHarness.CreateStack(registry));
+        session.RestartOrThrow(registry => TestHarness.CreateStack(registry));
         WaitHelper.WaitUntil(() => runtime.StackChangedCount >= 1 && runtime.RowsSeen >= frameCount * 2);
 
         await Assert.That(oldIngest.IsAbandoned).IsTrue();
@@ -581,7 +581,7 @@ internal sealed class SessionValueCacheTests
         SessionException? thrown = null;
         try
         {
-            session.Restart(SessionFixture.BuildEthernetOnlyStack);
+            session.RestartOrThrow(SessionFixture.BuildEthernetOnlyStack);
         }
         catch (SessionException ex)
         {
@@ -595,7 +595,7 @@ internal sealed class SessionValueCacheTests
         bool ingestAbandoned = ingestBefore.IsAbandoned;
 
         // The gate and the restart flag were reset, so a valid restart still works.
-        session.Restart(registry => TestHarness.CreateStack(registry));
+        session.RestartOrThrow(registry => TestHarness.CreateStack(registry));
 
         await Assert.That(thrown).IsNotNull();
         await Assert.That(thrown!.Code).IsEqualTo(SessionErrorCode.ValueCacheUnknownField);
@@ -674,7 +674,7 @@ internal sealed class SessionValueCacheTests
         {
             try
             {
-                session.Restart(registry => TestHarness.CreateStack(registry));
+                session.RestartOrThrow(registry => TestHarness.CreateStack(registry));
             }
             catch (Exception ex)
             {

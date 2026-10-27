@@ -174,7 +174,7 @@ internal sealed class SessionFixture : IDisposable
     /// <summary>Restarts the session onto an equivalent stack, which forces a filter re-bind.</summary>
     internal void Restart()
     {
-        Session.Restart(registry => TestHarness.CreateStack(registry));
+        Session.RestartOrThrow(registry => TestHarness.CreateStack(registry));
         WaitHelper.WaitUntil(() => Session.PacketCount >= _FrameCount);
     }
 
@@ -184,7 +184,7 @@ internal sealed class SessionFixture : IDisposable
     /// </summary>
     internal void RestartWithEthernetOnlyStack()
     {
-        Session.Restart(BuildEthernetOnlyStack);
+        Session.RestartOrThrow(BuildEthernetOnlyStack);
         WaitHelper.WaitUntil(() => Session.PacketCount >= _FrameCount);
     }
 

@@ -63,7 +63,7 @@ public readonly struct FieldChildEnumerable(Packet packet, ushort parentIndex, b
                 }
 
                 // Materialize the lazy parent before reading its first child index.
-                if (mat && p.HasUnpopulatedLazyFields && p.GetFieldRef(parentIdx).NeedsMaterialization)
+                if (mat && p.HasUnpopulatedLazyFields && p.GetFieldRef(parentIdx).IsLazyPending)
                 {
                     p.MaterializeLazyField(parentIdx);
                 }
@@ -129,7 +129,7 @@ public ref struct FieldChildEnumerator
         if (materialize && packet.HasUnpopulatedLazyFields)
         {
             ref readonly FieldBody parentBody = ref packet.GetFieldRef(parentIndex);
-            if (parentBody.NeedsMaterialization)
+            if (parentBody.IsLazyPending)
             {
                 packet.MaterializeLazyField(parentIndex);
             }
@@ -225,7 +225,7 @@ public readonly struct FieldDescendantEnumerable(Packet packet, ushort rootIndex
 
             // Materialize root before reading its child list.
             if (_Materialize && _Packet.HasUnpopulatedLazyFields
-                && _Packet.GetFieldRef(_RootIndex).NeedsMaterialization)
+                && _Packet.GetFieldRef(_RootIndex).IsLazyPending)
             {
                 _Packet.MaterializeLazyField(_RootIndex);
             }
@@ -259,7 +259,7 @@ public readonly struct FieldDescendantEnumerable(Packet packet, ushort rootIndex
             }
             // Materialize before reading children.
             if (_Materialize && _Packet.HasUnpopulatedLazyFields
-                && _Packet.GetFieldRef(_Current).NeedsMaterialization)
+                && _Packet.GetFieldRef(_Current).IsLazyPending)
             {
                 _Packet.MaterializeLazyField(_Current);
             }
@@ -315,7 +315,7 @@ public ref struct FieldDescendantEnumerator
         if (materialize && packet.HasUnpopulatedLazyFields)
         {
             ref readonly FieldBody rootBody = ref packet.GetFieldRef(rootIndex);
-            if (rootBody.NeedsMaterialization)
+            if (rootBody.IsLazyPending)
             {
                 packet.MaterializeLazyField(rootIndex);
             }
@@ -356,7 +356,7 @@ public ref struct FieldDescendantEnumerator
 
         // Optionally materialize before descending into children.
         // Fast outer guard: if no lazy fields are pending at all, skip the per-field check.
-        if (_Materialize && _Packet.HasUnpopulatedLazyFields && _Packet.GetFieldRef(_Current).NeedsMaterialization)
+        if (_Materialize && _Packet.HasUnpopulatedLazyFields && _Packet.GetFieldRef(_Current).IsLazyPending)
         {
             _Packet.MaterializeLazyField(_Current);
         }
@@ -442,7 +442,7 @@ public readonly struct FieldDfsEnumerable(Packet packet, bool materialize)
             _Current = _Stack.Pop();
             // Materialize before descending into children.
             if (_Materialize && _Packet.HasUnpopulatedLazyFields
-                && _Packet.GetFieldRef(_Current).NeedsMaterialization)
+                && _Packet.GetFieldRef(_Current).IsLazyPending)
             {
                 _Packet.MaterializeLazyField(_Current);
             }
@@ -520,7 +520,7 @@ public ref struct FieldDfsEnumerator
 
         // Optionally materialize before descending into children.
         // Fast outer guard: if no lazy fields are pending at all, skip the per-field check.
-        if (_Materialize && _Packet.HasUnpopulatedLazyFields && _Packet.GetFieldRef(_Current).NeedsMaterialization)
+        if (_Materialize && _Packet.HasUnpopulatedLazyFields && _Packet.GetFieldRef(_Current).IsLazyPending)
         {
             _Packet.MaterializeLazyField(_Current);
         }
@@ -603,7 +603,7 @@ public readonly struct FieldFlatEnumerable(Packet packet, bool materialize)
             // Materialize lazy field; newly appended children will be at higher indices
             // and will be visited when _CurrentIndex reaches them.
             if (_Materialize && _Packet.HasUnpopulatedLazyFields
-                && _Packet.GetFieldRef(_CurrentIndex).NeedsMaterialization)
+                && _Packet.GetFieldRef(_CurrentIndex).IsLazyPending)
             {
                 _Packet.MaterializeLazyField((ushort)_CurrentIndex);
             }
@@ -668,7 +668,7 @@ public ref struct FieldFlatEnumerator
         // Fast outer guard: if no lazy fields are pending at all, skip the per-field check.
         if (_Materialize && _Packet.HasUnpopulatedLazyFields)
         {
-            if (_Packet.GetFieldRef(_CurrentIndex).NeedsMaterialization)
+            if (_Packet.GetFieldRef(_CurrentIndex).IsLazyPending)
             {
                 _Packet.MaterializeLazyField((ushort)_CurrentIndex);
             }

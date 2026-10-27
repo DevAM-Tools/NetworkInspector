@@ -116,12 +116,16 @@ internal sealed class ValueCacheSlot : IDisposable
         _Rebuild = rebuild;
         _GetIngestWriter = getIngestWriter;
         _TryLeaseStack = tryLeaseStack;
+        // Independent, generation -1: a value-cache slot rebuilds its cache from the stored request on StackChanged; a restart
+        // never ends it (same reasoning as for the listener slot).
         _Job = new Job(
             jobId,
             listener.UiName,
             fillMode == ValueCacheFillMode.NotifyOnly
                 ? $"ValueCache ingest: {listener.UiName}"
                 : $"ValueCache: {listener.UiName}",
+            JobStackBinding.Independent,
+            generation: -1,
             _RunLoop,
             onStatusChanged);
         Info = new JobInfo(_Job);
@@ -209,9 +213,10 @@ internal sealed class ValueCacheSlot : IDisposable
     /// Requests cancellation of the slot and wakes the run loop. Safe on a disposed slot (shutdown may cancel a slot from its
     /// snapshot that a concurrent unsubscribe has already disposed).
     /// </summary>
-    internal void Cancel()
+    /// <param name="reason">Why the slot is ended; recorded before the token fires (see <see cref="Job.Cancel(JobEndReason)"/>).</param>
+    internal void Cancel(JobEndReason reason)
     {
-        _Job.Cancel();
+        _Job.Cancel(reason);
         _Wake.Set();
     }
 
@@ -534,6 +539,13 @@ internal sealed class ValueCacheSlot : IDisposable
     /// <summary>
     /// Skip-parses one frame into this slot's writer on <paramref name="stack"/>, recycling the slot's private packet when the
     /// parser accepts it. The caller holds a lease on <paramref name="stack"/>.
+    ///
+    /// <para>
+    /// The recycle packet may still belong to the stack before a restart: the parser rebinds it to <paramref name="stack"/>
+    /// (same frame registry), so the slot keeps its one packet across a restart. The slot still stops on
+    /// <see cref="ParseFailure.CacheStackMismatch"/> (its writer is of the old stack until the slot rebuilds it on
+    /// <see cref="NotifyFlags.StackChanged"/>), because rebinding the packet does not make a writer of another stack valid.
+    /// </para>
     /// </summary>
     /// <returns><see langword="false"/> with the parser's reason in <paramref name="failure"/> when the parse was rejected.</returns>
     private bool _TryParseInto(Stack stack, PacketId packetId, Frame frame, out ParseFailure failure)

@@ -51,7 +51,7 @@ internal sealed class SessionPacketFrameTests
         await Assert.That(_FindMismatch(session, expectedPackets)).IsNull();
 
         // Restart re-reads every packet's frame through the map and FrameById.
-        session.Restart(static registry => TestHarness.CreateStack(registry));
+        session.RestartOrThrow(static registry => TestHarness.CreateStack(registry));
         _ = session.WaitForCompletion();
         await Assert.That(session.PacketCount).IsEqualTo(expectedPackets);
         await Assert.That(_FindMismatch(session, expectedPackets)).IsNull();

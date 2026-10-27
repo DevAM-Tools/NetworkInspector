@@ -488,9 +488,12 @@ public readonly record struct Timestamp :
     /// </remarks>
     public TempString FormatTemp()
     {
-        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(MaxFormattedLength, out bool isThreadStatic);
+        // The acquire epoch must travel into the TempString: a thread-static owner built without it never matches on Dispose,
+        // so the buffer would stay locked on this thread for good and every later TempString there would fall back to the heap.
+        // Rejected: the epoch-less overloads (they compile and look equivalent, but leak the thread-static buffer).
+        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(MaxFormattedLength, true, out bool isThreadStatic, out int epoch);
         TryFormat(buffer, out int written, default, null);
-        return new TempString(buffer, written, isThreadStatic);
+        return new TempString(buffer, written, isThreadStatic, epoch);
     }
 
     /// <summary>Returns the formatted timestamp as a new string.</summary>

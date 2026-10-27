@@ -144,8 +144,16 @@ internal sealed class Eui64Tests
     public async Task FormatTemp()
     {
         Eui64 eui = new(0x0011223344556677);
-        TempString temp = eui.FormatTemp();
-        await Assert.That(temp.ToString()).IsEqualTo("00:11:22:33:44:55:66:77");
+
+        // The TempString owns the thread-static char buffer until it is disposed; read the text before any await and
+        // dispose on this thread, otherwise the buffer stays locked for every later test on this pool thread.
+        string formatted;
+        using (TempString temp = eui.FormatTemp())
+        {
+            formatted = temp.ToString();
+        }
+
+        await Assert.That(formatted).IsEqualTo("00:11:22:33:44:55:66:77");
     }
 
     [Test]

@@ -247,7 +247,7 @@ internal sealed class SessionValueCacheCoverageTests
         session.WaitForCompletion();
 
         ValueCacheSlot slot = _FirstSlot(session);
-        session.Restart(registry => TestHarness.CreateStack(registry));
+        session.RestartOrThrow(registry => TestHarness.CreateStack(registry));
         _ = slot.Writer;
         await Assert.That(session.IngestValueCache.HasValue).IsTrue();
         session.Shutdown();

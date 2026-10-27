@@ -59,7 +59,7 @@ internal sealed class RetirableStackTests
     private static Stack _NewStack() => TestHarness.CreateStack();
 
     private static RetirableStack _Guard(Stack stack, Spy spy, bool owned = true) =>
-        new(stack, owned, spy.Report, spy.Dispose);
+        new(stack, generation: 0, owned, spy.Report, spy.Dispose);
 
     #endregion
 
@@ -206,6 +206,7 @@ internal sealed class RetirableStackTests
         List<Exception[]> reports = [];
         RetirableStack guard = new(
             stack,
+            generation: 0,
             ownedBySession: true,
             (_, errors) => reports.Add(errors),
             _ => throw failure);
@@ -224,7 +225,7 @@ internal sealed class RetirableStackTests
     {
         using Stack stack = ProbeStack.Create(new(), out ProbeProtocol probe, throwOnShutdown: true);
         List<Exception[]> reports = [];
-        RetirableStack guard = new(stack, ownedBySession: true, (_, errors) => reports.Add(errors));
+        RetirableStack guard = new(stack, generation: 0, ownedBySession: true, (_, errors) => reports.Add(errors));
 
         guard.Retire();
 

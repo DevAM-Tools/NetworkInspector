@@ -110,7 +110,7 @@ internal sealed class SessionValueCacheRaceTests
         session.WaitForCompletion();
         WaitHelper.WaitUntil(() => session.Phase == SessionPhase.Stopped);
         RowsListener listener = new();
-        HookedNameList names = new("udp.srcport", () => session.Restart(registry => TestHarness.CreateStack(registry)));
+        HookedNameList names = new("udp.srcport", () => session.RestartOrThrow(registry => TestHarness.CreateStack(registry)));
 
         bool added = session.TryAddValueCache(
             listener,

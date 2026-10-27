@@ -50,7 +50,7 @@ internal sealed class SessionStackRetirementTests
         internal ProbeProtocol RestartOnto(bool throwOnShutdown = false)
         {
             ProbeProtocol? created = null;
-            Session.Restart(registry => ProbeStack.Create(registry, out created, throwOnShutdown));
+            Session.RestartOrThrow(registry => ProbeStack.Create(registry, out created, throwOnShutdown));
             return created!; // Non-null: the factory ran, otherwise Restart threw.
         }
 
@@ -233,7 +233,7 @@ internal sealed class SessionStackRetirementTests
         SessionException? secondFailure = null;
         try
         {
-            rig.Session.Restart(registry => ProbeStack.Create(registry, out first));
+            rig.Session.RestartOrThrow(registry => ProbeStack.Create(registry, out first));
         }
         catch (SessionException ex)
         {
@@ -242,7 +242,7 @@ internal sealed class SessionStackRetirementTests
 
         try
         {
-            rig.Session.Restart(registry => ProbeStack.Create(registry, out second));
+            rig.Session.RestartOrThrow(registry => ProbeStack.Create(registry, out second));
         }
         catch (SessionException ex)
         {

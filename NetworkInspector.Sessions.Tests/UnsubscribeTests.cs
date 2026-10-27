@@ -293,6 +293,8 @@ internal sealed class UnsubscribeTests
             new JobId(999),
             "Foreign",
             "Not in session",
+            JobStackBinding.StackBound,
+            generation: 0,
             ct => gate.Wait(ct),
             static (_, _) => { });
         foreignJob.Start();

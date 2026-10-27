@@ -114,6 +114,8 @@ internal sealed class SessionApiTests
             new JobId(999),
             "Foreign",
             "Not in session",
+            JobStackBinding.StackBound,
+            generation: 0,
             _ => { },
             static (_, _) => { });
         foreignJob.Start();
@@ -291,24 +293,20 @@ internal sealed class SessionApiTests
     }
 
     [Test]
-    public async Task Restart_FromIdle_ThrowsSessionException()
+    public async Task Restart_FromIdle_IsRefusedWithInvalidPhaseInsteadOfThrowing()
     {
         using Stack stack = TestHarness.CreateStack();
         using Session session = new(stack);
 
-        try
-        {
-            session.Restart(_ => TestHarness.CreateStack());
-            throw new InvalidOperationException("Expected SessionException was not thrown.");
-        }
-        catch (SessionException ex)
-        {
-            await Assert.That(ex.Code).IsEqualTo(SessionErrorCode.InvalidPhase);
-        }
+        bool restarted = session.TryRestart(_ => TestHarness.CreateStack(), out RestartReport? report, out SessionFailure? failure);
+
+        await Assert.That(restarted).IsFalse();
+        await Assert.That(report).IsNull();
+        await Assert.That(failure!.Value.Code).IsEqualTo(SessionErrorCode.InvalidPhase);
     }
 
     [Test]
-    public async Task Restart_ConcurrentSecondCall_ThrowsInvalidOperationException()
+    public async Task Restart_ConcurrentSecondCall_IsRefusedWithRestartInProgressInsteadOfThrowing()
     {
         const int frameCount = 10;
         using Stack stack = TestHarness.CreateStack();
@@ -319,14 +317,14 @@ internal sealed class SessionApiTests
         session.TryStart(out _);
         session.WaitForCompletion();
 
-        using ManualResetEventSlim otherStarted = new(false);
+        using ManualResetEventSlim factoryEntered = new(false);
         using ManualResetEventSlim releaseFactory = new(false);
 
         Thread thread = new(() =>
         {
-            otherStarted.Set();
-            session.Restart(registry =>
+            session.RestartOrThrow(registry =>
             {
+                factoryEntered.Set();
                 releaseFactory.Wait();
                 return TestHarness.CreateStack(registry);
             });
@@ -338,22 +336,18 @@ internal sealed class SessionApiTests
         };
 
         thread.Start();
-        otherStarted.Wait();
+        factoryEntered.Wait();
 
-        try
-        {
-            session.Restart(registry => TestHarness.CreateStack(registry));
-            throw new InvalidOperationException("Expected InvalidOperationException was not thrown.");
-        }
-        catch (InvalidOperationException ex)
-        {
-            await Assert.That(ex.Message).Contains("already in progress");
-        }
+        // The first restart is parked inside its factory, so it holds the claim.
+        bool second = session.TryRestart(registry => TestHarness.CreateStack(registry), out _, out SessionFailure? failure);
 
         releaseFactory.Set();
-        thread.Join(TimeSpan.FromSeconds(10));
-
+        bool joined = thread.Join(TimeSpan.FromSeconds(10));
         session.Shutdown();
+
+        await Assert.That(second).IsFalse();
+        await Assert.That(failure!.Value.Code).IsEqualTo(SessionErrorCode.RestartInProgress);
+        await Assert.That(joined).IsTrue();
     }
 
     [Test]
@@ -560,7 +554,7 @@ internal sealed class SessionApiTests
         {
             try
             {
-                session.Restart(registry =>
+                session.RestartOrThrow(registry =>
                 {
                     entered.Set();
                     release.Wait();
@@ -604,24 +598,39 @@ internal sealed class SessionApiTests
     [Test]
     public async Task WaitForCompletionTimeoutIsASingleBudget()
     {
+        // Six sources that never finish: a budget applied per job would take 6 x 300 ms = 1.8 s, one shared budget about 300 ms.
+        // The bound sits in the middle of the two (1.5 s), so a loaded machine that overshoots the wait by a few hundred
+        // milliseconds cannot fail a correct implementation, while the per-job mistake still fails it.
+        const int sourceCount = 6;
+        TimeSpan budget = TimeSpan.FromMilliseconds(300);
         using Stack stack = TestHarness.CreateStack();
-        using BlockingTestFrameSource first = new(10000);
-        using BlockingTestFrameSource second = new(10000);
         using Session session = new(stack);
-        session.TryAddFrameSource(first, out _, out _);
-        session.TryAddFrameSource(second, out _, out _);
+        BlockingTestFrameSource[] sources = new BlockingTestFrameSource[sourceCount];
+        for (int i = 0; i < sourceCount; i++)
+        {
+            sources[i] = new BlockingTestFrameSource(10000);
+            session.TryAddFrameSource(sources[i], out _, out _);
+        }
+
         session.TryStart(out _);
 
         Stopwatch watch = Stopwatch.StartNew();
-        bool completed = session.WaitForCompletion(TimeSpan.FromMilliseconds(200));
+        bool completed = session.WaitForCompletion(budget);
         watch.Stop();
 
         await Assert.That(completed).IsFalse();
-        await Assert.That(watch.Elapsed).IsLessThan(TimeSpan.FromMilliseconds(500));
+        await Assert.That(watch.Elapsed).IsLessThan(TimeSpan.FromMilliseconds(1500));
 
-        first.Release();
-        second.Release();
+        foreach (BlockingTestFrameSource source in sources)
+        {
+            source.Release();
+        }
+
         session.Shutdown();
+        foreach (BlockingTestFrameSource source in sources)
+        {
+            source.Dispose();
+        }
     }
 
     [Test]

@@ -57,6 +57,17 @@ public interface ISessionReader
         get;
     }
 
+    /// <summary>
+    /// The failure that left the session in <see cref="SessionPhase.Faulted"/> (a restart that failed after the stack was
+    /// swapped), or <see langword="null"/> while the session is not faulted. Volatile read. While it is non-null, reads and
+    /// new work are refused with <see cref="SessionErrorCode.SessionFaulted"/> and ingest is parked; another restart or the
+    /// shutdown are the only ways out, and a successful restart clears it.
+    /// </summary>
+    SessionFailure? Fault
+    {
+        get;
+    }
+
     // ── Packet access ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -76,8 +87,9 @@ public interface ISessionReader
     /// A store hit is not possible: the session never keeps packets. When
     /// <paramref name="recycle"/> is accepted, the returned instance is that object.
     /// If the recycle attempt is rejected (for example because the packet still has an active
-    /// materialization or came from another stack), the re-parse falls back to a fresh allocation and
-    /// still succeeds.
+    /// materialization or came from a stack of another frame registry), the re-parse falls back to a fresh allocation and
+    /// still succeeds. A recycle packet of an earlier stack of the same registry is rebound to the current one, so a buffer of
+    /// packets survives a restart without a single allocation.
     /// </para>
     ///
     /// <para>
@@ -88,6 +100,49 @@ public interface ISessionReader
     /// </para>
     /// </summary>
     bool TryGetPacket(PacketId id, Packet? recycle, [NotNullWhen(true)] out Packet? packet, [NotNullWhen(false)] out SessionFailure? failure);
+
+    /// <summary>
+    /// Parses one packet with the caller's <see cref="ParseOptions"/> (observers, a value cache, a first-protocol override, the
+    /// field-tree mode) under the session's own stack protection, and refuses options that were built for another stack
+    /// generation. This is the path for a caller that watches fields while it parses: the raw <see cref="Stack"/> property
+    /// parses without a lease (a restart can dispose the stack under the parse) and nothing validates the field ids in the
+    /// observers (after a restart they name other fields, silently).
+    ///
+    /// <para>
+    /// <b>Recipe:</b> take <c>StackView view = CurrentStack</c>, resolve the field ids on <c>view.Stack</c>, build the
+    /// options from them, and pass <paramref name="builtFor"/> = <c>view</c>. One integer compare against the generation of the
+    /// stack the call leases decides: a restart in between gives <see cref="SessionErrorCode.OptionsStackMismatch"/> (the
+    /// message names both generations) and the observers are not called; take the view again and rebuild the options.
+    /// </para>
+    ///
+    /// <para>
+    /// <paramref name="options"/> carries ids and objects of one stack: <see cref="ParseOptions.Index"/> left <see langword="null"/>
+    /// is replaced by the session's packet index of the leased stack; an index or value cache of another stack inside the
+    /// options is answered with <see cref="SessionErrorCode.OptionsStackMismatch"/> as well (a defined failure, not an
+    /// exception). <paramref name="recycle"/> follows the rules of
+    /// <see cref="TryGetPacket(PacketId, Packet?, out Packet?, out SessionFailure?)"/>.
+    /// </para>
+    ///
+    /// <para>
+    /// Refusals: <see cref="SessionErrorCode.QueriesDisabled"/> while a restart runs or after shutdown,
+    /// <see cref="SessionErrorCode.SessionFaulted"/>, <see cref="SessionErrorCode.OptionsStackMismatch"/>,
+    /// <see cref="SessionErrorCode.PacketNotFound"/>, <see cref="SessionErrorCode.FrameUnavailable"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="id">The packet to parse.</param>
+    /// <param name="options">The parse choices, built for <paramref name="builtFor"/>.</param>
+    /// <param name="builtFor">The view the options were built on.</param>
+    /// <param name="recycle">A packet to reuse, or <see langword="null"/> to allocate.</param>
+    /// <param name="packet">The parsed packet; set when the call returns <see langword="true"/>.</param>
+    /// <param name="failure">Why nothing was parsed; set when the call returns <see langword="false"/>.</param>
+    /// <returns><see langword="true"/> when the packet was parsed with the options.</returns>
+    bool TryGetPacket(
+        PacketId id,
+        in ParseOptions options,
+        StackView builtFor,
+        Packet? recycle,
+        [NotNullWhen(true)] out Packet? packet,
+        [NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
     /// Attempts to retrieve the captured frame for <paramref name="id"/> without parsing a packet.
@@ -104,6 +159,13 @@ public interface ISessionReader
     /// Each non-null <paramref name="buffer"/> slot is used as that slot’s recycle packet.
     /// Null slots allocate. The session does not retain the returned instances.
     /// Returns the number of slots actually filled. Returns 0 when queries are disabled.
+    ///
+    /// <para>
+    /// <b>One call, one generation:</b> the call parses on exactly one stack generation. A restart that starts during the
+    /// call leaves the remaining slots <see langword="null"/>; it never produces packets of another stack in the same buffer.
+    /// A <see langword="null"/> slot inside the returned count therefore means "a restart overtook this call" (check
+    /// <see cref="QueriesEnabled"/> and <see cref="Generation"/>), or that the frame could not be re-read.
+    /// </para>
     /// </summary>
     int ReadPackets(int fromIndex, Span<Packet?> buffer);
 
@@ -113,6 +175,11 @@ public interface ISessionReader
     /// <para>
     /// Every slot is an independent reparse. <see cref="PacketRef.Packet"/> on input is that slot’s recycle
     /// instance when non-null. The session does not retain returned packets.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>One call, one generation:</b> see <see cref="ReadPackets(int, Span{Packet?})"/>; a restart that starts during the
+    /// call leaves the remaining <see cref="PacketRef.Packet"/> values <see langword="null"/>.
     /// </para>
     /// </summary>
     /// <param name="startId">First <see cref="PacketId"/> value to read (inclusive).</param>
@@ -152,6 +219,12 @@ public interface ISessionReader
     /// <para>
     /// Filtering never applies to notifications: <see cref="Listeners.ISessionListener.OnNewPackets"/>
     /// keeps reporting the unfiltered id window.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>One call, one generation:</b> both modes parse on exactly one stack generation per call, see
+    /// <see cref="ReadPackets(int, Span{Packet?})"/>. A matching scan that a restart overtakes ends early with the packets
+    /// found so far.
     /// </para>
     /// </summary>
     /// <param name="listenerId">Identifies the listener whose filter applies.</param>
@@ -210,12 +283,43 @@ public interface ISessionReader
     // ── Stack ────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// The protocol stack currently bound to this session. Replaced by <see cref="ISession.Restart"/>. A caller that parses
-    /// with it outside the session's reads holds no protection: a stack the session owns is disposed once a restart replaced
-    /// it and the session's own reads ended, so read the property again after <c>OnStackChanged</c> and do not keep the old
-    /// reference.
+    /// The protocol stack currently bound to this session. Replaced by a restart
+    /// (<see cref="ISession.TryRestart(Func{FrameInterfaceRegistry, Stack}, out RestartReport?, out SessionFailure?)"/>). A caller that
+    /// parses with it outside the session's reads holds no protection: a stack the session owns is disposed once a restart
+    /// replaced it and the session's own reads ended, so read the property again after <c>OnStackChanged</c> and do not keep the
+    /// old reference. Prefer <see cref="CurrentStack"/>, which pairs the stack with its generation.
     /// </summary>
     Stack Stack
+    {
+        get;
+    }
+
+    /// <summary>
+    /// The number of the stack that serves reads now: 0 for the stack the session was constructed with, plus one for every
+    /// stack swap. It moves at the swap, before reads are enabled again, so a caller that polls only this property and
+    /// <see cref="QueriesEnabled"/> (no listener, no callback) can tell the three states of a restart apart:
+    /// <list type="table">
+    ///   <listheader><term>Generation / QueriesEnabled</term><description>Meaning</description></listheader>
+    ///   <item><term>N / true</term><description>Stable: everything derived from generation N is valid.</description></item>
+    ///   <item><term>N + 1 / false</term><description>A restart is in progress: the stack was swapped, packets are re-parsed,
+    ///   reads are refused.</description></item>
+    ///   <item><term>N + 1 / true</term><description>Done: reads serve generation N + 1; derived state of N must be rebuilt.</description></item>
+    /// </list>
+    /// Two restarts that a slow consumer observes in one wake-up show as a jump of two; compare for inequality with the
+    /// number you hold, never assume "old + 1". Volatile read, no lock, no allocation.
+    /// </summary>
+    int Generation
+    {
+        get;
+    }
+
+    /// <summary>
+    /// The current stack together with its generation, taken from one volatile load of the session's holder so the two can
+    /// never disagree. The pair is immutable: after a restart a view taken before still names the old stack and the old
+    /// number (<see cref="StackView.IsCurrent"/> then returns <see langword="false"/>). Resolve field names to ids on
+    /// <see cref="StackView.Stack"/>, keep the view next to the ids, and compare it before you use them again. No allocation.
+    /// </summary>
+    StackView CurrentStack
     {
         get;
     }

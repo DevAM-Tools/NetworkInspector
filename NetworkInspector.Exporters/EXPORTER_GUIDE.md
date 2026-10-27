@@ -470,6 +470,24 @@ private bool HandleSkip(ExportErrorKind kind, string message, long itemIndex)
 4. **Tolerant mode skips and continues.** Fire `ItemSkipped` event with details.
 5. **Increment counters with plain `++`**: `ErrorCount++`, `SkippedCount++`. No `Interlocked` is needed because exporters are single-threaded.
 
+### 9.3.1 One stack per export (catalog exporters)
+
+Field ids are dense counters **per protocol stack**: id 17 names another field on the stack a session restart builds. An
+exporter that writes a catalog built from the stack of its first packet (PBF **columnar**, Parquet, DuckDB) therefore
+accepts packets of that one stack only. Remember the first packet's stack (`_CatalogStack`) and refuse a packet of another
+stack with `ExportErrorKind.StackMismatch`:
+
+- the packet is **not written**; `ErrorCount` is incremented and `ItemSkipped` fires with `ItemIndex` = the number of packets
+  written so far;
+- the error is **fatal** for the export (`_HasError = true`, `OnPacket` returns `false`), whatever the error tolerance: every
+  later packet of the new stack would be refused too, one report each, for no dataset anybody wants;
+- `OnFinish` still finalizes a valid dataset of the packets written before;
+- the owner of the export (typically a stack-bound session job, which a restart ends anyway) starts a new export on the new
+  stack.
+
+Row exporters (CSV, JSON, Text, PBF standard, PCAPNG, BLF, ASC) read names from `Field.FieldInfo` per packet and carry no
+catalog, so they need no check.
+
 ### 9.4 Finish Sequence (`ExporterFinish`)
 
 Every exporter ends through the one internal helper `ExporterFinish.Run`, so a fix to cleanup applies to all formats:

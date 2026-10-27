@@ -4,7 +4,8 @@ namespace NetworkInspector.Sessions;
 
 /// <summary>
 /// One in-flight use of a session <see cref="Stack"/>: while the lease is held, the session does not dispose the stack,
-/// even when a <see cref="Session.Restart"/> has already swapped it out. Dispose the lease exactly once (a <c>using</c>
+/// even when a restart (<see cref="ISession.TryRestart(Func{FrameInterfaceRegistry, Stack}, out RestartReport?, out SessionFailure?)"/>)
+/// has already swapped it out. Dispose the lease exactly once (a <c>using</c>
 /// declaration) as soon as the parse that needed the stack is finished; the last release of a retired stack disposes it.
 ///
 /// <para>
@@ -38,6 +39,13 @@ internal readonly ref struct StackLease
 
     /// <summary>The leased stack. Only valid on a lease that was granted.</summary>
     internal Stack Stack => _Owner!.Stack; // Non-null: a granted lease always has an owner; the default lease is never read.
+
+    /// <summary>
+    /// The session generation of the leased stack. Only valid on a lease that was granted. A parse with caller-built options
+    /// compares the caller's view with this number, never with the session's current generation: a restart may have swapped
+    /// the session's holder after this lease was granted on the old one.
+    /// </summary>
+    internal int Generation => _Owner!.Generation; // Non-null: a granted lease always has an owner; the default lease is never read.
 
     #endregion
 }

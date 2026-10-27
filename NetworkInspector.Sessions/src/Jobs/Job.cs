@@ -42,22 +42,45 @@ internal sealed class Job : IDisposable
     private volatile Exception? _FailureException;
     // 0 = live, 1 = Dispose ran. Read by Cancel on any thread; see Cancel.
     private volatile int _DisposedFlag;
+    // Why the job ended (JobEndReason as int). Stored BEFORE the terminal status is published, with the same release rule as
+    // the end time: a snapshot that sees Cancelled must already see StackReplaced or UserCancelled, otherwise an owner could
+    // re-create a job that the user just cancelled. The writers are the job thread (Completed, Failed, the default for a
+    // cancel without a reason) and whoever cancels (restart, unsubscribe, shutdown), which store their reason before they
+    // cancel the token; the first reason wins (CompareExchange from None), except Failed, which always wins (see _RunCore).
+    // Rejected: deriving the reason from the status (a Cancelled job could not tell who cancelled it) and a second lock around
+    // status and reason (the status is read lock-free on every snapshot).
+    private volatile int _EndReason = (int)JobEndReason.None;
+    // The thread that runs the work; set by TryStart before the thread starts. Read by the restart to refuse a restart that is
+    // called from a stack-bound job's own thread (under WaitThenCancel it would wait for itself, under CancelNow it would
+    // cancel itself). Volatile: written by the starter, read by any thread.
+    private volatile Thread? _Thread;
 
     #endregion
 
     #region Lifecycle
 
-    /// <summary>Creates a job with the given identity and work delegate.</summary>
+    /// <summary>Creates a job with the given identity, stack binding and work delegate.</summary>
+    /// <param name="id">The job's identifier.</param>
+    /// <param name="uiName">User-visible name.</param>
+    /// <param name="description">Human-readable description.</param>
+    /// <param name="binding">Whether a restart ends this job; see <see cref="JobStackBinding"/>.</param>
+    /// <param name="generation">The session generation the job was created in; -1 for an independent job.</param>
+    /// <param name="work">The work; observes the token it receives.</param>
+    /// <param name="onStatusChanged">Told after every status change; must not throw.</param>
     internal Job(
         JobId id,
         string uiName,
         string description,
+        JobStackBinding binding,
+        int generation,
         Action<CancellationToken> work,
         Action<Job, JobStatus> onStatusChanged)
     {
         Id = id;
         UiName = uiName;
         Description = description;
+        Binding = binding;
+        Generation = generation;
         _Work = work;
         _OnStatusChanged = onStatusChanged;
         _Token = _Cts.Token;
@@ -83,12 +106,24 @@ internal sealed class Job : IDisposable
         get;
     }
 
+    /// <summary>Whether a restart ends this job.</summary>
+    internal JobStackBinding Binding { get; }
+
+    /// <summary>The session generation the job was created in; -1 for an <see cref="JobStackBinding.Independent"/> job.</summary>
+    internal int Generation { get; }
+
     #endregion
 
     #region Observable state
 
     /// <summary>Current execution status. Volatile read — always current.</summary>
     internal JobStatus Status => (JobStatus)_Status;
+
+    /// <summary>Why the job ended; <see cref="JobEndReason.None"/> until it did. Stored before the terminal status.</summary>
+    internal JobEndReason EndReason => (JobEndReason)_EndReason;
+
+    /// <summary>Whether the calling thread is the thread that runs this job's work.</summary>
+    internal bool IsCurrentThread => ReferenceEquals(_Thread, Thread.CurrentThread);
     /// <summary>When the job thread started. Null if not yet started.</summary>
     internal DateTimeOffset? StartTime
     {
@@ -172,6 +207,9 @@ internal sealed class Job : IDisposable
             IsBackground = true,
             CurrentCulture = CultureInfo.InvariantCulture,
         };
+        // Published before Start(): a restart that runs on this very thread must be recognized from the first instruction
+        // of the work (see IsCurrentThread).
+        _Thread = thread;
         // Set start time before transitioning to Running so that observers
         // never see Status==Running with a null StartTime.
         // Running is also published before the thread starts: a very short job could otherwise reach a terminal
@@ -189,6 +227,7 @@ internal sealed class Job : IDisposable
             // exhaustion above all), and none may leave the job in Running. Transition to Failed immediately so
             // WaitForCompletion() does not block; the exception is recorded and handed to the caller, not swallowed.
             _FailureException = ex;
+            _ = Interlocked.Exchange(ref _EndReason, (int)JobEndReason.Failed);
             _EndTimeValue = DateTimeOffset.UtcNow;
             _EndTimeSet = 1;
             _SetStatus(JobStatus.Failed);
@@ -206,6 +245,8 @@ internal sealed class Job : IDisposable
     /// </summary>
     internal void Cancel()
     {
+        // A cancel without a reason (a caller that holds the Job directly) records no reason here; the job thread falls back
+        // to UserCancelled when it observes the token (see _RunCore).
         // A disposed job is over (Dispose runs after Join, or after shutdown already cancelled it), so there is nothing
         // left to cancel and no caller has to be told.
         if (_DisposedFlag != 0)
@@ -224,6 +265,26 @@ internal sealed class Job : IDisposable
             return;
         }
     }
+    /// <summary>
+    /// Cancels the job and records why. The reason is stored first, then the token fires, so whoever observes the cancelled
+    /// job (its thread, a snapshot of the job list) already sees the reason. The first reason wins: a restart that cancels a
+    /// job before the shutdown does leaves <see cref="JobEndReason.StackReplaced"/> in place.
+    /// </summary>
+    /// <param name="reason">Why the job is ended; must not be <see cref="JobEndReason.None"/>.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="reason"/> is <see cref="JobEndReason.None"/>: a cancel always has a cause.</exception>
+    internal void Cancel(JobEndReason reason)
+    {
+        ArgumentOutOfRangeException.ThrowIfEqual(reason, JobEndReason.None);
+        SetEndReason(reason);
+        Cancel();
+    }
+
+    /// <summary>
+    /// Records why the job is being ended; the first reason wins. Thread-safe; safe on a disposed job (a plain field).
+    /// </summary>
+    internal void SetEndReason(JobEndReason reason)
+        => _ = Interlocked.CompareExchange(ref _EndReason, (int)reason, (int)JobEndReason.None);
+
     /// <summary>
     /// Blocks the calling thread until the job reaches a terminal state
     /// (<see cref="JobStatus.Completed"/>, <see cref="JobStatus.Cancelled"/>,
@@ -283,9 +344,11 @@ internal sealed class Job : IDisposable
     {
         // Every branch stores end time (and the failure exception) BEFORE publishing the terminal status, because
         // _SetStatus releases waiters; a thread woken by Join must see them already set.
+        // The end reason is stored with the end time, before the status, for the same reason: _SetStatus releases waiters.
         try
         {
             _Work(_Token);
+            SetEndReason(JobEndReason.Completed);
             _EndTimeValue = DateTimeOffset.UtcNow;
             _EndTimeSet = 1;
             _SetStatus(JobStatus.Completed);
@@ -296,6 +359,8 @@ internal sealed class Job : IDisposable
             // An OperationCanceledException from a different token (e.g. an external
             // token inside the work delegate) is a genuine failure and falls through
             // to the Exception catch below.
+            // A cancel that carried no reason (a caller that holds the JobInfo, which cancels without one) is a user cancel.
+            SetEndReason(JobEndReason.UserCancelled);
             _EndTimeValue = DateTimeOffset.UtcNow;
             _EndTimeSet = 1;
             _SetStatus(JobStatus.Cancelled);
@@ -304,7 +369,10 @@ internal sealed class Job : IDisposable
         {
             // Top-level boundary of a dedicated job thread: an unhandled exception here would take the process down,
             // so it is captured and exposed as the Failed status plus FailureException instead of being rethrown.
+            // Failed overwrites an earlier request reason: a job that a restart asked to end and that then threw (for example
+            // on a stack that was disposed under it) failed, and its owner must see that, not "stack replaced".
             _FailureException = ex;
+            _ = Interlocked.Exchange(ref _EndReason, (int)JobEndReason.Failed);
             _EndTimeValue = DateTimeOffset.UtcNow;
             _EndTimeSet = 1;
             _SetStatus(JobStatus.Failed);

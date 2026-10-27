@@ -180,12 +180,12 @@ internal sealed class PacketBufferTests
         Task a = Task.Run(() =>
         {
             start.SignalAndWait();
-            first = packet.PrepareForReuse(new PacketId(1), frame, FieldTreeMode.Build);
+            first = packet.PrepareForReuse(new PacketId(1), stack, frame, FieldTreeMode.Build);
         });
         Task b = Task.Run(() =>
         {
             start.SignalAndWait();
-            second = packet.PrepareForReuse(new PacketId(1), frame, FieldTreeMode.Build);
+            second = packet.PrepareForReuse(new PacketId(1), stack, frame, FieldTreeMode.Build);
         });
         await Task.WhenAll(a, b);
 
@@ -299,7 +299,7 @@ internal sealed class PacketBufferTests
         packet.Seal();
 
         Frame frame2 = _MakeFrame(stack, data, 2);
-        RecycleError? err = packet.PrepareForReuse(new PacketId(99), frame2, FieldTreeMode.Build);
+        RecycleError? err = packet.PrepareForReuse(new PacketId(99), stack, frame2, FieldTreeMode.Build);
         await Assert.That(err).IsNull();
 
         await Assert.That(packet.Id.Value).IsEqualTo(99);

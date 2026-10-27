@@ -156,7 +156,7 @@ internal sealed class SessionIntegrationTests
 
         // Restart with a new stack built via factory (same registry, can use new settings).
         // Sources are NOT stopped — frames are re-parsed from random-access storage.
-        session.Restart(registry => TestHarness.CreateStack(registry));
+        session.RestartOrThrow(registry => TestHarness.CreateStack(registry));
 
         // After restart, all sources had already finished, so phase is Stopped
         // immediately (no source threads to re-run).
@@ -191,7 +191,7 @@ internal sealed class SessionIntegrationTests
         SessionException? thrown = null;
         try
         {
-            session.Restart(registry => TestHarness.CreateStack(registry));
+            session.RestartOrThrow(registry => TestHarness.CreateStack(registry));
         }
         catch (SessionException ex)
         {
@@ -486,7 +486,7 @@ internal sealed class SessionIntegrationTests
                 Monitor.Exit(parseMutex);
                 WaitHelper.WaitUntil(() => session.IngestGateRefusalCount > 0);
             };
-            session.Restart(registry => TestHarness.CreateStack(registry));
+            session.RestartOrThrow(registry => TestHarness.CreateStack(registry));
         }
         finally
         {

@@ -32,7 +32,10 @@ public enum ParseFailure : byte
     /// <summary>The frame registry is not the stack's frame-interface registry.</summary>
     RegistryMismatch = 5,
 
-    /// <summary>The recycle packet belongs to a different stack instance.</summary>
+    /// <summary>
+    /// The recycle packet belongs to a stack with another frame registry than the stack of this parse. A different stack of
+    /// the same registry is accepted and the packet is rebound to it.
+    /// </summary>
     StackMismatch = 6,
 
     /// <summary><see cref="ParseOptions.FieldTree"/> is neither Build nor Skip.</summary>

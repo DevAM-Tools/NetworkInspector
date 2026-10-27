@@ -803,7 +803,7 @@ internal sealed class SessionFilterTests
         List<int> before = _ReadAllMatching(session, info!.Id, 64);
         ListenerSlot slot = _ListenerSlots(session).Single();
         PacketFilter? ownerBefore = slot.PrecheckOwner;
-        session.Restart(registry => TestHarness.CreateStack(registry));
+        session.RestartOrThrow(registry => TestHarness.CreateStack(registry));
         List<int> after = _ReadAllMatching(session, info.Id, 64);
         PacketFilter? ownerAfter = slot.PrecheckOwner;
         PacketFilter? filterAfter = slot.Filter;

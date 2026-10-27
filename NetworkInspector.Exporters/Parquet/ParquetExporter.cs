@@ -60,6 +60,16 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     private bool _Started;
     private bool _Finished;
 
+    // The stack of the first packet: the protocol catalog (protocols.parquet) is built from it, and every field id in the
+    // dataset is an id of that stack. Threat: a packet of another stack (a session restart between two OnPacket calls)
+    // carries field ids that name other fields in this catalog, so writing it would corrupt the dataset silently. Mitigation:
+    // the packet is refused as a fatal, reported error (StackMismatch), the dataset of the earlier packets is still finished
+    // by OnFinish, and the owner of the export (whose job a restart ended anyway) starts a new export on the new stack.
+    // Rejected: skipping only that packet in Tolerant mode (every later packet of the new stack would be skipped one by one,
+    // each reported, for no dataset anybody wants) and re-emitting the catalog (the format has one catalog per dataset).
+    // Residual risk: none for catalog exporters; a stack that is not the first packet's but identical in content is refused too.
+    private Stack? _CatalogStack;
+
     #endregion
 
     #region Constructor
@@ -170,6 +180,7 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
         // Lazy start: nothing is created on disk until the first packet arrives (see "Empty export" above).
         if (!_Started)
         {
+            _CatalogStack = packet.Stack;
             _Start(packet);
             if (_HasError)
             {
@@ -177,7 +188,34 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
             }
         }
 
+        // One stack per export: see _CatalogStack.
+        if (!ReferenceEquals(packet.Stack, _CatalogStack))
+        {
+            _ReportStackMismatch();
+            return false;
+        }
+
         return _HandlePacket(packet);
+    }
+
+    /// <summary>
+    /// A packet of another stack than the catalog's arrived: latches the fatal state, counts it, and raises
+    /// <see cref="ItemSkipped"/> with <see cref="ExportErrorKind.StackMismatch"/>. The packet is not written.
+    /// </summary>
+    private void _ReportStackMismatch()
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = PacketCount,
+            Kind = ExportErrorKind.StackMismatch,
+            Message = "The packet was parsed on another protocol stack than this export's catalog; start a new export after a session restart.",
+        });
     }
 
     /// <inheritdoc/>
@@ -190,6 +228,7 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
             return;
         }
         _Finished = true;
+        _CatalogStack = null; // A finished exporter accepts no packet (OnPacket checks _Finished first); do not keep the stack alive.
 
         if (!_Started)
         {

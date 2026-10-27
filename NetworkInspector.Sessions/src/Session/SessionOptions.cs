@@ -43,7 +43,9 @@ public sealed class SessionOptions
     /// When non-null, the session builds a value cache for these fields (or all fields)
     /// and fills it during the first parse of each frame. Field and group names are checked with
     /// <see cref="NameValidation.IsValidName"/> at construction and Restart, then resolved on the
-    /// current stack. The request itself never changes; <see cref="Session.Restart"/> rebuilds the ingest cache from it
+    /// current stack. The request itself never changes; a restart
+    /// (<see cref="ISession.TryRestart(Func{FrameInterfaceRegistry, Stack}, RestartOptions, out RestartReport?, out SessionFailure?)"/>)
+    /// rebuilds the ingest cache from it
     /// on the new stack and replaces the previous cache.
     /// </summary>
     public ValueCacheRequest? ValueCache { get; init; }
