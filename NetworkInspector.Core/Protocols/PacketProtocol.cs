@@ -12,7 +12,7 @@ namespace NetworkInspector.Core.Protocols;
 ///   <item>After dispatch completes, appends <c>packet.unparsed_data</c> when the frame
 ///         protocol left a trailing tail, then <c>packet.info</c> as a lazy string value —
 ///         the summary is deferred until first access (filter, export, or <see cref="Packet.Info"/>)
-///         and cached in-heap via <see cref="ZeroAlloc.LazyString"/>.</item>
+///         and cached in-heap via <see cref="LazyString"/>.</item>
 /// </list>
 /// <para>Field tree structure:</para>
 /// <code>

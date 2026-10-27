@@ -52,5 +52,4 @@ global using TUnit.Core;
 #endregion
 
 #region External Dependencies
-global using ZeroAlloc;
 #endregion

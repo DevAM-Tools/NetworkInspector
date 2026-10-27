@@ -269,8 +269,8 @@ internal sealed class BlfIncrementalScanner
                 continue;
             }
 
-            ushort headerSz = blockHeader.HeaderSize.Value;
-            uint objectType = blockHeader.ObjectType.Value;
+            ushort headerSz = blockHeader.HeaderSize;
+            uint objectType = blockHeader.ObjectType;
 
             // Validate we have enough data for the full object. The header is intact but the body is cut by EOF
             // (a capture tool that crashed while writing): report it once, then stop.
@@ -364,7 +364,7 @@ internal sealed class BlfIncrementalScanner
         }
 
         ReadOnlySpan<byte> containerHeaderData = objectData[containerHeaderOffset..];
-        if (!BlfContainerHeader.TryParse(containerHeaderData, out BlfContainerHeader containerHeader, out _))
+        if (!BlfContainerHeader.TryParse(containerHeaderData, out BlfContainerHeader containerHeader))
         {
             // Unreachable while the bounds check above holds (the header is a fixed 16-byte structure and at least 16 bytes
             // are left), kept as a safety net: like every other container failure it is counted, so a container that is
@@ -375,8 +375,8 @@ internal sealed class BlfIncrementalScanner
             return;
         }
 
-        ushort compressionMethod = containerHeader.CompressionMethod.Value;
-        uint uncompressedSize = containerHeader.UncompressedSize.Value;
+        ushort compressionMethod = containerHeader.CompressionMethod;
+        uint uncompressedSize = containerHeader.UncompressedSize;
 
         // Compressed/raw payload starts after the header_size region and the container header.
         ReadOnlySpan<byte> payloadData = objectData.Length > payloadOffset

@@ -15,7 +15,7 @@ namespace NetworkInspector.Core.Settings;
 /// <see cref="SettingValueText"/>.
 /// </para>
 /// </summary>
-public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable, IUtf8SpanFormattable, IStringSize
+public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable, IUtf8SpanFormattable
 {
     // Storage layout (a tagged union: one 8-byte payload word, one reference, one discriminant, so no value is boxed and the
     // scalar types need no allocation):
@@ -586,10 +586,11 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
 
     #endregion
 
-    #region IStringSize
+    #region String Size
 
     /// <summary>
-    /// Tries to determine the number of characters needed to format this value.
+    /// Tries to determine the number of characters needed to format this value. A plain method (no interface) because
+    /// every caller names the concrete type.
     /// Returns <see langword="true"/> with an exact count for Bool, String, Bytes, Enum, array types, and
     /// default-format integers. Returns <see langword="false"/> for <see cref="SettingType.F64"/>
     /// and for integers when a non-empty format string is supplied, because those lengths depend
@@ -599,7 +600,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
     {
         // The numbers below are the lengths of the literals TryFormat writes: "True" 4, "False" 5, and the array suffixes
         // " bool]" 6, " string]" 8, " f64]" / " u64]" / " i64]" 5 (the count and the opening bracket are added by the helper).
-        // An exact size lets Format() and FormatTemp() size a buffer once and never retry. F64 has no exact size because its
+        // An exact size lets Format() size a buffer once and never retry. F64 has no exact size because its
         // shortest round-trip text depends on the value; a custom format string changes integer lengths as well.
         switch (Type)
         {
@@ -673,7 +674,8 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
 
     /// <summary>
     /// Largest character count formatted into a <c>stackalloc</c> buffer (256 chars = 512 bytes of stack); a longer result goes
-    /// through a thread-static or pooled buffer from <c>ZeroAllocHelper</c>. Bounds the stack use per call.
+    /// through a pooled <see cref="ArrayPool{T}"/> buffer. Bounds the stack use per call. Constant of the call shape, not
+    /// an external-input limit.
     /// </summary>
     private const int _StackFormatLimit = 256;
 
@@ -684,53 +686,37 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
         return written;
     }
 
-    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static or pooled buffer.</summary>
+    /// <summary>
+    /// Formats a label longer than <see cref="_StackFormatLimit"/> through a pooled buffer and allocates only the result.
+    /// </summary>
     /// <remarks>
-    /// The underlying buffer is thread-local or pooled. The caller must dispose the returned <see cref="TempString"/>
-    /// before making another <see cref="FormatTemp"/> call on the same thread to avoid overwriting the buffer.
-    /// Do not retain references to the underlying span after disposal.
+    /// <paramref name="capacity"/> is the exact size from <see cref="TryGetStringSize"/>. The rental is returned in
+    /// <c>finally</c>; the pool is shared across threads, so nested or concurrent calls simply rent another array. This
+    /// replaced a thread-static buffer that could not be used re-entrantly (a nested call allocated a second multi-megabyte
+    /// array). Trade-off: a pool rental per long label instead of a retained per-thread array; long labels are rare.
     /// </remarks>
-    public TempString FormatTemp()
+    private string _FormatPooled(int capacity, ReadOnlySpan<char> format, IFormatProvider provider)
     {
-        // A string value is copied into the rented buffer so the caller gets one uniform disposable type; the empty string
-        // needs no buffer at all.
-        if (Type == SettingType.String && _ReferenceValue is string str)
+        char[] rented = ArrayPool<char>.Shared.Rent(capacity);
+        try
         {
-            if (str.Length == 0)
+            if (!TryFormat(rented, out int written, format, provider))
             {
-                return new TempString([], 0, false);
+                throw new InvalidOperationException("Setting label exceeds its reported size; TryGetStringSize is wrong.");
             }
 
-            // The acquire epoch goes to TempString so that Dispose can release the thread-static buffer; without it the buffer
-            // stays locked on this thread and every later TempString there falls back to a heap allocation.
-            char[] stringBuffer = ZeroAllocHelper.AcquireCharBuffer(str.Length, true, out bool stringThreadStatic, out int stringEpoch);
-            str.CopyTo(stringBuffer);
-            return new TempString(stringBuffer, str.Length, stringThreadStatic, stringEpoch);
+            return new string(rented, 0, written);
         }
-
-        // Size the buffer once: exact when known, otherwise the F64 upper bound (the only type without an exact size for the
-        // default format). TryFormat then reports how much of the buffer is used.
-        int size;
-        if (!TryGetStringSize(default, CultureInfo.InvariantCulture, out size))
+        finally
         {
-            size = _F64DefaultMaxChars;
+            ArrayPool<char>.Shared.Return(rented);
         }
-
-        if (size <= 0)
-        {
-            return new TempString([], 0, false);
-        }
-
-        // Epoch for TempString.Dispose: see the string case above.
-        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(size, true, out bool isThreadStatic, out int epoch);
-        TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
-        return new TempString(buffer, written, isThreadStatic, epoch);
     }
 
     /// <summary>Returns the formatted label as a new string.</summary>
     /// <remarks>
-    /// String values return the stored instance. Other types allocate a new string.
-    /// Use <see cref="FormatInto"/> or <see cref="FormatTemp"/> for allocation-free hot paths.
+    /// String values return the stored instance. Other types allocate exactly the result string: results up to the stack limit
+    /// are built on the stack, longer ones through a pooled buffer. Use <see cref="FormatInto"/> when the caller owns a buffer.
     /// </remarks>
     public string Format()
     {
@@ -739,9 +725,19 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
             return str;
         }
 
-        // Small results of known size are formatted on the stack so the only allocation is the result string itself; F64 (no
-        // exact size) and long results go through FormatTemp's reusable buffer, again with one string allocation at the end.
-        if (TryGetStringSize(default, CultureInfo.InvariantCulture, out int size) && size <= _StackFormatLimit)
+        // F64 is the only type without an exact size for the default format: its text always fits the fixed upper bound,
+        // so it is formatted on the stack as well.
+        if (!TryGetStringSize(default, CultureInfo.InvariantCulture, out int size))
+        {
+            // _F64DefaultMaxChars exceeds the longest default double text (24 characters), so TryFormat cannot run out of room
+            // and its result needs no check.
+            Span<char> f64Stack = stackalloc char[_F64DefaultMaxChars];
+            TryFormat(f64Stack, out int f64Written, default, CultureInfo.InvariantCulture);
+            return new string(f64Stack[..f64Written]);
+        }
+
+        // Small results of known size are formatted on the stack so the only allocation is the result string itself.
+        if (size <= _StackFormatLimit)
         {
             if (size == 0)
             {
@@ -753,8 +749,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
             return new string(stack[..written]);
         }
 
-        using TempString temp = FormatTemp();
-        return temp.ToString();
+        return _FormatPooled(size, default, CultureInfo.InvariantCulture);
     }
 
     /// <summary>Formats with a non-empty format string into a sized buffer, then allocates the result string.</summary>
@@ -806,11 +801,7 @@ public readonly struct SettingValue : IEquatable<SettingValue>, ISpanFormattable
             return new string(stack[..written]);
         }
 
-        // Epoch for TempString.Dispose: without it the thread-static buffer would stay locked on this thread.
-        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(size, true, out bool isThreadStatic, out int epoch);
-        TryFormat(buffer, out int writtenLarge, format, provider);
-        using TempString temp = new(buffer, writtenLarge, isThreadStatic, epoch);
-        return temp.ToString();
+        return _FormatPooled(size, format, provider);
     }
 
     #endregion

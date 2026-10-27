@@ -112,7 +112,7 @@ public readonly struct SocketCanLayer : IStatelessLayer, IRootLayer
             Data6 = _Data6,
             Data7 = _Data7,
         };
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

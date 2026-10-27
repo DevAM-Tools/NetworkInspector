@@ -419,7 +419,7 @@ public sealed partial class IPv6Protocol : IProtocol
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
         }
         ReadOnlySpan<byte> span = data.Span;
-        if (!IPv6Header.TryParse(span, out IPv6Header header, out _))
+        if (!IPv6Header.TryParse(span, out IPv6Header header))
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, IPv6Header.HeaderSize, (ulong)data.Length);
         }
@@ -429,7 +429,7 @@ public sealed partial class IPv6Protocol : IProtocol
         byte dscp = (byte)(trafficClass >> 2);
         byte ecn = (byte)(trafficClass & 0x03);
         uint flowLabel = header.FlowLabel;
-        ushort payloadLength = header.PayloadLength.Value;
+        ushort payloadLength = header.PayloadLength;
         byte nextHeader = header.NextHeader;
         byte hopLimit = header.HopLimit;
 
@@ -554,8 +554,8 @@ public sealed partial class IPv6Protocol : IProtocol
 
         ReadOnlySpan<byte> span = data.Span;
 
-        // Parse header using BinaryParsable-generated parser
-        if (!IPv6Header.TryParse(span, out IPv6Header header, out _))
+        // Decode the fixed header by hand (one length check)
+        if (!IPv6Header.TryParse(span, out IPv6Header header))
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, IPv6Header.HeaderSize, (ulong)data.Length);
         }
@@ -568,7 +568,7 @@ public sealed partial class IPv6Protocol : IProtocol
 
         // Only extract fields needed for: version check, extension-header walk, dispatch, index recording,
         // summary closure, and eager src/dst append. All other fields are deferred to the lazy populator.
-        ushort payloadLength = header.PayloadLength.Value;
+        ushort payloadLength = header.PayloadLength;
         byte nextHeader = header.NextHeader;
         IPv6Address src = IPv6Header.GetSrc(span);
         IPv6Address dst = IPv6Header.GetDst(span);
@@ -650,6 +650,12 @@ public sealed partial class IPv6Protocol : IProtocol
                 if (remaining >= 8)
                 {
                     hasEsp = true;
+
+                    // The 8 bytes of SPI and sequence number belong to the header part: the lazy parser reads them from
+                    // the stored slice, and the payload (ciphertext) starts after them. Without this advance the field
+                    // was recorded in the presence index but never emitted.
+                    extOffset += 8;
+                    extTotalLen += 8;
                 }
                 break;
             }
@@ -727,7 +733,10 @@ public sealed partial class IPv6Protocol : IProtocol
         // The stored value holds the extension-header chain too; its representation names the stored length. The
         // common case without extension headers keeps the static text (no per-packet formatting).
         FieldValue headerValue = FieldValue.NewBytes(headerBytes)
-            .WithCustomRepresentation(hasExtHeaders ? new LazyString(ZA.String(storedLen, " bytes")) : new LazyString("40 bytes"));
+            .WithCustomRepresentation(hasExtHeaders
+                // Eager text (one string): the field tree stores it right away; InvariantCulture per the repository rule.
+                ? new LazyString(string.Create(CultureInfo.InvariantCulture, $"{storedLen} bytes"))
+                : new LazyString("40 bytes"));
 
         // The container text "Internet Protocol Version 6, Src: ..., Dst: ..." is formatted lazily from src and
         // dst only (two 16-byte structs), which is smaller than capturing the whole header, and only when
@@ -1224,70 +1233,72 @@ public sealed partial class IPv6Protocol : IProtocol
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// </code>
 /// </summary>
-[BinaryParsable]
-internal readonly partial struct IPv6Header
+/// <remarks>
+/// Decoded by hand (one length check, fixed-offset reads with <see cref="BinaryPrimitives"/>) instead of a generated
+/// parser, so the JIT elides the per-read bounds checks and the dissector gets plain integers; declaration order
+/// mirrors the wire layout for readability only. The first four bytes pack version, traffic class and flow label and
+/// are split by shifts. Thread safety: immutable value type.
+/// </remarks>
+internal readonly struct IPv6Header
 {
-    /// <summary>IP version (4 bits, must be 6).</summary>
-    [BinaryField(BitCount = 4)]
+    /// <summary>IP version (bits 31..28 of the first word, must be 6).</summary>
     public byte Version
     {
         get; init;
     }
 
-    /// <summary>Traffic Class (8 bits: DSCP + ECN).</summary>
-    [BinaryField(BitCount = 8)]
+    /// <summary>Traffic Class (bits 27..20 of the first word: DSCP + ECN).</summary>
     public byte TrafficClass
     {
         get; init;
     }
 
-    /// <summary>Flow Label (20 bits).</summary>
-    [BinaryField(BitCount = 20)]
+    /// <summary>Flow Label (bits 19..0 of the first word).</summary>
     public uint FlowLabel
     {
         get; init;
     }
 
     /// <summary>
-    /// Payload length in bytes (excluding the 40-byte fixed header, including extension headers; 0 when a Jumbo Payload option carries the length).
+    /// Payload length in bytes (bytes 4..5; excluding the 40-byte fixed header, including extension headers; 0 when a Jumbo Payload option carries the length).
     /// </summary>
-    public U16BE PayloadLength
+    public ushort PayloadLength
     {
         get; init;
     }
 
-    /// <summary>Next header protocol number (same as IPv4 Protocol field).</summary>
+    /// <summary>Next header protocol number (byte 6, same as IPv4 Protocol field).</summary>
     public byte NextHeader
     {
         get; init;
     }
 
-    /// <summary>Hop limit (decremented by each router).</summary>
+    /// <summary>Hop limit (byte 7, decremented by each router).</summary>
     public byte HopLimit
     {
         get; init;
     }
 
-    /// <summary>Source address high 64 bits.</summary>
-    public U64BE SrcHi
+    /// <summary>Source address high 64 bits (bytes 8..15).</summary>
+    public ulong SrcHi
     {
         get; init;
     }
 
-    /// <summary>Source address low 64 bits.</summary>
-    public U64BE SrcLo
+    /// <summary>Source address low 64 bits (bytes 16..23).</summary>
+    public ulong SrcLo
     {
         get; init;
     }
 
-    /// <summary>Destination address high 64 bits.</summary>
-    public U64BE DstHi
+    /// <summary>Destination address high 64 bits (bytes 24..31).</summary>
+    public ulong DstHi
     {
         get; init;
     }
 
-    /// <summary>Destination address low 64 bits.</summary>
-    public U64BE DstLo
+    /// <summary>Destination address low 64 bits (bytes 32..39).</summary>
+    public ulong DstLo
     {
         get; init;
     }
@@ -1297,6 +1308,39 @@ internal readonly partial struct IPv6Header
 
     /// <summary>Expected IP version number.</summary>
     internal const byte ExpectedVersion = 6;
+
+    /// <summary>
+    /// Decodes the fixed 40-byte header. Returns <see langword="false"/> with a default value when fewer than
+    /// <see cref="HeaderSize"/> bytes are present. Longer input is accepted; only the first 40 bytes are read.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParse(ReadOnlySpan<byte> source, out IPv6Header value)
+    {
+        // One length check up front; a short buffer is an expected failure, not an exception.
+        if (source.Length < HeaderSize)
+        {
+            value = default;
+            return false;
+        }
+
+        // Exact-size slice: after this the JIT knows every index below is in range and drops the bounds checks.
+        ReadOnlySpan<byte> h = source[..HeaderSize];
+        uint versionClassFlow = BinaryPrimitives.ReadUInt32BigEndian(h);
+        value = new IPv6Header
+        {
+            Version = (byte)(versionClassFlow >> 28),                        // word 0..4, bits 31..28
+            TrafficClass = (byte)((versionClassFlow >> 20) & 0xFF),          // word 0..4, bits 27..20
+            FlowLabel = versionClassFlow & 0x000F_FFFF,                      // word 0..4, bits 19..0
+            PayloadLength = BinaryPrimitives.ReadUInt16BigEndian(h[4..]),    // 4..6
+            NextHeader = h[6],                                               // 6
+            HopLimit = h[7],                                                 // 7
+            SrcHi = BinaryPrimitives.ReadUInt64BigEndian(h[8..]),            // 8..16
+            SrcLo = BinaryPrimitives.ReadUInt64BigEndian(h[16..]),           // 16..24
+            DstHi = BinaryPrimitives.ReadUInt64BigEndian(h[24..]),           // 24..32
+            DstLo = BinaryPrimitives.ReadUInt64BigEndian(h[32..]),           // 32..40
+        };
+        return true;
+    }
 
     /// <summary>Extracts the source IPv6 address from raw header data.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

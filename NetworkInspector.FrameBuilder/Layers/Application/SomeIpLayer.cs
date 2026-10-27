@@ -94,7 +94,7 @@ public readonly struct SomeIpLayer : IStatelessLayer, IPayloadLayer, IPseudoHead
             MessageType = _MessageType,
             ReturnCode = _ReturnCode,
         };
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

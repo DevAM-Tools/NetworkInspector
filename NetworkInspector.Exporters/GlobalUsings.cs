@@ -46,7 +46,6 @@ global using NetworkInspector.Sources.Pcapng.Format;
 #region External Dependencies
 global using Parquet;
 global using Parquet.Schema;
-global using ZeroAlloc;
 // Parquet.Schema.Field collides with NetworkInspector.Core.Fields.Field; an alias directive
 // takes priority over both using-namespace directives, so unqualified "Field" always resolves
 // to the packet field-tree type used throughout this project (Parquet.Schema.Field is only ever

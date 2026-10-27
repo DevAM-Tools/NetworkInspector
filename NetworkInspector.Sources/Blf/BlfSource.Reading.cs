@@ -1043,7 +1043,7 @@ public sealed partial class BlfSource
 
         int headerFetch = (int)Math.Min(BlfConstants.BlockHeaderSize, fileSize - currentContainerOffset);
         ReadOnlySpan<byte> headerSpan = _Backend.GetSpan(currentContainerOffset, headerFetch);
-        if (!BlfBlockHeader.TryParse(headerSpan, out BlfBlockHeader currentHeader, out _))
+        if (!BlfBlockHeader.TryParse(headerSpan, out BlfBlockHeader currentHeader))
         {
             return false;
         }
@@ -1051,8 +1051,8 @@ public sealed partial class BlfSource
         // Same skip rule as the scanner's outer loop (see BlfBlockHeader.TryGetSkipDistance): the next object starts at or
         // after offset + max(max(16, object_length), header_size); the alignment zeros are found by the magic search.
         long skip = Math.Max(
-            Math.Max((long)BlfConstants.BlockHeaderSize, currentHeader.ObjectLength.Value),
-            currentHeader.HeaderSize.Value);
+            Math.Max((long)BlfConstants.BlockHeaderSize, currentHeader.ObjectLength),
+            currentHeader.HeaderSize);
         long searchFrom = currentContainerOffset + skip;
 
         // Walk the file-level objects until a LOG_CONTAINER shows up. Windows of 4 MiB overlap by 3 bytes so a "LOBJ"
@@ -1076,22 +1076,22 @@ public sealed partial class BlfSource
             }
 
             ReadOnlySpan<byte> nextHeader = _Backend.GetSpan(pos, BlfConstants.BlockHeaderSize);
-            if (!BlfBlockHeader.TryParse(nextHeader, out BlfBlockHeader block, out _)
-                || block.Signature.Value != BlfConstants.ObjectMagic)
+            if (!BlfBlockHeader.TryParse(nextHeader, out BlfBlockHeader block)
+                || block.Signature != BlfConstants.ObjectMagic)
             {
                 searchFrom = pos + 1;
                 continue;
             }
 
-            if (block.ObjectType.Value == BlfConstants.ObjTypeLogContainer)
+            if (block.ObjectType == BlfConstants.ObjTypeLogContainer)
             {
                 nextOffset = pos;
                 return true;
             }
 
             long objSkip = Math.Max(
-                Math.Max((long)BlfConstants.BlockHeaderSize, block.ObjectLength.Value),
-                block.HeaderSize.Value);
+                Math.Max((long)BlfConstants.BlockHeaderSize, block.ObjectLength),
+                block.HeaderSize);
             if (objSkip > BlfConstants.MaxBlockReadSize)
             {
                 searchFrom = pos + 1;
@@ -1143,15 +1143,15 @@ public sealed partial class BlfSource
 
         int headerFetch = (int)Math.Min(BlfConstants.BlockHeaderSize, _Backend.FileSize - containerFileOffset);
         ReadOnlySpan<byte> blockData = _Backend.GetSpan(containerFileOffset, headerFetch);
-        if (!BlfBlockHeader.TryParse(blockData, out BlfBlockHeader blockHeader, out _))
+        if (!BlfBlockHeader.TryParse(blockData, out BlfBlockHeader blockHeader))
         {
             errorKind = FrameReadErrorKind.MalformedHeader;
             errorMessage = $"Failed to parse container block header at offset {containerFileOffset}.";
             return false;
         }
 
-        ushort headerSize = blockHeader.HeaderSize.Value;
-        uint objectLength = blockHeader.ObjectLength.Value;
+        ushort headerSize = blockHeader.HeaderSize;
+        uint objectLength = blockHeader.ObjectLength;
         long totalSizeLong = Math.Max(Math.Max((long)BlfConstants.BlockHeaderSize, objectLength), headerSize);
         if (totalSizeLong > int.MaxValue)
         {
@@ -1192,7 +1192,7 @@ public sealed partial class BlfSource
             return false;
         }
 
-        if (!BlfContainerHeader.TryParse(fullObjectData[containerHeaderOffset..], out BlfContainerHeader containerHeader, out _))
+        if (!BlfContainerHeader.TryParse(fullObjectData[containerHeaderOffset..], out BlfContainerHeader containerHeader))
         {
             errorKind = FrameReadErrorKind.MalformedHeader;
             errorMessage = $"Failed to parse container header at offset {containerFileOffset}.";
@@ -1207,8 +1207,8 @@ public sealed partial class BlfSource
         }
 
         payloadData = fullObjectData[containerPayloadOffset..];
-        compressionMethod = containerHeader.CompressionMethod.Value;
-        uncompressedSize = containerHeader.UncompressedSize.Value;
+        compressionMethod = containerHeader.CompressionMethod;
+        uncompressedSize = containerHeader.UncompressedSize;
         errorKind = FrameReadErrorKind.Other;
         errorMessage = null;
         return true;

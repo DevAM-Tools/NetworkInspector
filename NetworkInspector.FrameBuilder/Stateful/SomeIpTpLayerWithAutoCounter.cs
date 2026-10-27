@@ -126,7 +126,7 @@ public readonly struct SomeIpTpLayerWithAutoCounter :
             MessageType = _MessageType,
             ReturnCode = _ReturnCode,
         };
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
 
         // TP word: zeroed; patched per segment by PatchFragmentHeader for
         // segmented messages, or left zero for single-frame messages

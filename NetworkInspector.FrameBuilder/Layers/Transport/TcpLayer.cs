@@ -99,7 +99,7 @@ public readonly struct TcpLayer :
         TcpHeader hdr = TcpHeader.Create(
             _SrcPort, _DstPort, _SeqNum, _AckNum,
             _Flags, _WindowSize, dataOffsetWords: 5, _UrgentPointer);
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

@@ -29,7 +29,6 @@ global using NetworkInspector.Core.Interfaces;
 global using NetworkInspector.Core.Protocols;
 global using NetworkInspector.Core.ValueCaches;
 global using NetworkInspector.Values;
-global using ZeroAlloc;
 #endregion
 
 #region NetworkInspector.FrameBuilder
@@ -49,6 +48,7 @@ global using NetworkInspector.Protocols.Dns;
 global using NetworkInspector.Protocols.Http2;
 global using NetworkInspector.Protocols.Icmpv6;
 global using NetworkInspector.Protocols.IPv4;
+global using NetworkInspector.Exporters.Text;
 global using NetworkInspector.Protocols.PduTransport;
 global using NetworkInspector.Protocols.SignalMessage;
 global using NetworkInspector.Protocols.Tcp;

@@ -366,7 +366,7 @@ internal sealed class SignalMessageProtocol : IProtocol
             else
             {
                 // Wide signal: a table over every raw value would be too large, so the text is composed
-                // per signal through ZA.Lazy (a LazyString) instead.
+                // per signal through LazyString.FormatLazy instead.
                 text = _BuildCustomText(in signal, raw, phys, enumName);
             }
 
@@ -399,34 +399,42 @@ internal sealed class SignalMessageProtocol : IProtocol
 
     /// <summary>
     /// Builds CustomText: <c>{ui_name}: {phys:F}[ {unit}] ({raw})[ [{enum}]]</c>.
-    /// Numbers use <see cref="CultureInfo.InvariantCulture"/> via ZeroAlloc's culture-first
-    /// <c>ZA.Lazy</c> overload; only physical uses <see cref="Formatted{T}"/> for the <c>F</c> format.
+    /// Numbers use <see cref="CultureInfo.InvariantCulture"/>: <c>{phys:F}</c> under the invariant culture gives the same
+    /// two-decimal text the former <c>Formatted&lt;double&gt;</c> fragment produced. The text stays lazy: one state box
+    /// now, the string only when somebody reads the field.
     /// </summary>
     private static LazyString _BuildCustomText(in SignalInfo signal, ulong raw, double phys, string? enumName)
     {
-        CultureInfo culture = CultureInfo.InvariantCulture;
-        Formatted<double> physFormatted = new(phys, "F");
         string unit = signal.Unit;
         string uiName = signal.UiName;
 
-        // One ZA.Lazy call per shape (unit and/or enum present) instead of passing empty strings: the
-        // argument list is fixed per call, and omitting absent parts avoids stray separators in the text.
+        // One FormatLazy call per shape (unit and/or enum present) instead of passing empty strings: the interpolation is
+        // fixed per call, and omitting absent parts avoids stray separators in the text. The lambdas are static (no
+        // closure allocation); the tuple is the whole captured state.
         if (enumName is not null)
         {
             if (unit.Length > 0)
             {
-                return ZA.Lazy(culture, uiName, ": ", physFormatted, " ", unit, " (", raw, ") [", enumName, "]");
+                return LazyString.FormatLazy(
+                    (uiName, phys, unit, raw, enumName),
+                    static s => string.Create(CultureInfo.InvariantCulture, $"{s.uiName}: {s.phys:F} {s.unit} ({s.raw}) [{s.enumName}]"));
             }
 
-            return ZA.Lazy(culture, uiName, ": ", physFormatted, " (", raw, ") [", enumName, "]");
+            return LazyString.FormatLazy(
+                (uiName, phys, raw, enumName),
+                static s => string.Create(CultureInfo.InvariantCulture, $"{s.uiName}: {s.phys:F} ({s.raw}) [{s.enumName}]"));
         }
 
         if (unit.Length > 0)
         {
-            return ZA.Lazy(culture, uiName, ": ", physFormatted, " ", unit, " (", raw, ")");
+            return LazyString.FormatLazy(
+                (uiName, phys, unit, raw),
+                static s => string.Create(CultureInfo.InvariantCulture, $"{s.uiName}: {s.phys:F} {s.unit} ({s.raw})"));
         }
 
-        return ZA.Lazy(culture, uiName, ": ", physFormatted, " (", raw, ")");
+        return LazyString.FormatLazy(
+            (uiName, phys, raw),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.uiName}: {s.phys:F} ({s.raw})"));
     }
 
     /// <summary>

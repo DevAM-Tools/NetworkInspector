@@ -74,15 +74,16 @@ internal sealed class Eui64Tests
     }
 
     [Test]
-    public async Task FormatTemp_ProducesCorrectString()
+    public async Task Format_MatchesTryFormatText()
     {
         Eui64 eui = new(0x0011223344556677UL);
-        string formatted;
-        using (TempString temp = eui.FormatTemp())
-        {
-            formatted = temp.ToString();
-        }
-        await Assert.That(formatted).IsEqualTo("00:11:22:33:44:55:66:77");
+        char[] buffer = new char[Eui64.FormattedLength];
+
+        bool ok = eui.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(new string(buffer, 0, written)).IsEqualTo("00:11:22:33:44:55:66:77");
+        await Assert.That(eui.Format()).IsEqualTo("00:11:22:33:44:55:66:77");
     }
 
     // === Round-trip ===
@@ -138,12 +139,22 @@ internal sealed class Eui64Tests
     // === Binary Serialization ===
 
     [Test]
-    public async Task TryGetWrittenSize_Is8()
+    public async Task TryWrite_MatchesToBytesAndFailsWhenOneByteShort()
     {
         Eui64 eui = new(0x0011223344556677UL);
-        bool ok = eui.TryGetWrittenSize(out int size);
-        await Assert.That(ok).IsTrue();
+        byte[] exact = new byte[8];
+        byte[] viaToBytes = new byte[8];
+        int size = eui.ToBytes(viaToBytes);
+
+        bool ok = eui.TryWrite(exact, out int written);
+        bool shortOk = eui.TryWrite(new byte[7], out int shortWritten);
+
         await Assert.That(size).IsEqualTo(8);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(8);
+        await Assert.That(exact.AsSpan().SequenceEqual(viaToBytes)).IsTrue();
+        await Assert.That(shortOk).IsFalse();
+        await Assert.That(shortWritten).IsEqualTo(0);
     }
 
     [Test]
@@ -267,7 +278,7 @@ internal sealed class Eui64Tests
     public async Task TryGetStringSize_ReturnsFormattedLength()
     {
         Eui64 eui = new(1UL);
-        bool ok = eui.TryGetStringSize(default, null, out int size);
+        bool ok = Eui64.TryGetStringSize(default, null, out int size);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(Eui64.FormattedLength);

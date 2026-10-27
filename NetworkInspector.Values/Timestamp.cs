@@ -6,7 +6,7 @@ namespace NetworkInspector.Values;
 [StructLayout(LayoutKind.Sequential)]
 public readonly record struct Timestamp :
     IEquatable<Timestamp>, IComparable<Timestamp>, IComparable,
-    ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
+    ISpanFormattable, IUtf8SpanFormattable,
     ISpanParsable<Timestamp>, IParsable<Timestamp>
 {
     #region Constants
@@ -329,18 +329,12 @@ public readonly record struct Timestamp :
 
     #endregion
 
-    #region IBinarySerializable
+    #region Binary Write
 
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetWrittenSize(out int size)
-    {
-        size = 8;
-        return true;
-    }
-
-    /// <inheritdoc/>
-    /// <remarks>Writes the raw nanosecond value as 8-byte big-endian.</remarks>
+    /// <summary>
+    /// Writes the raw nanosecond value as 8-byte big-endian; <see langword="false"/> and 0 when the destination is
+    /// shorter. A plain method (no interface) because every caller names the concrete type.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryWrite(Span<byte> destination, out int bytesWritten)
     {
@@ -458,10 +452,13 @@ public readonly record struct Timestamp :
 
     #endregion
 
-    #region IStringSize
+    #region String Size
 
-    /// <inheritdoc/>
-    public bool TryGetStringSize(
+    /// <summary>
+    /// Character count of the default text (always 30, exact); lets a caller size a buffer once. Kept without an
+    /// interface because every caller names the concrete type.
+    /// </summary>
+    public static bool TryGetStringSize(
         ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
     {
         // UTC ISO 8601 format is always exactly 30 chars: yyyy-MM-ddTHH:mm:ss.nnnnnnnnnZ
@@ -480,24 +477,11 @@ public readonly record struct Timestamp :
         return written;
     }
 
-    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static or pooled buffer.</summary>
-    /// <remarks>
-    /// The underlying buffer is thread-local or pooled. The caller must dispose the returned <see cref="TempString"/>
-    /// before making another <see cref="FormatTemp"/> call on the same thread to avoid overwriting the buffer.
-    /// Do not retain references to the underlying span after disposal.
-    /// </remarks>
-    public TempString FormatTemp()
-    {
-        // The acquire epoch must travel into the TempString: a thread-static owner built without it never matches on Dispose,
-        // so the buffer would stay locked on this thread for good and every later TempString there would fall back to the heap.
-        // Rejected: the epoch-less overloads (they compile and look equivalent, but leak the thread-static buffer).
-        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(MaxFormattedLength, true, out bool isThreadStatic, out int epoch);
-        TryFormat(buffer, out int written, default, null);
-        return new TempString(buffer, written, isThreadStatic, epoch);
-    }
-
     /// <summary>Returns the formatted timestamp as a new string.</summary>
-    /// <remarks>Allocates a new string on every call. Use <see cref="FormatInto"/> or <see cref="FormatTemp"/> for allocation-free hot paths.</remarks>
+    /// <remarks>
+    /// Allocates exactly the result string (the text is built on the stack first). Use <see cref="FormatInto"/> or
+    /// <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> when the caller owns a buffer.
+    /// </remarks>
     public string Format()
     {
         Span<char> buf = stackalloc char[MaxFormattedLength];

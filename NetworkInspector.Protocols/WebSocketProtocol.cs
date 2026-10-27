@@ -257,7 +257,8 @@ public sealed partial class WebSocketProtocol : IProtocol
         bool fin = (span[0] & 0x80) != 0;
         string opcodeText = WebSocketDisplayTables.GetOpcodeDisplayText(opcode);
 
-        parentField.SetPacketInfo(ZA.Lazy("WebSocket ", opcodeText));
+        parentField.SetPacketInfo(LazyString.FormatLazy(
+            opcodeText, static s => string.Create(CultureInfo.InvariantCulture, $"WebSocket {s}")));
 
         MutField container = parentField.AppendLazyWithCustomText(
             _ProtocolFieldId, FieldValue.NewBytes(data), "WebSocket ", opcodeText, fin ? " [FIN]" : "", _Populator);

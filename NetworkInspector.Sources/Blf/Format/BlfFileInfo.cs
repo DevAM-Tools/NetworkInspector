@@ -56,18 +56,18 @@ internal sealed class BlfFileInfo
         }
 
         // Parse the 12-byte prefix (signature, header_size, api_version).
-        if (!BlfFileHeaderPrefix.TryParse(data, out BlfFileHeaderPrefix prefix, out _))
+        if (!BlfFileHeaderPrefix.TryParse(data, out BlfFileHeaderPrefix prefix))
         {
             return false;
         }
 
         // Validate "LOGG" magic
-        if (prefix.Signature.Value != BlfConstants.FileMagic)
+        if (prefix.Signature != BlfConstants.FileMagic)
         {
             return false;
         }
 
-        uint headerSize = prefix.HeaderSize.Value;
+        uint headerSize = prefix.HeaderSize;
 
         // Header size must be at least the minimum. An upper bound is not checked here: callers hold only the first
         // FileHeaderMinSize bytes, so the size is validated against what they can read (a file source starts its scan at
@@ -84,7 +84,7 @@ internal sealed class BlfFileInfo
         //   obj_count(4) application_build(4) start_date(16) end_date(16) ...
         // → start_date begins at byte 40, end_date at byte 56.
         ReadOnlySpan<byte> dateSpan = data.Slice(40);
-        if (!BlfDate.TryParse(dateSpan, out BlfDate startDate, out _))
+        if (!BlfDate.TryParse(dateSpan, out BlfDate startDate))
         {
             return false;
         }

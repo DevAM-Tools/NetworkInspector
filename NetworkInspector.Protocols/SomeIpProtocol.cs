@@ -559,10 +559,10 @@ public sealed partial class SomeIpProtocol : IProtocol
         // (table lookups) so no number formatting happens here.
         string msgTypeText = SomeIpDisplayTables.GetMsgTypeDisplayText(header.MessageType);
 
-        parentField.SetPacketInfo(ZA.Lazy(
-            "SOME/IP 0x",
-            Helpers.DisplayTables.FormatHexU16(header.ServiceId),
-            " ", msgTypeText));
+        // FormatHexU16 already carries the "0x" prefix; adding it again here showed "0x0x1234".
+        parentField.SetPacketInfo(LazyString.FormatLazy(
+            (serviceIdText: Helpers.DisplayTables.FormatHexU16(header.ServiceId), msgTypeText),
+            static s => string.Create(CultureInfo.InvariantCulture, $"SOME/IP {s.serviceIdText} {s.msgTypeText}")));
 
         FieldValue containerValue = FieldValue.NewBytes(data[..totalLen]);
 
@@ -609,7 +609,7 @@ public sealed partial class SomeIpProtocol : IProtocol
 
         // Message ID
         container.AppendWithCustomText(_MessageIdFieldId,
-            FieldValue.NewU64(header.MessageId), "0x", new Hex8(header.MessageId));
+            FieldValue.NewU64(header.MessageId), "0x", new UpperHex8(header.MessageId));
 
         // Service/Method IDs
         container.AppendWithCustomText(_ServiceIdFieldId,
@@ -686,7 +686,8 @@ public sealed partial class SomeIpProtocol : IProtocol
                 // TP offset expressed in bytes
                 tpField.AppendWithCustomText(_TpOffsetFieldId,
                     FieldValue.NewU64(tpHeader.ByteOffset),
-                    (string)ZA.String(tpHeader.ByteOffset, " bytes"));
+                    // Eager text (one string): the field tree stores it right away; InvariantCulture per the repository rule.
+                    string.Create(CultureInfo.InvariantCulture, $"{tpHeader.ByteOffset} bytes"));
                 tpField.Append(_TpMoreFieldId, FieldValue.NewBool(tpHeader.MoreSegments));
                 tpField.AppendWithCustomText(_TpReservedFieldId,
                     FieldValue.NewU64(tpHeader.Reserved),

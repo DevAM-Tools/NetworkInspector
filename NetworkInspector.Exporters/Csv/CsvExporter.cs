@@ -569,7 +569,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IDisp
                 // materialize: true — CSV column may reference a lazy field.
                 if (packet.TryGetFieldValue(column.FieldId.Value, out FieldValue value, materialize: true))
                 {
-                    // FieldValue.ToString() → FieldValueData.ToTempString() → ZA.String (InvariantCulture).
+                    // FieldValue.ToString() → FieldValueData.ToString() (InvariantCulture, stack buffer / exact-size string).
                     return value.ToString();
                 }
                 return string.Empty;

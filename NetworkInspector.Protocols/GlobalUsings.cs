@@ -56,10 +56,3 @@ global using NetworkInspector.Protocols.Tls;
 global using NetworkInspector.Protocols.Udp;
 global using NetworkInspector.Protocols.WebSocket;
 #endregion
-
-#region External Dependencies
-// ZeroAlloc: source-generated, allocation-free string formatting. ZA (ZA.cs) is this assembly's generator entry point,
-// whose members are generated per call site; the static import additionally exposes them without qualification.
-global using ZeroAlloc;
-global using static NetworkInspector.Protocols.ZA;
-#endregion

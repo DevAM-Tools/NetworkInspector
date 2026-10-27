@@ -11,7 +11,3 @@ global using System.Threading.Tasks;
 #region NetworkInspector.Values
 global using NetworkInspector.Values;
 #endregion
-
-#region ZeroAlloc
-global using ZeroAlloc;
-#endregion

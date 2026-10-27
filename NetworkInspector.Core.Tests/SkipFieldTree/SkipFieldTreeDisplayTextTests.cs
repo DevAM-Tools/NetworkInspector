@@ -3,9 +3,9 @@
 namespace NetworkInspector.Core.Tests;
 
 /// <summary>
-/// Skip-tree display-text skip: payload-only cache must not pay <c>ZA.Lazy</c> / generic FormatLazy.
+/// Skip-tree display-text skip: a payload-only cache must not pay for <c>LazyString.FormatLazy</c> or the generic fragment overloads.
 /// </summary>
-internal sealed class SkipFieldTreeZeroAllocTests
+internal sealed class SkipFieldTreeDisplayTextTests
 {
     #region Helpers
 

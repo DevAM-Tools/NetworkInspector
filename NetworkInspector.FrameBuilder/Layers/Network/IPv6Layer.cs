@@ -95,7 +95,7 @@ public readonly struct IPv6Layer :
     public void WriteHeader(scoped Span<byte> dst)
     {
         IPv6Header hdr = IPv6Header.Create(_SrcAddr, _DstAddr, _ExplicitNextHeader, _HopLimit);
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

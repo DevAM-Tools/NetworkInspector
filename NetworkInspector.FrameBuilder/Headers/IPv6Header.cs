@@ -13,8 +13,7 @@ namespace NetworkInspector.FrameBuilder.Headers;
 /// <para>Extension headers (Hop-by-Hop, Routing, Destination Options, Fragment) can be appended after this
 /// header by chaining the corresponding extension-header layers.</para>
 /// </remarks>
-[BinaryWritable]
-internal readonly partial struct IPv6Header
+internal readonly struct IPv6Header
 {
     /// <summary>Size of the IPv6 header in bytes.</summary>
     internal const int Size = 40;
@@ -23,13 +22,13 @@ internal readonly partial struct IPv6Header
     /// Version(4 bits) + Traffic Class(8 bits) + Flow Label(20 bits).
     /// Use <see cref="MakeVersionClassFlow"/> to construct.
     /// </summary>
-    internal U32BE VersionClassFlow
+    internal uint VersionClassFlow
     {
         get; init;
     }
 
     /// <summary>Length of the payload after this header. Set to 0 for fixup.</summary>
-    internal U16BE PayloadLength
+    internal ushort PayloadLength
     {
         get; init;
     }
@@ -92,5 +91,32 @@ internal readonly partial struct IPv6Header
             SrcAddr = srcIp,
             DstAddr = dstIp,
         };
+    }
+
+    /// <summary>Writes the 40 header bytes in network order; <see langword="false"/> and 0 when the destination is shorter.</summary>
+    /// <remarks>
+    /// Replaces a generated writer: one length check, then fixed-offset stores on an exact-size slice, so the JIT drops the
+    /// per-store bounds checks. Layers call it directly (no interface dispatch). Writes nothing when it fails.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryWrite(Span<byte> destination, out int bytesWritten)
+    {
+        // One length check up front; a short destination is an expected failure, not an exception.
+        if (destination.Length < Size)
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        // Exact-size slice: the fixed-offset stores below need no further bounds checks after JIT.
+        Span<byte> d = destination[..Size];
+        BinaryPrimitives.WriteUInt32BigEndian(d, VersionClassFlow);    // 0..4
+        BinaryPrimitives.WriteUInt16BigEndian(d[4..], PayloadLength);  // 4..6
+        d[6] = NextHeader;                                             // 6
+        d[7] = HopLimit;                                               // 7
+        _ = SrcAddr.ToBytes(d[8..]);                                   // 8..24 (the slice is exact, so the count is always 16)
+        _ = DstAddr.ToBytes(d[24..]);                                  // 24..40
+        bytesWritten = Size;
+        return true;
     }
 }

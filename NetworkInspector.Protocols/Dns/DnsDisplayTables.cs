@@ -254,7 +254,7 @@ internal static class DnsDisplayTables
         16 => "Ed448 (16)",
         253 => "Private (253)",
         254 => "Private (254)",
-        _ => ZA.Lazy("Algorithm ", algorithm)
+        _ => LazyString.FormatLazy(algorithm, static s => string.Create(CultureInfo.InvariantCulture, $"Algorithm {s}"))
     };
 
     #endregion
@@ -269,7 +269,7 @@ internal static class DnsDisplayTables
         2 => "SHA-256 (2)",
         3 => "GOST R 34.11-94 (3)",
         4 => "SHA-384 (4)",
-        _ => ZA.Lazy("Digest Type ", digestType)
+        _ => LazyString.FormatLazy(digestType, static s => string.Create(CultureInfo.InvariantCulture, $"Digest Type {s}"))
     };
     #endregion
 }

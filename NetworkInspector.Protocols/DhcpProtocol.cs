@@ -259,16 +259,18 @@ public sealed partial class DhcpProtocol : IProtocol
             _ => "Unknown"
         };
         string msgTypeText = _GetDhcpMessageTypeText(msgType);
-        // The transaction ID is formatted by the Hex8 formatter straight into the text buffer, only when the text is
-        // built: formatting it into a string here would allocate for every message, including those parsed without a field tree.
-        parentField.SetPacketInfo(ZA.Lazy("DHCP ", msgTypeText, " - Transaction ID 0x", new Hex8(xid)));
+        // The transaction ID is formatted by UpperHex8 straight into the result string, only when the text is built:
+        // formatting it into a string here would allocate for every message, including those parsed without a field tree.
+        parentField.SetPacketInfo(LazyString.FormatLazy(
+            (msgTypeText, xid),
+            static s => string.Create(CultureInfo.InvariantCulture, $"DHCP {s.msgTypeText} - Transaction ID 0x{new UpperHex8(s.xid)}")));
 
         // The container covers the whole message (header and options) so the raw bytes of the undecoded BOOTP fields
         // stay selectable in the UI.
         FieldValue containerValue = FieldValue.NewBytes(data);
         MutField container = parentField.AppendWithCustomText(
             _ProtocolFieldId, containerValue,
-            "DHCP ", msgTypeText, " - Transaction ID 0x", new Hex8(xid));
+            "DHCP ", msgTypeText, " - Transaction ID 0x", new UpperHex8(xid));
 
         container.AppendWithCustomText(_OpFieldId, FieldValue.NewU64(op), opText);
         container.Append(_HwTypeFieldId, FieldValue.NewU64(htype));

@@ -12,8 +12,7 @@ namespace NetworkInspector.FrameBuilder.Headers;
 /// area with PadN options (per RFC 8200 §4.2).  Larger option blocks need the
 /// variable-size <see cref="IPv6HopByHopLayer"/> constructor that takes option bytes.
 /// </remarks>
-[BinaryWritable]
-internal readonly partial struct IPv6OptionsExtensionHeader
+internal readonly struct IPv6OptionsExtensionHeader
 {
     /// <summary>Size of this minimal extension header in bytes.</summary>
     internal const int Size = 8;
@@ -64,5 +63,34 @@ internal readonly partial struct IPv6OptionsExtensionHeader
     internal byte Data5
     {
         get; init;
+    }
+
+    /// <summary>Writes the 8 header bytes; <see langword="false"/> and 0 when the destination is shorter.</summary>
+    /// <remarks>
+    /// Replaces a generated writer: one length check, then fixed-offset stores on an exact-size slice, so the JIT drops the
+    /// per-store bounds checks. Layers call it directly (no interface dispatch). Writes nothing when it fails.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryWrite(Span<byte> destination, out int bytesWritten)
+    {
+        // One length check up front; a short destination is an expected failure, not an exception.
+        if (destination.Length < Size)
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        // Exact-size slice: the fixed-offset stores below need no further bounds checks after JIT.
+        Span<byte> d = destination[..Size];
+        d[0] = NextHeader;  // 0
+        d[1] = HdrExtLen;   // 1
+        d[2] = Data0;       // 2
+        d[3] = Data1;       // 3
+        d[4] = Data2;       // 4
+        d[5] = Data3;       // 5
+        d[6] = Data4;       // 6
+        d[7] = Data5;       // 7
+        bytesWritten = Size;
+        return true;
     }
 }

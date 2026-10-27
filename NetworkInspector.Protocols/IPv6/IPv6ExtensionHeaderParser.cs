@@ -195,7 +195,8 @@ internal static class IPv6ExtensionHeaderParser
 
         MutField hopoptsField = protoField.AppendWithCustomText(
             fields.HopoptsFieldId, FieldValue.None,
-            (string)ZA.String("Hop-by-Hop Options Header (", totalLen, " bytes)"));
+            // Eager text (one string): the field tree stores it right away; InvariantCulture per the repository rule.
+            string.Create(CultureInfo.InvariantCulture, $"Hop-by-Hop Options Header ({totalLen} bytes)"));
 
         hopoptsField.AppendWithCustomText(fields.HopoptsNxtFieldId, FieldValue.NewU64(nextHeader), nxtText);
         hopoptsField.Append(fields.HopoptsLenFieldId, FieldValue.NewU64(hdrExtLen));
@@ -236,7 +237,7 @@ internal static class IPv6ExtensionHeaderParser
 
         MutField dstoptsField = protoField.AppendWithCustomText(
             fields.DstoptsFieldId, FieldValue.None,
-            (string)ZA.String("Destination Options Header (", totalLen, " bytes)"));
+            string.Create(CultureInfo.InvariantCulture, $"Destination Options Header ({totalLen} bytes)"));
 
         dstoptsField.AppendWithCustomText(fields.DstoptsNxtFieldId, FieldValue.NewU64(nextHeader), nxtText);
         dstoptsField.Append(fields.DstoptsLenFieldId, FieldValue.NewU64(hdrExtLen));
@@ -284,8 +285,8 @@ internal static class IPv6ExtensionHeaderParser
 
         MutField routingField = protoField.AppendWithCustomText(
             fields.RoutingFieldId, FieldValue.None,
-            (string)ZA.String("Routing Header (Type ", routingType, ": ", rtDisplay,
-                ", Segments Left: ", segmentsLeft, ")"));
+            string.Create(CultureInfo.InvariantCulture,
+                $"Routing Header (Type {routingType}: {rtDisplay}, Segments Left: {segmentsLeft})"));
 
         routingField.AppendWithCustomText(fields.RoutingNxtFieldId, FieldValue.NewU64(nextHeader), nxtText);
         routingField.Append(fields.RoutingLenFieldId, FieldValue.NewU64(hdrExtLen));
@@ -421,8 +422,8 @@ internal static class IPv6ExtensionHeaderParser
 
         MutField fragField = protoField.AppendWithCustomText(
             fields.FraghdrFieldId, FieldValue.None,
-            (string)ZA.String("Fragment Header (Offset: ", fragOffset,
-                ", More: ", moreStr, ", ID: 0x", new Hex8(identification), ")"));
+            string.Create(CultureInfo.InvariantCulture,
+                $"Fragment Header (Offset: {fragOffset}, More: {moreStr}, ID: 0x{new UpperHex8(identification)})"));
 
         fragField.AppendWithCustomText(fields.FraghdrNxtFieldId, FieldValue.NewU64(nextHeader), nxtText);
         fragField.Append(fields.FraghdrReservedOctetFieldId, FieldValue.NewU64(reservedOctet));
@@ -431,7 +432,7 @@ internal static class IPv6ExtensionHeaderParser
         fragField.Append(fields.FraghdrMoreFieldId, FieldValue.NewBool(moreFragments));
         fragField.AppendWithCustomText(
             fields.FraghdrIdentFieldId, FieldValue.NewU64(identification),
-            (string)ZA.String("0x", new Hex8(identification)));
+            string.Create(CultureInfo.InvariantCulture, $"0x{new UpperHex8(identification)}"));
 
         return (nextHeader, _FragmentHeaderSize);
     }
@@ -471,14 +472,14 @@ internal static class IPv6ExtensionHeaderParser
 
         MutField ahField = protoField.AppendWithCustomText(
             fields.AhFieldId, FieldValue.None,
-            (string)ZA.String("Authentication Header (SPI: 0x", new Hex8(spi), ", Seq: ", seq, ")"));
+            string.Create(CultureInfo.InvariantCulture, $"Authentication Header (SPI: 0x{new UpperHex8(spi)}, Seq: {seq})"));
 
         ahField.AppendWithCustomText(fields.AhNxtFieldId, FieldValue.NewU64(nextHeader), nxtText);
         ahField.Append(fields.AhLengthFieldId, FieldValue.NewU64(payloadLen));
         ahField.Append(fields.AhReservedFieldId, FieldValue.NewU64(reserved));
         ahField.AppendWithCustomText(
             fields.AhSpiFieldId, FieldValue.NewU64(spi),
-            (string)ZA.String("0x", new Hex8(spi)));
+            string.Create(CultureInfo.InvariantCulture, $"0x{new UpperHex8(spi)}"));
         ahField.Append(fields.AhSeqFieldId, FieldValue.NewU64(seq));
 
         // ICV — remaining bytes after fixed 12 bytes
@@ -515,12 +516,12 @@ internal static class IPv6ExtensionHeaderParser
 
         MutField espField = protoField.AppendWithCustomText(
             fields.EspFieldId, FieldValue.None,
-            (string)ZA.String("Encapsulating Security Payload (SPI: 0x", new Hex8(spi),
-                ", Seq: ", seq, ")"));
+            string.Create(CultureInfo.InvariantCulture,
+                $"Encapsulating Security Payload (SPI: 0x{new UpperHex8(spi)}, Seq: {seq})"));
 
         espField.AppendWithCustomText(
             fields.EspSpiFieldId, FieldValue.NewU64(spi),
-            (string)ZA.String("0x", new Hex8(spi)));
+            string.Create(CultureInfo.InvariantCulture, $"0x{new UpperHex8(spi)}"));
         espField.Append(fields.EspSeqFieldId, FieldValue.NewU64(seq));
     }
 
@@ -576,7 +577,7 @@ internal static class IPv6ExtensionHeaderParser
             {
                 parentField.AppendWithCustomText(
                     fields.OptPadnFieldId, FieldValue.None,
-                    (string)ZA.String("PadN (", optTotal, " bytes)"));
+                    string.Create(CultureInfo.InvariantCulture, $"PadN ({optTotal} bytes)"));
             }
             else
             {

@@ -316,7 +316,8 @@ public sealed partial class TlsProtocol : IProtocol
         string contentTypeName = TlsDisplayTables.GetContentTypeName(firstRecord.ContentType);
 
         // Set packet info (a LazyString: formatted only if the info column is read)
-        parentField.SetPacketInfo(ZA.Lazy("TLS ", contentTypeName));
+        parentField.SetPacketInfo(LazyString.FormatLazy(
+            contentTypeName, static s => string.Create(CultureInfo.InvariantCulture, $"TLS {s}")));
 
         // Store entire TLS data (a slice of the packet buffer, no copy) in the container; _PopulateTls re-walks it on first access.
         FieldValue containerValue = FieldValue.NewBytes(data);

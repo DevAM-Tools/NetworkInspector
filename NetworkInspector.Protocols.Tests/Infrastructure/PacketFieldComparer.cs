@@ -29,7 +29,7 @@ internal static class PacketFieldComparer
         List<(FieldId Id, FieldValue Value)> fields = new(count);
         foreach (Field field in packet.IterFieldsDfs(materialize: true))
         {
-            // Lazy texts stay unevaluated: the readers race on their first evaluation, which ZeroAlloc 0.6.2 makes safe.
+            // Lazy texts stay unevaluated: the readers race on their first evaluation, which the in-repository LazyString makes safe (compare-exchange publication).
             fields.Add((field.FieldId, field.Value));
         }
 

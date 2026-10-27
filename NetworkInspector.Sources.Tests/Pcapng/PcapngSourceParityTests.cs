@@ -348,11 +348,11 @@ internal sealed class PcapngSourceParityTests
         uint idbLength = BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(32));
         int epbOffset = 28 + (int)idbLength;
 
-        bool parsed = EnhancedPacketBlock.TryParse(file.AsSpan(epbOffset), out EnhancedPacketBlock epb, out _);
+        bool parsed = EnhancedPacketBlock.TryParse(file.AsSpan(epbOffset), out EnhancedPacketBlock epb);
 
         await Assert.That(parsed).IsTrue();
-        await Assert.That(epb.CapturedLength.Value).IsEqualTo(4u);
-        await Assert.That(epb.OriginalLength.Value).IsEqualTo(4u);
+        await Assert.That(epb.CapturedLength).IsEqualTo(4u);
+        await Assert.That(epb.OriginalLength).IsEqualTo(4u);
     }
 
     [Test]

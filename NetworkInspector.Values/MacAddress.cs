@@ -8,7 +8,7 @@ namespace NetworkInspector.Values;
 [StructLayout(LayoutKind.Sequential)]
 public readonly record struct MacAddress :
     IEquatable<MacAddress>, IComparable<MacAddress>, IComparable,
-    ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
+    ISpanFormattable, IUtf8SpanFormattable,
     ISpanParsable<MacAddress>, IParsable<MacAddress>
 {
     #region Constants
@@ -208,17 +208,13 @@ public readonly record struct MacAddress :
 
     #endregion
 
-    #region IBinarySerializable
+    #region Binary Write
 
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetWrittenSize(out int size)
-    {
-        size = 6;
-        return true;
-    }
-
-    /// <inheritdoc/>
+    /// <summary>
+    /// Writes the 6-byte network-order form; <see langword="false"/> and 0 when the destination is shorter.
+    /// A plain method (no interface) because every caller names the concrete type. The FrameBuilder headers call
+    /// <see cref="ToBytes"/> on their exact-size slice instead, which needs no second length check.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryWrite(Span<byte> destination, out int bytesWritten)
     {
@@ -236,7 +232,11 @@ public readonly record struct MacAddress :
     #region ISpanFormattable
 
     /// <inheritdoc/>
-    /// <remarks>Uses <see cref="ZeroAlloc.SpanStringBuilder"/> for zero-allocation span-based formatting.</remarks>
+    /// <remarks>
+    /// Writes six uppercase hex pairs separated by colons straight into the destination through
+    /// <see cref="HexDigits.WriteUpperPair"/>; no builder, no intermediate buffer. The one length check up front plus
+    /// the exact-size slice keeps the seventeen stores free of per-store bounds checks after JIT.
+    /// </remarks>
     public bool TryFormat(
         Span<char> destination, out int charsWritten,
         ReadOnlySpan<char> format, IFormatProvider? provider)
@@ -246,19 +246,22 @@ public readonly record struct MacAddress :
             charsWritten = 0;
             return false;
         }
-        SpanStringBuilder sb = new(destination);
-        sb.AppendHex2((byte)(RawValue >> 40));
-        sb.Append(':');
-        sb.AppendHex2((byte)(RawValue >> 32));
-        sb.Append(':');
-        sb.AppendHex2((byte)(RawValue >> 24));
-        sb.Append(':');
-        sb.AppendHex2((byte)(RawValue >> 16));
-        sb.Append(':');
-        sb.AppendHex2((byte)(RawValue >> 8));
-        sb.Append(':');
-        sb.AppendHex2((byte)RawValue);
-        charsWritten = sb.Length;
+
+        // The (int) casts keep the low 32 bits of the shifted value on purpose: WriteUpperPair reads only the low byte, so
+        // the dropped high bits cannot change the text (and no overflow check applies to a deliberate truncation).
+        Span<char> d = destination[..FormattedLength];
+        HexDigits.WriteUpperPair(d, 0, (int)(RawValue >> 40));
+        d[2] = ':';
+        HexDigits.WriteUpperPair(d, 3, (int)(RawValue >> 32));
+        d[5] = ':';
+        HexDigits.WriteUpperPair(d, 6, (int)(RawValue >> 24));
+        d[8] = ':';
+        HexDigits.WriteUpperPair(d, 9, (int)(RawValue >> 16));
+        d[11] = ':';
+        HexDigits.WriteUpperPair(d, 12, (int)(RawValue >> 8));
+        d[14] = ':';
+        HexDigits.WriteUpperPair(d, 15, (int)RawValue);
+        charsWritten = FormattedLength;
         return true;
     }
 
@@ -293,10 +296,13 @@ public readonly record struct MacAddress :
 
     #endregion
 
-    #region IStringSize
+    #region String Size
 
-    /// <inheritdoc/>
-    public bool TryGetStringSize(
+    /// <summary>
+    /// Character count of the default text (always 17, exact); lets a caller size a buffer once. Kept without an
+    /// interface because every caller names the concrete type.
+    /// </summary>
+    public static bool TryGetStringSize(
         ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
     {
         size = FormattedLength;
@@ -314,24 +320,11 @@ public readonly record struct MacAddress :
         return written;
     }
 
-    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static or pooled buffer.</summary>
-    /// <remarks>
-    /// The underlying buffer is thread-local or pooled. The caller must dispose the returned <see cref="TempString"/>
-    /// before making another <see cref="FormatTemp"/> call on the same thread to avoid overwriting the buffer.
-    /// Do not retain references to the underlying span after disposal.
-    /// </remarks>
-    public TempString FormatTemp()
-    {
-        // The acquire epoch must travel into the TempString: a thread-static owner built without it never matches on Dispose,
-        // so the buffer would stay locked on this thread for good and every later TempString there would fall back to the heap.
-        // Rejected: the epoch-less overloads (they compile and look equivalent, but leak the thread-static buffer).
-        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(FormattedLength, true, out bool isThreadStatic, out int epoch);
-        TryFormat(buffer, out int written, default, null);
-        return new TempString(buffer, written, isThreadStatic, epoch);
-    }
-
     /// <summary>Returns the formatted MAC address as a new string.</summary>
-    /// <remarks>Allocates a new string on every call. Use <see cref="FormatInto"/> or <see cref="FormatTemp"/> for allocation-free hot paths.</remarks>
+    /// <remarks>
+    /// Allocates exactly the result string (the text is built on the stack first). Use <see cref="FormatInto"/> or
+    /// <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> when the caller owns a buffer.
+    /// </remarks>
     public string Format()
     {
         Span<char> buf = stackalloc char[FormattedLength];

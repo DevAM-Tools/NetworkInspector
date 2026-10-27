@@ -36,7 +36,8 @@ namespace NetworkInspector.Protocols.Tcp;
 /// <b>Allocation:</b> options are parsed only when the TCP container is materialized (lazy populator), not per frame
 /// during ingest. Byte-valued fields (cookies, digests, MACs, unknown data) are copied with <c>ToArray()</c> because
 /// the parser only has a span, which cannot back a stored memory value; the display text of containers is composed
-/// eagerly with <c>ZA.String</c>. Both costs are therefore paid per displayed packet, not per captured packet.
+/// eagerly with <c>string.Create</c> (invariant culture, one result string). Both costs are therefore paid per displayed
+/// packet, not per captured packet.
 /// </para>
 /// <para><b>Thread safety:</b> stateless static class; safe to call concurrently.</para>
 /// </remarks>
@@ -227,7 +228,8 @@ internal static class TcpOptionsParser
         ushort value = BinaryPrimitives.ReadUInt16BigEndian(data[2..]);
         MutField mssField = container.AppendWithCustomText(
             ids.Mss, FieldValue.None,
-            (string)ZA.String("Maximum Segment Size: ", value, " bytes"));
+            // Eager text (one string): the field tree stores it right away; InvariantCulture per the repository rule.
+            string.Create(CultureInfo.InvariantCulture, $"Maximum Segment Size: {value} bytes"));
         mssField.Append(ids.MssVal, FieldValue.NewU64(value));
         return value;
     }
@@ -253,7 +255,7 @@ internal static class TcpOptionsParser
 
         MutField wsField = container.AppendWithCustomText(
             ids.WindowScale, FieldValue.None,
-            (string)ZA.String("Window Scale: ", shift, " (multiply by ", multiplier, ")"));
+            string.Create(CultureInfo.InvariantCulture, $"Window Scale: {shift} (multiply by {multiplier})"));
         wsField.Append(ids.WindowScaleVal, FieldValue.NewU64(shift));
         wsField.Append(ids.WindowScaleMultiplier, FieldValue.NewU64(multiplier));
 
@@ -288,7 +290,7 @@ internal static class TcpOptionsParser
 
         MutField sackField = container.AppendWithCustomText(
             ids.Sack, FieldValue.None,
-            (string)ZA.String("SACK: ", blockCount, " block(s)"));
+            string.Create(CultureInfo.InvariantCulture, $"SACK: {blockCount} block(s)"));
         sackField.Append(ids.SackCount, FieldValue.NewU64((ulong)blockCount));
 
         int blockOffset = 2;
@@ -318,7 +320,7 @@ internal static class TcpOptionsParser
 
         MutField tsField = container.AppendWithCustomText(
             ids.Timestamps, FieldValue.None,
-            (string)ZA.String("Timestamps: TSval=", tsVal, ", TSecr=", tsEcr));
+            string.Create(CultureInfo.InvariantCulture, $"Timestamps: TSval={tsVal}, TSecr={tsEcr}"));
         tsField.Append(ids.TimestampTsVal, FieldValue.NewU64(tsVal));
         tsField.Append(ids.TimestampTsEcr, FieldValue.NewU64(tsEcr));
 
@@ -344,7 +346,7 @@ internal static class TcpOptionsParser
 
         MutField utoField = container.AppendWithCustomText(
             ids.UserTimeout, FieldValue.None,
-            (string)ZA.String("User Timeout: ", value, " ", unit));
+            string.Create(CultureInfo.InvariantCulture, $"User Timeout: {value} {unit}"));
         utoField.Append(ids.UserTimeoutGranularity, FieldValue.NewString(unit));
         utoField.Append(ids.UserTimeoutVal, FieldValue.NewU64(value));
     }
@@ -370,7 +372,7 @@ internal static class TcpOptionsParser
             ReadOnlyMemory<byte> cookie = data[2..].ToArray();
             MutField tfoField = container.AppendWithCustomText(
                 ids.FastOpen, FieldValue.None,
-                (string)ZA.String("TCP Fast Open: Cookie (", data.Length - 2, " bytes)"));
+                string.Create(CultureInfo.InvariantCulture, $"TCP Fast Open: Cookie ({data.Length - 2} bytes)"));
             tfoField.Append(ids.FastOpenCookie, FieldValue.NewBytes(cookie));
         }
     }
@@ -392,7 +394,7 @@ internal static class TcpOptionsParser
 
         MutField mpField = container.AppendWithCustomText(
             ids.Mptcp, FieldValue.None,
-            (string)ZA.String("Multipath TCP: ", subtypeName));
+            string.Create(CultureInfo.InvariantCulture, $"Multipath TCP: {subtypeName}"));
         mpField.Append(ids.MptcpSubtype, FieldValue.NewU64(subtype));
     }
 
@@ -431,7 +433,7 @@ internal static class TcpOptionsParser
 
         MutField aoField = container.AppendWithCustomText(
             ids.TcpAo, FieldValue.None,
-            (string)ZA.String("TCP-AO: KeyID=", keyId, ", RNextKeyID=", rNextKeyId));
+            string.Create(CultureInfo.InvariantCulture, $"TCP-AO: KeyID={keyId}, RNextKeyID={rNextKeyId}"));
         aoField.Append(ids.TcpAoKeyId, FieldValue.NewU64(keyId));
         aoField.Append(ids.TcpAoRNextKeyId, FieldValue.NewU64(rNextKeyId));
 
@@ -620,7 +622,7 @@ internal static class TcpOptionsParser
         string displayText = DisplayTables.GetTcpOptionDisplayText(kind);
         MutField unknownField = container.AppendWithCustomText(
             ids.Unknown, FieldValue.None,
-            (string)ZA.String("Unknown Option: ", displayText));
+            string.Create(CultureInfo.InvariantCulture, $"Unknown Option: {displayText}"));
 
         if (data.Length > 2)
         {

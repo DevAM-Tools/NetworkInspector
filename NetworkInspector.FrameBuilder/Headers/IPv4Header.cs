@@ -13,8 +13,7 @@ namespace NetworkInspector.FrameBuilder.Headers;
 /// <c>FixPhase.Length</c> / <c>FixPhase.OuterChecksum</c> post-fixes.</para>
 /// <para>Options can be appended after this header by using <c>IPv4LayerWithOptions</c>.</para>
 /// </remarks>
-[BinaryWritable]
-internal readonly partial struct IPv4Header
+internal readonly struct IPv4Header
 {
     /// <summary>Size of the base IPv4 header without options in bytes.</summary>
     internal const int Size = 20;
@@ -35,19 +34,19 @@ internal readonly partial struct IPv4Header
     }
 
     /// <summary>Total length including header and payload. Set to 0 for fixup.</summary>
-    internal U16BE TotalLength
+    internal ushort TotalLength
     {
         get; init;
     }
 
     /// <summary>Identification field for fragmentation.</summary>
-    internal U16BE Identification
+    internal ushort Identification
     {
         get; init;
     }
 
     /// <summary>Flags(3 bits) + Fragment Offset(13 bits). 0x4000 = Don't Fragment.</summary>
-    internal U16BE FlagsFragment
+    internal ushort FlagsFragment
     {
         get; init;
     }
@@ -65,7 +64,7 @@ internal readonly partial struct IPv4Header
     }
 
     /// <summary>Header checksum. Set to 0 for fixup.</summary>
-    internal U16BE HeaderChecksum
+    internal ushort HeaderChecksum
     {
         get; init;
     }
@@ -136,5 +135,36 @@ internal readonly partial struct IPv4Header
             SrcAddr = srcIp,
             DstAddr = dstIp,
         };
+    }
+
+    /// <summary>Writes the 20 fixed header bytes in network order; <see langword="false"/> and 0 when the destination is shorter.</summary>
+    /// <remarks>
+    /// Replaces a generated writer: one length check, then fixed-offset stores on an exact-size slice, so the JIT drops the
+    /// per-store bounds checks. Layers call it directly (no interface dispatch). Writes nothing when it fails.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryWrite(Span<byte> destination, out int bytesWritten)
+    {
+        // One length check up front; a short destination is an expected failure, not an exception.
+        if (destination.Length < Size)
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        // Exact-size slice: the fixed-offset stores below need no further bounds checks after JIT.
+        Span<byte> d = destination[..Size];
+        d[0] = VersionIhl;                                              // 0
+        d[1] = DscpEcn;                                                 // 1
+        BinaryPrimitives.WriteUInt16BigEndian(d[2..], TotalLength);     // 2..4
+        BinaryPrimitives.WriteUInt16BigEndian(d[4..], Identification);  // 4..6
+        BinaryPrimitives.WriteUInt16BigEndian(d[6..], FlagsFragment);   // 6..8
+        d[8] = Ttl;                                                     // 8
+        d[9] = Protocol;                                                // 9
+        BinaryPrimitives.WriteUInt16BigEndian(d[10..], HeaderChecksum); // 10..12
+        _ = SrcAddr.ToBytes(d[12..]);                                   // 12..16 (the slice is exact, so the count is always 4)
+        _ = DstAddr.ToBytes(d[16..]);                                   // 16..20
+        bytesWritten = Size;
+        return true;
     }
 }

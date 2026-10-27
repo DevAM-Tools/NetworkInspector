@@ -169,15 +169,16 @@ internal sealed class IPv6AddressTests
     }
 
     [Test]
-    public async Task FormatTemp_ProducesCorrectString()
+    public async Task Format_MatchesTryFormatText()
     {
         await Assert.That(IPv6Address.TryParse("::1", out IPv6Address addr)).IsTrue();
-        string formatted;
-        using (TempString temp = addr.FormatTemp())
-        {
-            formatted = temp.ToString();
-        }
-        await Assert.That(formatted).IsEqualTo("::1");
+        char[] buffer = new char[IPv6Address.MaxFormattedLength];
+
+        bool ok = addr.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(new string(buffer, 0, written)).IsEqualTo("::1");
+        await Assert.That(addr.Format()).IsEqualTo("::1");
     }
 
     // === Equality & Comparison ===
@@ -226,12 +227,22 @@ internal sealed class IPv6AddressTests
     // === Binary Serialization ===
 
     [Test]
-    public async Task TryGetWrittenSize_Is16()
+    public async Task TryWrite_MatchesToBytesAndFailsWhenOneByteShort()
     {
-        IPv6Address addr = default;
-        bool ok = addr.TryGetWrittenSize(out int size);
-        await Assert.That(ok).IsTrue();
+        IPv6Address addr = new(0x20010DB800000000UL, 1UL);
+        byte[] exact = new byte[16];
+        byte[] viaToBytes = new byte[16];
+        int size = addr.ToBytes(viaToBytes);
+
+        bool ok = addr.TryWrite(exact, out int written);
+        bool shortOk = addr.TryWrite(new byte[15], out int shortWritten);
+
         await Assert.That(size).IsEqualTo(16);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(16);
+        await Assert.That(exact.AsSpan().SequenceEqual(viaToBytes)).IsTrue();
+        await Assert.That(shortOk).IsFalse();
+        await Assert.That(shortWritten).IsEqualTo(0);
     }
 
     [Test]

@@ -302,7 +302,7 @@ Without Wireshark, set `NETWORKINSPECTOR_ALLOW_MISSING_TSHARK=1` to skip the tes
 cross-validation evidence is never discarded silently.
 
 `NetworkInspector.Core` bundles `NetworkInspector.Generators` in its analyzer assets, and the library packages
-carry `ZeroAlloc` (including its generator) transitively, so consumers need no extra references.
+have no third-party runtime dependency besides the ones listed in their package READMEs.
 
 ## Links
 

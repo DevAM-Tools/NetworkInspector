@@ -135,7 +135,7 @@ partial void OnShutdownCustom(Stack stack);
 | NIGEN012 | Error | Protocol class is not `partial` |
 | NIGEN013 | Warning | Incomplete attribute payload; entry skipped |
 | NIGEN014 | Error | Null element in an array-setting `Default` |
-| NIGEN015 | Warning | `ZA.Lazy` passed to a `MutField` custom-text append |
+| NIGEN015 | Warning | Prebuilt `LazyString` (`FormatLazy` / `Lazy`) passed to a `MutField` custom-text append |
 
 ## Learn More
 

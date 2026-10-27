@@ -118,7 +118,7 @@ public readonly struct IPv4LayerWithAutoIpId :
         IPv4Header hdr = IPv4Header.Create(
             _SrcAddr, _DstAddr, _ExplicitProtocol, _Ttl, id,
             dontFragment: !CanFragment);
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

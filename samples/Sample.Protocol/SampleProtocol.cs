@@ -71,7 +71,9 @@ internal sealed class SampleProtocol : IProtocol
         container.Append(_SpeedFieldId, FieldValue.NewU64(speed));
 
         // The text is formatted when somebody reads it, not while parsing: nothing is allocated per packet for the info.
-        container.SetPacketInfo(ZA.Lazy("Sample counter=", counter, " gear=", gear, " speed=", speed));
+        container.SetPacketInfo(LazyString.FormatLazy(
+            (counter, gear, speed),
+            static s => string.Create(CultureInfo.InvariantCulture, $"Sample counter={s.counter} gear={s.gear} speed={s.speed}")));
         return SampleWire.PayloadLength;
     }
 

@@ -823,10 +823,10 @@ internal sealed class FieldValueTests
         await Assert.That(a.CompareTo(b)).IsLessThan(0);
     }
 
-    // === IStringSize ===
+    // === TryGetStringSize ===
 
     [Test]
-    public async Task FieldValueData_IStringSize_None_ReturnsZero()
+    public async Task FieldValueData_TryGetStringSize_None_ReturnsZero()
     {
         FieldValueData val = FieldValueData.None;
         bool result = val.TryGetStringSize(default, null, out int size);
@@ -835,7 +835,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValueData_IStringSize_Bool_True_ReturnsFour()
+    public async Task FieldValueData_TryGetStringSize_Bool_True_ReturnsFour()
     {
         FieldValueData val = FieldValueData.NewBool(true);
         bool result = val.TryGetStringSize(default, null, out int size);
@@ -844,7 +844,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValueData_IStringSize_Bool_False_ReturnsFive()
+    public async Task FieldValueData_TryGetStringSize_Bool_False_ReturnsFive()
     {
         FieldValueData val = FieldValueData.NewBool(false);
         bool result = val.TryGetStringSize(default, null, out int size);
@@ -853,7 +853,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValueData_IStringSize_I64_ReturnsBoundedSize()
+    public async Task FieldValueData_TryGetStringSize_I64_ReturnsBoundedSize()
     {
         FieldValueData val = FieldValueData.NewI64(long.MinValue);
         bool result = val.TryGetStringSize(default, null, out int size);
@@ -862,7 +862,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValueData_IStringSize_U64_ReturnsBoundedSize()
+    public async Task FieldValueData_TryGetStringSize_U64_ReturnsBoundedSize()
     {
         FieldValueData val = FieldValueData.NewU64(ulong.MaxValue);
         bool result = val.TryGetStringSize(default, null, out int size);
@@ -871,7 +871,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValueData_IStringSize_F64_ReturnsFalse()
+    public async Task FieldValueData_TryGetStringSize_F64_ReturnsFalse()
     {
         FieldValueData val = FieldValueData.NewF64(3.14);
         bool result = val.TryGetStringSize(default, null, out int size);
@@ -880,7 +880,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValueData_IStringSize_String_ReturnsExactLength()
+    public async Task FieldValueData_TryGetStringSize_String_ReturnsExactLength()
     {
         string text = "Hello, World!";
         FieldValueData val = FieldValueData.NewString(text);
@@ -890,7 +890,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValueData_IStringSize_Bytes_ReturnsExactLength()
+    public async Task FieldValueData_TryGetStringSize_Bytes_ReturnsExactLength()
     {
         byte[] bytes = [0xDE, 0xAD, 0xBE, 0xEF];
         FieldValueData val = FieldValueData.NewBytes(bytes);
@@ -901,7 +901,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValueData_IStringSize_Bytes_OverflowLength_ReturnsFalse()
+    public async Task FieldValueData_TryGetStringSize_Bytes_OverflowLength_ReturnsFalse()
     {
         FieldValueData val = _WithBytesPackedLength(FieldValueData.NewBytes([0x01]), ((long)int.MaxValue + 1) / 3 + 1);
 
@@ -928,7 +928,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValueData_IStringSize_MacAddress_ReturnsExactLength()
+    public async Task FieldValueData_TryGetStringSize_MacAddress_ReturnsExactLength()
     {
         MacAddress mac = new(0x112233445566UL);
         FieldValueData val = FieldValueData.NewMacAddress(mac);
@@ -938,7 +938,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValueData_IStringSize_IPv4_ReturnsExactLength()
+    public async Task FieldValueData_TryGetStringSize_IPv4_ReturnsExactLength()
     {
         IPv4Address ip = new(0xC0A80101u); // 192.168.1.1
         FieldValueData val = FieldValueData.NewIPv4(ip);
@@ -948,7 +948,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValue_IStringSize_WithCustomRepresentation_ReturnsCustomLength()
+    public async Task FieldValue_TryGetStringSize_WithCustomRepresentation_ReturnsCustomLength()
     {
         string custom = "Custom Text";
         FieldValue val = FieldValue.NewU64(42, custom);
@@ -958,7 +958,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValue_IStringSize_WithoutCustomRepresentation_DelegatesToData()
+    public async Task FieldValue_TryGetStringSize_WithoutCustomRepresentation_DelegatesToData()
     {
         FieldValue val = FieldValue.NewBool(true);
         bool result = val.TryGetStringSize(default, null, out int size);
@@ -966,222 +966,89 @@ internal sealed class FieldValueTests
         await Assert.That(size).IsEqualTo(4); // "True"
     }
 
-    // === ToTempString ===
+    // === ToString ===
+
+    /// <summary>One value of every field type; the string, lazy, and bytes entries cover the non-scalar paths of <see cref="FieldValueData.ToString()"/>.</summary>
+    private static FieldValueData[] _EveryFieldType() =>
+    [
+        FieldValueData.None,
+        FieldValueData.NewBool(true),
+        FieldValueData.NewBool(false),
+        FieldValueData.NewI64(long.MinValue),
+        FieldValueData.NewU64(ulong.MaxValue),
+        FieldValueData.NewF64(-1.7976931348623157E+308),
+        FieldValueData.NewString("test"),
+        FieldValueData.NewBytes(Array.Empty<byte>()),
+        FieldValueData.NewBytes([0xAB]),
+        FieldValueData.NewBytes([0xAB, 0xCD]),
+        FieldValueData.NewMacAddress(new MacAddress(0x001122334455UL)),
+        FieldValueData.NewIPv4(new IPv4Address(0x0A000001u)),
+        FieldValueData.NewIPv6(new IPv6Address(0x20010DB800000000UL, 0x0000000000000001UL)),
+        FieldValueData.NewEui64(new Eui64(0x0011223344556677UL)),
+        FieldValueData.NewUuid(new Uuid(0x550E8400E29B41D4UL, 0xA716446655440000UL)),
+        FieldValueData.NewTimestamp(Timestamp.FromNanos(1_700_000_000_123_456_789L)),
+        FieldValueData.NewLazyString(LazyString.Lazy(static () => "lazy")),
+    ];
 
     [Test]
-    public async Task FieldValueData_ToTempString_String_DisposeReleasesTheThreadStaticBuffer()
+    public async Task FieldValueData_ToString_EqualsTryFormatText_ForEveryFieldType()
     {
-        // No await between acquire and check: the thread-static buffer belongs to this thread.
-        bool availableDuring;
-        bool availableAfter;
-        using (TempString temp = FieldValueData.NewString("abc").ToTempString())
+        char[] large = new char[256];
+
+        foreach (FieldValueData val in _EveryFieldType())
         {
-            availableDuring = ZeroAllocHelper.IsCharBufferAvailable();
+            bool ok = val.TryFormat(large, out int written, default, CultureInfo.InvariantCulture);
+            string viaTryFormat = new(large, 0, written);
+
+            await Assert.That(ok).IsTrue();
+            await Assert.That(val.ToString()).IsEqualTo(viaTryFormat);
         }
-
-        availableAfter = ZeroAllocHelper.IsCharBufferAvailable();
-
-        await Assert.That(availableDuring).IsFalse();
-        await Assert.That(availableAfter).IsTrue();
     }
 
     [Test]
-    public async Task FieldValueData_ToTempString_LazyString_DisposeReleasesTheThreadStaticBuffer()
+    public async Task FieldValueData_ToString_KnownTexts()
     {
-        bool availableAfter;
-        string text;
-        using (TempString temp = FieldValueData.NewLazyString(LazyString.Lazy(static () => "lazy")).ToTempString())
-        {
-            text = temp.AsSpan().ToString();
-        }
-
-        availableAfter = ZeroAllocHelper.IsCharBufferAvailable();
-
-        await Assert.That(text).IsEqualTo("lazy");
-        await Assert.That(availableAfter).IsTrue();
+        await Assert.That(FieldValueData.None.ToString()).IsEqualTo(string.Empty);
+        await Assert.That(FieldValueData.NewBool(true).ToString()).IsEqualTo("True");
+        await Assert.That(FieldValueData.NewBool(false).ToString()).IsEqualTo("False");
+        await Assert.That(FieldValueData.NewI64(-1234567890L).ToString()).IsEqualTo("-1234567890");
+        await Assert.That(FieldValueData.NewU64(9876543210UL).ToString()).IsEqualTo("9876543210");
+        await Assert.That(FieldValueData.NewString("Hello").ToString()).IsEqualTo("Hello");
+        await Assert.That(FieldValueData.NewBytes(Array.Empty<byte>()).ToString()).IsEqualTo(string.Empty);
+        await Assert.That(FieldValueData.NewBytes([0xDE, 0xAD, 0xBE, 0xEF]).ToString()).IsEqualTo("DE AD BE EF");
+        await Assert.That(FieldValueData.NewMacAddress(new MacAddress(0x112233445566UL)).ToString()).IsEqualTo("11:22:33:44:55:66");
+        await Assert.That(FieldValueData.NewIPv4(new IPv4Address(0xC0A80101u)).ToString()).IsEqualTo("192.168.1.1");
     }
 
     [Test]
-    public async Task FieldValue_ToTempString_CustomRepresentation_DisposeReleasesTheThreadStaticBuffer()
+    public async Task FieldValueData_ToString_ReturnsTheStoredStringInstance()
     {
-        bool availableAfter;
-        string text;
-        using (TempString temp = FieldValue.NewU64(1, new LazyString("custom")).ToTempString())
-        {
-            text = temp.AsSpan().ToString();
-        }
+        string text = new('x', 5);
+        FieldValueData val = FieldValueData.NewString(text);
 
-        availableAfter = ZeroAllocHelper.IsCharBufferAvailable();
+        string result = val.ToString();
 
-        await Assert.That(text).IsEqualTo("custom");
-        await Assert.That(availableAfter).IsTrue();
+        await Assert.That(ReferenceEquals(result, text)).IsTrue();
     }
 
     [Test]
-    public async Task FieldValueData_ToTempString_None_ReturnsEmpty()
+    public async Task FieldValue_ToString_PrefersTheCustomRepresentation()
     {
-        string result;
-        using (TempString temp = FieldValueData.None.ToTempString())
-        {
-            result = temp.AsSpan().ToString();
-        }
-        await Assert.That(result).IsEqualTo(string.Empty);
+        FieldValue withCustom = FieldValue.NewU64(42, "Custom Display");
+        FieldValue withoutCustom = FieldValue.NewI64(99L);
+
+        await Assert.That(withCustom.ToString()).IsEqualTo("Custom Display");
+        await Assert.That(withoutCustom.ToString()).IsEqualTo("99");
     }
 
     [Test]
-    public async Task FieldValueData_ToTempString_Bool_MatchesFormat()
+    public async Task FieldValue_DefaultText_IgnoresTheCustomRepresentation()
     {
-        string trueResult;
-        string falseResult;
-        using (TempString temp = FieldValueData.NewBool(true).ToTempString())
-        {
-            trueResult = temp.AsSpan().ToString();
-        }
-        using (TempString temp = FieldValueData.NewBool(false).ToTempString())
-        {
-            falseResult = temp.AsSpan().ToString();
-        }
-        await Assert.That(trueResult).IsEqualTo("True");
-        await Assert.That(falseResult).IsEqualTo("False");
-    }
-
-    [Test]
-    public async Task FieldValueData_ToTempString_I64_MatchesFormat()
-    {
-        long value = -1234567890L;
-        string result;
-        using (TempString temp = FieldValueData.NewI64(value).ToTempString())
-        {
-            result = temp.AsSpan().ToString();
-        }
-        await Assert.That(result).IsEqualTo(value.ToString(CultureInfo.InvariantCulture));
-    }
-
-    [Test]
-    public async Task FieldValueData_ToTempString_U64_MatchesFormat()
-    {
-        ulong value = 9876543210UL;
-        string result;
-        using (TempString temp = FieldValueData.NewU64(value).ToTempString())
-        {
-            result = temp.AsSpan().ToString();
-        }
-        await Assert.That(result).IsEqualTo(value.ToString(CultureInfo.InvariantCulture));
-    }
-
-    [Test]
-    public async Task FieldValueData_ToTempString_String_MatchesOriginal()
-    {
-        string text = "Hello, ZeroAlloc!";
-        string result;
-        using (TempString temp = FieldValueData.NewString(text).ToTempString())
-        {
-            result = temp.AsSpan().ToString();
-        }
-        await Assert.That(result).IsEqualTo(text);
-    }
-
-    [Test]
-    public async Task FieldValueData_ToTempString_Bytes_MatchesHexFormat()
-    {
-        byte[] bytes = [0xDE, 0xAD, 0xBE, 0xEF];
-        string result;
-        using (TempString temp = FieldValueData.NewBytes(bytes).ToTempString())
-        {
-            result = temp.AsSpan().ToString();
-        }
-        await Assert.That(result).IsEqualTo("DE AD BE EF");
-    }
-
-    [Test]
-    public async Task FieldValueData_ToTempString_MacAddress_MatchesFormat()
-    {
-        MacAddress mac = new(0x112233445566UL);
-        string result;
-        using (TempString temp = FieldValueData.NewMacAddress(mac).ToTempString())
-        {
-            result = temp.AsSpan().ToString();
-        }
-        await Assert.That(result).IsEqualTo(mac.ToString());
-    }
-
-    [Test]
-    public async Task FieldValueData_ToTempString_IPv4_MatchesFormat()
-    {
-        IPv4Address ip = new(0xC0A80101u); // 192.168.1.1
-        string result;
-        using (TempString temp = FieldValueData.NewIPv4(ip).ToTempString())
-        {
-            result = temp.AsSpan().ToString();
-        }
-        await Assert.That(result).IsEqualTo(ip.ToString());
-    }
-
-    [Test]
-    public async Task FieldValue_ToTempString_WithCustomRepresentation_UsesCustom()
-    {
-        string custom = "Custom Display";
-        FieldValue val = FieldValue.NewU64(42, custom);
-        string result;
-        using (TempString temp = val.ToTempString())
-        {
-            result = temp.AsSpan().ToString();
-        }
-        await Assert.That(result).IsEqualTo(custom);
-    }
-
-    [Test]
-    public async Task FieldValue_ToTempString_WithoutCustomRepresentation_FormatsData()
-    {
-        FieldValue val = FieldValue.NewI64(99L);
-        string result;
-        using (TempString temp = val.ToTempString())
-        {
-            result = temp.AsSpan().ToString();
-        }
-        await Assert.That(result).IsEqualTo("99");
-    }
-
-    [Test]
-    public async Task FieldValue_DefaultText_ToTempString_IgnoresCustomRepresentation()
-    {
-        // DefaultText should always format raw data, even when custom repr is set
         FieldValue val = FieldValue.NewI64(42L, "custom");
-        string result;
-        using (TempString temp = val.DataText.ToTempString())
-        {
-            result = temp.AsSpan().ToString();
-        }
+
+        string result = val.DataText.ToString();
+
         await Assert.That(result).IsEqualTo("42");
-    }
-
-    [Test]
-    public async Task FieldValueData_ToTempString_ResultMatchesToString()
-    {
-        // ToTempString and ToString should produce identical output for all types
-        FieldValueData[] values =
-        [
-            FieldValueData.None,
-            FieldValueData.NewBool(true),
-            FieldValueData.NewBool(false),
-            FieldValueData.NewI64(-42L),
-            FieldValueData.NewU64(42UL),
-            FieldValueData.NewString("test"),
-            FieldValueData.NewBytes([0xAB, 0xCD]),
-            FieldValueData.NewMacAddress(new MacAddress(0x001122334455UL)),
-            FieldValueData.NewIPv4(new IPv4Address(0x0A000001u)),
-        ];
-
-        foreach (FieldValueData val in values)
-        {
-            string fromTempString;
-            using (TempString temp = val.ToTempString())
-            {
-                fromTempString = temp.AsSpan().ToString();
-            }
-            string fromToString = val.ToString();
-            await Assert.That(fromTempString).IsEqualTo(fromToString);
-        }
     }
 
     // === FieldValue equality, comparison, formatting gaps ===
@@ -1456,7 +1323,7 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValueData_IStringSize_IPv6_Eui64_Uuid_Timestamp()
+    public async Task FieldValueData_TryGetStringSize_IPv6_Eui64_Uuid_Timestamp()
     {
         await Assert.That(FieldValueData.NewIPv6(IPv6Address.FromBytes(new byte[16])).TryGetStringSize(default, null, out int ipv6Size)).IsTrue();
         await Assert.That(ipv6Size).IsGreaterThan(0);
@@ -1469,34 +1336,11 @@ internal sealed class FieldValueTests
     }
 
     [Test]
-    public async Task FieldValueData_IStringSize_LazyString_ReturnsLength()
+    public async Task FieldValueData_TryGetStringSize_LazyString_ReturnsLength()
     {
         FieldValueData val = FieldValueData.NewLazyString(LazyString.Lazy(static () => "lazy"));
         await Assert.That(val.TryGetStringSize(default, null, out int size)).IsTrue();
         await Assert.That(size).IsEqualTo(4);
-    }
-
-    [Test]
-    public async Task FieldValueData_ToTempString_ScalarTypes()
-    {
-        FieldValueData[] values =
-        [
-            FieldValueData.NewF64(2.5),
-            FieldValueData.NewIPv6(IPv6Address.FromBytes(new byte[16])),
-            FieldValueData.NewEui64(Eui64.FromBytes(new byte[8])),
-            FieldValueData.NewUuid(Uuid.FromBytes(new byte[16])),
-            FieldValueData.NewTimestamp(Timestamp.FromSecs(2)),
-        ];
-
-        foreach (FieldValueData val in values)
-        {
-            string text;
-            using (TempString temp = val.ToTempString())
-            {
-                text = temp.AsSpan().ToString();
-            }
-            await Assert.That(text).IsEqualTo(val.ToString());
-        }
     }
 
     [Test]
@@ -1597,12 +1441,6 @@ internal sealed class FieldValueTests
         string toString = lazy.ToString();
         string overload = lazy.ToString(null, CultureInfo.InvariantCulture);
 
-        string tempText;
-        using (TempString temp = lazy.ToTempString())
-        {
-            tempText = temp.AsSpan().ToString();
-        }
-
         bool smallChar = lazy.TryFormat(new char[3], out int smallCharWritten, default, null);
         bool smallUtf8 = lazy.TryFormat(new byte[3], out int smallUtf8Written, default, null);
 
@@ -1612,7 +1450,6 @@ internal sealed class FieldValueTests
         await Assert.That(utf8Text).IsEqualTo("lazy-format");
         await Assert.That(toString).IsEqualTo("lazy-format");
         await Assert.That(overload).IsEqualTo("lazy-format");
-        await Assert.That(tempText).IsEqualTo("lazy-format");
         await Assert.That(smallChar).IsFalse();
         await Assert.That(smallCharWritten).IsEqualTo(0);
         await Assert.That(smallUtf8).IsFalse();

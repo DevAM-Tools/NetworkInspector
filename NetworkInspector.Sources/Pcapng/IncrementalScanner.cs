@@ -350,7 +350,7 @@ internal sealed class IncrementalScanner
             throw new PcapException("File too small for the declared SHB block length.");
         }
 
-        if (!SectionHeaderBlock.TryParse(shbData, out SectionHeaderBlock shb, out _))
+        if (!SectionHeaderBlock.TryParse(shbData, out SectionHeaderBlock shb))
         {
             throw new PcapException("Failed to parse Section Header Block.");
         }
@@ -360,7 +360,7 @@ internal sealed class IncrementalScanner
             throw new PcapException("SHB trailing block_total_length does not match the leading length.");
         }
 
-        long sectionLength = reader.Swap(shb.SectionLength.Value);
+        long sectionLength = reader.Swap(shb.SectionLength);
 
         // First SHB starts at file offset 0.
         SectionInfo section = new(byteSwapped, sectionLength, 0);
@@ -402,14 +402,14 @@ internal sealed class IncrementalScanner
             throw new PcapException("File too small for legacy PCAP global header.");
         }
 
-        if (!PcapGlobalHeader.TryParse(header, out PcapGlobalHeader hdr, out _))
+        if (!PcapGlobalHeader.TryParse(header, out PcapGlobalHeader hdr))
         {
             throw new PcapException("Failed to parse legacy PCAP global header.");
         }
 
         EndianReader reader = new(detection.ByteSwapped);
-        uint rawNetwork = reader.Swap(hdr.Network.Value);
-        uint rawSnapLen = reader.Swap(hdr.SnapLen.Value);
+        uint rawNetwork = reader.Swap(hdr.Network);
+        uint rawSnapLen = reader.Swap(hdr.SnapLen);
 
         // The link type is the low 16 bits of the 32-bit network field. The snaplen is kept exactly as declared
         // (0 means not declared) because TryValidateLegacyInclLen applies the default cap only for an undeclared value.
@@ -691,15 +691,15 @@ internal sealed class IncrementalScanner
         // size (checked above), so a parse failure is not expected; the branch is defensive, and it reports the failure like
         // every other record-boundary error instead of ending the scan unseen (a scan that stops silently looks like a
         // file that simply ended).
-        if (!PcapPacketHeader.TryParse(packetHeader, out PcapPacketHeader rec, out _))
+        if (!PcapPacketHeader.TryParse(packetHeader, out PcapPacketHeader rec))
         {
             return _ExhaustCorrupt(
                 "Legacy PCAP record header could not be parsed.", FrameReadErrorKind.MalformedHeader, out frame);
         }
 
-        uint tsSec = reader.Swap(rec.TsSec.Value);
-        uint tsFrac = reader.Swap(rec.TsFrac.Value);
-        uint inclLen = reader.Swap(rec.InclLen.Value);
+        uint tsSec = reader.Swap(rec.TsSec);
+        uint tsFrac = reader.Swap(rec.TsFrac);
+        uint inclLen = reader.Swap(rec.InclLen);
         // orig_len is parsed but not stored. Frame.Data is captured bytes only.
 
         // Bound incl_len by the declared snaplen and the block cap before anything reads or allocates

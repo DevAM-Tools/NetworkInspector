@@ -164,7 +164,8 @@ public sealed partial class DtlsProtocol : IProtocol
         string ctText = _GetContentTypeText(firstRecord.ContentType);
         string verText = _GetDtlsVersionText(firstRecord.Version);
 
-        parentField.SetPacketInfo(ZA.Lazy("DTLS ", ctText));
+        parentField.SetPacketInfo(LazyString.FormatLazy(
+            ctText, static s => string.Create(CultureInfo.InvariantCulture, $"DTLS {s}")));
 
         // Eagerly scan every DTLS record in the datagram to decide the handshake-related
         // presence groups. The lazy populator emits dtls.handshake fields for any record with
@@ -406,7 +407,8 @@ public sealed partial class DtlsProtocol : IProtocol
         {
             0xFEFF => "DTLS 1.0",
             0xFEFD => "DTLS 1.2",
-            _ => (string)ZA.String("Unknown (", Helpers.DisplayTables.FormatHexU16(version), ")")
+            // Eager text (one string): the field tree stores it right away; InvariantCulture per the repository rule.
+            _ => string.Create(CultureInfo.InvariantCulture, $"Unknown ({Helpers.DisplayTables.FormatHexU16(version)})")
         };
     #endregion
 }

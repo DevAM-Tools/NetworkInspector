@@ -118,7 +118,7 @@ public readonly struct TcpLayerWithAutoSequence :
         TcpHeader hdr = TcpHeader.Create(
             _SrcPort, _DstPort, seq, ack,
             _Flags, _WindowSize, dataOffsetWords: 5, _UrgentPointer);
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

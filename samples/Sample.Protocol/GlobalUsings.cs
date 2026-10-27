@@ -27,7 +27,3 @@ global using NetworkInspector.Values;
 #region NetworkInspector.Plugins
 global using NetworkInspector.Plugins;
 #endregion
-
-#region External Dependencies
-global using ZeroAlloc;
-#endregion

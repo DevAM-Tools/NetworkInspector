@@ -36,7 +36,7 @@ internal static class IPv6ExtensionLayerHelpers
             Data4 = 0x00,
             Data5 = 0x00,
         };
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <summary>

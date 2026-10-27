@@ -211,12 +211,12 @@ internal static class PcapngPacketBlocks
         }
         else
         {
-            if (!SimplePacketBlock.TryParse(blockOrBody, out SimplePacketBlock spb, out _))
+            if (!SimplePacketBlock.TryParse(blockOrBody, out SimplePacketBlock spb))
             {
                 return ScanPacketResult.SkipMalformed;
             }
 
-            originalLength = reader.Swap(spb.OriginalPacketLength.Value);
+            originalLength = reader.Swap(spb.OriginalPacketLength);
         }
 
         uint capturedCandidate = originalLength < iface.SnapLength ? originalLength : iface.SnapLength;
@@ -283,16 +283,16 @@ internal static class PcapngPacketBlocks
         }
         else
         {
-            if (!ObsoletePacketBlock.TryParse(blockOrBody, out ObsoletePacketBlock pb, out _))
+            if (!ObsoletePacketBlock.TryParse(blockOrBody, out ObsoletePacketBlock pb))
             {
                 return ScanPacketResult.SkipMalformed;
             }
 
-            interfaceId = reader.Swap(pb.InterfaceId.Value);
-            tsHigh = reader.Swap(pb.TimestampHigh.Value);
-            tsLow = reader.Swap(pb.TimestampLow.Value);
-            capturedLength = reader.Swap(pb.CapturedLength.Value);
-            originalLength = reader.Swap(pb.OriginalLength.Value);
+            interfaceId = reader.Swap(pb.InterfaceId);
+            tsHigh = reader.Swap(pb.TimestampHigh);
+            tsLow = reader.Swap(pb.TimestampLow);
+            capturedLength = reader.Swap(pb.CapturedLength);
+            originalLength = reader.Swap(pb.OriginalLength);
         }
 
         ulong rawTimestamp = ((ulong)tsHigh << 32) | tsLow;
@@ -338,13 +338,13 @@ internal static class PcapngPacketBlocks
         }
         else
         {
-            if (!InterfaceDescriptionBlock.TryParse(blockOrBody, out InterfaceDescriptionBlock idb, out _))
+            if (!InterfaceDescriptionBlock.TryParse(blockOrBody, out InterfaceDescriptionBlock idb))
             {
                 return false;
             }
 
-            linkType = reader.Swap(idb.LinkType.Value);
-            snapLength = reader.Swap(idb.SnapLength.Value);
+            linkType = reader.Swap(idb.LinkType);
+            snapLength = reader.Swap(idb.SnapLength);
         }
 
         if (!_TryGetOptionsSpan(
@@ -383,13 +383,13 @@ internal static class PcapngPacketBlocks
             return false;
         }
 
-        if (!SectionHeaderBlock.TryParse(fullBlock, out SectionHeaderBlock shb, out _))
+        if (!SectionHeaderBlock.TryParse(fullBlock, out SectionHeaderBlock shb))
         {
             return false;
         }
 
         EndianReader reader = new(swap);
-        sectionLength = reader.Swap(shb.SectionLength.Value);
+        sectionLength = reader.Swap(shb.SectionLength);
         if (!_TryGetOptionsSpan(fullBlock, bodyOmits8ByteHeader: false, blockLength, _ShbBytesBeforeOptions, out optionData))
         {
             optionData = ReadOnlySpan<byte>.Empty;

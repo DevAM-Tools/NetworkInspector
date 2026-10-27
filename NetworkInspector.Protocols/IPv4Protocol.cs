@@ -317,7 +317,7 @@ public sealed partial class IPv4Protocol : IProtocol
         }
 
         ReadOnlySpan<byte> span = headerBytes.Span;
-        if (!IPv4Header.TryParse(span, out IPv4Header header, out _))
+        if (!IPv4Header.TryParse(span, out IPv4Header header))
         {
             return ParseError.InvalidData(ProtocolName, "Failed to parse IPv4 header");
         }
@@ -336,15 +336,15 @@ public sealed partial class IPv4Protocol : IProtocol
         int headerLen = header.HeaderLength; // bytes
         byte dscp = header.Dscp;
         byte ecn = header.Ecn;
-        ushort totalLength = header.TotalLength.Value;
-        ushort identification = header.Identification.Value;
+        ushort totalLength = header.TotalLength;
+        ushort identification = header.Identification;
         bool reservedBit = header.ReservedFlag != 0;
         bool dontFragment = header.DontFragment != 0;
         bool moreFragments = header.MoreFragments != 0;
         ushort fragOffset = header.FragmentOffset;
         byte ttl = header.Ttl;
         byte protocol = header.Protocol;
-        ushort checksum = header.Checksum.Value;
+        ushort checksum = header.Checksum;
 
         container.Append(_VersionFieldId, FieldValue.NewU64(version));
 
@@ -396,7 +396,8 @@ public sealed partial class IPv4Protocol : IProtocol
 
             MutField optionsContainer = container.AppendWithCustomText(
                 _OptionsFieldId, FieldValue.None,
-                (string)ZA.String("Options (", optionsLen, " bytes)"));
+                // Eager text (one string): the field tree stores it right away; InvariantCulture per the repository rule.
+                string.Create(CultureInfo.InvariantCulture, $"Options ({optionsLen} bytes)"));
 
             IPv4OptionsParser.Parse(optionsContainer, optionsSpan, in _OptionFieldIds);
         }
@@ -496,8 +497,8 @@ public sealed partial class IPv4Protocol : IProtocol
 
         ReadOnlySpan<byte> span = data.Span;
 
-        // Parse header using BinaryParsable-generated parser
-        if (!IPv4Header.TryParse(span, out IPv4Header header, out _))
+        // Decode the fixed header by hand (one length check)
+        if (!IPv4Header.TryParse(span, out IPv4Header header))
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, IPv4Header.MinHeaderSize, (ulong)data.Length);
         }
@@ -520,7 +521,7 @@ public sealed partial class IPv4Protocol : IProtocol
         IPv4Address src = IPv4Header.GetSrc(span);
         IPv4Address dst = IPv4Header.GetDst(span);
         byte protocol = header.Protocol;
-        ushort totalLength = header.TotalLength.Value;
+        ushort totalLength = header.TotalLength;
 
         // Validate checksum at parse time if setting is enabled.
         // RecordIndexPresence must happen at parse time, not during lazy materialisation.
@@ -596,7 +597,7 @@ public sealed partial class IPv4Protocol : IProtocol
                     // reassembly tuple (source, destination, identification, protocol). The effect is recorded in
                     // the same step, before the watermark is raised, so a replay always finds it.
                     DatagramFragmentKey key = new(src.RawValue, dst.RawValue,
-                        header.Identification.Value, protocol);
+                        header.Identification, protocol);
                     int byteOffset = fragOffset * 8; // convert to byte offset
 
                     reassembled = _Defragmenter.ProcessFragment(
@@ -866,103 +867,100 @@ public sealed partial class IPv4Protocol : IProtocol
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// </code>
 /// </summary>
-[BinaryParsable]
-internal readonly partial struct IPv4Header
+/// <remarks>
+/// Decoded by hand (one length check, fixed-offset reads with <see cref="BinaryPrimitives"/>) instead of a generated
+/// parser, so the JIT elides the per-read bounds checks and the dissector gets plain integers; declaration order
+/// mirrors the wire layout for readability only. Options are not part of this struct. Thread safety: immutable value
+/// type.
+/// </remarks>
+internal readonly struct IPv4Header
 {
-    /// <summary>IP version (4 bits, must be 4).</summary>
-    [BinaryField(BitCount = 4)]
+    /// <summary>IP version (high nibble of byte 0, must be 4).</summary>
     public byte Version
     {
         get; init;
     }
 
-    /// <summary>Internet Header Length in 32-bit words (4 bits, min 5).</summary>
-    [BinaryField(BitCount = 4)]
+    /// <summary>Internet Header Length in 32-bit words (low nibble of byte 0, min 5).</summary>
     public byte Ihl
     {
         get; init;
     }
 
-    /// <summary>Differentiated Services Code Point (6 bits).</summary>
-    [BinaryField(BitCount = 6)]
+    /// <summary>Differentiated Services Code Point (bits 7..2 of byte 1).</summary>
     public byte Dscp
     {
         get; init;
     }
 
-    /// <summary>Explicit Congestion Notification (2 bits).</summary>
-    [BinaryField(BitCount = 2)]
+    /// <summary>Explicit Congestion Notification (bits 1..0 of byte 1).</summary>
     public byte Ecn
     {
         get; init;
     }
 
-    /// <summary>Total length of the IP datagram in bytes.</summary>
-    public U16BE TotalLength
+    /// <summary>Total length of the IP datagram in bytes (bytes 2..3).</summary>
+    public ushort TotalLength
     {
         get; init;
     }
 
-    /// <summary>Identification field for fragment reassembly.</summary>
-    public U16BE Identification
+    /// <summary>Identification field for fragment reassembly (bytes 4..5).</summary>
+    public ushort Identification
     {
         get; init;
     }
 
-    /// <summary>Reserved flag bit (1 bit, must be zero).</summary>
-    [BinaryField(BitCount = 1)]
+    /// <summary>Reserved flag bit (bit 15 of the flags/fragment word at bytes 6..7, must be zero).</summary>
     public byte ReservedFlag
     {
         get; init;
     }
 
-    /// <summary>Don't Fragment flag (1 bit).</summary>
-    [BinaryField(BitCount = 1)]
+    /// <summary>Don't Fragment flag (bit 14 of the flags/fragment word).</summary>
     public byte DontFragment
     {
         get; init;
     }
 
-    /// <summary>More Fragments flag (1 bit).</summary>
-    [BinaryField(BitCount = 1)]
+    /// <summary>More Fragments flag (bit 13 of the flags/fragment word).</summary>
     public byte MoreFragments
     {
         get; init;
     }
 
-    /// <summary>Fragment offset in 8-byte units (13 bits).</summary>
-    [BinaryField(BitCount = 13)]
+    /// <summary>Fragment offset in 8-byte units (bits 12..0 of the flags/fragment word).</summary>
     public ushort FragmentOffset
     {
         get; init;
     }
 
-    /// <summary>Time to live (hop count).</summary>
+    /// <summary>Time to live (hop count, byte 8).</summary>
     public byte Ttl
     {
         get; init;
     }
 
-    /// <summary>Protocol number of the encapsulated payload.</summary>
+    /// <summary>Protocol number of the encapsulated payload (byte 9).</summary>
     public byte Protocol
     {
         get; init;
     }
 
-    /// <summary>One's complement checksum of the header.</summary>
-    public U16BE Checksum
+    /// <summary>One's complement checksum of the header (bytes 10..11).</summary>
+    public ushort Checksum
     {
         get; init;
     }
 
-    /// <summary>Source IPv4 address (as 32-bit big-endian value).</summary>
-    public U32BE SrcAddr
+    /// <summary>Source IPv4 address as a 32-bit value (bytes 12..15).</summary>
+    public uint SrcAddr
     {
         get; init;
     }
 
-    /// <summary>Destination IPv4 address (as 32-bit big-endian value).</summary>
-    public U32BE DstAddr
+    /// <summary>Destination IPv4 address as a 32-bit value (bytes 16..19).</summary>
+    public uint DstAddr
     {
         get; init;
     }
@@ -972,6 +970,46 @@ internal readonly partial struct IPv4Header
 
     /// <summary>Computes the header length in bytes from the IHL field.</summary>
     internal int HeaderLength => Ihl * 4;
+
+    /// <summary>
+    /// Decodes the fixed 20-byte header. Returns <see langword="false"/> with a default value when fewer than
+    /// <see cref="MinHeaderSize"/> bytes are present. Longer input is accepted; only the first 20 bytes are read.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParse(ReadOnlySpan<byte> source, out IPv4Header value)
+    {
+        // One length check up front; a short buffer is an expected failure, not an exception.
+        if (source.Length < MinHeaderSize)
+        {
+            value = default;
+            return false;
+        }
+
+        // Exact-size slice: after this the JIT knows every index below is in range and drops the bounds checks.
+        ReadOnlySpan<byte> h = source[..MinHeaderSize];
+        byte versionAndIhl = h[0];
+        byte dscpAndEcn = h[1];
+        ushort flagsAndFragment = BinaryPrimitives.ReadUInt16BigEndian(h[6..]);
+        value = new IPv4Header
+        {
+            Version = (byte)(versionAndIhl >> 4),                           // byte 0, bits 7..4
+            Ihl = (byte)(versionAndIhl & 0x0F),                             // byte 0, bits 3..0
+            Dscp = (byte)(dscpAndEcn >> 2),                                 // byte 1, bits 7..2
+            Ecn = (byte)(dscpAndEcn & 0x03),                                // byte 1, bits 1..0
+            TotalLength = BinaryPrimitives.ReadUInt16BigEndian(h[2..]),     // 2..4
+            Identification = BinaryPrimitives.ReadUInt16BigEndian(h[4..]),  // 4..6
+            ReservedFlag = (byte)(flagsAndFragment >> 15),                  // word 6..8, bit 15
+            DontFragment = (byte)((flagsAndFragment >> 14) & 0x01),         // word 6..8, bit 14
+            MoreFragments = (byte)((flagsAndFragment >> 13) & 0x01),        // word 6..8, bit 13
+            FragmentOffset = (ushort)(flagsAndFragment & 0x1FFF),           // word 6..8, bits 12..0
+            Ttl = h[8],                                                     // 8
+            Protocol = h[9],                                                // 9
+            Checksum = BinaryPrimitives.ReadUInt16BigEndian(h[10..]),       // 10..12
+            SrcAddr = BinaryPrimitives.ReadUInt32BigEndian(h[12..]),        // 12..16
+            DstAddr = BinaryPrimitives.ReadUInt32BigEndian(h[16..]),        // 16..20
+        };
+        return true;
+    }
 
     /// <summary>Extracts the source IPv4 address from raw header data.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

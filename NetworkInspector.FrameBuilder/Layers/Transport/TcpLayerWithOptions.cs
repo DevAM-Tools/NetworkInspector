@@ -115,7 +115,7 @@ public readonly struct TcpLayerWithOptions :
         TcpHeader hdr = TcpHeader.Create(
             _SrcPort, _DstPort, _SeqNum, _AckNum,
             _Flags, _WindowSize, dataOffsetWords, _UrgentPointer);
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
 
         // Copy raw option bytes, then zero-pad up to the padded length (NOP = 0x01,
         // but the canonical "padding" octet for the unused tail is the End-Of-Options

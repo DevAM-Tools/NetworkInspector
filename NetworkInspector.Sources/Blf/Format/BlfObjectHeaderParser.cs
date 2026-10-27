@@ -157,20 +157,20 @@ internal static class BlfObjectHeaderParser
             return false;
         }
 
-        if (!BlfBlockHeader.TryParse(data, out BlfBlockHeader blockHeader, out _))
+        if (!BlfBlockHeader.TryParse(data, out BlfBlockHeader blockHeader))
         {
             return false;
         }
 
         // Validate "LOBJ" magic
-        if (blockHeader.Signature.Value != BlfConstants.ObjectMagic)
+        if (blockHeader.Signature != BlfConstants.ObjectMagic)
         {
             return false;
         }
 
-        ushort headerSize = blockHeader.HeaderSize.Value;
-        uint objectLength = blockHeader.ObjectLength.Value;
-        uint objectType = blockHeader.ObjectType.Value;
+        ushort headerSize = blockHeader.HeaderSize;
+        uint objectLength = blockHeader.ObjectLength;
+        uint objectType = blockHeader.ObjectType;
 
         // Compute skip distance using long arithmetic to prevent uint overflow:
         // objectLength is untrusted and can be > int.MaxValue, which would wrap to a
@@ -188,7 +188,7 @@ internal static class BlfObjectHeaderParser
         skipDistance = totalObjectSize;
 
         // Total data needed: block header + log object header
-        int fullHeaderSize = BlfConstants.BlockHeaderSize + _GetLogObjectHeaderSize(blockHeader.HeaderType.Value);
+        int fullHeaderSize = BlfConstants.BlockHeaderSize + _GetLogObjectHeaderSize(blockHeader.HeaderType);
         if (data.Length < fullHeaderSize || data.Length < totalObjectSize)
         {
             return false;
@@ -202,7 +202,7 @@ internal static class BlfObjectHeaderParser
         // Parse log object header based on type
         ReadOnlySpan<byte> logHeaderData = objectBytes[BlfConstants.BlockHeaderSize..];
 
-        switch (blockHeader.HeaderType.Value)
+        switch (blockHeader.HeaderType)
         {
             case 1:
                 return _TryParseWithV1(logHeaderData, objectType, headerSize, objectBytes, objectMemorySlice, startOffset, out info);
@@ -241,7 +241,7 @@ internal static class BlfObjectHeaderParser
         out BlfObjectInfo info)
     {
         info = default;
-        if (!BlfLogObjectHeaderV1.TryParse(logHeaderData, out BlfLogObjectHeaderV1 v1, out _))
+        if (!BlfLogObjectHeaderV1.TryParse(logHeaderData, out BlfLogObjectHeaderV1 v1))
         {
             return false;
         }
@@ -249,10 +249,10 @@ internal static class BlfObjectHeaderParser
         info = new BlfObjectInfo
         {
             ObjectType = objectType,
-            TimestampNanos = BlfTimestamp.ToNanoseconds(v1.Timestamp.Value, v1.Flags.Value),
-            Flags = v1.Flags.Value,
-            ClientIndex = v1.ClientIndex.Value,
-            ObjectVersion = v1.ObjectVersion.Value,
+            TimestampNanos = BlfTimestamp.ToNanoseconds(v1.Timestamp, v1.Flags),
+            Flags = v1.Flags,
+            ClientIndex = v1.ClientIndex,
+            ObjectVersion = v1.ObjectVersion,
             StartOffset = startOffset,
             Payload = _SlicePayload(fullData, headerSize),
             PayloadMemory = _SlicePayloadMemory(objectMemory, headerSize),
@@ -271,7 +271,7 @@ internal static class BlfObjectHeaderParser
         out BlfObjectInfo info)
     {
         info = default;
-        if (!BlfLogObjectHeaderV2.TryParse(logHeaderData, out BlfLogObjectHeaderV2 v2, out _))
+        if (!BlfLogObjectHeaderV2.TryParse(logHeaderData, out BlfLogObjectHeaderV2 v2))
         {
             return false;
         }
@@ -279,10 +279,10 @@ internal static class BlfObjectHeaderParser
         info = new BlfObjectInfo
         {
             ObjectType = objectType,
-            TimestampNanos = BlfTimestamp.ToNanoseconds(v2.Timestamp.Value, v2.Flags.Value),
-            Flags = v2.Flags.Value,
+            TimestampNanos = BlfTimestamp.ToNanoseconds(v2.Timestamp, v2.Flags),
+            Flags = v2.Flags,
             ClientIndex = 0, // V2 (per Vector blf.h) has no client_index field; uses timestamp_status instead
-            ObjectVersion = v2.ObjectVersion.Value,
+            ObjectVersion = v2.ObjectVersion,
             StartOffset = startOffset,
             Payload = _SlicePayload(fullData, headerSize),
             PayloadMemory = _SlicePayloadMemory(objectMemory, headerSize),
@@ -301,7 +301,7 @@ internal static class BlfObjectHeaderParser
         out BlfObjectInfo info)
     {
         info = default;
-        if (!BlfLogObjectHeaderV3.TryParse(logHeaderData, out BlfLogObjectHeaderV3 v3, out _))
+        if (!BlfLogObjectHeaderV3.TryParse(logHeaderData, out BlfLogObjectHeaderV3 v3))
         {
             return false;
         }
@@ -309,10 +309,10 @@ internal static class BlfObjectHeaderParser
         info = new BlfObjectInfo
         {
             ObjectType = objectType,
-            TimestampNanos = BlfTimestamp.ToNanoseconds(v3.Timestamp.Value, v3.Flags.Value),
-            Flags = v3.Flags.Value,
+            TimestampNanos = BlfTimestamp.ToNanoseconds(v3.Timestamp, v3.Flags),
+            Flags = v3.Flags,
             ClientIndex = 0, // V3 has no client index
-            ObjectVersion = v3.ObjectVersion.Value,
+            ObjectVersion = v3.ObjectVersion,
             StartOffset = startOffset,
             Payload = _SlicePayload(fullData, headerSize),
             PayloadMemory = _SlicePayloadMemory(objectMemory, headerSize),

@@ -1,9 +1,6 @@
 <!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <PackageReference Include="ZeroAlloc" />
-  </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.CLI.Core\NetworkInspector.CLI.Core.csproj" />
     <!-- Plugin projects the CLI tests load by path; their assemblies are copied next to the tests, not referenced. -->
     <ProjectReference Include="..\samples\Sample.Protocol\Sample.Protocol.csproj" ReferenceOutputAssembly="false" />

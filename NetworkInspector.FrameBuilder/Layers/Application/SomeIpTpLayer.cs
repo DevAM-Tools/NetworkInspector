@@ -124,7 +124,7 @@ public readonly struct SomeIpTpLayer : IStatelessLayer, IPayloadLayer, IPseudoHe
             MessageType = _MessageType,
             ReturnCode = _ReturnCode,
         };
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
 
         // Write the 4-byte TP word immediately after the SOME/IP header.
         BinaryPrimitives.WriteUInt32BigEndian(dst.Slice(SomeIpHeader.Size, 4), _TpWord);

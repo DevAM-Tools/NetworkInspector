@@ -463,24 +463,24 @@ public sealed partial class CanProtocol : IProtocol
             : "Controller Area Network, ID: 0x";
 
         parentField.SetPacketInfo(isFd
-            ? ZA.Lazy("CAN FD 0x", new Hex8(canId))
-            : ZA.Lazy("CAN 0x", new Hex8(canId)));
+            ? LazyString.FormatLazy(canId, static s => string.Create(CultureInfo.InvariantCulture, $"CAN FD 0x{new UpperHex8(s)}"))
+            : LazyString.FormatLazy(canId, static s => string.Create(CultureInfo.InvariantCulture, $"CAN 0x{new UpperHex8(s)}")));
 
         MutField canField = parentField.AppendWithCustomText(
             _ProtocolFieldId, FieldValue.NewBytes(data[..totalLen]),
-            canKind, new Hex8(canId), ", Length: ", dlc);
+            canKind, new UpperHex8(canId), ", Length: ", dlc);
 
         // CAN ID: the value is the masked identifier; the display text distinguishes the width. The cast to ushort is
         // lossless for standard frames because canId was masked with the 11-bit mask above.
         if (isExtended)
         {
             canField.AppendWithCustomText(
-                _IdFieldId, FieldValue.NewU64(canId), "0x", new Hex8(canId), " (Extended)");
+                _IdFieldId, FieldValue.NewU64(canId), "0x", new UpperHex8(canId), " (Extended)");
         }
         else
         {
             canField.AppendWithCustomText(
-                _IdFieldId, FieldValue.NewU64(canId), "0x", new Hex3((ushort)canId), " (Standard)");
+                _IdFieldId, FieldValue.NewU64(canId), "0x", new UpperHex3((ushort)canId), " (Standard)");
         }
 
         // Message name from configuration (empty lookup when no file is configured; the name field is then absent)
@@ -611,8 +611,9 @@ public sealed partial class CanProtocol : IProtocol
 
         // Build summary text: packet info "CAN XL P:N VCID:0xNN", container title
         // "CAN XL, Priority: N, VCID: 0xNN, Length: N" (Length is the raw wire value). Both are formatted lazily.
-        parentField.SetPacketInfo(ZA.Lazy(
-            "CAN XL P:", priority, " VCID:", Helpers.DisplayTables.FormatHexU8((byte)vcid)));
+        parentField.SetPacketInfo(LazyString.FormatLazy(
+            (priority, vcidText: Helpers.DisplayTables.FormatHexU8((byte)vcid)),
+            static s => string.Create(CultureInfo.InvariantCulture, $"CAN XL P:{s.priority} VCID:{s.vcidText}")));
 
         // Append protocol container with frame slice bytes
         MutField xlField = parentField.AppendWithCustomText(
@@ -645,7 +646,7 @@ public sealed partial class CanProtocol : IProtocol
 
         // Acceptance Field (hex display)
         xlField.AppendWithCustomText(_CanxlAcceptanceFieldId, FieldValue.NewU64(acceptanceField),
-            "0x", new Hex8(acceptanceField));
+            "0x", new UpperHex8(acceptanceField));
 
         // Data payload (conditional — present when payload length > 0).
         // Dispatch on parentField (sibling of the CAN XL container) via can.extended_id

@@ -199,7 +199,7 @@ public sealed partial class EthernetProtocol : IProtocol
         }
 
         // Eagerly parse MAC addresses (12-byte memory copy) — the ToString()
-        // formatting is still deferred via ZA.Lazy until the summary is displayed.
+        // formatting is still deferred (custom-text fragments) until the summary is displayed.
         MacAddress src = MacAddress.FromBytes(span[6..12]);
         MacAddress dst = MacAddress.FromBytes(span[..6]);
         ReadOnlyMemory<byte> hdrBytes = data[.._HeaderSize];
@@ -217,7 +217,7 @@ public sealed partial class EthernetProtocol : IProtocol
         // Eagerly append eth.dst, eth.src, and eth.type/eth.len so these key identifier
         // fields are present in the field tree during the initial parse pass.
         // The alias group "eth.addr" is metadata-only (registered in _RegisterFieldsCustom).
-        // CustomText combines the MAC address with its I/G+L/G annotation; ZA.Lazy defers
+        // CustomText combines the MAC address with its I/G+L/G annotation; the custom-text fragments defer
         // string allocation until the value is actually rendered.
         ethContainer.AppendWithCustomText(_DstFieldId, FieldValue.NewMacAddress(dst), dst, " (", _FormatMacAddressBits(dst), ")");
         ethContainer.AppendWithCustomText(_SrcFieldId, FieldValue.NewMacAddress(src), src, " (", _FormatMacAddressBits(src), ")");

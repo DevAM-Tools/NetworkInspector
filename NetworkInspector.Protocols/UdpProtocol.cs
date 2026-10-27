@@ -287,15 +287,15 @@ public sealed partial class UdpProtocol : IProtocol
 
         ReadOnlySpan<byte> span = data.Span;
 
-        if (!UdpHeader.TryParse(span, out UdpHeader header, out _))
+        if (!UdpHeader.TryParse(span, out UdpHeader header))
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)data.Length);
         }
 
-        ushort srcPort = header.SrcPort.Value;
-        ushort dstPort = header.DstPort.Value;
-        ushort length = header.Length.Value;
-        ushort checksum = header.Checksum.Value;
+        ushort srcPort = header.SrcPort;
+        ushort dstPort = header.DstPort;
+        ushort length = header.Length;
+        ushort checksum = header.Checksum;
 
         // Compute payload bounds (guard against negative). The payload ends at the smaller of the UDP length field and the
         // available data: the length field is attacker-controlled and may claim more than was captured, or (invalid) less
@@ -396,10 +396,13 @@ public sealed partial class UdpProtocol : IProtocol
             context.RecordGroupPresence(_UdpErrorGroupId);
         }
 
-        // Packet info uses ZA.Lazy: only the value-typed ports are captured and the text is built if the info column is read.
+        // Packet info is deferred: only the value-typed ports are captured (one state box, a static lambda, no closure) and the
+        // text is built if the info column is read.
         // Set packet info so the info column reflects the transport layer ports.
         // Higher-level protocols (DNS, HTTP, etc.) can overwrite this later.
-        parentField.SetPacketInfo(ZA.Lazy("Src Port: ", srcPort, ", Dst Port: ", dstPort));
+        parentField.SetPacketInfo(LazyString.FormatLazy(
+            (srcPort, dstPort),
+            static s => string.Create(CultureInfo.InvariantCulture, $"Src Port: {s.srcPort}, Dst Port: {s.dstPort}")));
 
         // Store the full UDP datagram (header + payload) in the field value (a slice, no copy).
         // The CustomRepresentation still shows "8 bytes" (the header size) to the user; it is a constant string, so
@@ -681,33 +684,63 @@ public sealed partial class UdpProtocol : IProtocol
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// </code>
 /// </summary>
-[BinaryParsable]
-internal readonly partial struct UdpHeader
+/// <remarks>
+/// Decoded by hand (one length check, fixed-offset reads with <see cref="BinaryPrimitives"/>) instead of a generated
+/// parser, so the JIT elides the per-read bounds checks and the dissector gets plain integers; declaration order
+/// mirrors the wire layout for readability only. Thread safety: immutable value type.
+/// </remarks>
+internal readonly struct UdpHeader
 {
-    /// <summary>Source port number.</summary>
-    public U16BE SrcPort
+    /// <summary>Source port number (bytes 0..1).</summary>
+    public ushort SrcPort
     {
         get; init;
     }
 
-    /// <summary>Destination port number.</summary>
-    public U16BE DstPort
+    /// <summary>Destination port number (bytes 2..3).</summary>
+    public ushort DstPort
     {
         get; init;
     }
 
-    /// <summary>Length of the UDP datagram (header + payload) in bytes.</summary>
-    public U16BE Length
+    /// <summary>Length of the UDP datagram (header + payload) in bytes (bytes 4..5).</summary>
+    public ushort Length
     {
         get; init;
     }
 
-    /// <summary>One's complement checksum over pseudo-header, header, and payload.</summary>
-    public U16BE Checksum
+    /// <summary>One's complement checksum over pseudo-header, header, and payload (bytes 6..7).</summary>
+    public ushort Checksum
     {
         get; init;
     }
 
     /// <summary>Serialized header size in bytes (8).</summary>
     internal const int HeaderSize = 8;
+
+    /// <summary>
+    /// Decodes the 8-byte header. Returns <see langword="false"/> with a default value when fewer than
+    /// <see cref="HeaderSize"/> bytes are present. Longer input is accepted; only the first 8 bytes are read.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParse(ReadOnlySpan<byte> source, out UdpHeader value)
+    {
+        // One length check up front; a short datagram is an expected failure, not an exception.
+        if (source.Length < HeaderSize)
+        {
+            value = default;
+            return false;
+        }
+
+        // Exact-size slice: after this the JIT knows every index below is in range and drops the bounds checks.
+        ReadOnlySpan<byte> h = source[..HeaderSize];
+        value = new UdpHeader
+        {
+            SrcPort = BinaryPrimitives.ReadUInt16BigEndian(h),          // 0..2
+            DstPort = BinaryPrimitives.ReadUInt16BigEndian(h[2..]),     // 2..4
+            Length = BinaryPrimitives.ReadUInt16BigEndian(h[4..]),      // 4..6
+            Checksum = BinaryPrimitives.ReadUInt16BigEndian(h[6..]),    // 6..8
+        };
+        return true;
+    }
 }

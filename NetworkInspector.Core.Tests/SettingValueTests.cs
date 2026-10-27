@@ -998,10 +998,10 @@ internal sealed class SettingValueTests
         await Assert.That(written).IsEqualTo(0);
     }
 
-    // === IStringSize / ZeroAlloc convenience ===
+    // === TryGetStringSize / convenience formatting ===
 
     [Test]
-    public async Task IStringSize_Bool_True_ReturnsFour()
+    public async Task TryGetStringSize_Bool_True_ReturnsFour()
     {
         bool ok = SettingValue.Bool(true).TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsTrue();
@@ -1009,7 +1009,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_Bool_False_ReturnsFive()
+    public async Task TryGetStringSize_Bool_False_ReturnsFive()
     {
         bool ok = SettingValue.Bool(false).TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsTrue();
@@ -1017,7 +1017,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_String_ReturnsExactLength()
+    public async Task TryGetStringSize_String_ReturnsExactLength()
     {
         bool ok = SettingValue.String("hello").TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsTrue();
@@ -1025,7 +1025,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_Bytes_ReturnsExactLabelLength()
+    public async Task TryGetStringSize_Bytes_ReturnsExactLabelLength()
     {
         bool ok = SettingValue.Bytes([1, 2, 3]).TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsTrue();
@@ -1033,7 +1033,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_U64Array_ReturnsExactLabelLength()
+    public async Task TryGetStringSize_U64Array_ReturnsExactLabelLength()
     {
         bool ok = SettingValue.U64Array([1UL, 2UL]).TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsTrue();
@@ -1041,7 +1041,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_Enum_ReturnsExactLabelLength()
+    public async Task TryGetStringSize_Enum_ReturnsExactLabelLength()
     {
         bool ok = SettingValue.Enum("High", 2).TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsTrue();
@@ -1049,7 +1049,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_U64_ReturnsExactDigitCount()
+    public async Task TryGetStringSize_U64_ReturnsExactDigitCount()
     {
         bool ok = SettingValue.U64(ulong.MaxValue).TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsTrue();
@@ -1058,7 +1058,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_I64_MinValue_ReturnsTwenty()
+    public async Task TryGetStringSize_I64_MinValue_ReturnsTwenty()
     {
         bool ok = SettingValue.I64(long.MinValue).TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsTrue();
@@ -1067,7 +1067,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_F64_ReturnsFalse()
+    public async Task TryGetStringSize_F64_ReturnsFalse()
     {
         bool ok = SettingValue.F64(3.14).TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsFalse();
@@ -1075,7 +1075,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_U64_WithFormat_ReturnsFalse()
+    public async Task TryGetStringSize_U64_WithFormat_ReturnsFalse()
     {
         bool ok = SettingValue.U64(42).TryGetStringSize("X", CultureInfo.InvariantCulture, out int size);
         await Assert.That(ok).IsFalse();
@@ -1083,7 +1083,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_I64_WithFormat_ReturnsFalse()
+    public async Task TryGetStringSize_I64_WithFormat_ReturnsFalse()
     {
         bool ok = SettingValue.I64(-7).TryGetStringSize("D", CultureInfo.InvariantCulture, out int size);
         await Assert.That(ok).IsFalse();
@@ -1091,7 +1091,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_NullReferences_ReturnZeroOrEmptyLabel()
+    public async Task TryGetStringSize_NullReferences_ReturnZeroOrEmptyLabel()
     {
         SettingValue nullString = SettingsTestHelpers.WithSettingValueField<object?>(
             SettingValue.String("ignored"), "_ReferenceValue", null);
@@ -1113,7 +1113,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_UnknownType_ReturnsZero()
+    public async Task TryGetStringSize_UnknownType_ReturnsZero()
     {
         SettingValue v = SettingsTestHelpers.WithSettingValueField(
             SettingValue.Bool(true), "_Type", (SettingType)99);
@@ -1145,47 +1145,52 @@ internal sealed class SettingValueTests
         string stored = "plain";
         SettingValue v = SettingValue.String(stored);
         await Assert.That(ReferenceEquals(v.Format(), stored)).IsTrue();
-        string fromTemp;
-        using (TempString temp = v.FormatTemp())
-        {
-            fromTemp = temp.AsSpan().ToString();
-        }
-        await Assert.That(fromTemp).IsEqualTo(stored);
     }
 
     [Test]
-    public async Task FormatTemp_StringAndNumber_DisposeReleasesTheThreadStaticBuffer()
+    public async Task Format_Number_ReturnsInvariantText()
     {
-        // No await between acquire and check: the thread-static buffer belongs to this thread.
-        bool availableAfterString;
-        bool availableAfterNumber;
-        string numberText;
-        using (SettingValue.String("plain").FormatTemp())
-        {
-        }
+        string numberText = SettingValue.I64(-12345).Format();
 
-        availableAfterString = ZeroAllocHelper.IsCharBufferAvailable();
-        using (TempString temp = SettingValue.I64(-12345).FormatTemp())
-        {
-            numberText = temp.AsSpan().ToString();
-        }
-
-        availableAfterNumber = ZeroAllocHelper.IsCharBufferAvailable();
-
-        await Assert.That(availableAfterString).IsTrue();
         await Assert.That(numberText).IsEqualTo("-12345");
-        await Assert.That(availableAfterNumber).IsTrue();
     }
 
     [Test]
-    public async Task FormatTemp_EmptyString_ReturnsEmpty()
+    public async Task Format_EmptyString_ReturnsEmpty()
     {
-        int length;
-        using (TempString temp = SettingValue.String("").FormatTemp())
-        {
-            length = temp.AsSpan().Length;
-        }
-        await Assert.That(length).IsEqualTo(0);
+        string text = SettingValue.String("").Format();
+
+        await Assert.That(text).IsEqualTo(string.Empty);
+    }
+
+    [Test]
+    public async Task Format_EnumLabelBeyondTheStackLimit_MatchesTryFormat()
+    {
+        // Array and bytes labels carry only a count and stay short; the pooled path (above 256 characters) is reached by an
+        // enum label whose name is longer than the limit.
+        string longName = new('E', 400);
+        SettingValue enumValue = SettingValue.Enum(longName, 7);
+        enumValue.TryGetStringSize(default, CultureInfo.InvariantCulture, out int size);
+        char[] large = new char[size + 8];
+
+        bool ok = enumValue.TryFormat(large, out int written, default, CultureInfo.InvariantCulture);
+        string formatted = enumValue.Format();
+
+        await Assert.That(size).IsGreaterThan(256);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(formatted).IsEqualTo(new string(large, 0, written));
+        await Assert.That(formatted.Length).IsEqualTo(size);
+    }
+
+    [Test]
+    public async Task Format_F64_UsesTheFixedStackBuffer()
+    {
+        // F64 has no exact size hint, so Format() formats it into a fixed stack buffer sized for the longest double text.
+        SettingValue f64 = SettingValue.F64(-1.7976931348623157E+308);
+
+        string text = f64.Format();
+
+        await Assert.That(text).IsEqualTo((-1.7976931348623157E+308).ToString("R", CultureInfo.InvariantCulture));
     }
 
     [Test]
@@ -1219,7 +1224,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task FormatTemp_MatchesToString_AllTypes()
+    public async Task Format_MatchesToString_AllTypes()
     {
         SettingValue[] values =
         [
@@ -1235,26 +1240,16 @@ internal sealed class SettingValueTests
 
         foreach (SettingValue v in values)
         {
-            string fromTemp;
-            using (TempString temp = v.FormatTemp())
-            {
-                fromTemp = temp.AsSpan().ToString();
-            }
-            await Assert.That(fromTemp).IsEqualTo(v.ToString());
+            await Assert.That(v.Format()).IsEqualTo(v.ToString());
         }
     }
 
     [Test]
-    public async Task FormatTemp_UnknownType_ReturnsEmpty()
+    public async Task Format_UnknownType_ReturnsEmpty()
     {
         SettingValue v = SettingsTestHelpers.WithSettingValueField(
             SettingValue.Bool(true), "_Type", (SettingType)99);
-        int length;
-        using (TempString temp = v.FormatTemp())
-        {
-            length = temp.AsSpan().Length;
-        }
-        await Assert.That(length).IsEqualTo(0);
+
         await Assert.That(v.Format()).IsEqualTo("");
     }
 
@@ -1376,7 +1371,7 @@ internal sealed class SettingValueTests
     }
 
     [Test]
-    public async Task IStringSize_I64_Negative_IncludesSign()
+    public async Task TryGetStringSize_I64_Negative_IncludesSign()
     {
         bool negativeOk = SettingValue.I64(-42).TryGetStringSize(default, null, out int negativeSize);
         await Assert.That(negativeOk).IsTrue();

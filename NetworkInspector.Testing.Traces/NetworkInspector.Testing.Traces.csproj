@@ -8,9 +8,6 @@
     <InternalsVisibleTo Include="NetworkInspector.Testing.Traces.Tests" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="ZeroAlloc" />
-  </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
     <ProjectReference Include="..\NetworkInspector.FrameBuilder\NetworkInspector.FrameBuilder.csproj" />
     <ProjectReference Include="..\NetworkInspector.Sources\NetworkInspector.Sources.csproj" />

@@ -51,10 +51,6 @@ global using NetworkInspector.Sources.Tests.Generators;
 global using NetworkInspector.Sources.Tests.Helpers;
 #endregion
 
-#region ZeroAlloc
-global using ZeroAlloc;
-#endregion
-
 #region Test Framework
 global using TUnit.Assertions;
 global using TUnit.Assertions.Extensions;

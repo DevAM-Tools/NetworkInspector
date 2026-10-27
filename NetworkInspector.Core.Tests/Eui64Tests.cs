@@ -72,14 +72,13 @@ internal sealed class Eui64Tests
         await Assert.That(written).IsEqualTo(0);
     }
 
-    // === IBinarySerializable ===
+    // === Binary write ===
 
     [Test]
-    public async Task TryGetWrittenSize()
+    public async Task ToBytes_ReturnsWrittenSize()
     {
         Eui64 eui = new(1);
-        bool ok = eui.TryGetWrittenSize(out int size);
-        await Assert.That(ok).IsTrue();
+        int size = eui.ToBytes(new byte[8]);
         await Assert.That(size).IsEqualTo(8);
     }
 
@@ -141,17 +140,11 @@ internal sealed class Eui64Tests
     }
 
     [Test]
-    public async Task FormatTemp()
+    public async Task Format_ReturnsExpectedText()
     {
         Eui64 eui = new(0x0011223344556677);
 
-        // The TempString owns the thread-static char buffer until it is disposed; read the text before any await and
-        // dispose on this thread, otherwise the buffer stays locked for every later test on this pool thread.
-        string formatted;
-        using (TempString temp = eui.FormatTemp())
-        {
-            formatted = temp.ToString();
-        }
+        string formatted = eui.Format();
 
         await Assert.That(formatted).IsEqualTo("00:11:22:33:44:55:66:77");
     }
@@ -205,13 +198,13 @@ internal sealed class Eui64Tests
         await Assert.That(written).IsEqualTo(0);
     }
 
-    // === IStringSize ===
+    // === TryGetStringSize ===
 
     [Test]
     public async Task TryGetStringSize()
     {
         Eui64 eui = new(1);
-        bool ok = eui.TryGetStringSize(default, null, out int size);
+        bool ok = Eui64.TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(Eui64.FormattedLength);
     }

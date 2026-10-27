@@ -94,7 +94,7 @@ public readonly struct IcmpV4EchoLayer : IStatelessLayer, IPseudoHeaderIndepende
             Identifier = _Identifier,
             SequenceNumber = _SequenceNumber,
         };
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

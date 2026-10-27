@@ -199,7 +199,8 @@ internal static class IPv4OptionsParser
 
         MutField container = optionsContainer.AppendWithCustomText(
             fields.RecordRouteFieldId, FieldValue.None,
-            (string)ZA.String(optName, " (", optLen, " bytes, ", addrCount, " entries)"));
+            // Eager text (one string): the field tree stores it right away; InvariantCulture per the repository rule.
+            string.Create(CultureInfo.InvariantCulture, $"{optName} ({optLen} bytes, {addrCount} entries)"));
 
         _AppendOptionTypeFields(container, optData[0], in fields);
         container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen));
@@ -231,7 +232,7 @@ internal static class IPv4OptionsParser
 
         MutField container = optionsContainer.AppendWithCustomText(
             containerFieldId, FieldValue.None,
-            (string)ZA.String(optName, " (", optLen, " bytes, ", addrCount, " entries)"));
+            string.Create(CultureInfo.InvariantCulture, $"{optName} ({optLen} bytes, {addrCount} entries)"));
 
         _AppendOptionTypeFields(container, optData[0], in fields);
         container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen));
@@ -270,7 +271,7 @@ internal static class IPv4OptionsParser
 
         MutField container = optionsContainer.AppendWithCustomText(
             fields.TimestampFieldId, FieldValue.None,
-            (string)ZA.String(optName, " (", optLen, " bytes, ", flagDisplay, ")"));
+            string.Create(CultureInfo.InvariantCulture, $"{optName} ({optLen} bytes, {flagDisplay})"));
 
         _AppendOptionTypeFields(container, optData[0], in fields);
         container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen));
@@ -329,11 +330,11 @@ internal static class IPv4OptionsParser
 
         // Use static text for known values, dynamic for unknown
         string raDisplay = DisplayTables.GetRouterAlertDisplayText(raValue)
-            ?? (string)ZA.String("Unknown (", raValue, ")");
+            ?? string.Create(CultureInfo.InvariantCulture, $"Unknown ({raValue})");
 
         MutField container = optionsContainer.AppendWithCustomText(
             fields.RouterAlertFieldId, FieldValue.None,
-            (string)ZA.String(optName, ": ", raDisplay));
+            string.Create(CultureInfo.InvariantCulture, $"{optName}: {raDisplay}"));
 
         _AppendOptionTypeFields(container, optData[0], in fields);
         container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optData.Length));
@@ -356,7 +357,7 @@ internal static class IPv4OptionsParser
 
         MutField container = optionsContainer.AppendWithCustomText(
             fields.SecurityFieldId, FieldValue.None,
-            (string)ZA.String(optName, " (", optLen, " bytes)"));
+            string.Create(CultureInfo.InvariantCulture, $"{optName} ({optLen} bytes)"));
 
         _AppendOptionTypeFields(container, optData[0], in fields);
         container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen));
@@ -388,7 +389,7 @@ internal static class IPv4OptionsParser
 
         MutField container = optionsContainer.AppendWithCustomText(
             fields.StreamIdFieldId, FieldValue.None,
-            (string)ZA.String(optName, ": ", sidValue));
+            string.Create(CultureInfo.InvariantCulture, $"{optName}: {sidValue}"));
 
         _AppendOptionTypeFields(container, optData[0], in fields);
         container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optData.Length));
@@ -411,7 +412,7 @@ internal static class IPv4OptionsParser
 
         MutField container = optionsContainer.AppendWithCustomText(
             fields.UnknownFieldId, FieldValue.None,
-            (string)ZA.String(displayName, " (type ", optType, ", ", optLen, " bytes)"));
+            string.Create(CultureInfo.InvariantCulture, $"{displayName} (type {optType}, {optLen} bytes)"));
 
         _AppendOptionTypeFields(container, optType, in fields);
         container.Append(fields.OptLenFieldId, FieldValue.NewU64((ulong)optLen));

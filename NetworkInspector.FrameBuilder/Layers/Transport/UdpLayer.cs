@@ -100,7 +100,7 @@ public readonly struct UdpLayer : IStatelessLayer, IInteriorLayer, IProvidesProt
     public void WriteHeader(scoped Span<byte> dst)
     {
         UdpHeader hdr = UdpHeader.Create(_SrcPort, _DstPort);
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

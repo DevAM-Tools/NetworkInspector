@@ -77,14 +77,13 @@ internal sealed class UuidTests
         await Assert.That(written).IsEqualTo(0);
     }
 
-    // === IBinarySerializable ===
+    // === Binary write ===
 
     [Test]
-    public async Task TryGetWrittenSize()
+    public async Task ToBytes_ReturnsWrittenSize()
     {
         Uuid uuid = new(1, 2);
-        bool ok = uuid.TryGetWrittenSize(out int size);
-        await Assert.That(ok).IsTrue();
+        int size = uuid.ToBytes(new byte[16]);
         await Assert.That(size).IsEqualTo(16);
     }
 
@@ -149,17 +148,11 @@ internal sealed class UuidTests
     }
 
     [Test]
-    public async Task FormatTemp()
+    public async Task Format_ReturnsExpectedText()
     {
         Uuid uuid = new(0x550E8400E29B41D4, 0xA716446655440000);
 
-        // The TempString owns the thread-static char buffer until it is disposed; read the text before any await and
-        // dispose on this thread, otherwise the buffer stays locked for every later test on this pool thread.
-        string formatted;
-        using (TempString temp = uuid.FormatTemp())
-        {
-            formatted = temp.ToString();
-        }
+        string formatted = uuid.Format();
 
         await Assert.That(formatted).IsEqualTo("550E8400-E29B-41D4-A716-446655440000");
     }
@@ -213,13 +206,13 @@ internal sealed class UuidTests
         await Assert.That(written).IsEqualTo(0);
     }
 
-    // === IStringSize ===
+    // === TryGetStringSize ===
 
     [Test]
     public async Task TryGetStringSize()
     {
         Uuid uuid = new(1, 2);
-        bool ok = uuid.TryGetStringSize(default, null, out int size);
+        bool ok = Uuid.TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(Uuid.FormattedLength);
     }

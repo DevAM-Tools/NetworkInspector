@@ -184,15 +184,16 @@ internal sealed class IPv4AddressTests
     }
 
     [Test]
-    public async Task FormatTemp_ProducesCorrectString()
+    public async Task Format_MatchesTryFormatText()
     {
         IPv4Address addr = new(0xC0A80101u);
-        string formatted;
-        using (TempString temp = addr.FormatTemp())
-        {
-            formatted = temp.ToString();
-        }
-        await Assert.That(formatted).IsEqualTo("192.168.1.1");
+        char[] buffer = new char[IPv4Address.MaxFormattedLength];
+
+        bool ok = addr.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(new string(buffer, 0, written)).IsEqualTo("192.168.1.1");
+        await Assert.That(addr.Format()).IsEqualTo("192.168.1.1");
     }
 
     // === Round-trip ===
@@ -262,12 +263,22 @@ internal sealed class IPv4AddressTests
     // === Binary Serialization ===
 
     [Test]
-    public async Task TryGetWrittenSize_Is4()
+    public async Task TryWrite_MatchesToBytesAndFailsWhenOneByteShort()
     {
         IPv4Address addr = new(0xC0A80101u);
-        bool ok = addr.TryGetWrittenSize(out int size);
-        await Assert.That(ok).IsTrue();
+        byte[] exact = new byte[4];
+        byte[] viaToBytes = new byte[4];
+        int size = addr.ToBytes(viaToBytes);
+
+        bool ok = addr.TryWrite(exact, out int written);
+        bool shortOk = addr.TryWrite(new byte[3], out int shortWritten);
+
         await Assert.That(size).IsEqualTo(4);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(4);
+        await Assert.That(exact.AsSpan().SequenceEqual(viaToBytes)).IsTrue();
+        await Assert.That(shortOk).IsFalse();
+        await Assert.That(shortWritten).IsEqualTo(0);
     }
 
     [Test]

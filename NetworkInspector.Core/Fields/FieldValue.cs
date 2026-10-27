@@ -15,7 +15,7 @@ namespace NetworkInspector.Core.Fields;
 /// </para>
 /// </summary>
 [StructLayout(LayoutKind.Auto)]
-public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldValue>, ISpanFormattable, IUtf8SpanFormattable, IStringSize
+public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldValue>, ISpanFormattable, IUtf8SpanFormattable
 {
     /// <summary>None value constant (container fields).</summary>
     public static readonly FieldValue None;
@@ -243,12 +243,13 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
 
     #endregion
 
-    #region IStringSize
+    #region String Size
 
     /// <summary>
     /// Tries to determine the number of characters needed to format this value.
     /// When a custom representation is present, returns its exact length.
-    /// Otherwise delegates to the underlying <see cref="FieldValueData"/>.
+    /// Otherwise delegates to the underlying <see cref="FieldValueData"/>. Exporters call it to presize their buffers; it
+    /// is a plain method (no interface) because every caller names the concrete type.
     /// </summary>
     public bool TryGetStringSize(ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
     {
@@ -258,29 +259,6 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
             return true;
         }
         return Data.TryGetStringSize(format, provider, out size);
-    }
-
-    #endregion
-
-    #region Zero-allocation formatting
-
-    /// <summary>
-    /// Returns a <see cref="TempString"/> containing the formatted value.
-    /// Uses the custom representation if present, otherwise formats the raw data.
-    /// When a thread-static buffer is available and the value fits, no heap allocation occurs.
-    /// The caller is responsible for disposing the returned <see cref="TempString"/>.
-    /// </summary>
-    public TempString ToTempString()
-    {
-        if (!CustomRepresentation.IsNull)
-        {
-            ReadOnlySpan<char> text = CustomRepresentation.AsSpan;
-            // The epoch lets Dispose release the thread-static buffer; without it the buffer stays locked on this thread.
-            char[] buffer = ZeroAllocHelper.AcquireCharBuffer(text.Length, true, out bool isThreadStatic, out int epoch);
-            text.CopyTo(buffer);
-            return new TempString(buffer, text.Length, isThreadStatic, epoch);
-        }
-        return Data.ToTempString();
     }
 
     #endregion
@@ -358,7 +336,7 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     // Suppression approved: CA1034 — DefaultText is a public formatting wrapper intentionally nested on FieldValue for discoverability.
     [SuppressMessage("Design", "CA1034:Nested types should not be visible",
         Justification = "DefaultText is a lightweight formatting wrapper tightly coupled to FieldValue")]
-    public readonly struct DefaultText(FieldValueData data) : ISpanFormattable, IUtf8SpanFormattable, IStringSize
+    public readonly struct DefaultText(FieldValueData data) : ISpanFormattable, IUtf8SpanFormattable
     {
         private readonly FieldValueData _Data = data;
 
@@ -379,13 +357,6 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
         /// <inheritdoc cref="FieldValueData.TryGetStringSize"/>
         public bool TryGetStringSize(ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
             => _Data.TryGetStringSize(format, provider, out size);
-
-        /// <summary>
-        /// Returns a <see cref="TempString"/> containing the formatted raw data value.
-        /// No heap allocation occurs when a thread-static buffer is available.
-        /// The caller is responsible for disposing the returned <see cref="TempString"/>.
-        /// </summary>
-        public TempString ToTempString() => _Data.ToTempString();
 
         /// <summary>Implicit conversion to string for convenience.</summary>
         public static implicit operator string(DefaultText text) => text.ToString();

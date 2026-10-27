@@ -170,7 +170,7 @@ public sealed partial class WebSocketProtocol
             {
                 frameContainer.AppendWithCustomText(_MaskingKeyFieldId,
                     FieldValue.NewU64(header.MaskingKey),
-                    "0x", new Hex8(header.MaskingKey));
+                    "0x", new UpperHex8(header.MaskingKey));
             }
 
             // RSV1 = Per-Message Compressed (RFC 7692)

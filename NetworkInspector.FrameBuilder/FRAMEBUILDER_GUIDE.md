@@ -237,7 +237,7 @@ NetworkInspector.FrameBuilder/
     IStackNode.cs / IStatelessStack.cs
     ITrailerLayer.cs
     EtherTypeKind.cs / IpNextProtocolKind.cs    ← phantom-type discriminators
-  Headers/                                  ← [BinaryWritable] header structs
+  Headers/                                  ← header structs with a handwritten TryWrite
     EthernetHeader.cs / VlanTag.cs / ArpHeader.cs
     IPv4Header.cs / IPv6Header.cs
     IPv6FragmentExtensionHeader.cs / IPv6OptionsExtensionHeader.cs
@@ -467,54 +467,73 @@ constants.
 
 ## 7. Header Struct Pattern
 
-Every fixed-size header sits in a `[BinaryWritable]` struct under
-`Headers/`:
+Every fixed-size header sits in a plain struct under `Headers/` that writes itself:
 
 ```csharp
-[BinaryWritable]
-internal readonly partial struct UdpHeader
+internal readonly struct UdpHeader
 {
     /// <summary>Size of the UDP header in bytes.</summary>
     internal const int Size = 8;
 
     /// <summary>Source port number.</summary>
-    internal U16BE SrcPort { get; init; }
+    internal ushort SrcPort { get; init; }
 
     /// <summary>Destination port number.</summary>
-    internal U16BE DstPort { get; init; }
+    internal ushort DstPort { get; init; }
 
     /// <summary>Length of UDP header + payload. Set to 0 for fixup.</summary>
-    internal U16BE Length { get; init; }
+    internal ushort Length { get; init; }
 
     /// <summary>Checksum (0 = no checksum).</summary>
-    internal U16BE Checksum { get; init; }
+    internal ushort Checksum { get; init; }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static UdpHeader Create(ushort srcPort, ushort dstPort) =>
-        new() { SrcPort = srcPort, DstPort = dstPort, Length = (ushort)0, Checksum = (ushort)0 };
+        new() { SrcPort = srcPort, DstPort = dstPort, Length = 0, Checksum = 0 };
+
+    /// <summary>Writes the 8 header bytes; <see langword="false"/> and 0 when the destination is shorter.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryWrite(Span<byte> destination, out int bytesWritten)
+    {
+        if (destination.Length < Size)
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        // Exact-size slice, then fixed offsets: the JIT drops the bounds checks of the four stores.
+        Span<byte> d = destination[..Size];
+        BinaryPrimitives.WriteUInt16BigEndian(d, SrcPort);         // 0..2
+        BinaryPrimitives.WriteUInt16BigEndian(d[2..], DstPort);    // 2..4
+        BinaryPrimitives.WriteUInt16BigEndian(d[4..], Length);     // 4..6
+        BinaryPrimitives.WriteUInt16BigEndian(d[6..], Checksum);   // 6..8
+        bytesWritten = Size;
+        return true;
+    }
 }
 ```
 
 Rules:
 
-1. `internal readonly partial struct` — `partial` is required by
-   `[BinaryWritable]`.
+1. `internal readonly struct` with a `TryWrite` that checks the destination once and writes fixed offsets with
+   `BinaryPrimitives.Write…BigEndian` (addresses through the value types' `ToBytes`).
 2. Always include a `Size` constant (or `MinHeaderSize` for variable-size
    headers).
-3. Use ZeroAlloc big-endian wrappers — `U16BE`, `U32BE`, `U64BE`, `I16BE`,
-   etc. — for network-order fields.
-4. Use `[BinaryField(BitCount = N)]` for sub-byte fields (IP version,
-   IHL, DSCP, ECN, …).
+3. Use plain `ushort` / `uint` / `ulong` properties for network-order fields; the writer swaps the byte order.
+4. Pack sub-byte fields (IP version, IHL, DSCP, ECN, …) by hand in the `Create` factory
+   (see `TcpHeader.MakeDataOffsetFlags`).
 5. Length / checksum / fragment-offset fields **must default to 0** in
    the static `Create` factory — they are always patched in post-fix.
 6. The header struct never knows about layers; layers know about
    headers.
+7. Test every header: a `HeaderWriteTests` case per struct compares the written bytes with a hand-written byte string and
+   checks the one-byte-short destination.
 
 Layers serialise via:
 
 ```csharp
 UdpHeader hdr = UdpHeader.Create(_SrcPort, _DstPort);
-_ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+_ = hdr.TryWrite(dst, out _);
 ```
 
 The unused-result discard is intentional: `dst` is statically sized to
@@ -1111,8 +1130,8 @@ strict.
 
 - Use `BinaryPrimitives.Write*BigEndian` for direct buffer writes.
 - Use `ReadOnlySpan<byte>` / `Span<byte>` everywhere on the hot path.
-- Use `[BinaryWritable]` for fixed-size headers — the source generator
-  emits zero-allocation `TryWrite`.
+- Use a header struct with a handwritten `TryWrite` for fixed-size headers — one length
+  check, then fixed-offset `BinaryPrimitives` stores.
 - Use `params Slot[]` in factories that take many small structs and
   defensively copy in the factory (so callers cannot mutate the array
   out from under a sequence iteration — see
@@ -1268,7 +1287,7 @@ guarantees that cannot be exercised at runtime.
   `_XxxIsExplicit` in `PatchNextProtocol` / `ApplyPostFix`.
 - ✅ Validate all invariants in the constructor / factory; once the
   struct is built, downstream methods assume valid inputs.
-- ✅ Use `[BinaryWritable]` headers for fixed-size frame structures.
+- ✅ Use header structs with a handwritten `TryWrite` for fixed-size frame structures.
 - ✅ Use a single `XxxConfigFb` for layers paired with a parser config.
 - ✅ Split static layout from per-frame values
   ([§15](#15-layout--valueset-split-parameterised-layers)).
@@ -1319,10 +1338,10 @@ guarantees that cannot be exercised at runtime.
 
 ### Header Struct
 
-- [ ] `[BinaryWritable] internal readonly partial struct XxxHeader` under `Headers/`
+- [ ] `internal readonly struct XxxHeader` with a handwritten `TryWrite` under `Headers/`
 - [ ] `Size` constant in bytes
-- [ ] Big-endian fields use `U16BE` / `U32BE` / `U64BE`
-- [ ] Bit-fields use `[BinaryField(BitCount = N)]`
+- [ ] Big-endian fields are plain `ushort` / `uint` / `ulong` written with `BinaryPrimitives.Write…BigEndian`
+- [ ] Bit-fields are packed by hand in the `Create` factory
 - [ ] Length / checksum / fragment-offset fields default to 0 in `Create`
 - [ ] XML doc with layout description (single line or ASCII diagram)
 
@@ -1341,7 +1360,7 @@ guarantees that cannot be exercised at runtime.
 ### Behaviour
 
 - [ ] `HeaderSize` is constant per instance
-- [ ] `WriteHeader` uses `[BinaryWritable]`'s `TryWrite` (or direct
+- [ ] `WriteHeader` uses the header's `TryWrite` (or direct
       `BinaryPrimitives.Write*` for layers without a header struct)
 - [ ] Length / checksum bytes start at 0 in `WriteHeader` (patched in
       post-fix)
@@ -1445,7 +1464,7 @@ public readonly struct XxxLayer :
     public void WriteHeader(scoped Span<byte> dst)
     {
         XxxHeader hdr = XxxHeader.Create(_SrcPort, _DstPort);
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />
@@ -1559,7 +1578,7 @@ public readonly struct XxxStatefulLayer :
         unchecked { state.XxxNextCounter = (ushort)(counter + 1); }
 
         XxxHeader hdr = XxxHeader.Create(counter);
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

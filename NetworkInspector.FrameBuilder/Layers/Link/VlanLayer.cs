@@ -95,7 +95,7 @@ public readonly struct VlanLayer :
             Tci = VlanTag.MakeTci(_VlanId, _Pcp, _Dei),
             InnerEtherType = (ushort)0, // patched by PatchNextProtocol
         };
-        _ = ((IBinarySerializable)tag).TryWrite(dst, out _);
+        _ = tag.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

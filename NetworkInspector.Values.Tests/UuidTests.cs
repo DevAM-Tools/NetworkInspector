@@ -78,15 +78,16 @@ internal sealed class UuidTests
     }
 
     [Test]
-    public async Task FormatTemp_ProducesCorrectString()
+    public async Task Format_MatchesTryFormatText()
     {
         Uuid uuid = new(0x0102030405060708UL, 0x090A0B0C0D0E0F10UL);
-        string formatted;
-        using (TempString temp = uuid.FormatTemp())
-        {
-            formatted = temp.ToString();
-        }
-        await Assert.That(formatted).IsEqualTo("01020304-0506-0708-090A-0B0C0D0E0F10");
+        char[] buffer = new char[Uuid.FormattedLength];
+
+        bool ok = uuid.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(new string(buffer, 0, written)).IsEqualTo("01020304-0506-0708-090A-0B0C0D0E0F10");
+        await Assert.That(uuid.Format()).IsEqualTo("01020304-0506-0708-090A-0B0C0D0E0F10");
     }
 
     // === Round-trip ===
@@ -148,12 +149,22 @@ internal sealed class UuidTests
     // === Binary Serialization ===
 
     [Test]
-    public async Task TryGetWrittenSize_Is16()
+    public async Task TryWrite_MatchesToBytesAndFailsWhenOneByteShort()
     {
         Uuid uuid = new(0x0102030405060708UL, 0x090A0B0C0D0E0F10UL);
-        bool ok = uuid.TryGetWrittenSize(out int size);
-        await Assert.That(ok).IsTrue();
+        byte[] exact = new byte[16];
+        byte[] viaToBytes = new byte[16];
+        int size = uuid.ToBytes(viaToBytes);
+
+        bool ok = uuid.TryWrite(exact, out int written);
+        bool shortOk = uuid.TryWrite(new byte[15], out int shortWritten);
+
         await Assert.That(size).IsEqualTo(16);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(16);
+        await Assert.That(exact.AsSpan().SequenceEqual(viaToBytes)).IsTrue();
+        await Assert.That(shortOk).IsFalse();
+        await Assert.That(shortWritten).IsEqualTo(0);
     }
 
     [Test]

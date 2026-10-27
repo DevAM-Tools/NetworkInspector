@@ -5,7 +5,7 @@
 > Comprehensive reference for implementing protocol parsers in **NetworkInspector**.
 > Based on the production patterns in `FrameProtocol.cs`, `EthernetProtocol.cs`,
 > `IPv4Protocol.cs`, `IPv6Protocol.cs`, `UdpProtocol.cs`, and `VlanProtocol.cs`.
-> Target: .NET 10+, ZeroAlloc source generator, lazy field materialization architecture.
+> Target: .NET 10+, handwritten header decoding, lazy field materialization architecture.
 
 ---
 
@@ -686,14 +686,14 @@ public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in 
 
     // ── Step 3: Parse header eagerly ────────────────────────────────
     ReadOnlySpan<byte> span = data.Span;
-    if (!UdpHeader.TryParse(span, out UdpHeader header, out _))
+    if (!UdpHeader.TryParse(span, out UdpHeader header))
     {
         return ParseError.InsufficientDataWithInfo(ProtocolName, UdpHeader.HeaderSize, (ulong)data.Length);
     }
 
-    ushort srcPort = header.SrcPort.Value;
-    ushort dstPort = header.DstPort.Value;
-    ushort length = header.Length.Value;
+    ushort srcPort = header.SrcPort;
+    ushort dstPort = header.DstPort;
+    ushort length = header.Length;
 
     // ── Step 5: Compute payload bounds ──────────────────────────────
     int payloadLen = Math.Max(0, Math.Min(length - UdpHeader.HeaderSize, data.Length - UdpHeader.HeaderSize));
@@ -702,7 +702,7 @@ public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in 
         : ReadOnlyMemory<byte>.Empty;
 
     // ── Step 6: Record optional index groups ────────────────────────
-    bool checksumVerified = _VerifyChecksum && header.Checksum.Value != 0;
+    bool checksumVerified = _VerifyChecksum && header.Checksum != 0;
     if (checksumVerified)
     {
         context.RecordGroupPresence(_UdpChecksumStatusGroupId);
@@ -713,12 +713,17 @@ public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in 
     }
 
     // ── Step 7: Build summary ───────────────────────────────────────
-    // ZA.Lazy captures only value-type args — no per-packet closure allocation
-    LazyString summary = ZA.Lazy(
-        "User Datagram Protocol, Src Port: ", srcPort, ", Dst Port: ", dstPort);
+    // FormatLazy boxes the value tuple once; the static lambda captures nothing, so no closure is allocated
+    LazyString summary = LazyString.FormatLazy(
+        (srcPort, dstPort),
+        static s => string.Create(
+            CultureInfo.InvariantCulture,
+            $"User Datagram Protocol, Src Port: {s.srcPort}, Dst Port: {s.dstPort}"));
 
     // ── Step 8: Set packet info (transport-layer display) ───────────
-    parentField.SetPacketInfo(ZA.Lazy("Src Port: ", srcPort, ", Dst Port: ", dstPort));
+    parentField.SetPacketInfo(LazyString.FormatLazy(
+        (srcPort, dstPort),
+        static s => string.Create(CultureInfo.InvariantCulture, $"Src Port: {s.srcPort}, Dst Port: {s.dstPort}")));
 
     // ── Step 9: Append lazy container ───────────────────────────────
     // Store the full UDP datagram so the populator can re-parse without captured state
@@ -905,27 +910,24 @@ but populated immediately.
 
 | Concern | Technique | What it captures | Allocation |
 |---------|-----------|-----------------|------------|
-| **Summary text** | `ZA.Lazy(...)` | Small set of display values (ports, addresses) | One display-class per packet |
+| **Summary text** | `LazyString.FormatLazy(tuple, static …)` | Small set of display values (ports, addresses) | One state box per packet |
 | **Populator** | Pre-allocated `_Populator` delegate | Only `this` — re-parses from stored bytes | Zero per packet |
 | **Container value** | `FieldValue.NewBytes(headerSlice)` | Raw header bytes (`ReadOnlyMemory<byte>`) | Zero (slice of existing buffer) |
 
-The summary closure is the **only** per-packet allocation. Minimize what it captures
+The summary state box is the **only** per-packet allocation. Minimize what it captures
 — prefer small value types (ushort, byte, IPv4Address) over full header structs.
 
-**Ethernet example** — captures only the 14-byte header slice to minimize display class size:
+**Ethernet example** — captures only the two 6-byte MAC addresses and the EtherType:
 
 ```csharp
-ReadOnlyMemory<byte> hdrBytes = data[..HeaderSize];
-LazyString summary = LazyString.FormatLazy(() =>
-{
-    ReadOnlySpan<byte> s = hdrBytes.Span;
-    MacAddress lazySrc = MacAddress.FromBytes(s[6..12]);
-    MacAddress lazyDst = MacAddress.FromBytes(s[..6]);
-    ushort lazyTypeOrLen = BinaryPrimitives.ReadUInt16BigEndian(s[12..14]);
-    return lazyTypeOrLen >= MinEtherType
-        ? ZA.String("Ethernet II, Src: ", lazySrc, ", Dst: ", lazyDst)
-        : ZA.String("IEEE 802.3, Src: ", lazySrc, ", Dst: ", lazyDst);
-});
+MacAddress src = MacAddress.FromBytes(span[6..12]);
+MacAddress dst = MacAddress.FromBytes(span[..6]);
+ushort typeOrLen = BinaryPrimitives.ReadUInt16BigEndian(span[12..14]);
+LazyString summary = LazyString.FormatLazy(
+    (src, dst, isEthernetII: typeOrLen >= MinEtherType),
+    static s => string.Create(
+        CultureInfo.InvariantCulture,
+        $"{(s.isEthernetII ? "Ethernet II" : "IEEE 802.3")}, Src: {s.src}, Dst: {s.dst}"));
 ```
 
 ### 9.8 Pre-Computed Values Pattern (Parse → Populator)
@@ -1846,7 +1848,7 @@ Follow this strict priority order:
 | 1 | `DisplayTables.Get*(value)` | **Zero** | Value from precomputed static table |
 | 2 | Literal string `"constant text"` | **Zero** | Well-known constant text |
 | 3 | `$"text {var}"` in lazy populator | **Deferred** | Dynamic text inside a populator (runs only on access) |
-| 4 | `ZA.Lazy(...)` | **One display-class** per packet | Summary text, packet info |
+| 4 | `LazyString.FormatLazy(tuple, static …)` | **One state box** per packet | Summary text, packet info |
 | 5 | `$"text {var}"` in Parse() | **One string** per packet | **Avoid** — only if no other option |
 
 ### 14.2 Precomputed Display Tables
@@ -1875,44 +1877,66 @@ string hdrLen = DisplayTables.GetHeaderLengthDisplayText(len);     // "20 bytes"
 - Partial arrays for structural fields (header lengths 0–60).
 - Named entries for well-known values; fill remaining with numeric string representation.
 
-### 14.3 ZeroAlloc String Formatting (ZA.Lazy / ZA.String)
+### 14.3 Deferred text with LazyString.FormatLazy
 
-The `ZA.Lazy()` shorthand from the ZeroAlloc source generator creates a `LazyString`
-that is evaluated once on first access. `ZA.String()` writes directly into a pooled
-buffer using `ISpanFormattable.TryFormat()`, eliminating intermediate `ToString()` calls
-and boxing:
+There are three forms of display text, picked by when the text is needed:
+
+| Need | Form | Cost |
+|------|------|------|
+| A fixed literal | `new LazyString("8 bytes")` | Nothing: no deferral needed |
+| Text built from runtime values, read rarely (summary, packet info) | `LazyString.FormatLazy(tuple, static s => string.Create(…))` | One state box at parse time, one string on first read |
+| Text the field tree stores right away (eager custom text) | `string.Create(CultureInfo.InvariantCulture, $"…")` | One string at parse time |
 
 ```csharp
-// ✅ ZA.Lazy — preferred form for simple inline expressions
-LazyString summary = ZA.Lazy(
-    "User Datagram Protocol, Src Port: ", srcPort, ", Dst Port: ", dstPort);
+// Deferred: the value tuple is boxed once; the lambda is static, so no closure object exists.
+LazyString summary = LazyString.FormatLazy(
+    (srcPort, dstPort),
+    static s => string.Create(
+        CultureInfo.InvariantCulture,
+        $"User Datagram Protocol, Src Port: {s.srcPort}, Dst Port: {s.dstPort}"));
+
+// Eager: when the container stores the text immediately anyway.
+container.AppendWithCustomText(ids.Mss, FieldValue.None,
+    string.Create(CultureInfo.InvariantCulture, $"Maximum Segment Size: {value} bytes"));
 ```
 
-The Source Generator creates type-specific overloads for each combination of
-argument types, so there is no boxing or virtual dispatch.
+**Why the lambda is `static`:** a lambda that captures a local allocates a closure object on every call. A static lambda
+captures nothing; everything it needs travels in the state argument. **Why the state is a tuple:** the state is boxed
+exactly once into the deferred text, whatever its size, and the tuple element names give the lambda readable access.
+**Why `string.Create(CultureInfo.InvariantCulture, …)`:** it writes the interpolation straight into the result string
+(no scratch buffer, safe to call from inside another deferred text) and it never depends on the thread culture, so a
+`de-DE` machine shows the same decimal point as an invariant one.
 
-**Use `ZA.Lazy(...)` for:**
+**Use `FormatLazy` for:**
 - Protocol summary text (displayed in the packet list / tree root).
 - Packet info text (displayed in the info column).
 - Any text containing runtime values that is computed per packet.
 
-For complex multi-statement cases (conditionals, local variables), use
-`LazyString.FormatLazy(() => { ... return ZA.String(...); })` instead.
+**Never pass a prebuilt lazy text as the last argument of `AppendWithCustomText`** (or its prepend/insert/lazy
+siblings): that text is built in the caller and cannot be skipped on a skip-mode parse. Pass the fragments instead
+(`m.AppendWithCustomText(id, value, "Maximum Segment Size: ", value, " bytes")`). Analyzer NIGEN015 reports the
+mistake.
+
+When a hex fragment must print exactly eight uppercase digits, use `new UpperHex8(value)` (an interpolation argument and
+a custom-text fragment alike); `DisplayTables.FormatHexU32` is lowercase and carries a `0x` prefix.
 
 ### 14.4 LazyString
 
-`LazyString` defers string evaluation until first access:
+`NetworkInspector.Core.Fields.LazyString` defers string evaluation until first access:
 
 ```csharp
 // Static text — zero allocation
 new LazyString("8 bytes")
 
-// Deferred — evaluated once on first access, then cached via Interlocked.CompareExchange
-ZA.Lazy("Options: (", len, " bytes)")
+// Deferred — evaluated once on first access, then cached in place via Interlocked.CompareExchange
+LazyString.FormatLazy(len, static l => string.Create(CultureInfo.InvariantCulture, $"Options: ({l} bytes)"))
 
-// Null — absent text
+// Absent text
 LazyString.Empty
 ```
+
+The cache lives in the storage location that was read. `LazyString` is a readonly struct, so evaluating a *copy*
+caches into the copy; read through the stored field, array element, or the `FieldValue` that holds it.
 
 ### 14.5 AppendWithCustomText vs. Append
 
@@ -1947,9 +1971,10 @@ checksum.ToString("x4")
 // ❌ BAD — per-packet string allocation in Parse() for display text
 string summary = $"UDP, Src: {srcPort}, Dst: {dstPort}";  // Allocates every packet
 
-// ✅ GOOD — deferred with ZA.String (allocates only if accessed)
-LazyString summary = LazyString.FormatLazy(() =>
-    ZA.String("UDP, Src: ", srcPort, ", Dst: ", dstPort));
+// ✅ GOOD — deferred with FormatLazy (allocates the string only if accessed)
+LazyString summary = LazyString.FormatLazy(
+    (srcPort, dstPort),
+    static s => string.Create(CultureInfo.InvariantCulture, $"UDP, Src: {s.srcPort}, Dst: {s.dstPort}"));
 ```
 
 ---
@@ -2031,7 +2056,8 @@ internal static class TcpFlagsFormatter
    only the boolean bits, build a 256-entry table, and return the brackets string
    only.  The caller concatenates hex + brackets:
    ```csharp
-   ZA.Lazy(DisplayTables.FormatHexU16(flags), " ", DnsFlagsFormatter.Format(flags))
+   LazyString.FormatLazy(flags, static f => string.Create(CultureInfo.InvariantCulture,
+       $"{DisplayTables.FormatHexU16(f)} {DnsFlagsFormatter.Format(f)}"))
    ```
 
 #### Formatter placement
@@ -2133,89 +2159,80 @@ else
 
 ---
 
-## 16. Binary Header Parsing
+## 16. Binary Header Decoding by Hand
 
-### 16.1 BinaryParsable Source Generator
+### 16.1 The header struct
 
-Fixed-size protocol headers use ZeroAlloc's `[BinaryParsable]` source generator:
+Fixed-size protocol headers are `internal readonly struct`s with plain integer properties in wire order and a
+handwritten `TryParse`:
 
 ```csharp
-[BinaryParsable]
-internal readonly partial struct UdpHeader
+internal readonly struct UdpHeader
 {
-    /// <summary>Source port number.</summary>
-    public U16BE SrcPort { get; init; }
+    /// <summary>Source port number (bytes 0..1).</summary>
+    public ushort SrcPort { get; init; }
 
-    /// <summary>Destination port number.</summary>
-    public U16BE DstPort { get; init; }
+    /// <summary>Destination port number (bytes 2..3).</summary>
+    public ushort DstPort { get; init; }
 
-    /// <summary>Length of the UDP datagram (header + payload) in bytes.</summary>
-    public U16BE Length { get; init; }
+    /// <summary>Length of the UDP datagram (header + payload) in bytes (bytes 4..5).</summary>
+    public ushort Length { get; init; }
 
-    /// <summary>One's complement checksum.</summary>
-    public U16BE Checksum { get; init; }
+    /// <summary>One's complement checksum (bytes 6..7).</summary>
+    public ushort Checksum { get; init; }
 
     /// <summary>Serialized header size in bytes (8).</summary>
     internal const int HeaderSize = 8;
+
+    /// <summary>Decodes the 8-byte header; <see langword="false"/> with a default value when fewer bytes are present.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParse(ReadOnlySpan<byte> source, out UdpHeader value)
+    {
+        if (source.Length < HeaderSize)
+        {
+            value = default;
+            return false;
+        }
+
+        // Exact-size slice: the JIT knows every index below is in range and drops the bounds checks.
+        ReadOnlySpan<byte> h = source[..HeaderSize];
+        value = new UdpHeader
+        {
+            SrcPort = BinaryPrimitives.ReadUInt16BigEndian(h),
+            DstPort = BinaryPrimitives.ReadUInt16BigEndian(h[2..]),
+            Length = BinaryPrimitives.ReadUInt16BigEndian(h[4..]),
+            Checksum = BinaryPrimitives.ReadUInt16BigEndian(h[6..]),
+        };
+        return true;
+    }
 }
 ```
 
-### 16.2 Generated API
+### 16.2 The rules
+
+- **One length check, one exact-size slice, `BinaryPrimitives` reads.** Network byte order uses the `…BigEndian`
+  methods; little-endian formats use `…LittleEndian`.
+- **Offsets are literals with a comment** naming the bytes (`h[4..]` for bytes 4..5); the declaration order of the
+  properties mirrors the wire layout for the reader only.
+- **Short input is an expected failure:** `TryParse` returns `false` and a default value, never an exception. Longer
+  input is accepted and only the fixed header is read.
+- **Test every field:** a test per struct feeds bytes with a distinct value per field and compares each property, plus
+  the one-byte-short case.
+
+### 16.3 Bit fields
+
+Sub-byte fields (flags, version nibbles) are decoded with shifts and masks from the byte or word that holds them; each
+line names the bit positions:
 
 ```csharp
-// Safe parse — returns false if data is too short
-bool success = UdpHeader.TryParse(span, out UdpHeader header, out int consumed);
-
-// Serialization
-int written = header.Write(destinationSpan);
-
-// Compile-time size constant
-int size = UdpHeader.SIZE;
+byte versionAndIhl = h[0];
+Version = (byte)(versionAndIhl >> 4),      // bits 7..4
+Ihl = (byte)(versionAndIhl & 0x0F),        // bits 3..0
 ```
 
-### 16.3 Big-Endian Types
+### 16.4 Header struct conventions
 
-Network byte order fields use ZeroAlloc's endian types:
-
-| Type | Size | Access |
-|------|------|--------|
-| `U16BE` | 2 bytes | `.Value` → `ushort` |
-| `U32BE` | 4 bytes | `.Value` → `uint` |
-| `U64BE` | 8 bytes | `.Value` → `ulong` |
-| `I16BE` | 2 bytes | `.Value` → `short` |
-| `I32BE` | 4 bytes | `.Value` → `int` |
-| `I64BE` | 8 bytes | `.Value` → `long` |
-
-### 16.4 Bit Fields
-
-For sub-byte fields (flags, version nibbles), use `[BinaryField(BitCount = N)]`:
-
-```csharp
-[BinaryParsable]
-internal readonly partial struct IPv4Header
-{
-    [BinaryField(BitCount = 4)]
-    public byte Version { get; init; }
-
-    [BinaryField(BitCount = 4)]
-    public byte Ihl { get; init; }
-
-    [BinaryField(BitCount = 6)]
-    public byte Dscp { get; init; }
-
-    [BinaryField(BitCount = 2)]
-    public byte Ecn { get; init; }
-
-    public U16BE TotalLength { get; init; }
-    // ...
-}
-```
-
-The generator handles bit-level packing/unpacking automatically.
-
-### 16.5 Header Struct Conventions
-
-- Always `internal readonly partial struct`.
+- Always `internal readonly struct`.
 - Always include a `HeaderSize` / `MinHeaderSize` constant.
 - Include an ASCII-art header diagram in the XML doc comment.
 - Use `init` properties (not `set`).
@@ -2527,9 +2544,9 @@ Frame ──[frame.link_type]──► Ethernet ──[eth.type]──► IPv4/I
 
 ### Header Struct
 
-- [ ] Create `[BinaryParsable] internal readonly partial struct` for fixed-size headers
-- [ ] Use `U16BE` / `U32BE` for big-endian fields
-- [ ] Use `[BinaryField(BitCount = N)]` for sub-byte fields
+- [ ] Create an `internal readonly struct` with a handwritten `TryParse` (one length check) for fixed-size headers
+- [ ] Read big-endian fields with `BinaryPrimitives.Read…BigEndian` on an exact-size slice
+- [ ] Decode sub-byte fields with shifts and masks, one comment per field naming the bits
 - [ ] Include `HeaderSize` / `MinHeaderSize` constant
 - [ ] Include ASCII-art header diagram in XML doc
 
@@ -2541,7 +2558,7 @@ Frame ──[frame.link_type]──► Ethernet ──[eth.type]──► IPv4/I
 - [ ] Validate header integrity (version, length bounds)
 - [ ] Compute payload bounds with `Math.Max(0, ...)` guard
 - [ ] Record optional index groups conditionally
-- [ ] Build `LazyString` summary with `ZA.String()` (minimize captured state)
+- [ ] Build the `LazyString` summary with `FormatLazy` (tuple state, static lambda; minimize captured state)
 - [ ] Store header bytes in `FieldValue.NewBytes()` for lazy re-parsing
 - [ ] Append lazy container with pre-allocated `_Populator`
 - [ ] Eagerly append cross-protocol fields if needed (src/dst addresses)
@@ -2568,7 +2585,7 @@ Frame ──[frame.link_type]──► Ethernet ──[eth.type]──► IPv4/I
 ### Display Text
 
 - [ ] Precomputed static table in `DisplayTables.cs` for fixed-domain fields
-- [ ] `ZA.Lazy(...)` for dynamic summary text and packet info
+- [ ] `LazyString.FormatLazy` for dynamic summary text and packet info
 - [ ] No `string.Format()`, `$""`, or `.ToString()` on the parse hot path
 - [ ] Use `DisplayTables.FormatHexU8()` / `FormatHexU16()` for hex formatting
 - [ ] Flags container field uses a precomputed `*FlagsFormatter` class (see §14.8) with bracket-style display text (`[FLAG1, FLAG2]` or `0xNN [FLAG1, FLAG2]`)

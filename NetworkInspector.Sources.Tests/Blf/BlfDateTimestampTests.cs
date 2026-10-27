@@ -7,13 +7,13 @@ internal sealed class BlfDateTimestampTests
 {
     private static BlfDate _Date(int year, int month, int day, int hour, int minute, int second, int millisecond) => new()
     {
-        Year = new U16LE((ushort)year),
-        Month = new U16LE((ushort)month),
-        Day = new U16LE((ushort)day),
-        Hour = new U16LE((ushort)hour),
-        Minute = new U16LE((ushort)minute),
-        Second = new U16LE((ushort)second),
-        Millisecond = new U16LE((ushort)millisecond),
+        Year = (ushort)year,
+        Month = (ushort)month,
+        Day = (ushort)day,
+        Hour = (ushort)hour,
+        Minute = (ushort)minute,
+        Second = (ushort)second,
+        Millisecond = (ushort)millisecond,
     };
 
     [Test]

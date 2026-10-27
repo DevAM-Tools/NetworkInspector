@@ -243,14 +243,16 @@ internal sealed class TimestampTests
     }
 
     [Test]
-    public async Task FormatTemp_ProducesCorrectString()
+    public async Task Format_MatchesTryFormatText()
     {
-        string formatted;
-        using (TempString temp = default(Timestamp).FormatTemp())
-        {
-            formatted = temp.ToString();
-        }
-        await Assert.That(formatted).IsEqualTo("1970-01-01T00:00:00.000000000Z");
+        Timestamp ts = default;
+        char[] buffer = new char[Timestamp.MaxFormattedLength];
+
+        bool ok = ts.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(new string(buffer, 0, written)).IsEqualTo("1970-01-01T00:00:00.000000000Z");
+        await Assert.That(ts.Format()).IsEqualTo("1970-01-01T00:00:00.000000000Z");
     }
 
     // === Arithmetic ===
@@ -346,12 +348,19 @@ internal sealed class TimestampTests
     // === Binary Serialization ===
 
     [Test]
-    public async Task TryGetWrittenSize_Is8()
+    public async Task TryWrite_WritesEightBytesAndFailsWhenOneByteShort()
     {
         Timestamp ts = Timestamp.FromNanos(42L);
-        bool ok = ts.TryGetWrittenSize(out int size);
+        byte[] exact = new byte[8];
+
+        bool ok = ts.TryWrite(exact, out int written);
+        bool shortOk = ts.TryWrite(new byte[7], out int shortWritten);
+
         await Assert.That(ok).IsTrue();
-        await Assert.That(size).IsEqualTo(8);
+        await Assert.That(written).IsEqualTo(8);
+        await Assert.That(BinaryPrimitives.ReadInt64BigEndian(exact)).IsEqualTo(42L);
+        await Assert.That(shortOk).IsFalse();
+        await Assert.That(shortWritten).IsEqualTo(0);
     }
 
     [Test]

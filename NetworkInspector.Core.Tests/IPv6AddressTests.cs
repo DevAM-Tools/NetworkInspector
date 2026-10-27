@@ -76,14 +76,13 @@ internal sealed class IPv6AddressTests
         await Assert.That(written).IsEqualTo(0);
     }
 
-    // === IBinarySerializable ===
+    // === Binary write ===
 
     [Test]
-    public async Task TryGetWrittenSize()
+    public async Task ToBytes_ReturnsWrittenSize()
     {
         IPv6Address ip = new(1, 2);
-        bool ok = ip.TryGetWrittenSize(out int size);
-        await Assert.That(ok).IsTrue();
+        int size = ip.ToBytes(new byte[16]);
         await Assert.That(size).IsEqualTo(16);
     }
 
@@ -269,17 +268,11 @@ internal sealed class IPv6AddressTests
     }
 
     [Test]
-    public async Task FormatTemp()
+    public async Task Format_ReturnsExpectedText()
     {
         IPv6Address ip = new(0, 1);
 
-        // The TempString owns the thread-static char buffer until it is disposed; read the text before any await and
-        // dispose on this thread, otherwise the buffer stays locked for every later test on this pool thread.
-        string formatted;
-        using (TempString temp = ip.FormatTemp())
-        {
-            formatted = temp.ToString();
-        }
+        string formatted = ip.Format();
 
         await Assert.That(formatted).IsEqualTo("::1");
     }
@@ -344,7 +337,7 @@ internal sealed class IPv6AddressTests
         await Assert.That(written).IsEqualTo(0);
     }
 
-    // === IStringSize ===
+    // === TryGetStringSize ===
 
     [Test]
     public async Task TryGetStringSize()

@@ -98,7 +98,7 @@ public readonly struct IPv6FragmentExtensionLayer :
             FragmentOffsetAndFlags = (ushort)0, // patched per fragment
             Identification = _Identification,
         };
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

@@ -1,9 +1,6 @@
 <!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <PackageReference Include="ZeroAlloc" />
-  </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Testing.Traces\NetworkInspector.Testing.Traces.csproj" />
     <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />
     <ProjectReference Include="..\NetworkInspector.Sources\NetworkInspector.Sources.csproj" />

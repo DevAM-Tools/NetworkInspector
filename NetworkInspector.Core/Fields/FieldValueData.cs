@@ -41,7 +41,7 @@ namespace NetworkInspector.Core.Fields;
 /// result wins and all readers see that same string (see <c>NewLazyString</c>).</para>
 /// </summary>
 [StructLayout(LayoutKind.Auto)]
-public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<FieldValueData>, ISpanFormattable, IUtf8SpanFormattable, IStringSize
+public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<FieldValueData>, ISpanFormattable, IUtf8SpanFormattable
 {
     // Three fields: 8 + 8 + 8 = 24 bytes total on x64.
     // _Data1 is used only for 128-bit types (IPv6Address, Uuid); zero for all others.
@@ -778,32 +778,59 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
     }
 
     /// <summary>
-    /// Returns the formatted string representation of the value.
-    /// Delegates to <see cref="ToTempString"/> which uses <see cref="ZA.String(FieldValueData)"/>
-    /// with <see cref="CultureInfo.InvariantCulture"/> for numeric formatting.
-    /// String values return the stored string itself (no allocation); every other type allocates exactly one result string,
-    /// the formatting itself runs in a pooled thread-static buffer.
+    /// Returns the display text of the value. String values return the stored string (no allocation); a lazy string
+    /// is evaluated in place and cached; every other type allocates exactly the result string.
     /// </summary>
+    /// <remarks>
+    /// Scalars are formatted into a <see cref="_StackFormatLimit"/>-char stack buffer and copied once into the result; a
+    /// Bytes value gets an exact-size <see cref="string.Create{TState}"/> so the hex text (3 chars per byte minus one) is
+    /// written straight into the string. Both paths are re-entrant and keep no per-thread state: this replaced a
+    /// thread-static scratch buffer (2 Mi chars per thread) whose nested use allocated a second one. Numbers always use
+    /// <see cref="CultureInfo.InvariantCulture"/>.
+    /// </remarks>
     public override string ToString()
     {
-        // Fast path: None
-        if (_Ref is null)
+        object? refValue = _Ref;
+
+        // Fast paths: no formatting needed. The lazy string is evaluated through the box so every copy shares the cache.
+        if (refValue is null)
         {
             return string.Empty;
         }
-        // Fast path: plain string — return stored string directly, no formatting needed
-        if (_Ref is string str)
+        if (refValue is string str)
         {
             return str;
         }
-        // Fast path: boxed LazyString — evaluate via Unsafe.Unbox so caching persists to the heap-resident struct
-        if (_Ref is LazyString)
+        if (refValue is LazyString)
         {
-            ref LazyString ls = ref Unsafe.Unbox<LazyString>(_Ref!);
+            ref LazyString ls = ref Unsafe.Unbox<LazyString>(refValue!);
             return ls.AsString;
         }
-        using TempString temp = ToTempString();
-        return temp.ToString();
+
+        // Bytes: the hex text can be large (3n - 1 chars), so write it directly into an exactly sized string. A length
+        // whose hex form does not fit an int is reported by TryGetStringSize; the throw below marks that broken
+        // invariant for a caller that skipped the size hint, not an expected failure.
+        if (refValue is byte[])
+        {
+            if (!_TryGetHexFormattedByteCharCount((int)(_Data >> 32), out int hexChars))
+            {
+                throw new InvalidOperationException("Bytes value too long to format as text (the hex form exceeds int.MaxValue characters).");
+            }
+
+            // string.Create hands the callback a span of exactly hexChars characters, which is the size the formatter needs, so
+            // its result is always true and is not checked (a callback cannot report failure to string.Create anyway).
+            return hexChars == 0
+                ? string.Empty
+                : string.Create(hexChars, this, static (span, self) => self._TryFormatBytes(span, out _));
+        }
+
+        // Scalars: every default text fits _StackFormatLimit; one copy into the result string.
+        Span<char> buffer = stackalloc char[_StackFormatLimit];
+        if (!TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture))
+        {
+            throw new InvalidOperationException("Scalar text exceeds the stack format limit; the limit is wrong.");
+        }
+        return new string(buffer[..written]);
     }
 
     /// <summary>Returns the formatted string representation of the value. Both arguments are ignored (see <see cref="ToString()"/>).</summary>
@@ -811,14 +838,15 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
 
     #endregion
 
-    #region IStringSize
+    #region String Size
 
     /// <summary>
     /// Tries to determine the number of characters needed to format this value.
     /// Returns <c>true</c> for types where the size can be determined without formatting;
     /// returns <c>false</c> for F64 whose character count depends on the actual value, and for a Bytes value whose
     /// hex form would not fit in a 32-bit length.
-    /// Dispatches directly on <c>_Ref</c> to avoid double classification.
+    /// Dispatches directly on <c>_Ref</c> to avoid double classification. Exporters call it to presize their buffers;
+    /// it is a plain method (no interface) because every caller names the concrete type.
     /// </summary>
     /// <remarks>
     /// The size is exact for most types but a tight upper bound for I64 and U64 (the maximum width, not the digit count), so the
@@ -851,7 +879,7 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         }
         if (ReferenceEquals(refValue, MacAddressMarker.Instance))
         {
-            return new MacAddress(_Data).TryGetStringSize(format, provider, out size);
+            return MacAddress.TryGetStringSize(format, provider, out size);
         }
         if (ReferenceEquals(refValue, IPv4AddressMarker.Instance))
         {
@@ -859,11 +887,11 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         }
         if (ReferenceEquals(refValue, Eui64Marker.Instance))
         {
-            return new Eui64(_Data).TryGetStringSize(format, provider, out size);
+            return Eui64.TryGetStringSize(format, provider, out size);
         }
         if (ReferenceEquals(refValue, TimestampMarker.Instance))
         {
-            return new Timestamp((long)_Data).TryGetStringSize(format, provider, out size);
+            return Timestamp.TryGetStringSize(format, provider, out size);
         }
         if (ReferenceEquals(refValue, IPv6AddressMarker.Instance))
         {
@@ -871,7 +899,7 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         }
         if (ReferenceEquals(refValue, UuidMarker.Instance))
         {
-            return new Values.Uuid(_Data, _Data1).TryGetStringSize(format, provider, out size);
+            return Values.Uuid.TryGetStringSize(format, provider, out size);
         }
         if (refValue is string str)
         {
@@ -893,48 +921,6 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
         // Unreachable for instances built through the factory methods; mirrors the None answer of _ClassifyRef.
         size = 0;
         return true;
-    }
-
-    #endregion
-
-    #region Zero-allocation formatting
-
-    /// <summary>
-    /// Returns a <see cref="TempString"/> containing the formatted value.
-    /// Uses <see cref="ZA.String(FieldValueData)"/> for zero-allocation formatting via
-    /// the <see cref="ISpanFormattable"/> implementation.
-    /// The caller is responsible for disposing the returned <see cref="TempString"/>.
-    /// </summary>
-    public TempString ToTempString()
-    {
-        // Fast path: None — empty result without buffer acquisition ([] is the shared empty array, so nothing is allocated
-        // and Dispose has no thread-static buffer to release).
-        if (_Ref is null)
-        {
-            return new TempString([], 0, false);
-        }
-        // Fast path: plain string — copy chars into the ZeroAlloc thread-static buffer directly. A nested TempString on the
-        // same thread makes AcquireCharBuffer hand out a heap buffer instead (isThreadStatic is false then), which TempString
-        // handles; the caller's Dispose releases the thread-static buffer. The acquire epoch must be passed to TempString: a
-        // thread-static owner built without it (epoch 0) never matches on Dispose, so the buffer would stay locked on that thread
-        // for good and every later TempString there would silently fall back to a heap allocation.
-        if (_Ref is string str)
-        {
-            char[] buffer = ZeroAllocHelper.AcquireCharBuffer(str.Length, true, out bool isThreadStatic, out int epoch);
-            str.CopyTo(buffer);
-            return new TempString(buffer, str.Length, isThreadStatic, epoch);
-        }
-        // Fast path: boxed LazyString — evaluate via Unsafe.Unbox so caching persists to the heap-resident struct, then copy
-        if (_Ref is LazyString)
-        {
-            ref LazyString ls = ref Unsafe.Unbox<LazyString>(_Ref!);
-            string evaluated = ls.AsString;
-            char[] lazyBuffer = ZeroAllocHelper.AcquireCharBuffer(evaluated.Length, true, out bool lazyIsThreadStatic, out int lazyEpoch);
-            evaluated.CopyTo(lazyBuffer);
-            return new TempString(lazyBuffer, evaluated.Length, lazyIsThreadStatic, lazyEpoch);
-        }
-        // General path: use ZA.String which leverages ISpanFormattable + IStringSize
-        return ZA.String(this);
     }
 
     #endregion
@@ -1073,6 +1059,12 @@ public readonly struct FieldValueData : IEquatable<FieldValueData>, IComparable<
     #endregion
 
     #region Shared helpers
+
+    // Largest default text of any scalar field type: IPv6 39, UUID 36, Timestamp 30, I64 20 (U64 20), F64 at most 24
+    // ('R' round-trip), Bool 5. Bytes and strings never take the stack path. Constant of the formats, not a tunable:
+    // it is not an external-input limit, so it is neither configurable nor a posture decision. 64 chars = 128 bytes of
+    // stack per ToString call, small enough to be safe at any call depth.
+    private const int _StackFormatLimit = 64;
 
     /// <summary>Extracts the bytes span from a Bytes-typed value. Only valid when <c>_Ref is byte[]</c>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

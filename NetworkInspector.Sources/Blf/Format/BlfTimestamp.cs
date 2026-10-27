@@ -103,13 +103,13 @@ internal static class BlfTimestamp
     {
         ArgumentNullException.ThrowIfNull(dateTimeZone);
 
-        int year = date.Year.Value;
-        int month = date.Month.Value;
-        int day = date.Day.Value;
-        int hour = date.Hour.Value;
-        int minute = date.Minute.Value;
-        int second = date.Second.Value;
-        int millisecond = date.Millisecond.Value;
+        int year = date.Year;
+        int month = date.Month;
+        int day = date.Day;
+        int hour = date.Hour;
+        int minute = date.Minute;
+        int second = date.Second;
+        int millisecond = date.Millisecond;
 
         // Validate ranges; an all-zero or out-of-range BlfDate yields epoch=0.
         if (year < 1970 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31)

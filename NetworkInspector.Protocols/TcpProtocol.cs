@@ -735,7 +735,7 @@ public sealed partial class TcpProtocol : IProtocol
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
         }
 
-        if (!TcpHeader.TryParse(tcpData.Span, out TcpHeader header, out _))
+        if (!TcpHeader.TryParse(tcpData.Span, out TcpHeader header))
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, TcpHeader.MinSize, (ulong)tcpData.Length);
         }
@@ -746,8 +746,8 @@ public sealed partial class TcpProtocol : IProtocol
         // _RegisterFieldsCustom; no duplicate tcp.port field node is appended.
 
         // Checksum: displayed as hex from the precomputed table (no per-packet string formatting).
-        string csumText = DisplayTables.FormatHexU16(header.Checksum.Value);
-        container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(header.Checksum.Value), csumText);
+        string csumText = DisplayTables.FormatHexU16(header.Checksum);
+        container.AppendWithCustomText(_ChecksumFieldId, FieldValue.NewU64(header.Checksum), csumText);
 
         // Optional verification. Field order matters: tcp.checksum.status directly follows tcp.checksum (the index group is
         // recorded in _ParseBody under the same _VerifyChecksum condition, so the setting must not change between the two).
@@ -770,8 +770,8 @@ public sealed partial class TcpProtocol : IProtocol
 
         // tcp.seq and tcp.ack are appended eagerly in Parse so relative values survive replay.
         // tcp.seq_raw / tcp.ack_raw stay here as the wire values.
-        container.Append(_SeqRawFieldId, FieldValue.NewU64(header.SeqNumber.Value));
-        container.Append(_AckRawFieldId, FieldValue.NewU64(header.AckNumber.Value));
+        container.Append(_SeqRawFieldId, FieldValue.NewU64(header.SeqNumber));
+        container.Append(_AckRawFieldId, FieldValue.NewU64(header.AckNumber));
 
         container.Append(_HdrLenFieldId, FieldValue.NewU64((ulong)headerLen));
 
@@ -794,8 +794,8 @@ public sealed partial class TcpProtocol : IProtocol
         container.Append(_FlagsNsFieldId, FieldValue.NewBool(header.NsFlag != 0));
         container.Append(_FlagsResFieldId, FieldValue.NewU64(header.Reserved));
 
-        container.Append(_WindowFieldId, FieldValue.NewU64(header.WindowSize.Value));
-        container.Append(_UrgentPointerFieldId, FieldValue.NewU64(header.UrgentPointer.Value));
+        container.Append(_WindowFieldId, FieldValue.NewU64(header.WindowSize));
+        container.Append(_UrgentPointerFieldId, FieldValue.NewU64(header.UrgentPointer));
 
         // TCP Options (between fixed 20-byte header and payload). The span handed to the parser ends at the header
         // length, so option parsing is confined to the header and cannot run into the payload.
@@ -806,7 +806,8 @@ public sealed partial class TcpProtocol : IProtocol
 
             MutField optionsContainer = container.AppendWithCustomText(
                 _OptionsFieldId, FieldValue.None,
-                (string)ZA.String("Options: (", optionsLen, " bytes)"));
+                // Eager text (one string): the field tree stores it right away; InvariantCulture per the repository rule.
+                string.Create(CultureInfo.InvariantCulture, $"Options: ({optionsLen} bytes)"));
 
             TcpOptionsParser.Parse(optionsData, in optionsContainer, in _OptionsFieldIds);
         }
@@ -989,7 +990,7 @@ public sealed partial class TcpProtocol : IProtocol
         context.RecordGroupPresence(_TcpAckrawGroupId);
 
         ReadOnlySpan<byte> span = data.Span;
-        if (!TcpHeader.TryParse(span, out TcpHeader header, out _))
+        if (!TcpHeader.TryParse(span, out TcpHeader header))
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, TcpHeader.MinSize, (ulong)data.Length);
         }
@@ -1007,8 +1008,8 @@ public sealed partial class TcpProtocol : IProtocol
             return ParseError.InsufficientDataWithInfo(ProtocolName, (ulong)headerLen, (ulong)data.Length);
         }
 
-        ushort srcPort = header.SrcPort.Value;
-        ushort dstPort = header.DstPort.Value;
+        ushort srcPort = header.SrcPort;
+        ushort dstPort = header.DstPort;
         byte flags = header.Flags;
         int payloadLen = Math.Max(0, data.Length - headerLen);
 
@@ -1030,14 +1031,17 @@ public sealed partial class TcpProtocol : IProtocol
         // captures only the value-typed ports, so the text is built only if somebody reads the info column.
         string flagsText = TcpFlagsFormatter.Format(flags);
 
-        parentField.SetPacketInfo(ZA.Lazy(srcPort, " → ", dstPort));
+        parentField.SetPacketInfo(LazyString.FormatLazy(
+            (srcPort, dstPort),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.srcPort} → {s.dstPort}")));
 
         // Store full TCP segment (header + payload) for the lazy populator. The custom representation ("32 bytes") is only
         // built when the packet wants custom text (tree or cache needs it); on a skip-mode parse this saves the allocation.
         FieldValue containerValue = FieldValue.NewBytes(data);
         if (parentField.WantsCustomText(_ProtocolFieldId))
         {
-            containerValue = containerValue.WithCustomRepresentation(ZA.Lazy(headerLen, " bytes"));
+            containerValue = containerValue.WithCustomRepresentation(LazyString.FormatLazy(
+                headerLen, static s => string.Create(CultureInfo.InvariantCulture, $"{s} bytes")));
         }
 
         // The title line differs only in the ", Len: " part; two call sites keep the format arguments typed (no boxing, no
@@ -1063,12 +1067,12 @@ public sealed partial class TcpProtocol : IProtocol
 
         // ── TCP analysis: stateful on the first parse, effect replay afterwards ───────────────────
         TcpAnalysisResult analysis = _ResolveAnalysis(
-            in parentField, srcPort, dstPort, header.SeqNumber.Value, header.AckNumber.Value,
-            flags, header.WindowSize.Value, payloadLen, span, in context, layerKey, isReplay);
+            in parentField, srcPort, dstPort, header.SeqNumber, header.AckNumber,
+            flags, header.WindowSize, payloadLen, span, in context, layerKey, isReplay);
 
         // Relative numbers are shown only when the analysis knows the ISN; otherwise the wire value is displayed.
-        uint shownSeq = analysis.SequenceIsRelative ? analysis.RelativeSeq : header.SeqNumber.Value;
-        uint shownAck = analysis.AckIsRelative ? analysis.RelativeAck : header.AckNumber.Value;
+        uint shownSeq = analysis.SequenceIsRelative ? analysis.RelativeSeq : header.SeqNumber;
+        uint shownAck = analysis.AckIsRelative ? analysis.RelativeAck : header.AckNumber;
         tcpContainer.Append(_SeqFieldId, FieldValue.NewU64(shownSeq));
         tcpContainer.Append(_AckFieldId, FieldValue.NewU64(shownAck));
 
@@ -1133,7 +1137,7 @@ public sealed partial class TcpProtocol : IProtocol
         {
             ReadOnlyMemory<byte> payload = data[headerLen..];
             return _DispatchTcpPayload(
-                in parentField, srcPort, dstPort, header.SeqNumber.Value, payload, data.Length, in context, in analysis, layerKey, isReplay);
+                in parentField, srcPort, dstPort, header.SeqNumber, payload, data.Length, in context, in analysis, layerKey, isReplay);
         }
 
         // No payload path: record analysis-only effects so a replay reproduces identical fields.

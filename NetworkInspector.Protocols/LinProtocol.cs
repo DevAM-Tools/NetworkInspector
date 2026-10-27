@@ -272,7 +272,8 @@ public sealed partial class LinProtocol : IProtocol
             1 => "Event-triggered",
             2 => "Sporadic",
             _MsgTypeEvent => "Event",
-            _ => ZA.String("Unknown (", msgType, ")")
+            // Eager text (one string): the field tree stores it right away; InvariantCulture per the repository rule.
+            _ => string.Create(CultureInfo.InvariantCulture, $"Unknown ({msgType})")
         };
         container.AppendWithCustomText(_MessageTypeFieldId, FieldValue.NewString(msgTypeText), msgTypeText);
 

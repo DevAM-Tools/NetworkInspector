@@ -87,14 +87,14 @@ public readonly struct EthernetLayer :
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteHeader(scoped Span<byte> dst)
     {
-        // Use the [BinaryWritable]-generated TryWrite for zero-allocation serialization.
+        // Handwritten TryWrite: one length check, fixed-offset stores.
         EthernetHeader hdr = new()
         {
             DstMac = _DstMac,
             SrcMac = _SrcMac,
             EtherType = _ExplicitEtherType, // 0 = will be patched by PatchNextProtocol
         };
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

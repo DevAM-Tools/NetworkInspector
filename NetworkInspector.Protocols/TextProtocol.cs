@@ -53,7 +53,8 @@ public sealed partial class TextProtocol : IProtocol
         context.RecordProtocolPresence(_ProtocolId);
         context.RecordGroupPresence(_TextGroupId);
 
-        parentField.SetPacketInfo(ZA.Lazy("Text"));
+        // A literal needs no deferral at all.
+        parentField.SetPacketInfo(new LazyString("Text"));
 
         // Decode the whole payload in one pass. The replacement behaviour of Encoding.UTF8 is what makes arbitrary bytes safe.
         string text = Encoding.UTF8.GetString(data.Span);

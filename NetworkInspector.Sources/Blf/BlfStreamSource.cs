@@ -433,7 +433,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             return false;
         }
 
-        if (!BlfBlockHeader.TryParse(headerSpan, out BlfBlockHeader blockHeader, out _))
+        if (!BlfBlockHeader.TryParse(headerSpan, out BlfBlockHeader blockHeader))
         {
             _HandleSkip(new FrameReadErrorEventArgs
             {
@@ -445,9 +445,9 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             return false;
         }
 
-        ushort headerSize = blockHeader.HeaderSize.Value;
-        uint objectLength = blockHeader.ObjectLength.Value;
-        uint objectType = blockHeader.ObjectType.Value;
+        ushort headerSize = blockHeader.HeaderSize;
+        uint objectLength = blockHeader.ObjectLength;
+        uint objectType = blockHeader.ObjectType;
 
         // object_length comes from the (untrusted) stream and decides how many bytes are buffered next. Skip rule as in
         // BlfBlockHeader.TryGetSkipDistance, so file and stream readers agree on object boundaries. The cap below is the
@@ -547,7 +547,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             return;
         }
 
-        if (!BlfContainerHeader.TryParse(objectData[containerHeaderOffset..], out BlfContainerHeader containerHeader, out _))
+        if (!BlfContainerHeader.TryParse(objectData[containerHeaderOffset..], out BlfContainerHeader containerHeader))
         {
             _CarryOver = null;
             _HandleSkip(new FrameReadErrorEventArgs
@@ -560,8 +560,8 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             return;
         }
 
-        ushort compressionMethod = containerHeader.CompressionMethod.Value;
-        uint uncompressedSize = containerHeader.UncompressedSize.Value;
+        ushort compressionMethod = containerHeader.CompressionMethod;
+        uint uncompressedSize = containerHeader.UncompressedSize;
 
         // Compressed/raw payload starts after block header + container header.
         ReadOnlySpan<byte> payloadData = objectData.Length > payloadOffset

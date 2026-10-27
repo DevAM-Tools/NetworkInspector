@@ -397,7 +397,7 @@ public sealed class Packet
     /// The packet info/summary string.
     /// <para>
     /// When <see cref="PacketProtocol"/> has finished parsing, reads from the
-    /// <c>packet.info</c> field whose value is a boxed <see cref="ZeroAlloc.LazyString"/> —
+    /// <c>packet.info</c> field whose value is a boxed <see cref="LazyString"/> —
     /// the summary string is evaluated and cached in-heap on first access.
     /// Before the field exists (during Parse) falls back to the side-channel
     /// <see cref="InfoLazy"/> LazyString directly.
@@ -1309,7 +1309,7 @@ public sealed class Packet
     /// <summary>
     /// The raw <see cref="LazyString"/> set by sub-protocols during parsing.
     /// Read by <see cref="Protocols.PacketProtocol"/> to create the <c>packet.info</c> field
-    /// value (boxed <see cref="ZeroAlloc.LazyString"/>) without evaluating the factory.
+    /// value (boxed <see cref="LazyString"/>) without evaluating the factory.
     /// </summary>
     internal LazyString InfoLazy { get; set; }
 
@@ -1317,7 +1317,7 @@ public sealed class Packet
     /// Records the storage index of the <c>packet.info</c> FieldBody.
     /// Called by <see cref="Protocols.PacketProtocol"/> after the field is appended so that
     /// subsequent reads of <see cref="Info"/> go through the field's
-    /// <see cref="ZeroAlloc.LazyString"/> for in-heap cached lazy evaluation.
+    /// <see cref="LazyString"/> for in-heap cached lazy evaluation.
     /// </summary>
     internal void SetInfoFieldIndex(ushort index)
     {
@@ -2343,9 +2343,9 @@ public sealed class Packet
             return ex.Message;
         }
 
-        // ZeroAlloc: concatenate message + newline + stack trace without intermediate allocations.
-        using TempString temp = ZA.String(ex.Message, "\n", ex.StackTrace);
-        return temp.ToString();
+        // One concatenation, one result string. This is an error path (a protocol threw), not a hot path, so the plain
+        // string.Concat is the right trade-off: it replaced a scratch-buffer detour that allocated a multi-megabyte array.
+        return string.Concat(ex.Message, "\n", ex.StackTrace);
     }
 
     // ── Shared lifecycle helpers ──────────────────────────────────────────────────────────────────

@@ -456,7 +456,7 @@ internal sealed class ValueTypeTests
     public async Task Timestamp_TryGetStringSize_IsAlways30()
     {
         Timestamp ts = Timestamp.FromSecs(1_000_000);
-        bool success = ts.TryGetStringSize(default, null, out int size);
+        bool success = Timestamp.TryGetStringSize(default, null, out int size);
         await Assert.That(success).IsTrue();
         await Assert.That(size).IsEqualTo(30);
     }
@@ -464,11 +464,10 @@ internal sealed class ValueTypeTests
     // === MacAddress extended coverage ===
 
     [Test]
-    public async Task MacAddress_TryGetWrittenSize()
+    public async Task MacAddress_ToBytes_ReturnsWrittenSize()
     {
         MacAddress mac = new(0x001122334455);
-        bool ok = mac.TryGetWrittenSize(out int size);
-        await Assert.That(ok).IsTrue();
+        int size = mac.ToBytes(new byte[6]);
         await Assert.That(size).IsEqualTo(6);
     }
 
@@ -526,17 +525,11 @@ internal sealed class ValueTypeTests
     }
 
     [Test]
-    public async Task MacAddress_FormatTemp()
+    public async Task MacAddress_Format_ReturnsExpectedText()
     {
         MacAddress mac = MacAddress.FromBytes([0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45]);
 
-        // The TempString owns the thread-static char buffer until it is disposed; read the text before any await and
-        // dispose on this thread, otherwise the buffer stays locked for every later test on this pool thread.
-        string formatted;
-        using (TempString temp = mac.FormatTemp())
-        {
-            formatted = temp.ToString();
-        }
+        string formatted = mac.Format();
 
         await Assert.That(formatted).IsEqualTo("AB:CD:EF:01:23:45");
     }
@@ -545,7 +538,7 @@ internal sealed class ValueTypeTests
     public async Task MacAddress_TryGetStringSize()
     {
         MacAddress mac = new(1);
-        bool ok = mac.TryGetStringSize(default, null, out int size);
+        bool ok = MacAddress.TryGetStringSize(default, null, out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(MacAddress.FormattedLength);
     }
@@ -625,11 +618,10 @@ internal sealed class ValueTypeTests
     // === IPv4Address extended coverage ===
 
     [Test]
-    public async Task IPv4Address_TryGetWrittenSize()
+    public async Task IPv4Address_ToBytes_ReturnsWrittenSize()
     {
         IPv4Address ip = new(0xC0A80001);
-        bool ok = ip.TryGetWrittenSize(out int size);
-        await Assert.That(ok).IsTrue();
+        int size = ip.ToBytes(new byte[4]);
         await Assert.That(size).IsEqualTo(4);
     }
 
@@ -687,17 +679,11 @@ internal sealed class ValueTypeTests
     }
 
     [Test]
-    public async Task IPv4Address_FormatTemp()
+    public async Task IPv4Address_Format_ReturnsExpectedText()
     {
         IPv4Address ip = IPv4Address.FromBytes([10, 0, 0, 1]);
 
-        // The TempString owns the thread-static char buffer until it is disposed; read the text before any await and
-        // dispose on this thread, otherwise the buffer stays locked for every later test on this pool thread.
-        string formatted;
-        using (TempString temp = ip.FormatTemp())
-        {
-            formatted = temp.ToString();
-        }
+        string formatted = ip.Format();
 
         await Assert.That(formatted).IsEqualTo("10.0.0.1");
     }
@@ -803,10 +789,10 @@ internal sealed class ValueTypeTests
     }
 
     [Test]
-    public async Task Timestamp_TryGetWrittenSize()
+    public async Task Timestamp_TryWrite_ReportsEightBytes()
     {
         Timestamp ts = Timestamp.FromSecs(0);
-        bool ok = ts.TryGetWrittenSize(out int size);
+        bool ok = ts.TryWrite(new byte[8], out int size);
         await Assert.That(ok).IsTrue();
         await Assert.That(size).IsEqualTo(8);
     }
@@ -866,17 +852,11 @@ internal sealed class ValueTypeTests
     }
 
     [Test]
-    public async Task Timestamp_FormatTemp()
+    public async Task Timestamp_Format_ReturnsExpectedText()
     {
         Timestamp ts = Timestamp.FromSecs(0);
 
-        // The TempString owns the thread-static char buffer until it is disposed; read the text before any await and
-        // dispose on this thread, otherwise the buffer stays locked for every later test on this pool thread.
-        string formatted;
-        using (TempString temp = ts.FormatTemp())
-        {
-            formatted = temp.ToString();
-        }
+        string formatted = ts.Format();
 
         await Assert.That(formatted).IsEqualTo("1970-01-01T00:00:00.000000000Z");
     }

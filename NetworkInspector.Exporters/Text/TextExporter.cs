@@ -538,7 +538,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IDis
 
         // 3. Fallback: ToString() — one allocation, covers exotic or future value types, and is reached when the
         //    value cannot report its size or formatting into the buffer failed.
-        // FieldValue.ToString() uses InvariantCulture via FieldValueData.ToTempString() / ZA.String.
+        // FieldValue.ToString() → FieldValueData.ToString() (InvariantCulture, stack buffer / exact-size string).
         _WriteString(_TruncateText(field.Value.ToString(), _MaxTextLength));
     }
 

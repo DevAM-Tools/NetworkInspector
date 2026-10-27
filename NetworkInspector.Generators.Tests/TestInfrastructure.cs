@@ -346,14 +346,19 @@ internal static class TestInfrastructure
     }
 
     /// <summary>
-    /// Stubs for <see cref="ZaLazyAppendDiagnostics"/> tests: MutField custom-text overloads and ZA.Lazy.
+    /// Stubs for <see cref="LazyAppendDiagnostics"/> tests: MutField custom-text overloads and LazyString.
     /// </summary>
-    public const string ZaLazyAppendStubs = """
+    public const string LazyAppendStubs = """
         namespace NetworkInspector.Core.Fields
         {
             public readonly struct FieldId { }
             public readonly struct FieldValue { public static FieldValue None => default; }
-            public readonly struct LazyString { }
+            public readonly struct LazyString
+            {
+                public LazyString(string value) { }
+                public static LazyString Lazy(System.Func<string> factory) => default;
+                public static LazyString FormatLazy<T>(T state, System.Func<T, string> formatter) => default;
+            }
             public readonly struct MutField
             {
                 public MutField AppendWithCustomText(FieldId id, FieldValue v, LazyString t) => this;
@@ -361,23 +366,18 @@ internal static class TestInfrastructure
                 public void SetPacketInfo(LazyString t) { }
             }
         }
-        public static class ZA
-        {
-            public static NetworkInspector.Core.Fields.LazyString Lazy(object a, object b) => default;
-            public static NetworkInspector.Core.Fields.LazyString LazyInterpolated(object a) => default;
-        }
         """;
 
     /// <summary>
-    /// Combines <see cref="AttributeStubs"/>, <see cref="ZaLazyAppendStubs"/>, and the caller source,
-    /// then runs <see cref="ZaLazyAppendDiagnostics"/> (not <see cref="ProtocolGenerator"/>).
+    /// Combines <see cref="AttributeStubs"/>, <see cref="LazyAppendStubs"/>, and the caller source,
+    /// then runs <see cref="LazyAppendDiagnostics"/> (not <see cref="ProtocolGenerator"/>).
     /// </summary>
-    public static GeneratorDriverRunResult RunZaLazyDiagnostics(string source)
+    public static GeneratorDriverRunResult RunLazyAppendDiagnostics(string source)
     {
         SyntaxTree[] trees =
         [
             CSharpSyntaxTree.ParseText(AttributeStubs),
-            CSharpSyntaxTree.ParseText(ZaLazyAppendStubs),
+            CSharpSyntaxTree.ParseText(LazyAppendStubs),
             CSharpSyntaxTree.ParseText(source),
         ];
 
@@ -387,7 +387,7 @@ internal static class TestInfrastructure
             _DefaultReferences,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
-        ZaLazyAppendDiagnostics generator = new();
+        LazyAppendDiagnostics generator = new();
         GeneratorDriver driver = CSharpGeneratorDriver.Create(generator);
         driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out _, out _);
         return driver.GetRunResult();

@@ -108,15 +108,16 @@ internal sealed class MacAddressTests
     }
 
     [Test]
-    public async Task FormatTemp_ProducesCorrectString()
+    public async Task Format_MatchesTryFormatText()
     {
         MacAddress addr = new(0x001122334455UL);
-        string formatted;
-        using (TempString temp = addr.FormatTemp())
-        {
-            formatted = temp.ToString();
-        }
-        await Assert.That(formatted).IsEqualTo("00:11:22:33:44:55");
+        char[] buffer = new char[MacAddress.FormattedLength];
+
+        bool ok = addr.TryFormat(buffer, out int written, default, CultureInfo.InvariantCulture);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(new string(buffer, 0, written)).IsEqualTo("00:11:22:33:44:55");
+        await Assert.That(addr.Format()).IsEqualTo("00:11:22:33:44:55");
     }
 
     // === Round-trip ===
@@ -172,12 +173,22 @@ internal sealed class MacAddressTests
     // === Binary Serialization ===
 
     [Test]
-    public async Task TryGetWrittenSize_Is6()
+    public async Task TryWrite_MatchesToBytesAndFailsWhenOneByteShort()
     {
         MacAddress addr = new(0x001122334455UL);
-        bool ok = addr.TryGetWrittenSize(out int size);
-        await Assert.That(ok).IsTrue();
+        byte[] exact = new byte[6];
+        byte[] viaToBytes = new byte[6];
+        int size = addr.ToBytes(viaToBytes);
+
+        bool ok = addr.TryWrite(exact, out int written);
+        bool shortOk = addr.TryWrite(new byte[5], out int shortWritten);
+
         await Assert.That(size).IsEqualTo(6);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(written).IsEqualTo(6);
+        await Assert.That(exact.AsSpan().SequenceEqual(viaToBytes)).IsTrue();
+        await Assert.That(shortOk).IsFalse();
+        await Assert.That(shortWritten).IsEqualTo(0);
     }
 
     [Test]

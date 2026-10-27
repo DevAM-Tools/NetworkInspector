@@ -139,7 +139,7 @@ public readonly struct IPv4LayerWithOptions :
             _Ttl, _Identification,
             dontFragment: !CanFragment,
             ihl: ihl);
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
 
         // Copy raw option bytes, then zero-pad up to the padded length (EOOL = 0x00).
         if (_Options.Length > 0)

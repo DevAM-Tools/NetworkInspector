@@ -460,8 +460,8 @@ public sealed partial class DnsProtocol : IProtocol
 
         // Set packet info for the info column
         parentField.SetPacketInfo(isResponse
-            ? ZA.Lazy("DNS Response ", hexId)
-            : ZA.Lazy("DNS Query ", hexId));
+            ? LazyString.FormatLazy(hexId, static s => string.Create(CultureInfo.InvariantCulture, $"DNS Response {s}"))
+            : LazyString.FormatLazy(hexId, static s => string.Create(CultureInfo.InvariantCulture, $"DNS Query {s}")));
 
         // The container value is the DNS message without the TCP length prefix; the children are created by the shared
         // populator on first access, which keeps the per-packet cost of an unexpanded DNS packet at this one node.

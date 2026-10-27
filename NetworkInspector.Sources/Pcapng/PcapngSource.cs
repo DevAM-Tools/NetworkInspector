@@ -1010,13 +1010,13 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
 
         ReadOnlySpan<byte> header = _Backend.GetScanSpan(recordOffset, PcapConstants.PcapPacketHeaderSize);
         if (header.Length < PcapConstants.PcapPacketHeaderSize
-            || !PcapPacketHeader.TryParse(header, out PcapPacketHeader record, out _))
+            || !PcapPacketHeader.TryParse(header, out PcapPacketHeader record))
         {
             return false;
         }
 
         EndianReader reader = new(legacy.Info.ByteSwapped);
-        uint inclLen = reader.Swap(record.InclLen.Value);
+        uint inclLen = reader.Swap(record.InclLen);
         long dataOffset = recordOffset + PcapConstants.PcapPacketHeaderSize;
         if (!PcapngBlockLayout.TryValidateLegacyInclLen(inclLen, legacy.Info.DeclaredSnapLength, out _)
             || dataOffset + inclLen > fileSize)
@@ -1026,7 +1026,7 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
 
         // inclLen passed the snaplen/MaxBlockSize check above, so it fits an int. Legacy PCAP has one implicit section and
         // interface (0, 0); the registry entry is looked up in the table because no InterfaceInfo carries it.
-        long timestampNanos = legacy.Info.TimestampToNanos(reader.Swap(record.TsSec.Value), reader.Swap(record.TsFrac.Value));
+        long timestampNanos = legacy.Info.TimestampToNanos(reader.Swap(record.TsSec), reader.Swap(record.TsFrac));
         packet = new IndexedPacket(dataOffset, (int)inclLen, timestampNanos, 0, 0, Registered: null);
         return true;
     }

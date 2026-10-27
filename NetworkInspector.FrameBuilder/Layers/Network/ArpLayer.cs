@@ -77,7 +77,7 @@ public readonly struct ArpLayer : IStatelessLayer, IPseudoHeaderIndependent, IPr
     public void WriteHeader(scoped Span<byte> dst)
     {
         ArpHeader hdr = ArpHeader.Create(_Opcode, _SenderMac, _SenderIp, _TargetMac, _TargetIp);
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

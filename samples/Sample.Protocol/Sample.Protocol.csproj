@@ -8,6 +8,5 @@
   <ItemGroup>
     <!-- Contract and Core assemblies come from the application at run time; Private=false keeps them out of the folder. -->
     <ProjectReference Include="..\..\NetworkInspector.Plugins\NetworkInspector.Plugins.csproj" Private="false" />
-    <PackageReference Include="ZeroAlloc" />
   </ItemGroup>
 </Project>

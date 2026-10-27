@@ -74,4 +74,15 @@ internal sealed class SizeTests
 
         await Assert.That(fieldValueSize).IsEqualTo(32);
     }
+
+    /// <summary>
+    /// LazyString is one object reference wide so that FieldValue stays at 32 bytes (8 bytes on x64).
+    /// </summary>
+    [Test]
+    public async Task LazyString_Size_Must_Be_One_Reference()
+    {
+        int lazyStringSize = Unsafe.SizeOf<LazyString>();
+
+        await Assert.That(lazyStringSize).IsEqualTo(IntPtr.Size);
+    }
 }

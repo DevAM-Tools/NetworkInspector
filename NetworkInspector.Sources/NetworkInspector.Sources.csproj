@@ -12,10 +12,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ZeroAlloc" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
   </ItemGroup>
 

@@ -162,7 +162,8 @@ public sealed partial class Dhcpv6Protocol : IProtocol
         context.RecordGroupPresence(_Dhcpv6GroupId);
 
         string msgTypeText = _GetMessageTypeText(msgType);
-        parentField.SetPacketInfo(ZA.Lazy("DHCPv6 ", msgTypeText));
+        parentField.SetPacketInfo(LazyString.FormatLazy(
+            msgTypeText, static s => string.Create(CultureInfo.InvariantCulture, $"DHCPv6 {s}")));
 
         FieldValue containerValue = FieldValue.NewBytes(data);
         MutField container = parentField.AppendWithCustomText(_ProtocolFieldId, containerValue, "DHCPv6 ", msgTypeText);

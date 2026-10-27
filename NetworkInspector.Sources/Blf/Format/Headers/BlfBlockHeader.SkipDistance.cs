@@ -22,10 +22,10 @@ internal readonly partial struct BlfBlockHeader
     internal static bool TryGetSkipDistance(ReadOnlySpan<byte> data, out BlfBlockHeader header, out int skipDistance)
     {
         skipDistance = 0;
-        if (!TryParse(data, out header, out _)
-            || header.Signature.Value != BlfConstants.ObjectMagic
-            || header.HeaderSize.Value < BlfConstants.BlockHeaderSize
-            || header.ObjectLength.Value == 0)
+        if (!TryParse(data, out header)
+            || header.Signature != BlfConstants.ObjectMagic
+            || header.HeaderSize < BlfConstants.BlockHeaderSize
+            || header.ObjectLength == 0)
         {
             return false;
         }
@@ -33,7 +33,7 @@ internal readonly partial struct BlfBlockHeader
         // Computed in long: object_length is an untrusted u32 that must not wrap into a negative or small int. The skip is
         // the larger of header_size and object_length (header_size is already >= 16 here, the 16 keeps the formula the same
         // as in the other readers). The cap is checked before the int conversion, so the cast below cannot truncate.
-        long distance = Math.Max(Math.Max((long)header.HeaderSize.Value, BlfConstants.BlockHeaderSize), header.ObjectLength.Value);
+        long distance = Math.Max(Math.Max((long)header.HeaderSize, BlfConstants.BlockHeaderSize), header.ObjectLength);
         if (distance > BlfConstants.MaxBlockReadSize)
         {
             return false;

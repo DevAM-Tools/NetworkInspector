@@ -6,7 +6,7 @@ namespace NetworkInspector.Values;
 [StructLayout(LayoutKind.Sequential)]
 public readonly record struct Uuid :
     IEquatable<Uuid>, IComparable<Uuid>, IComparable,
-    ISpanFormattable, IUtf8SpanFormattable, IStringSize, IBinarySerializable,
+    ISpanFormattable, IUtf8SpanFormattable,
     ISpanParsable<Uuid>, IParsable<Uuid>
 {
     #region Constants
@@ -181,17 +181,13 @@ public readonly record struct Uuid :
 
     #endregion
 
-    #region IBinarySerializable
+    #region Binary Write
 
-    /// <inheritdoc/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetWrittenSize(out int size)
-    {
-        size = 16;
-        return true;
-    }
-
-    /// <inheritdoc/>
+    /// <summary>
+    /// Writes the 16-byte network-order form; <see langword="false"/> and 0 when the destination is shorter.
+    /// A plain method (no interface) because every caller names the concrete type. The FrameBuilder headers call
+    /// <see cref="ToBytes"/> on their exact-size slice instead, which needs no second length check.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryWrite(Span<byte> destination, out int bytesWritten)
     {
@@ -219,29 +215,30 @@ public readonly record struct Uuid :
             return false;
         }
 
-        // Extract hex nibbles directly from ulong fields using shifts.
-        // Avoids intermediate byte array and SpanStringBuilder overhead.
+        // Extract hex nibbles directly from the ulong fields using shifts and write them through the shared
+        // HexDigits helper: no intermediate byte array, no builder. The (int) casts keep the low 32 bits on purpose:
+        // WriteUpperPair reads only the low byte, so the dropped high bits cannot change the text.
         // Format: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
-        _WriteHexByte(destination, 0, (int)(High >> 56));
-        _WriteHexByte(destination, 2, (int)(High >> 48));
-        _WriteHexByte(destination, 4, (int)(High >> 40));
-        _WriteHexByte(destination, 6, (int)(High >> 32));
+        HexDigits.WriteUpperPair(destination, 0, (int)(High >> 56));
+        HexDigits.WriteUpperPair(destination, 2, (int)(High >> 48));
+        HexDigits.WriteUpperPair(destination, 4, (int)(High >> 40));
+        HexDigits.WriteUpperPair(destination, 6, (int)(High >> 32));
         destination[8] = '-';
-        _WriteHexByte(destination, 9, (int)(High >> 24));
-        _WriteHexByte(destination, 11, (int)(High >> 16));
+        HexDigits.WriteUpperPair(destination, 9, (int)(High >> 24));
+        HexDigits.WriteUpperPair(destination, 11, (int)(High >> 16));
         destination[13] = '-';
-        _WriteHexByte(destination, 14, (int)(High >> 8));
-        _WriteHexByte(destination, 16, (int)High);
+        HexDigits.WriteUpperPair(destination, 14, (int)(High >> 8));
+        HexDigits.WriteUpperPair(destination, 16, (int)High);
         destination[18] = '-';
-        _WriteHexByte(destination, 19, (int)(Low >> 56));
-        _WriteHexByte(destination, 21, (int)(Low >> 48));
+        HexDigits.WriteUpperPair(destination, 19, (int)(Low >> 56));
+        HexDigits.WriteUpperPair(destination, 21, (int)(Low >> 48));
         destination[23] = '-';
-        _WriteHexByte(destination, 24, (int)(Low >> 40));
-        _WriteHexByte(destination, 26, (int)(Low >> 32));
-        _WriteHexByte(destination, 28, (int)(Low >> 24));
-        _WriteHexByte(destination, 30, (int)(Low >> 16));
-        _WriteHexByte(destination, 32, (int)(Low >> 8));
-        _WriteHexByte(destination, 34, (int)Low);
+        HexDigits.WriteUpperPair(destination, 24, (int)(Low >> 40));
+        HexDigits.WriteUpperPair(destination, 26, (int)(Low >> 32));
+        HexDigits.WriteUpperPair(destination, 28, (int)(Low >> 24));
+        HexDigits.WriteUpperPair(destination, 30, (int)(Low >> 16));
+        HexDigits.WriteUpperPair(destination, 32, (int)(Low >> 8));
+        HexDigits.WriteUpperPair(destination, 34, (int)Low);
 
         charsWritten = FormattedLength;
         return true;
@@ -278,10 +275,13 @@ public readonly record struct Uuid :
 
     #endregion
 
-    #region IStringSize
+    #region String Size
 
-    /// <inheritdoc/>
-    public bool TryGetStringSize(
+    /// <summary>
+    /// Character count of the default text (always 36, exact); lets a caller size a buffer once. Kept without an
+    /// interface because every caller names the concrete type.
+    /// </summary>
+    public static bool TryGetStringSize(
         ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
     {
         size = FormattedLength;
@@ -299,24 +299,11 @@ public readonly record struct Uuid :
         return written;
     }
 
-    /// <summary>Returns a <see cref="TempString"/> backed by a thread-static or pooled buffer.</summary>
-    /// <remarks>
-    /// The underlying buffer is thread-local or pooled. The caller must dispose the returned <see cref="TempString"/>
-    /// before making another <see cref="FormatTemp"/> call on the same thread to avoid overwriting the buffer.
-    /// Do not retain references to the underlying span after disposal.
-    /// </remarks>
-    public TempString FormatTemp()
-    {
-        // The acquire epoch must travel into the TempString: a thread-static owner built without it never matches on Dispose,
-        // so the buffer would stay locked on this thread for good and every later TempString there would fall back to the heap.
-        // Rejected: the epoch-less overloads (they compile and look equivalent, but leak the thread-static buffer).
-        char[] buffer = ZeroAllocHelper.AcquireCharBuffer(FormattedLength, true, out bool isThreadStatic, out int epoch);
-        TryFormat(buffer, out int written, default, null);
-        return new TempString(buffer, written, isThreadStatic, epoch);
-    }
-
     /// <summary>Returns the formatted UUID as a new string.</summary>
-    /// <remarks>Allocates a new string on every call. Use <see cref="FormatInto"/> or <see cref="FormatTemp"/> for allocation-free hot paths.</remarks>
+    /// <remarks>
+    /// Allocates exactly the result string (the text is built on the stack first). Use <see cref="FormatInto"/> or
+    /// <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> when the caller owns a buffer.
+    /// </remarks>
     public string Format()
     {
         Span<char> buf = stackalloc char[FormattedLength];
@@ -383,16 +370,6 @@ public readonly record struct Uuid :
     #endregion
 
     #region Private Helpers
-
-    private const string _HexChars = "0123456789ABCDEF";
-
-    /// <summary>Writes a single byte as two uppercase hex characters at the given offset.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void _WriteHexByte(Span<char> dest, int offset, int value)
-    {
-        dest[offset] = _HexChars[(value >> 4) & 0xF];
-        dest[offset + 1] = _HexChars[value & 0xF];
-    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int _HexDigitValue(char c)

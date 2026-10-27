@@ -56,10 +56,6 @@ global using NetworkInspector.Sources.Pcapng;
 global using NetworkInspector.Sources.Pcapng.Format;
 #endregion
 
-#region ZeroAlloc
-global using ZeroAlloc;
-#endregion
-
 #region NetworkInspector.Exporters (internal)
 global using NetworkInspector.Exporters.Columnar;
 global using NetworkInspector.Exporters.DuckDb;

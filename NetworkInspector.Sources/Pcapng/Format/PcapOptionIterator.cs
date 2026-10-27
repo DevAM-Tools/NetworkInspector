@@ -99,14 +99,14 @@ internal ref struct PcapOptionIterator
         }
 
         // Read option header fields. OptionHeader is little-endian on disk; swap when the section is swapped.
-        if (!OptionHeader.TryParse(_Data[_Offset..], out OptionHeader header, out _))
+        if (!OptionHeader.TryParse(_Data[_Offset..], out OptionHeader header))
         {
             option = default;
             return false;
         }
 
-        ushort code = _Reader.Swap(header.Code.Value);
-        ushort length = _Reader.Swap(header.Length.Value);
+        ushort code = _Reader.Swap(header.Code);
+        ushort length = _Reader.Swap(header.Length);
 
         // End-of-options sentinel
         if (code == PcapConstants.OptEndOfOpt)

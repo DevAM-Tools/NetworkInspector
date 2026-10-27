@@ -218,7 +218,8 @@ public sealed partial class Http2Protocol : IProtocol
             ? Http2DisplayTables.GetFrameTypeDisplayText(firstFrame.Type)
             : "Magic";
 
-        parentField.SetPacketInfo(ZA.Lazy("HTTP/2 ", typeText));
+        parentField.SetPacketInfo(LazyString.FormatLazy(
+            typeText, static s => string.Create(CultureInfo.InvariantCulture, $"HTTP/2 {s}")));
 
         // Eagerly scan every frame in the segment to record exactly the index groups whose fields
         // the lazy populator will emit. Index state can only be recorded here: a LazyPopulator receives no

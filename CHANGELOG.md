@@ -98,6 +98,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Dependency removed:** `ZeroAlloc` is no longer referenced by any package. Deferred display text is now
+  `NetworkInspector.Core.Fields.LazyString` (same members, same cache-in-place semantics); eager text uses
+  `string.Create(CultureInfo.InvariantCulture, $"…")`; the fixed headers of IPv4, IPv6, TCP, UDP, VLAN, BLF, and PCAPNG are
+  decoded by hand with one length check (parsing is faster in the profiling gate set); FrameBuilder headers write
+  themselves. No per-thread scratch buffer remains: the former formatting path kept a 2 Mi-char `char[]` (4 MiB) per thread
+  and allocated another one for every nested call. NIGEN015 now reports a prebuilt `LazyString.FormatLazy` / `LazyString.Lazy`
+  as the last argument of a custom-text append. `UpperHex8` (internal) replaces the package's `Hex8` fragment where the text
+  shows eight uppercase hex digits. The size hint `TryGetStringSize` of `MacAddress`, `Eui64`, `Timestamp`, and `Uuid` is
+  now `static` (their text length is a constant).
+
 - **CLI: profiles are applied.** `--profile` selects a settings profile for every command; a profile that does not exist is
   an error. The default profile moved from the settings base to `<base>/default` (application settings live in
   `<base>/application`). Files in the old location were never applied by the CLI.
@@ -151,8 +161,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the Sessions `README.md`, and `EXPORTER_GUIDE.md` ("one stack per export") follow the new contract; the guide samples are
   compiled by `SessionGuideSamplesTests`.
 
+### Removed
+
+- `FormatTemp()` on `IPv4Address`, `IPv6Address`, `MacAddress`, `Eui64`, `Timestamp`, `Uuid`, and `SettingValue`;
+  `ToTempString()` on `FieldValue`, `FieldValue.DefaultText`, and `FieldValueData`; `TryGetWrittenSize` on the six value
+  types; the `IStringSize` and `IBinarySerializable` implementations of the value types, `FieldValue`,
+  `FieldValue.DefaultText`, `FieldValueData`, and `SettingValue`.
+
 ### Fixed
 
+- **SOME/IP: the packet info showed the service id with a doubled prefix** (`SOME/IP 0x0x1234 …`); it now reads
+  `SOME/IP 0x1234 …`. Exports that contain the packet info of SOME/IP packets change accordingly.
+- **IPv6: the Encapsulating Security Payload header was never shown.** `ipv6.esp` (with `ipv6.esp.spi` and `ipv6.esp.seq`)
+  was recorded in the presence index but not emitted, and the 8 bytes of SPI and sequence number counted as payload of
+  protocol 50. They now belong to the header part: the fields appear (`Encapsulating Security Payload (SPI: 0x0A0B0C0D,
+  Seq: 100000)`), and the payload handed to the next stage starts after them.
 - **CLI: `--profile` was ignored** by `convert --filter` and `export`; the protocol settings of the profile now apply.
 - **Core: `SettingsManager.Save` dropped stored values** of settings that were not registered in the saving process (for
   example the settings of a plugin that was not loaded).
@@ -238,6 +261,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   128 GiB); a hit is reported in a named field instead of truncating silently.
 
 ### Breaking
+
+- **The lazy text moved out of the `ZeroAlloc` namespace.** `LazyString`, `LazyStringError`, and `LazyStringErrorCode` are now in
+  `NetworkInspector.Core.Fields`; change the `using` (no other change: the members are the same). `ZA.Lazy(…)` becomes
+  `LazyString.FormatLazy(tuple, static s => string.Create(CultureInfo.InvariantCulture, $"…"))`; `FormatTemp()` becomes
+  `Format()` or `TryFormat(Span<char>, …)`; `ToTempString()` becomes `ToString()` or `TryFormat`; `TryGetWrittenSize(out size)`
+  becomes the return value of `ToBytes`. `TryGetStringSize` of `MacAddress`, `Eui64`, `Timestamp`, and `Uuid` is `static` now
+  (call it on the type, not on a value). Plugins that referenced `ZeroAlloc` directly must drop that reference.
 
 - **`ISession.Restart(factory)` is removed; use `TryRestart`.** Every expected refusal is now a result (`false` plus a
   `SessionFailure`) instead of an exception: a wrong phase (`InvalidPhase`), a second restart (`RestartInProgress`, was

@@ -11,10 +11,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ZeroAlloc" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Values\NetworkInspector.Values.csproj" />
     <ProjectReference Include="..\NetworkInspector.Generators\NetworkInspector.Generators.csproj"
                       OutputItemType="Analyzer"

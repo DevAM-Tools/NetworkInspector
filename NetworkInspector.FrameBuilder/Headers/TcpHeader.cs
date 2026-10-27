@@ -11,8 +11,7 @@ namespace NetworkInspector.FrameBuilder.Headers;
 /// <para>Checksum is left at 0 and patched by <c>TcpLayer</c>'s <c>FixPhase.InnerChecksum</c> post-fix.</para>
 /// <para>Options can be appended after this header by using <c>TcpLayerWithOptions</c>.</para>
 /// </remarks>
-[BinaryWritable]
-internal readonly partial struct TcpHeader
+internal readonly struct TcpHeader
 {
     /// <summary>Size of the base TCP header without options in bytes.</summary>
     internal const int Size = 20;
@@ -21,25 +20,25 @@ internal readonly partial struct TcpHeader
     internal const int MaxSize = 60;
 
     /// <summary>Source port number.</summary>
-    internal U16BE SrcPort
+    internal ushort SrcPort
     {
         get; init;
     }
 
     /// <summary>Destination port number.</summary>
-    internal U16BE DstPort
+    internal ushort DstPort
     {
         get; init;
     }
 
     /// <summary>Sequence number.</summary>
-    internal U32BE SeqNum
+    internal uint SeqNum
     {
         get; init;
     }
 
     /// <summary>Acknowledgment number (significant when ACK flag is set).</summary>
-    internal U32BE AckNum
+    internal uint AckNum
     {
         get; init;
     }
@@ -48,25 +47,25 @@ internal readonly partial struct TcpHeader
     /// Data Offset(4 bits) + Reserved(3 bits) + Flags(9 bits).
     /// Use <see cref="MakeDataOffsetFlags"/> to construct.
     /// </summary>
-    internal U16BE DataOffsetFlags
+    internal ushort DataOffsetFlags
     {
         get; init;
     }
 
     /// <summary>Window size in bytes.</summary>
-    internal U16BE WindowSize
+    internal ushort WindowSize
     {
         get; init;
     }
 
     /// <summary>Checksum (including pseudo-header). Set to 0 for fixup.</summary>
-    internal U16BE Checksum
+    internal ushort Checksum
     {
         get; init;
     }
 
     /// <summary>Urgent pointer (significant when URG flag is set).</summary>
-    internal U16BE UrgentPointer
+    internal ushort UrgentPointer
     {
         get; init;
     }
@@ -144,5 +143,34 @@ internal readonly partial struct TcpHeader
             Checksum = (ushort)0, // patched by TcpLayer FixPhase.InnerChecksum
             UrgentPointer = urgentPointer,
         };
+    }
+
+    /// <summary>Writes the 20 fixed header bytes in network order; <see langword="false"/> and 0 when the destination is shorter.</summary>
+    /// <remarks>
+    /// Replaces a generated writer: one length check, then fixed-offset big-endian stores on an exact-size slice, so the JIT
+    /// drops the per-store bounds checks. Layers call it directly (no interface dispatch). Writes nothing when it fails.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryWrite(Span<byte> destination, out int bytesWritten)
+    {
+        // One length check up front; a short destination is an expected failure, not an exception.
+        if (destination.Length < Size)
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        // Exact-size slice: the fixed-offset stores below need no further bounds checks after JIT.
+        Span<byte> d = destination[..Size];
+        BinaryPrimitives.WriteUInt16BigEndian(d, SrcPort);                // 0..2
+        BinaryPrimitives.WriteUInt16BigEndian(d[2..], DstPort);           // 2..4
+        BinaryPrimitives.WriteUInt32BigEndian(d[4..], SeqNum);            // 4..8
+        BinaryPrimitives.WriteUInt32BigEndian(d[8..], AckNum);            // 8..12
+        BinaryPrimitives.WriteUInt16BigEndian(d[12..], DataOffsetFlags);  // 12..14
+        BinaryPrimitives.WriteUInt16BigEndian(d[14..], WindowSize);       // 14..16
+        BinaryPrimitives.WriteUInt16BigEndian(d[16..], Checksum);         // 16..18
+        BinaryPrimitives.WriteUInt16BigEndian(d[18..], UrgentPointer);    // 18..20
+        bytesWritten = Size;
+        return true;
     }
 }

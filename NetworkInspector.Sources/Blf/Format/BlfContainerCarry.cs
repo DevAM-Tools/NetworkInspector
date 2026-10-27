@@ -98,15 +98,15 @@ internal static class BlfContainerCarry
             return false;
         }
 
-        if (!BlfBlockHeader.TryParse(candidate, out BlfBlockHeader header, out _)
-            || header.Signature.Value != BlfConstants.ObjectMagic)
+        if (!BlfBlockHeader.TryParse(candidate, out BlfBlockHeader header)
+            || header.Signature != BlfConstants.ObjectMagic)
         {
             return false;
         }
 
         long skip = Math.Max(
-            Math.Max((long)BlfConstants.BlockHeaderSize, header.ObjectLength.Value),
-            header.HeaderSize.Value);
+            Math.Max((long)BlfConstants.BlockHeaderSize, header.ObjectLength),
+            header.HeaderSize);
         return skip > BlfConstants.MaxBlockReadSize;
     }
 

@@ -128,7 +128,7 @@ public readonly struct IPv4Layer :
         IPv4Header hdr = IPv4Header.Create(
             _SrcAddr, _DstAddr, _ExplicitProtocol, _Ttl, _Identification,
             dontFragment: !CanFragment);
-        _ = ((IBinarySerializable)hdr).TryWrite(dst, out _);
+        _ = hdr.TryWrite(dst, out _);
     }
 
     /// <inheritdoc />

@@ -83,13 +83,13 @@ internal sealed class BlfFormatConstantsTests
     {
         BlfDate date = new()
         {
-            Year = new U16LE(2024),
-            Month = new U16LE(1),
-            Day = new U16LE(2),
-            Hour = new U16LE(3),
-            Minute = new U16LE(4),
-            Second = new U16LE(5),
-            Millisecond = new U16LE(6),
+            Year = 2024,
+            Month = 1,
+            Day = 2,
+            Hour = 3,
+            Minute = 4,
+            Second = 5,
+            Millisecond = 6,
         };
 
         long nanos = BlfTimestamp.DateToUnixNanoseconds(date, TimeZoneInfo.Utc);
@@ -112,13 +112,13 @@ internal sealed class BlfFormatConstantsTests
     {
         BlfDate date = new()
         {
-            Year = new U16LE(2024),
-            Month = new U16LE(2),
-            Day = new U16LE(31),
-            Hour = new U16LE(0),
-            Minute = new U16LE(0),
-            Second = new U16LE(0),
-            Millisecond = new U16LE(0),
+            Year = 2024,
+            Month = 2,
+            Day = 31,
+            Hour = 0,
+            Minute = 0,
+            Second = 0,
+            Millisecond = 0,
         };
 
         long nanos = BlfTimestamp.DateToUnixNanoseconds(date, TimeZoneInfo.Utc);

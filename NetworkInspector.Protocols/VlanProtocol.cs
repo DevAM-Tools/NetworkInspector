@@ -104,7 +104,7 @@ public sealed partial class VlanProtocol : IProtocol
         {
             return ParseError.InvalidData(ProtocolName, "Container value is not of type Bytes");
         }
-        if (!VlanHeader.TryParse(headerBytes.Span, out VlanHeader header, out _))
+        if (!VlanHeader.TryParse(headerBytes.Span, out VlanHeader header))
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, VlanHeader._HeaderSize, (ulong)headerBytes.Length);
         }
@@ -112,7 +112,7 @@ public sealed partial class VlanProtocol : IProtocol
         byte pcp = header.Priority;
         bool dei = header.Dei != 0;
         ushort vid = header.VlanId;
-        ushort etherType = header.EtherType.Value;
+        ushort etherType = header.EtherType;
 
         string pcpText = DisplayTables.GetVlanPriorityDisplayText(pcp);
         container.AppendWithCustomText(_PriorityFieldId, FieldValue.NewU64(pcp), pcpText);
@@ -147,8 +147,8 @@ public sealed partial class VlanProtocol : IProtocol
 
         ReadOnlySpan<byte> span = data.Span;
 
-        // Parse header using BinaryParsable-generated parser
-        if (!VlanHeader.TryParse(span, out VlanHeader header, out _))
+        // Decode the fixed header by hand (one length check)
+        if (!VlanHeader.TryParse(span, out VlanHeader header))
         {
             return ParseError.InsufficientDataWithInfo(ProtocolName, VlanHeader._HeaderSize, (ulong)data.Length);
         }
@@ -156,7 +156,7 @@ public sealed partial class VlanProtocol : IProtocol
         byte pcp = header.Priority;
         bool dei = header.Dei != 0;
         ushort vid = header.VlanId;
-        ushort etherType = header.EtherType.Value;
+        ushort etherType = header.EtherType;
 
         // Last write wins, so a nested tag replaces the outer one. TCP reads this as the innermost VLAN.
         // Per-thread, replaced on every VLAN of this packet, valid only until the next packet parsed on this thread.
@@ -257,36 +257,65 @@ public sealed partial class VlanProtocol : IProtocol
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// </code>
 /// </summary>
-[BinaryParsable]
-internal readonly partial struct VlanHeader
+/// <remarks>
+/// Decoded by hand (one length check, fixed-offset reads with <see cref="BinaryPrimitives"/>) instead of a generated
+/// parser, so the JIT elides the per-read bounds checks and the dissector gets plain integers; declaration order
+/// mirrors the wire layout for readability only. The first 16-bit word (tag control information) packs PCP, DEI and
+/// VID and is split by shifts. Thread safety: immutable value type.
+/// </remarks>
+internal readonly struct VlanHeader
 {
-    /// <summary>Priority Code Point (3 bits, 802.1p).</summary>
-    [BinaryField(BitCount = 3)]
+    /// <summary>Priority Code Point (bits 15..13 of the tag control word, 802.1p).</summary>
     public byte Priority
     {
         get; init;
     }
 
-    /// <summary>Drop Eligible Indicator (1 bit).</summary>
-    [BinaryField(BitCount = 1)]
+    /// <summary>Drop Eligible Indicator (bit 12 of the tag control word).</summary>
     public byte Dei
     {
         get; init;
     }
 
-    /// <summary>VLAN Identifier (12 bits).</summary>
-    [BinaryField(BitCount = 12)]
+    /// <summary>VLAN Identifier (bits 11..0 of the tag control word).</summary>
     public ushort VlanId
     {
         get; init;
     }
 
-    /// <summary>Encapsulated protocol EtherType.</summary>
-    public U16BE EtherType
+    /// <summary>Encapsulated protocol EtherType (bytes 2..3).</summary>
+    public ushort EtherType
     {
         get; init;
     }
 
     /// <summary>Serialized header size in bytes (4).</summary>
     internal const int _HeaderSize = 4;
+
+    /// <summary>
+    /// Decodes the 4-byte tag. Returns <see langword="false"/> with a default value when fewer than
+    /// <see cref="_HeaderSize"/> bytes are present. Longer input is accepted; only the first 4 bytes are read.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParse(ReadOnlySpan<byte> source, out VlanHeader value)
+    {
+        // One length check up front; a short tag is an expected failure, not an exception.
+        if (source.Length < _HeaderSize)
+        {
+            value = default;
+            return false;
+        }
+
+        // Exact-size slice: after this the JIT knows every index below is in range and drops the bounds checks.
+        ReadOnlySpan<byte> h = source[.._HeaderSize];
+        ushort tagControl = BinaryPrimitives.ReadUInt16BigEndian(h);
+        value = new VlanHeader
+        {
+            Priority = (byte)(tagControl >> 13),                         // word 0..2, bits 15..13
+            Dei = (byte)((tagControl >> 12) & 0x01),                     // word 0..2, bit 12
+            VlanId = (ushort)(tagControl & 0x0FFF),                      // word 0..2, bits 11..0
+            EtherType = BinaryPrimitives.ReadUInt16BigEndian(h[2..]),    // 2..4
+        };
+        return true;
+    }
 }

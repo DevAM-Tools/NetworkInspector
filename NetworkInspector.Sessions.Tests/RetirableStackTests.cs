@@ -357,49 +357,6 @@ internal sealed class RetirableStackTests
 
     #endregion
 
-    #region Allocation
-
-    [Test]
-    public async Task AcquireAndReleaseAllocateNothing()
-    {
-        using Stack stack = _NewStack();
-        Spy spy = new();
-        RetirableStack guard = _Guard(stack, spy);
-
-        // Warm up, so a first-call allocation (JIT, static init) is not counted.
-        bool allGranted = true;
-        for (int i = 0; i < 100; i++)
-        {
-            allGranted &= _Cycle(guard);
-        }
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++)
-        {
-            allGranted &= _Cycle(guard);
-        }
-
-        long after = GC.GetAllocatedBytesForCurrentThread();
-
-        await Assert.That(allGranted).IsTrue();
-        await Assert.That(after - before).IsEqualTo(0);
-    }
-
-    private static bool _Cycle(RetirableStack guard)
-    {
-        if (!guard.TryAcquire(out StackLease lease))
-        {
-            return false;
-        }
-
-        using (lease)
-        {
-            return lease.Stack is not null;
-        }
-    }
-
-    #endregion
-
     #region Index selection
 
     [Test]

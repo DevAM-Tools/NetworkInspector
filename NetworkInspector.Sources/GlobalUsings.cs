@@ -53,10 +53,3 @@ global using NetworkInspector.Sources.Pcapng;
 global using NetworkInspector.Sources.Pcapng.Format;
 global using NetworkInspector.Sources.Pcapng.Format.Blocks;
 #endregion
-
-#region External Dependencies
-// ZeroAlloc: provides the [BinaryParsable] attribute and the fixed-width endian field types (for example U32LE) that the
-// packed on-disk header structs use (for example BlfLogObjectHeaderV2).
-global using ZeroAlloc;
-#endregion
-

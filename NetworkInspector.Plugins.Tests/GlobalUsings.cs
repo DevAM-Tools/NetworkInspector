@@ -70,7 +70,3 @@ global using NetworkInspector.Sources.Random;
 #region Sample plugin
 global using Sample.Protocol;
 #endregion
-
-#region External Dependencies
-global using ZeroAlloc;
-#endregion

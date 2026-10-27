@@ -42,7 +42,3 @@ global using TUnit.Assertions;
 global using TUnit.Assertions.Extensions;
 global using TUnit.Core;
 #endregion
-
-#region External Dependencies
-global using ZeroAlloc;
-#endregion

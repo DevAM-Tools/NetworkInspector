@@ -5,8 +5,6 @@
     <Description>Built-in protocol dissectors for NetworkInspector including Ethernet, IPv4, IPv6, TCP, UDP, DNS, DHCPv4, DHCPv6, HTTP/1.x, HTTP/2, TLS, DTLS, WebSocket, ARP, ICMP, ICMPv6, CAN, CAN XL, FlexRay, LIN, SOME/IP, PDU Transport, and more.</Description>
     <PackageTags>network;protocol;dissector;ethernet;ipv4;ipv6;tcp;udp;dns;http;tls;can;someip</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <!-- CS1570/CS1584/CS1658: ZeroAlloc source generator emits invalid XML cref attributes in generated doc comments. -->
-    <NoWarn>$(NoWarn);1570;1584;1658</NoWarn>
   </PropertyGroup>
 
   <!--
@@ -22,10 +20,6 @@
   <ItemGroup>
     <InternalsVisibleTo Include="NetworkInspector.Protocols.Tests" />
     <InternalsVisibleTo Include="NetworkInspector.Core.Tests" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="ZeroAlloc" PrivateAssets="none" />
   </ItemGroup>
 
   <ItemGroup>

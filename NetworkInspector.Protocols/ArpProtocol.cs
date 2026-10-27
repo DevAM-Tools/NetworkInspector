@@ -195,11 +195,16 @@ public sealed partial class ArpProtocol : IProtocol
         {
             if (opcode == _OpcodeRequest)
             {
-                parentField.SetPacketInfo(ZA.Lazy("Who has ", targetIp, "? Tell ", senderIp));
+                // Deferred: one state box now, the string only when the info column is read; the lambda is static (no closure).
+                parentField.SetPacketInfo(LazyString.FormatLazy(
+                    (targetIp, senderIp),
+                    static s => string.Create(CultureInfo.InvariantCulture, $"Who has {s.targetIp}? Tell {s.senderIp}")));
             }
             else if (opcode == _OpcodeReply)
             {
-                parentField.SetPacketInfo(ZA.Lazy(senderIp, " is at ", senderMac));
+                parentField.SetPacketInfo(LazyString.FormatLazy(
+                    (senderIp, senderMac),
+                    static s => string.Create(CultureInfo.InvariantCulture, $"{s.senderIp} is at {s.senderMac}")));
             }
         }
 
@@ -210,9 +215,10 @@ public sealed partial class ArpProtocol : IProtocol
 
         // ARP is a leaf protocol with few fields — no lazy populator needed. The container value covers exactly the
         // ARP message (not trailing Ethernet padding); its representation shows the byte count instead of a hex dump.
-        // The title text takes its arguments unformatted so MutField builds it only when a field tree stores it.
+        // The container value is always built, so its text is formatted eagerly (one string, InvariantCulture) instead of
+        // deferred.
         FieldValue containerValue = FieldValue.NewBytes(data[..totalSize])
-            .WithCustomRepresentation(new LazyString(ZA.String(totalSize, " bytes")));
+            .WithCustomRepresentation(new LazyString(string.Create(CultureInfo.InvariantCulture, $"{totalSize} bytes")));
         MutField container;
         if (isStandardArp && opcode == _OpcodeRequest)
         {

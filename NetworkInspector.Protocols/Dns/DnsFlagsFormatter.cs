@@ -30,7 +30,8 @@ namespace NetworkInspector.Protocols.Dns;
 /// <para>
 /// <see cref="Format"/> returns the bracket portion only, e.g. <c>[Response, RD, RA]</c>
 /// or <c>[None]</c>.  The caller prepends the hex value:
-/// <c>ZA.Lazy(DisplayTables.FormatHexU16(flags), " ", DnsFlagsFormatter.Format(flags))</c>.
+/// <c>LazyString.FormatLazy(flags, static f =&gt; string.Create(CultureInfo.InvariantCulture,
+/// $"{DisplayTables.FormatHexU16(f)} {DnsFlagsFormatter.Format(f)}"))</c>.
 /// </para>
 /// </summary>
 /// <remarks>
