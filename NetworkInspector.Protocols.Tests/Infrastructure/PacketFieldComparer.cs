@@ -47,18 +47,37 @@ internal static class PacketFieldComparer
 
         await Assert.That(actual.FieldCount(materialize: true)).IsEqualTo(expected.FieldCount);
 
-        foreach ((FieldId Id, FieldValue Value) expectedField in expected.Fields)
+        // Compared position by position, not by looking the field id up: some fields occur several times in one packet
+        // (one tcp.segment per contributing packet, one SACK edge per block), and a lookup by id would always return the
+        // first occurrence and report a false mismatch for the others. Two dissects of the same bytes must also produce
+        // the fields in the same order, which this comparison checks as well.
+        List<(FieldId Id, FieldValue Value)> actualFields = _CollectFields(actual);
+        for (int index = 0; index < actualFields.Count; index++)
         {
+            (FieldId Id, FieldValue Value) expectedField = expected.Fields[index];
             FieldInfo? info = stack.GetField(expectedField.Id);
             string name = info?.Name ?? expectedField.Id.ToString();
 
-            bool found = actual.TryGetFieldValue(expectedField.Id, out FieldValue actualValue, materialize: true);
-            await Assert.That(found).IsTrue().Because($"Re-parsed packet missing field '{name}'");
-
-            await Assert.That(_ValuesEqual(expectedField.Value, actualValue))
+            await Assert.That(actualFields[index].Id).IsEqualTo(expectedField.Id).Because($"Re-parsed packet field #{index} is not '{name}'");
+            await Assert.That(_ValuesEqual(expectedField.Value, actualFields[index].Value))
                 .IsTrue()
                 .Because($"Field '{name}' value mismatch");
         }
+    }
+
+    /// <summary>
+    /// Collects the fields of a packet in depth-first order. A separate synchronous method because the field enumerator is a
+    /// ref struct, which cannot be held across the awaits of the assertions.
+    /// </summary>
+    private static List<(FieldId Id, FieldValue Value)> _CollectFields(Packet packet)
+    {
+        List<(FieldId Id, FieldValue Value)> fields = [];
+        foreach (Field field in packet.IterFieldsDfs(materialize: true))
+        {
+            fields.Add((field.FieldId, field.Value));
+        }
+
+        return fields;
     }
 
     /// <summary>
@@ -73,21 +92,17 @@ internal static class PacketFieldComparer
         await Assert.That(actual.FieldCount(materialize: true))
             .IsEqualTo(expected.FieldCount(materialize: true));
 
-        List<(FieldId Id, FieldValue Value)> expectedFields = [];
-        foreach (Field field in expected.IterFieldsDfs(materialize: true))
+        // Positional comparison, see AssertMatchesSnapshot: repeated fields must be compared occurrence by occurrence.
+        List<(FieldId Id, FieldValue Value)> expectedFields = _CollectFields(expected);
+        List<(FieldId Id, FieldValue Value)> actualFields = _CollectFields(actual);
+        for (int index = 0; index < actualFields.Count; index++)
         {
-            expectedFields.Add((field.FieldId, field.Value));
-        }
-
-        foreach ((FieldId Id, FieldValue Value) expectedField in expectedFields)
-        {
+            (FieldId Id, FieldValue Value) expectedField = expectedFields[index];
             FieldInfo? info = stack.GetField(expectedField.Id);
             string name = info?.Name ?? expectedField.Id.ToString();
 
-            bool found = actual.TryGetFieldValue(expectedField.Id, out FieldValue actualValue, materialize: true);
-            await Assert.That(found).IsTrue().Because($"Redissect packet missing field '{name}'");
-
-            await Assert.That(_ValuesEqual(expectedField.Value, actualValue))
+            await Assert.That(actualFields[index].Id).IsEqualTo(expectedField.Id).Because($"Redissect packet field #{index} is not '{name}'");
+            await Assert.That(_ValuesEqual(expectedField.Value, actualFields[index].Value))
                 .IsTrue()
                 .Because($"Field '{name}' value mismatch");
         }

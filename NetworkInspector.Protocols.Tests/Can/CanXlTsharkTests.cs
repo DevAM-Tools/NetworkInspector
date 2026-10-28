@@ -8,7 +8,7 @@ namespace NetworkInspector.Protocols.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The Wireshark CAN dissector at link type 227 (LINKTYPE_CAN_SOCKETCAN)
+/// The reference CAN dissector at link type 227 (LINKTYPE_CAN_SOCKETCAN)
 /// does not surface CAN-XL frames as the <c>canxl.*</c> protocol family —
 /// XL support requires the dedicated DLT_CAN_XL link type which is not
 /// emitted by the in-memory pcap-ng writer. Until that path exists, this

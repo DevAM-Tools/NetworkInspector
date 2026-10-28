@@ -3,25 +3,41 @@
 namespace NetworkInspector.Protocols.Http2;
 
 /// <summary>
-/// Lightweight HPACK header compression decoder (RFC 7541).
-/// Decodes HPACK-encoded header blocks into name/value pairs.
-/// This is a per-packet stateless decoder (does not maintain a dynamic table across packets).
+/// HPACK header compression decoder (RFC 7541) with a dynamic table: one instance decodes the header blocks of ONE
+/// direction of ONE HTTP/2 connection, in order.
 /// <para>
-/// Design: a real HPACK decoder needs the connection's dynamic table, which only exists if every header block of the
-/// connection is decoded in order. A packet dissector sees packets independently (and may start mid-connection), so
-/// this decoder is deliberately a best-effort display decoder: it resolves everything that does not depend on earlier
-/// blocks (the static table, literals, Huffman strings, and entries added earlier in the same block) and skips what
-/// does. The decoder is not meant for protocol enforcement.
+/// <b>Why an instance with state:</b> HPACK compresses headers against a table that both endpoints build up over the whole
+/// connection. After the first request, a browser or server refers to <c>:authority</c>, <c>user-agent</c>, cookies and most
+/// custom headers by index; a decoder that starts every block with an empty table can show only the static-table headers of
+/// the second and every later request. The decoder therefore keeps the dynamic table between blocks, applies the size updates
+/// the encoder signals (RFC 7541 section 4.3) and evicts the oldest entries when the table is over its size
+/// (section 4.4), exactly as the endpoints do.
 /// </para>
 /// <para>
-/// <b>Thread-safety:</b> stateless; the static and Huffman tables are immutable, so all members are safe for
-/// concurrent use. The cost is a handful of allocations per header (strings, lists, a <see cref="StringBuilder"/>
-/// per Huffman string). The output size is bounded by the input size (every representation consumes at least one byte
-/// and a Huffman string expands at most 8/5 times); the decoder sets no limit of its own, so the size of a header
-/// block is limited by whoever hands it in (the HTTP/2 frame size).
+/// <b>A passive observer can lack history:</b> a capture that starts mid-connection misses the blocks that built the table.
+/// An index that refers to an entry the decoder never saw is skipped (indexed header) or ends the block (literal with a name
+/// index), and the decoder keeps going with the next block; later blocks that only use entries added after the capture
+/// started resolve normally. The decoder is a display aid, not a protocol enforcer: it does not check the size updates
+/// against the SETTINGS the endpoints exchanged (the SETTINGS frame may precede the capture) and does not report a
+/// compression error.
+/// </para>
+/// <para>
+/// <b>Limit - dynamic table size:</b> <see cref="MaxTableBytes"/>, 64 KiB per decoder. Threat: every tracked connection owns
+/// two decoders, and an endpoint may announce a table of up to 4 GiB; honoring that would let a peer make the dissector hold
+/// gigabytes of header strings. Constant (a memory bound of the dissector, not configurable), secure by default (typical
+/// tables are 4 KiB; the largest common value is 64 KiB). Exceeding it is not an error: a larger announced size is clipped to
+/// the limit, so entries are evicted earlier than the endpoints do, and a later index that refers to an evicted entry is
+/// skipped like an unseen one.
+/// </para>
+/// <para>
+/// <b>Thread-safety:</b> an instance is mutated by every <see cref="Decode"/> call and must be used by one thread at a
+/// time; the HTTP/2 protocol decodes on the ordered first parse only and replays recorded headers. The static and Huffman
+/// tables are immutable. The cost is a handful of allocations per header (strings, a list per block, a
+/// <see cref="StringBuilder"/> per Huffman string). The output size is bounded by the input size (every representation
+/// consumes at least one byte and a Huffman string expands at most 8/5 times).
 /// </para>
 /// </summary>
-internal static class HpackDecoder
+internal sealed class HpackDecoder
 {
     /// <summary>
     /// The largest HPACK integer the decoder accepts: the maximum HTTP/2 frame payload, 2^24 - 1 octets (RFC 9113
@@ -29,35 +45,63 @@ internal static class HpackDecoder
     /// </summary>
     private const int _MaxInteger = 0xFFFFFF;
 
+    /// <summary>
+    /// The size of the dynamic table before any size update: 4096 octets, the initial value of
+    /// SETTINGS_HEADER_TABLE_SIZE (RFC 9113 section 6.5.2). A protocol fact.
+    /// </summary>
+    private const int _InitialTableBytes = 4096;
+
+    /// <summary>
+    /// Per-entry overhead of the dynamic table size accounting: an entry occupies the length of its name plus the length of
+    /// its value plus 32 octets (RFC 7541 section 4.1). A protocol fact.
+    /// </summary>
+    private const int _EntryOverheadBytes = 32;
+
+    /// <summary>
+    /// Upper bound of the dynamic table size the decoder honors (see the class remarks for the threat, posture and what
+    /// happens when it is exceeded).
+    /// </summary>
+    internal const int MaxTableBytes = 64 * 1024;
+
     /// <summary>Represents a decoded HPACK header (name + value).</summary>
     /// <param name="Name">The header name (lower case on the wire for HTTP/2).</param>
     /// <param name="Value">The header value.</param>
     internal readonly record struct Header(string Name, string Value);
 
     /// <summary>
-    /// Decodes an HPACK-encoded header block into a list of name/value pairs.
-    /// Uses the static table for indexed headers and literal decoding for others.
-    /// Dynamic table entries are tracked within this single header block only.
+    /// The dynamic table in insertion order, oldest first; the live entries are <c>[_Head, Count)</c>. Index 62 of the
+    /// HPACK address space is the NEWEST entry (RFC 7541 section 2.3.3), so lookups count from the end. Appending at the end
+    /// keeps an insert O(1); the evicted prefix is released by advancing <see cref="_Head"/>, and the list is compacted only
+    /// when more than half of it is dead, so an eviction is O(1) amortized instead of an O(n) shift per entry.
     /// </summary>
-    /// <param name="data">The HPACK-encoded header block fragment.</param>
+    private readonly List<Header> _Entries = [];
+
+    private int _Head;
+
+    /// <summary>Sum of the sizes (name + value + 32) of the live entries, in octets.</summary>
+    private int _TableBytes;
+
+    /// <summary>Current maximum size of the dynamic table, set by size updates (starts at <see cref="_InitialTableBytes"/>).</summary>
+    private int _MaxTableBytes = _InitialTableBytes;
+
+    /// <summary>
+    /// Decodes one HPACK header block (the concatenated header block fragments of a HEADERS frame and its CONTINUATION
+    /// frames) into name/value pairs and updates the dynamic table.
+    /// </summary>
+    /// <param name="data">The HPACK-encoded header block.</param>
     /// <returns>
     /// The headers decoded before the first malformed representation, in wire order. Malformed or truncated input
     /// ends decoding early and returns the headers found so far (possibly an empty list); it never throws for a
-    /// truncated block. An indexed header whose index refers to a dynamic table entry of an earlier block is skipped.
+    /// truncated block. An indexed header whose index refers to an entry the decoder never saw is skipped.
     /// </returns>
     /// <remarks>
-    /// Known differences from a connection-level decoder (RFC 7541 section 4): a Dynamic Table Size Update is consumed
-    /// but not applied, so the per-block table never evicts; the "never indexed" flag of a literal is not reported;
-    /// and the table is empty at the start of every block, so indexes of entries created by earlier blocks do not
-    /// resolve. After a block that relied on earlier entries, later block-local indexes (62 and up) can also point at a
-    /// different entry than the connection's real table would.
+    /// The "never indexed" flag of a literal is not reported (it only matters to re-encoders). A malformed block can leave
+    /// the table with fewer entries than the encoder added; later indexes may then point at a different entry than the
+    /// endpoints' tables would, which a display aid accepts.
     /// </remarks>
-    internal static List<Header> Decode(ReadOnlySpan<byte> data)
+    internal List<Header> Decode(ReadOnlySpan<byte> data)
     {
         List<Header> headers = [];
-
-        // Per-block dynamic table to track headers added within this block
-        List<Header> dynamicTable = [];
 
         // One representation per iteration; the first bits of the first byte select the representation (RFC 7541
         // section 6). Any malformed representation ends the loop and keeps what was decoded before it.
@@ -76,9 +120,10 @@ internal static class HpackDecoder
                     break; // Invalid index
                 }
 
-                // An index into the dynamic table of an earlier block does not resolve (stateless decoder): skip the
-                // header and continue, unlike a literal with such a name index, which ends the block.
-                Header? header = _LookupIndex(index, dynamicTable);
+                // An index into an entry the decoder never saw (the capture started mid-connection, or the entry was
+                // evicted by the size limit) does not resolve: skip the header and continue, unlike a literal with such a
+                // name index, which ends the block.
+                Header? header = _LookupIndex(index);
                 if (header is not null)
                 {
                     headers.Add(header.Value);
@@ -88,23 +133,20 @@ internal static class HpackDecoder
             {
                 // §6.2.1 Literal Header Field with Incremental Indexing
                 // Bit pattern: 01xxxxxx
-                Header? header = _DecodeLiteralHeader(data, ref offset, 6, dynamicTable);
+                Header? header = _DecodeLiteralHeader(data, ref offset, 6);
                 if (header is null)
                 {
                     break;
                 }
-                // Index 62 is always the most recent entry (RFC 7541 section 2.3.3). Entries are appended at the end of the
-                // list and _LookupIndex counts from the end, so the insert is O(1); inserting at position 0 would shift
-                // the whole list for every literal (quadratic in the number of literals of one block, which a hostile
-                // block can make large). The table is never evicted (see the remarks).
-                dynamicTable.Add(header.Value);
+
+                _AddEntry(header.Value);
                 headers.Add(header.Value);
             }
             else if ((b & 0xF0) == 0x00)
             {
                 // §6.2.2 Literal Header Field without Indexing
                 // Bit pattern: 0000xxxx
-                Header? header = _DecodeLiteralHeader(data, ref offset, 4, dynamicTable);
+                Header? header = _DecodeLiteralHeader(data, ref offset, 4);
                 if (header is null)
                 {
                     break;
@@ -116,7 +158,7 @@ internal static class HpackDecoder
                 // §6.2.3 Literal Header Field Never Indexed
                 // Bit pattern: 0001xxxx. Decoded like "without indexing"; the never-indexed marker only matters to
                 // re-encoders and is not kept.
-                Header? header = _DecodeLiteralHeader(data, ref offset, 4, dynamicTable);
+                Header? header = _DecodeLiteralHeader(data, ref offset, 4);
                 if (header is null)
                 {
                     break;
@@ -126,10 +168,24 @@ internal static class HpackDecoder
             else if ((b & 0xE0) == 0x20)
             {
                 // §6.3 Dynamic Table Size Update
-                // Bit pattern: 001xxxxx
-                // Consume the size update. The new size is not applied: the per-block table has no size accounting and
-                // no eviction (see the remarks).
-                _ = _DecodeInteger(data, ref offset, 5);
+                // Bit pattern: 001xxxxx. The new maximum size takes effect immediately and evicts entries until the table
+                // fits (RFC 7541 section 4.3). A value the decoder cannot represent ends the block as malformed.
+                int newSize = _DecodeInteger(data, ref offset, 5);
+                if (newSize < 0)
+                {
+                    // Truncated: the block ends here. A well-formed value too large to represent (above 2^24 - 1) has been
+                    // consumed completely; it is clipped to the decoder's limit like any other oversized request.
+                    if (offset >= data.Length)
+                    {
+                        break;
+                    }
+
+                    newSize = MaxTableBytes;
+                }
+
+                // Clipped to the decoder's own limit, see MaxTableBytes.
+                _MaxTableBytes = Math.Min(newSize, MaxTableBytes);
+                _EvictToFit(0);
             }
             else
             {
@@ -141,15 +197,52 @@ internal static class HpackDecoder
     }
 
     /// <summary>
+    /// Adds an entry at the newest position and evicts the oldest entries until the table fits (RFC 7541 section 4.4). An
+    /// entry larger than the whole table empties the table and is not added, as the RFC prescribes.
+    /// </summary>
+    private void _AddEntry(Header header)
+    {
+        // The sizes are octets; the header strings are Latin-1, so one char is one octet and Length is the octet count.
+        int size = header.Name.Length + header.Value.Length + _EntryOverheadBytes;
+        _EvictToFit(size);
+        if (size > _MaxTableBytes)
+        {
+            return;
+        }
+
+        _Entries.Add(header);
+        _TableBytes += size;
+    }
+
+    /// <summary>Evicts the oldest entries until <paramref name="incomingBytes"/> more octets would fit.</summary>
+    private void _EvictToFit(int incomingBytes)
+    {
+        while (_Head < _Entries.Count && _TableBytes + incomingBytes > _MaxTableBytes)
+        {
+            Header oldest = _Entries[_Head];
+            _TableBytes -= oldest.Name.Length + oldest.Value.Length + _EntryOverheadBytes;
+
+            // Release the strings now; the slot stays until the list is compacted.
+            _Entries[_Head] = default;
+            _Head++;
+        }
+
+        // Compact when more than half of the list is dead (and it is worth the copy): an eviction stays O(1) amortized.
+        if (_Head > 32 && _Head * 2 > _Entries.Count)
+        {
+            _Entries.RemoveRange(0, _Head);
+            _Head = 0;
+        }
+    }
+
+    /// <summary>
     /// Decodes a literal header field from the HPACK data.
     /// </summary>
     /// <param name="data">The header block.</param>
     /// <param name="offset">Read position; advanced past the field on success, unspecified on failure.</param>
     /// <param name="prefixBits">Width of the name index prefix: 6 with incremental indexing, 4 otherwise.</param>
-    /// <param name="dynamicTable">The per-block dynamic table used to resolve an indexed name.</param>
     /// <returns>The header, or <see langword="null"/> when the field is truncated or its name index is unknown.</returns>
-    private static Header? _DecodeLiteralHeader(
-        ReadOnlySpan<byte> data, ref int offset, int prefixBits, List<Header> dynamicTable)
+    private Header? _DecodeLiteralHeader(ReadOnlySpan<byte> data, ref int offset, int prefixBits)
     {
         int nameIndex = _DecodeInteger(data, ref offset, prefixBits);
         if (nameIndex < 0)
@@ -161,7 +254,7 @@ internal static class HpackDecoder
         if (nameIndex > 0)
         {
             // Name is indexed in the static/dynamic table
-            Header? indexed = _LookupIndex(nameIndex, dynamicTable);
+            Header? indexed = _LookupIndex(nameIndex);
             if (indexed is null)
             {
                 return null;
@@ -294,18 +387,20 @@ internal static class HpackDecoder
     /// Static table indices: 1-61, Dynamic table indices: 62+.
     /// </summary>
     /// <returns>The entry, or <see langword="null"/> for index 0, a negative index, or an unknown dynamic index.</returns>
-    private static Header? _LookupIndex(int index, List<Header> dynamicTable)
+    private Header? _LookupIndex(int index)
     {
         if (index >= 1 && index <= _StaticTable.Length)
         {
             return _StaticTable[index - 1];
         }
 
-        // Dynamic table: index 62 = most recent entry. The list is in insertion order (oldest first), so count from the end.
+        // Dynamic table: index 62 = most recent entry. The list is in insertion order (oldest first), so count from the end;
+        // the dead prefix before _Head holds evicted entries and is never addressed.
         int dynamicIndex = index - _StaticTable.Length - 1;
-        if (dynamicIndex >= 0 && dynamicIndex < dynamicTable.Count)
+        int live = _Entries.Count - _Head;
+        if (dynamicIndex >= 0 && dynamicIndex < live)
         {
-            return dynamicTable[dynamicTable.Count - 1 - dynamicIndex];
+            return _Entries[_Entries.Count - 1 - dynamicIndex];
         }
 
         return null;

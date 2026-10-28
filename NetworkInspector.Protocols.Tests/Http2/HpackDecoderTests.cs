@@ -61,7 +61,7 @@ internal sealed class HpackDecoderTests
             0x82, 0x86, 0x84, 0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff
         ];
 
-        List<HpackDecoder.Header> headers = HpackDecoder.Decode(block);
+        List<HpackDecoder.Header> headers = new HpackDecoder().Decode(block);
 
         await Assert.That(headers.Count).IsEqualTo(4);
         await Assert.That(headers[3]).IsEqualTo(new HpackDecoder.Header(":authority", "www.example.com"));
@@ -77,7 +77,7 @@ internal sealed class HpackDecoderTests
             0x81, 0x66, 0xe0, 0x82, 0xa6, 0x2d, 0x1b, 0xff
         ];
 
-        List<HpackDecoder.Header> headers = HpackDecoder.Decode(block);
+        List<HpackDecoder.Header> headers = new HpackDecoder().Decode(block);
 
         await Assert.That(headers.Count).IsEqualTo(1);
         await Assert.That(headers[0]).IsEqualTo(new HpackDecoder.Header("date", "Mon, 21 Oct 2013 20:13:21 GMT"));
@@ -100,7 +100,7 @@ internal sealed class HpackDecoderTests
         string text = new string('a', leadingSymbols) + "\n" + "ab" + "\r" + "a";
         byte[] block = _LiteralWithValue(_HuffmanEncode(text), huffman: true);
 
-        List<HpackDecoder.Header> headers = HpackDecoder.Decode(block);
+        List<HpackDecoder.Header> headers = new HpackDecoder().Decode(block);
 
         await Assert.That(headers.Count).IsEqualTo(1);
         await Assert.That(headers[0].Value).IsEqualTo(text);
@@ -116,7 +116,7 @@ internal sealed class HpackDecoderTests
         // Length 0x7FFFFFFF: offset + length wraps to a negative number; the bounds check must not be fooled by it.
         byte[] block = [0x00, 0x01, (byte)'x', 0x7F, 0x80, 0xFF, 0xFF, 0xFF, 0x07, 0x41, 0x42];
 
-        List<HpackDecoder.Header> headers = HpackDecoder.Decode(block);
+        List<HpackDecoder.Header> headers = new HpackDecoder().Decode(block);
 
         await Assert.That(headers.Count).IsEqualTo(0);
     }
@@ -127,7 +127,7 @@ internal sealed class HpackDecoderTests
         // 127 + 0xF0000000: the fifth group (shift 28) would make an int negative or wrap it around.
         byte[] block = [0xFF, 0x80, 0x80, 0x80, 0x80, 0x0F];
 
-        List<HpackDecoder.Header> headers = HpackDecoder.Decode(block);
+        List<HpackDecoder.Header> headers = new HpackDecoder().Decode(block);
 
         await Assert.That(headers.Count).IsEqualTo(0);
     }
@@ -139,7 +139,7 @@ internal sealed class HpackDecoderTests
         // (:method GET) is still decoded.
         byte[] block = [0x3F, 0xE0, 0xFF, 0xFF, 0xFF, 0x0F, 0x82];
 
-        List<HpackDecoder.Header> headers = HpackDecoder.Decode(block);
+        List<HpackDecoder.Header> headers = new HpackDecoder().Decode(block);
 
         await Assert.That(headers.Count).IsEqualTo(1);
         await Assert.That(headers[0]).IsEqualTo(new HpackDecoder.Header(":method", "GET"));
@@ -151,7 +151,7 @@ internal sealed class HpackDecoderTests
         // Octets above 0x7F must keep their value (Latin-1) in both paths; a plain string must not turn them into '?'.
         byte[] block = _LiteralWithValue([(byte)'c', (byte)'a', (byte)'f', 0xE9], huffman: false);
 
-        List<HpackDecoder.Header> headers = HpackDecoder.Decode(block);
+        List<HpackDecoder.Header> headers = new HpackDecoder().Decode(block);
 
         await Assert.That(headers.Count).IsEqualTo(1);
         await Assert.That(headers[0].Value).IsEqualTo("café");
@@ -162,7 +162,7 @@ internal sealed class HpackDecoderTests
     {
         byte[] block = [0x00, 0x01, (byte)'x', 0x05, (byte)'a', (byte)'b'];
 
-        List<HpackDecoder.Header> headers = HpackDecoder.Decode(block);
+        List<HpackDecoder.Header> headers = new HpackDecoder().Decode(block);
 
         await Assert.That(headers.Count).IsEqualTo(0);
     }
@@ -183,7 +183,7 @@ internal sealed class HpackDecoderTests
 
         block.AddRange([0xBE, 0xBF, 0xC0]);
 
-        List<HpackDecoder.Header> headers = HpackDecoder.Decode([.. block]);
+        List<HpackDecoder.Header> headers = new HpackDecoder().Decode([.. block]);
 
         await Assert.That(headers.Count).IsEqualTo(6);
         await Assert.That(headers[3]).IsEqualTo(new HpackDecoder.Header("n3", "3"));
@@ -194,8 +194,10 @@ internal sealed class HpackDecoderTests
     [Test]
     public async Task ManyIncrementallyIndexedLiteralsDecodeQuickly()
     {
-        // 30000 literals with incremental indexing and then a reference to the oldest entry. The decode must be linear in
-        // the block size; the check is the result, which is only reachable after the whole block was inserted.
+        // 30000 literals with incremental indexing and then a reference to the newest entry (index 62). The decode must be
+        // linear in the block size even though nearly every insert evicts an old entry (the table holds 4096 octets, so
+        // about 120 of these 34-octet entries); the check is the result, which is only reachable after the whole block was
+        // processed.
         const int count = 30_000;
         List<byte> block = new(count * 6);
         for (int index = 0; index < count; index++)
@@ -203,22 +205,116 @@ internal sealed class HpackDecoderTests
             block.AddRange([0x40, 0x01, (byte)'k', 0x01, (byte)'v']);
         }
 
-        // Index 62 + count - 1 is the oldest entry: a multi-byte integer with the 7-bit prefix (127 + remainder).
-        int oldest = 62 + count - 1;
-        int remainder = oldest - 127;
-        block.Add(0xFF);
-        while (remainder >= 0x80)
-        {
-            block.Add((byte)((remainder & 0x7F) | 0x80));
-            remainder >>= 7;
-        }
+        block.Add(0x80 | 62);
 
-        block.Add((byte)remainder);
-
-        List<HpackDecoder.Header> headers = HpackDecoder.Decode([.. block]);
+        List<HpackDecoder.Header> headers = new HpackDecoder().Decode([.. block]);
 
         await Assert.That(headers.Count).IsEqualTo(count + 1);
         await Assert.That(headers[^1]).IsEqualTo(new HpackDecoder.Header("k", "v"));
+    }
+
+    #endregion
+
+    #region Dynamic table across blocks
+
+    [Test]
+    public async Task EntryAddedInEarlierBlockResolvesInLaterBlock()
+    {
+        // The reason for the stateful decoder: the first block adds "x-key: x-val" to the dynamic table, the second block
+        // refers to it by index 62. A stateless decoder would skip the reference.
+        HpackDecoder decoder = new();
+        byte[] first = [0x40, 0x05, (byte)'x', (byte)'-', (byte)'k', (byte)'e', (byte)'y', 0x05, (byte)'x', (byte)'-', (byte)'v', (byte)'a', (byte)'l'];
+        byte[] second = [0x80 | 62];
+
+        List<HpackDecoder.Header> firstHeaders = decoder.Decode(first);
+        List<HpackDecoder.Header> secondHeaders = decoder.Decode(second);
+
+        await Assert.That(firstHeaders.Count).IsEqualTo(1);
+        await Assert.That(secondHeaders.Count).IsEqualTo(1);
+        await Assert.That(secondHeaders[0]).IsEqualTo(new HpackDecoder.Header("x-key", "x-val"));
+    }
+
+    [Test]
+    public async Task FreshDecoderDoesNotResolveEntryOfAnotherConnection()
+    {
+        // State is per decoder instance: another connection's table must not leak in.
+        HpackDecoder first = new();
+        _ = first.Decode([0x40, 0x01, (byte)'a', 0x01, (byte)'b']);
+
+        List<HpackDecoder.Header> headers = new HpackDecoder().Decode([0x80 | 62]);
+
+        await Assert.That(headers.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TableSizeUpdateToZeroEvictsEveryEntry()
+    {
+        // RFC 7541 section 6.3: a size update to 0 empties the table; a later reference to a former entry does not resolve.
+        HpackDecoder decoder = new();
+        _ = decoder.Decode([0x40, 0x01, (byte)'a', 0x01, (byte)'b']);
+
+        List<HpackDecoder.Header> headers = decoder.Decode([0x20, 0x80 | 62]);
+
+        await Assert.That(headers.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task OldestEntryIsEvictedWhenTheTableOverflows()
+    {
+        // A table of 100 octets holds two 34-octet entries ("k": "v" is 1 + 1 + 32 octets) but not three: the third insert
+        // evicts the oldest. Size update first (7 bits prefix 5: 0x20 | 31 then 100 - 31 = 69).
+        HpackDecoder decoder = new();
+        _ = decoder.Decode([0x3F, 69]);
+        _ = decoder.Decode([0x40, 0x01, (byte)'a', 0x01, (byte)'1']);
+        _ = decoder.Decode([0x40, 0x01, (byte)'b', 0x01, (byte)'2']);
+        _ = decoder.Decode([0x40, 0x01, (byte)'c', 0x01, (byte)'3']);
+
+        // Index 62 is the newest (c), 63 the one before (b); a (the oldest) was evicted, so index 64 does not resolve.
+        List<HpackDecoder.Header> headers = decoder.Decode([0x80 | 62, 0x80 | 63, 0x80 | 64]);
+
+        await Assert.That(headers.Count).IsEqualTo(2);
+        await Assert.That(headers[0]).IsEqualTo(new HpackDecoder.Header("c", "3"));
+        await Assert.That(headers[1]).IsEqualTo(new HpackDecoder.Header("b", "2"));
+    }
+
+    [Test]
+    public async Task EntryLargerThanTheTableEmptiesItAndIsNotAdded()
+    {
+        // RFC 7541 section 4.4: an entry that does not fit the whole table clears the table and is not added.
+        HpackDecoder decoder = new();
+        _ = decoder.Decode([0x3F, 69]);
+        _ = decoder.Decode([0x40, 0x01, (byte)'a', 0x01, (byte)'1']);
+
+        byte[] longValue = new byte[200];
+        Array.Fill(longValue, (byte)'x');
+        List<byte> oversized = [0x40, 0x01, (byte)'k', (byte)longValue.Length];
+        oversized.AddRange(longValue);
+        _ = decoder.Decode([.. oversized]);
+
+        List<HpackDecoder.Header> headers = decoder.Decode([0x80 | 62]);
+
+        await Assert.That(headers.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task OversizedTableSizeIsClippedToTheDecoderLimit()
+    {
+        // The encoder announces a table larger than the decoder's own limit: the limit applies, so the decoder never holds
+        // more than MaxTableBytes. With 34-octet entries more than MaxTableBytes / 34 inserts must have evicted the first.
+        HpackDecoder decoder = new();
+
+        // Size update to 2^24 - 1 (the largest representable value): 0x3F then the continuation of 5-bit prefix 31.
+        _ = decoder.Decode([0x3F, 0xE0 | 0x1F, 0xFF, 0xFF, 0x07]);
+        int entries = (HpackDecoder.MaxTableBytes / 34) + 10;
+        for (int index = 0; index < entries; index++)
+        {
+            _ = decoder.Decode([0x40, 0x01, (byte)'k', 0x01, (byte)'v']);
+        }
+
+        int oldestAlive = 62 + (HpackDecoder.MaxTableBytes / 34) - 1;
+        List<HpackDecoder.Header> beyond = decoder.Decode([0xFF, (byte)((oldestAlive + 16 - 127) & 0x7F | 0x80), (byte)((oldestAlive + 16 - 127) >> 7)]);
+
+        await Assert.That(beyond.Count).IsEqualTo(0);
     }
 
     #endregion

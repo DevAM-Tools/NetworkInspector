@@ -2504,6 +2504,26 @@ Fixed limits of the other application and bus protocols (constants, not settings
 
 HTTP on TCP ports 80 and 8080 is reassembled with `Http1MessageDetector` before `HttpProtocol.Parse`. A port that has more than one registered protocol is not reassembled; every registered parser is still tried.
 
+### TCP analysis and reassembly
+
+What the TCP layer adds beyond the header, and the limits behind it:
+
+- **Analysis** (`tcp.analysis.*`) is derived per direction from an ordered list of unacknowledged segments, serial-number arithmetic (so wrap-around is safe), and the window scale of the SYNs. It reports lost segments, retransmissions (plain, fast and spurious, with the time since the first send in `tcp.analysis.rto` and the packet in `tcp.analysis.rto_frame`), out-of-order segments, duplicate ACKs (`tcp.analysis.duplicate_ack_num` counts until the acknowledgement number moves), zero-window and window-update facts, keep-alives, ambiguous and partial ACKs, `tcp.analysis.bytes_in_flight` (the sum of the unacknowledged bytes) and the round-trip times. The unacknowledged list of a direction holds at most 10000 segments and is allocated on the first data segment; a segment beyond the bound is analysed but not remembered, so a receiver that never acknowledges cannot grow memory.
+- **Connection state** (`tcp.analysis.connection_state`) follows RFC 9293 for the side that closed first. It is derived from recorded FIN and ACK facts, not from flags alone, so a retransmitted FIN does not move it. A connection joined mid-stream reads `ESTABLISHED (handshake not captured)`. A reset ends it for good.
+- **Completeness** (`tcp.completeness`, `tcp.completeness.str`, one `tcp.completeness.*` flag per part) records which parts of the conversation the capture contains. The value at a packet describes the packets before it.
+- **Relative numbers** (`tcp.seq`, `tcp.ack`, `tcp.nxtseq`) subtract the initial sequence number of the direction. A connection joined mid-stream uses the first number seen as its base.
+- **Stream lifecycle.** A FIN from both sides or an RST ends the reassembly of a stream. A new SYN on the same address and port pair after the close starts a new stream and sets `tcp.analysis.reused_ports`.
+- **Reassembled protocols.** DNS, HTTP/1, TLS and HTTP/2 are reassembled per direction, each with its own framing detector. A protocol that the heuristic table (`tcp.heuristic`) picks gets the same reassembly. A reassembled PDU lists the packets that delivered it (`tcp.segments`), and each segment shows `tcp.segment.count`. A reassembly that reaches its limit sets `tcp.error.reassembly_limit` and names the limit; nothing is truncated silently.
+
+| Protocol | Largest PDU | Buffer per direction | Why |
+|----------|-------------|----------------------|-----|
+| DNS | 65537 bytes | 1 MiB | The largest legal message plus its length prefix. |
+| HTTP/1 | 16 MiB | 16 MiB | A message is delivered whole; open by default, configurable by the registering code. |
+| TLS | 2 MiB | 4 MiB | One record or a handshake message that spans records; a hostile length cannot fill the buffer. |
+| HTTP/2 | frame header + 16 MiB - 1 | 16 MiB | The largest legal frame; the detector follows the peer's `SETTINGS_MAX_FRAME_SIZE`. |
+
+HTTP/2 header blocks are decoded with a stateful HPACK decoder per direction (RFC 7541 dynamic table, at most 64 KiB; header block fragments across CONTINUATION frames are joined up to 256 KiB). The decoder state is built during the first parse and replayed read-only afterwards, like all cross-packet state.
+
 **Dispatch chain:**
 
 ```

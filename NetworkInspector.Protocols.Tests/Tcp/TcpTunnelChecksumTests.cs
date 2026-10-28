@@ -55,6 +55,6 @@ internal sealed class TcpTunnelChecksumTests
         Packet packet = ProtocolTestHelper.ParseFrame(stack, frame, 0, Timestamp.FromMillis(0));
 
         await ProtocolTestHelper.AssertFieldExists(stack, packet, "ipv6").ConfigureAwait(false);
-        await ProtocolTestHelper.AssertStringField(stack, packet, "tcp.checksum.status", "[Good]").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.checksum.status", 1).ConfigureAwait(false);
     }
 }

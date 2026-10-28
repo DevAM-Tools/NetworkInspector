@@ -71,35 +71,33 @@ internal static class TcpOptionsParser
     /// <summary>Maximum window scale shift count per RFC 7323.</summary>
     private const byte _MaxWindowScale = 14;
 
+    #endregion
+
+    #region Parse
+
     /// <summary>
     /// Parses all TCP options from the options area and appends fields to the container.
-    /// Returns parsed option values needed for stateful analysis (MSS, Window Scale, etc.).
     /// </summary>
+    /// <remarks>
+    /// The method returns nothing on purpose: the values the stateful analysis needs from the options (the window scale of a
+    /// SYN) are read by a separate, field-free scan in the protocol, because they are needed at ingest time while this
+    /// parser only runs when the lazy options node is opened. Parsing never fails: truncated or malformed options simply
+    /// stop the walk.
+    /// </remarks>
     /// <param name="optionsData">The raw TCP options bytes (header[20..headerLen]).</param>
     /// <param name="container">The MutField to append option sub-fields to.</param>
     /// <param name="fieldIds">The registered field IDs for TCP options.</param>
-    /// <returns>
-    /// Parsed option information for analysis. Parsing never fails: truncated or malformed options simply stop the walk.
-    /// </returns>
-    internal static TcpOptionsInfo Parse(
+    internal static void Parse(
         ReadOnlySpan<byte> optionsData,
         in MutField container,
         in TcpOptionsFieldIds fieldIds)
     {
-        ushort? mss = null;
-        byte? windowScale = null;
-        bool sackPermitted = false;
-        uint? tsVal = null;
-        uint? tsEcr = null;
-
         int offset = 0;
         while (offset < optionsData.Length)
         {
             byte kind = optionsData[offset];
 
-    #endregion
-
-            #region Single-byte options (no length field)
+            // Single-byte options (no length field): EOL ends the walk, NOP only pads.
             if (kind == _OptEol)
             {
                 container.AppendWithCustomText(
@@ -117,9 +115,7 @@ internal static class TcpOptionsParser
                 continue;
             }
 
-            #endregion
-
-            #region Multi-byte options: kind + length + data
+            // Multi-byte options: kind + length + data.
             if (offset + 1 >= optionsData.Length)
             {
                 break; // Truncated - no length byte
@@ -139,20 +135,19 @@ internal static class TcpOptionsParser
             switch (kind)
             {
                 case _OptMss:
-                    mss = _ParseMss(optionBytes, in container, in fieldIds);
+                    _ParseMss(optionBytes, in container, in fieldIds);
                     break;
                 case _OptWindowScale:
-                    windowScale = _ParseWindowScale(optionBytes, in container, in fieldIds);
+                    _ParseWindowScale(optionBytes, in container, in fieldIds);
                     break;
                 case _OptSackPermitted:
                     _ParseSackPermitted(in container, in fieldIds);
-                    sackPermitted = true;
                     break;
                 case _OptSack:
                     _ParseSack(optionBytes, in container, in fieldIds);
                     break;
                 case _OptTimestamps:
-                    (tsVal, tsEcr) = _ParseTimestamps(optionBytes, in container, in fieldIds);
+                    _ParseTimestamps(optionBytes, in container, in fieldIds);
                     break;
                 case _OptUserTimeout:
                     _ParseUserTimeout(optionBytes, in container, in fieldIds);
@@ -179,10 +174,10 @@ internal static class TcpOptionsParser
                     _ParseFixedU32(optionBytes, in container, in fieldIds, fieldIds.Cc, fieldIds.CcValue);
                     break;
                 case _OptCcNew:
-                    _ParseFixedU32(optionBytes, in container, in fieldIds, fieldIds.CcNew, fieldIds.CcNewValue);
+                    _ParseFixedU32(optionBytes, in container, in fieldIds, fieldIds.CcNew, fieldIds.CcValue);
                     break;
                 case _OptCcEcho:
-                    _ParseFixedU32(optionBytes, in container, in fieldIds, fieldIds.CcEcho, fieldIds.CcEchoValue);
+                    _ParseFixedU32(optionBytes, in container, in fieldIds, fieldIds.CcEcho, fieldIds.CcValue);
                     break;
                 case _OptScps:
                     _ParseScps(optionBytes, in container, in fieldIds);
@@ -205,24 +200,19 @@ internal static class TcpOptionsParser
 
             offset += optLen;
         }
-
-        return new TcpOptionsInfo
-        {
-            Mss = mss,
-            WindowScale = windowScale,
-            SackPermitted = sackPermitted,
-            TsVal = tsVal,
-            TsEcr = tsEcr,
-        };
     }
 
+    #endregion
+
+    #region Option handlers
+
     /// <summary>Parses MSS option (kind 2, length 4): 2-byte MSS value.</summary>
-    private static ushort? _ParseMss(
+    private static void _ParseMss(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 4)
         {
-            return null;
+            return;
         }
 
         ushort value = BinaryPrimitives.ReadUInt16BigEndian(data[2..]);
@@ -231,22 +221,21 @@ internal static class TcpOptionsParser
             // Eager text (one string): the field tree stores it right away; InvariantCulture per the repository rule.
             string.Create(CultureInfo.InvariantCulture, $"Maximum Segment Size: {value} bytes"));
         mssField.Append(ids.MssVal, FieldValue.NewU64(value));
-        return value;
     }
 
     /// <summary>
     /// Parses Window Scale option (kind 3, length 3): 1-byte shift count.
     /// Capped to 14 per RFC 7323.
     /// </summary>
-    private static byte? _ParseWindowScale(
+    private static void _ParseWindowScale(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 3)
         {
-            return null;
+            return;
         }
 
-        // The field shows the value as sent (shift); the multiplier and the returned value use the capped count.
+        // The field shows the value as sent (shift); the multiplier uses the capped count.
         // RFC 7323 -2.3: shift count MUST NOT exceed 14 (receivers treat larger values as 14). The cap also keeps
         // the 1u << effectiveShift below valid for any wire byte.
         byte shift = data[2];
@@ -258,8 +247,6 @@ internal static class TcpOptionsParser
             string.Create(CultureInfo.InvariantCulture, $"Window Scale: {shift} (multiply by {multiplier})"));
         wsField.Append(ids.WindowScaleVal, FieldValue.NewU64(shift));
         wsField.Append(ids.WindowScaleMultiplier, FieldValue.NewU64(multiplier));
-
-        return effectiveShift;
     }
 
     /// <summary>Parses SACK Permitted option (kind 4, length 2): no data.</summary>
@@ -307,12 +294,12 @@ internal static class TcpOptionsParser
     /// <summary>
     /// Parses Timestamps option (kind 8, length 10): TSval (4 bytes) + TSecr (4 bytes).
     /// </summary>
-    private static (uint? TsVal, uint? TsEcr) _ParseTimestamps(
+    private static void _ParseTimestamps(
         ReadOnlySpan<byte> data, in MutField container, in TcpOptionsFieldIds ids)
     {
         if (data.Length < 10)
         {
-            return (null, null);
+            return;
         }
 
         uint tsVal = BinaryPrimitives.ReadUInt32BigEndian(data[2..]);
@@ -323,8 +310,6 @@ internal static class TcpOptionsParser
             string.Create(CultureInfo.InvariantCulture, $"Timestamps: TSval={tsVal}, TSecr={tsEcr}"));
         tsField.Append(ids.TimestampTsVal, FieldValue.NewU64(tsVal));
         tsField.Append(ids.TimestampTsEcr, FieldValue.NewU64(tsEcr));
-
-        return (tsVal, tsEcr);
     }
 
     /// <summary>
@@ -472,7 +457,7 @@ internal static class TcpOptionsParser
 
         uint value = BinaryPrimitives.ReadUInt32BigEndian(data[2..]);
         MutField echo = container.Append(ids.EchoReply, FieldValue.None);
-        echo.Append(ids.EchoReplyValue, FieldValue.NewU64(value));
+        echo.Append(ids.EchoValue, FieldValue.NewU64(value));
     }
 
     /// <summary>
@@ -504,6 +489,7 @@ internal static class TcpOptionsParser
 
         byte caps = data[2];
         MutField scps = container.Append(ids.Scps, FieldValue.None);
+        scps.Append(ids.ScpsVector, FieldValue.NewU64(caps));
         scps.Append(ids.ScpsBets, FieldValue.NewBool((caps & 0x80) != 0));
         scps.Append(ids.ScpsSnack1, FieldValue.NewBool((caps & 0x40) != 0));
         scps.Append(ids.ScpsSnack2, FieldValue.NewBool((caps & 0x20) != 0));
@@ -631,6 +617,10 @@ internal static class TcpOptionsParser
         }
     }
 
+    #endregion
+
+    #region Display helpers
+
     /// <summary>Returns the name of an MPTCP subtype (the subtypes 0..8 defined by RFC 8684; others as <c>Unknown (n)</c>).</summary>
     private static string _GetMptcpSubtypeName(byte subtype)
     {
@@ -648,8 +638,5 @@ internal static class TcpOptionsParser
             _ => $"Unknown ({subtype})",
         };
     }
-            #endregion
+    #endregion
 }
-
-
-

@@ -103,6 +103,27 @@ public static class TcpConnection
             _SharedProducerBuffer = null;
         }
     }
+
+    /// <summary>
+    /// Number of MSS-sized segments needed for <paramref name="payloadLength"/> bytes (ceiling division).
+    /// </summary>
+    /// <remarks>
+    /// Why 64-bit arithmetic: a <see cref="ReadOnlySpan{T}"/> may be as long as <see cref="int.MaxValue"/>, and
+    /// <c>payloadLength + mss - 1</c> in 32 bits wraps negative near that length. The segment loop would then run zero
+    /// times and the write would silently emit nothing, which a large-transfer test could not notice. The result always
+    /// fits an <see cref="int"/> because it is at most <paramref name="payloadLength"/>. Thread safety: pure function.
+    /// </remarks>
+    /// <param name="payloadLength">Payload size in bytes; must not be negative.</param>
+    /// <param name="mss">Maximum segment size in bytes; must be greater than zero.</param>
+    /// <returns>The segment count, 0 for an empty payload.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="payloadLength"/> is negative or <paramref name="mss"/> is 0.</exception>
+    internal static int SegmentCount(int payloadLength, ushort mss)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(payloadLength);
+        ArgumentOutOfRangeException.ThrowIfZero(mss);
+
+        return (int)(((long)payloadLength + mss - 1) / mss);
+    }
 }
 
 /// <summary>
@@ -467,8 +488,10 @@ public sealed class TcpConnection<TOld, TTail> : IDisposable
             return;
         }
 
-        // Determine number of segments produced by this call.
-        int segmentCount = (payload.Length + effectiveMss - 1) / effectiveMss;
+        // Determine number of segments produced by this call. The ceiling division is done in 64 bits (see SegmentCount):
+        // a span near int.MaxValue would wrap a 32-bit sum negative, the loop below would run zero times and the call would
+        // return without a frame and without an error.
+        int segmentCount = TcpConnection.SegmentCount(payload.Length, effectiveMss);
         int offset = 0;
         for (int i = 0; i < segmentCount; i++)
         {

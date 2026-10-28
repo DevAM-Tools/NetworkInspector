@@ -88,8 +88,8 @@ public readonly struct SocketCanXlLayer : IStatelessLayer, IRootLayer
     public void WriteHeader(scoped Span<byte> dst)
     {
         // Prio/VCID: 4 bytes big-endian in LINKTYPE_CAN_SOCKETCAN captures.
-        // Wireshark: "The priority/VCID field is big-endian in LINKTYPE_CAN_SOCKETCAN
-        // captures, for historical reasons."
+        // The priority/VCID field is big-endian in LINKTYPE_CAN_SOCKETCAN
+        // captures, for historical reasons.
         BinaryPrimitives.WriteUInt32BigEndian(dst[..4], _Prio);
         dst[4] = _Flags;
         dst[5] = _Sdt;

@@ -3,13 +3,13 @@
 namespace NetworkInspector.Testing.Tshark;
 
 /// <summary>
-/// Internal helpers for parsing Wireshark PDML (Packet Details Markup Language) XML.
+/// Internal helpers for parsing tshark PDML (Packet Details Markup Language) XML.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>Why <see cref="XName.LocalName"/>-based matching?</b>
-/// Wireshark 4.x introduced a default XML namespace declaration on the PDML root element
-/// (e.g. <c>xmlns="http://www.wireshark.org/pdml/2.0"</c>). Once that namespace is present
+/// tshark 4.x introduced a default XML namespace declaration on the PDML root element
+/// (a URI under the tool vendor's domain). Once that namespace is present
 /// every child element's fully-qualified <see cref="XName"/> includes the namespace URI, so
 /// the common unqualified lookup <c>element.Element("packet")</c> returns <see langword="null"/>
 /// because the supplied literal <c>"packet"</c> resolves to the no-namespace name.

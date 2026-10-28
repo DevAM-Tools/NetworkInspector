@@ -222,8 +222,8 @@ internal sealed class TcpFlagsTests
         using Stack stack = ProtocolTestHelper.BuildStack();
         Packet p = _Parse(stack, _BuildFrame(TcpFlags.Syn));
 
-        // Display text format: "0xHH [flag1, flag2, ...]"
-        await ProtocolTestHelper.AssertDisplayText(stack, p, "tcp.flags", "0x02 [SYN]").ConfigureAwait(false);
+        // Display text format: "0xHHH [flag1, flag2, ...]": 12 bits, three hex digits, flags from the lowest bit up
+        await ProtocolTestHelper.AssertDisplayText(stack, p, "tcp.flags", "0x002 [SYN]").ConfigureAwait(false);
     }
 
     [Test]
@@ -232,7 +232,7 @@ internal sealed class TcpFlagsTests
         using Stack stack = ProtocolTestHelper.BuildStack();
         Packet p = _Parse(stack, _BuildFrame(TcpFlags.SynAck));
 
-        await ProtocolTestHelper.AssertDisplayText(stack, p, "tcp.flags", "0x12 [ACK, SYN]").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertDisplayText(stack, p, "tcp.flags", "0x012 [SYN, ACK]").ConfigureAwait(false);
     }
 
     [Test]
@@ -241,7 +241,7 @@ internal sealed class TcpFlagsTests
         using Stack stack = ProtocolTestHelper.BuildStack();
         Packet p = _Parse(stack, _BuildFrame(0x00));
 
-        await ProtocolTestHelper.AssertDisplayText(stack, p, "tcp.flags", "0x00 [None]").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertDisplayText(stack, p, "tcp.flags", "0x000 [None]").ConfigureAwait(false);
     }
 
     #endregion

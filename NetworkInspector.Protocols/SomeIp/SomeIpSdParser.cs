@@ -10,7 +10,6 @@ namespace NetworkInspector.Protocols.SomeIp;
 /// | Flags(1) | Reserved(3) | Entries Length(4) | Entries... | Options Length(4) | Options... |
 /// </code>
 /// Each entry is 16 bytes. Options are variable-length (length(2) + type(1) + data).
-/// <para>Wireshark ref: packet-someip-sd.c</para>
 /// </summary>
 /// <remarks>
 /// <para>
@@ -308,7 +307,7 @@ internal static class SomeIpSdParser
             //   type (1 byte)
             //   [reserved (1 byte)] - for most option types
             //   option data
-            // Total wire size = length + 3 (per Wireshark packet-someip-sd.c). Every iteration advances by at
+            // Total wire size = length + 3 (SOME/IP-SD option layout). Every iteration advances by at
             // least 3 bytes, so the loop terminates even for crafted zero-length options.
             int optLength = BinaryPrimitives.ReadUInt16BigEndian(
                 fullData[offset..(offset + 2)]);

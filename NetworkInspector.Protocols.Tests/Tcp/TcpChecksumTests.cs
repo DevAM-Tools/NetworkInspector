@@ -60,7 +60,7 @@ internal sealed class TcpChecksumTests
         byte[] frame = _BuildFrame();
         Packet p = ProtocolTestHelper.ParseFrame(stack, frame, 0, Timestamp.FromMillis(0));
 
-        await ProtocolTestHelper.AssertStringField(stack, p, "tcp.checksum.status", "[Good]").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.checksum.status", 1).ConfigureAwait(false);
     }
 
     [Test]
@@ -73,7 +73,7 @@ internal sealed class TcpChecksumTests
         _CorruptChecksum(frame);
         Packet p = ProtocolTestHelper.ParseFrame(stack, frame, 0, Timestamp.FromMillis(0));
 
-        await ProtocolTestHelper.AssertStringField(stack, p, "tcp.checksum.status", "[Bad]").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.checksum.status", 0).ConfigureAwait(false);
     }
 
     [Test]
@@ -99,7 +99,7 @@ internal sealed class TcpChecksumTests
         byte[] frame = _BuildFrame(payload);
         Packet p = ProtocolTestHelper.ParseFrame(stack, frame, 0, Timestamp.FromMillis(0));
 
-        await ProtocolTestHelper.AssertStringField(stack, p, "tcp.checksum.status", "[Good]").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertU64Field(stack, p, "tcp.checksum.status", 1).ConfigureAwait(false);
     }
 
     #endregion

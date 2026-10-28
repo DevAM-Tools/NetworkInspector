@@ -33,7 +33,7 @@ public static class TsharkVerifier
     /// <summary>
     /// Environment variable name. When set to <c>"1"</c> the missing-tshark hard failure
     /// is downgraded to a silent skip. Intended only for developer machines without
-    /// Wireshark; CI/release runs must leave it unset.
+    /// tshark; CI/release runs must leave it unset.
     /// </summary>
     public const string AllowMissingEnvVar = "NETWORKINSPECTOR_ALLOW_MISSING_TSHARK";
 
@@ -85,7 +85,7 @@ public static class TsharkVerifier
         {
             throw new InvalidOperationException(
                 "tshark is required for cross-validation tests but was not found on PATH. " +
-                "Install Wireshark/tshark 4.6.x or newer (tshark must be on PATH).");
+                "Install tshark 4.6.x or newer (tshark must be on PATH).");
         }
     }
 
@@ -108,7 +108,7 @@ public static class TsharkVerifier
 
         throw new InvalidOperationException(
             "tshark is required for protocol cross-validation but was not found on PATH. " +
-            $"Install Wireshark/tshark or set {AllowMissingEnvVar}=1 to skip cross-validation locally. " +
+            $"Install tshark or set {AllowMissingEnvVar}=1 to skip cross-validation locally. " +
             "Release and CI runs must execute with tshark available.");
     }
 
@@ -121,7 +121,7 @@ public static class TsharkVerifier
     /// </summary>
     /// <param name="frameData">Raw frame bytes for the link-layer type indicated by <paramref name="dlt"/>.</param>
     /// <param name="tsharkFieldName">tshark field name (for example <c>ip.src</c>, <c>tcp.dstport</c>).</param>
-    /// <param name="dlt">Wireshark/libpcap link-type identifier (DLT). Default <c>1</c> = Ethernet.</param>
+    /// <param name="dlt">libpcap link-type identifier (DLT). Default <c>1</c> = Ethernet.</param>
     /// <param name="decodeAs">Optional <c>-d</c> argument forcing dissector selection (for example <c>tcp.port==8443,http2</c>).</param>
     /// <param name="profileDir">Optional per-test tshark profile directory; passed through to <see cref="TsharkProcess.Run"/>.</param>
     public static string? GetFieldValue(
@@ -147,7 +147,7 @@ public static class TsharkVerifier
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <c>tshark -T fields -e …</c> validates each <c>-e</c> name against the Wireshark startup field
+    /// <c>tshark -T fields -e …</c> validates each <c>-e</c> name against the tool's startup field
     /// registry only. Preference/UAT-registered Signal Message per-signal columns are thus rejected as
     /// &quot;Some fields aren't valid&quot; even though the dissected PDML tree contains those fields at
     /// runtime. When <paramref name="profileDir"/> is set and stderr reports that error for the requested
@@ -196,7 +196,7 @@ public static class TsharkVerifier
 
             // Take the last non-empty line: user Lua plugins (when present) sometimes
             // print extra lines first. Lua plugins are normally suppressed via
-            // WIRESHARK_CONFIG_DIR but this is a defensive fallback.
+            // the tool's configuration directory override (TsharkProcess.ConfigDirVariable) but this is a defensive fallback.
             string[] lines = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
             string line = lines.Length > 0 ? lines[^1] : string.Empty;
             string[] parts = line.Split('\t');
@@ -323,7 +323,7 @@ public static class TsharkVerifier
     /// </summary>
     /// <param name="frameData">Raw frame bytes.</param>
     /// <param name="protocolName">tshark protocol name (for example <c>eth</c>, <c>ip</c>, <c>tcp</c>).</param>
-    /// <param name="dlt">Wireshark/libpcap link-type identifier (DLT).</param>
+    /// <param name="dlt">libpcap link-type identifier (DLT).</param>
     /// <param name="decodeAs">Optional <c>-d</c> dissector override.</param>
     /// <param name="profileDir">Optional per-test tshark profile directory.</param>
     public static List<PdmlField> GetProtocolFields(
@@ -470,7 +470,7 @@ public static class TsharkVerifier
     /// </remarks>
     /// <param name="frames">Frames in wire order.</param>
     /// <param name="tsharkFieldNames">Field names to extract per packet.</param>
-    /// <param name="dlt">Wireshark/libpcap link-type identifier (DLT). Default <c>1</c> = Ethernet.</param>
+    /// <param name="dlt">libpcap link-type identifier (DLT). Default <c>1</c> = Ethernet.</param>
     /// <param name="decodeAs">Optional <c>-d</c> dissector override.</param>
     /// <param name="profileDir">Optional per-test tshark profile directory.</param>
     public static List<string?[]> GetFieldValuesPerPacket(
@@ -549,6 +549,23 @@ public static class TsharkVerifier
         IReadOnlyList<byte[]> frames,
         string argumentsAfterReader,
         int dlt = 1,
+        string? profileDir = null) =>
+        RunOnTimedFrames(frames, timestampsMicros: null, argumentsAfterReader, dlt, profileDir);
+
+    /// <summary>
+    /// Like <see cref="RunOnFrames"/>, with an explicit capture time per frame. Needed for analyses that depend on the time
+    /// between packets (reordering window, retransmission timeout, fast retransmission).
+    /// </summary>
+    /// <param name="frames">Frames in wire order.</param>
+    /// <param name="timestampsMicros">Capture time of each frame in microseconds since the epoch, or <see langword="null"/> for 1 ms spacing.</param>
+    /// <param name="argumentsAfterReader">tshark arguments appended after the implicit <c>-r &lt;file&gt;</c>.</param>
+    /// <param name="dlt">DLT for the temporary capture.</param>
+    /// <param name="profileDir">Optional per-test tshark profile directory.</param>
+    public static string RunOnTimedFrames(
+        IReadOnlyList<byte[]> frames,
+        IReadOnlyList<long>? timestampsMicros,
+        string argumentsAfterReader,
+        int dlt = 1,
         string? profileDir = null)
     {
         if (!_EnsureAvailableOrAllowed())
@@ -559,7 +576,7 @@ public static class TsharkVerifier
         string tempFile = Path.Combine(Path.GetTempPath(), $"ni_test_{Guid.NewGuid():N}.pcap");
         try
         {
-            TsharkPcapWriter.Write(tempFile, frames, dlt);
+            TsharkPcapWriter.Write(tempFile, frames, timestampsMicros, dlt);
             string arguments = $"-r \"{tempFile}\" {argumentsAfterReader}";
             (int exit, string output, string stderr, _) = TsharkProcess.Run(arguments, 15_000, profileDir);
             if (exit != 0)

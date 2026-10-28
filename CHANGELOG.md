@@ -98,6 +98,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **TCP analysis rewritten on an ordered list of unacknowledged segments.** Per direction the tracker remembers the segments
+  that are not yet acknowledged (bounded at 10000, allocated on the first data segment) and compares every segment and ACK
+  against them with serial-number arithmetic. Result: a gap is only `lost_segment`, a late segment is `out_of_order` (not a
+  retransmission), a retransmission names the first transmission (`rto`, `rto_frame`), `spurious_retransmission` and
+  `fast_retransmission` are reported next to `retransmission`, duplicate ACKs keep counting across data segments of the
+  receiver and restart only when the acknowledgement number moves, ACKs of lost, partially acknowledged or retransmitted data
+  are flagged (`ack_lost_segment`, `partial_ack`, `ambiguous_ack`), `bytes_in_flight` is the sum of the unacknowledged bytes,
+  and the window scale is applied from the SYNs (including the "scale unknown" and "scale off" cases). The per-direction ring
+  buffers are gone, so an idle connection no longer carries them. The result is compared field by field with `tshark` 4.6 in
+  twelve recorded scenarios.
+- **TCP connection state, completeness and packet info.** `tcp.analysis.connection_state` is derived from recorded FIN and ACK
+  facts and follows RFC 9293 for the side that closed first (TIME_WAIT only when both FINs are acknowledged; a retransmitted FIN
+  no longer moves it; a reset is final; a connection without handshake reads `ESTABLISHED (handshake not captured)`). New
+  fields: `tcp.completeness` with `tcp.completeness.str` and one flag per part, `tcp.nxtseq`, the 12-bit `tcp.flags` word with
+  `tcp.flags.ae`, `tcp.window_size_scalefactor`, and `tcp.segment`/`tcp.segment.count` on reassembled PDUs. The packet info reads
+  `49152 → 80 [PSH, ACK] Seq=1 Ack=1 Win=65535 Len=100`.
+- **TCP stream lifecycle.** A FIN from both sides or an RST ends the reassembly of a stream and frees its buffers; a SYN on the
+  same address and port pair after the close starts a new stream (`tcp.analysis.reused_ports`). A reassembly that reaches its
+  limit reports `tcp.error.reassembly_limit` with the limit's name and goes on with a fresh buffer instead of staying silent.
+- **Reassembly for TLS and HTTP/2.** TLS records and handshake messages that span segments or records are joined
+  (`TlsRecordDetector`, PDU 2 MiB, buffer 4 MiB per direction). HTTP/2 frames are framed by `Http2FrameDetector` (it follows
+  `SETTINGS_MAX_FRAME_SIZE`, 16 MiB buffer per direction), header blocks across CONTINUATION frames are joined (up to 256 KiB),
+  and HPACK is decoded with a stateful decoder per direction (dynamic table, size updates, at most 64 KiB), so indexed headers
+  of later requests resolve. A protocol chosen by the heuristic table gets the same reassembly. HTTP/1 framing keeps a cursor per
+  direction and handles `HEAD`/`CONNECT` replies and bodies that end with the connection.
+- **`SequenceStreamBuffer`:** held out-of-order segments are kept sorted (binary search, no scan per insertion, ordered across the
+  sequence wrap), the buffer remembers which packets delivered which bytes (`TryAppend(sequence, payload, packetId)`,
+  `GetContributingPacketIds`), and exposes `BufferedLength` and `RebaseCount`.
+- **FrameBuilder:** `TcpOptionsBuilder` has `Nop`, `Eol`, `SackPermitted`, `WindowScale` (shift up to 14), `Timestamps`,
+  `Sack` (one to four blocks) and `Unknown`; `SynOptions` is built from these blocks.
 - **Dependency removed:** `ZeroAlloc` is no longer referenced by any package. Deferred display text is now
   `NetworkInspector.Core.Fields.LazyString` (same members, same cache-in-place semantics); eager text uses
   `string.Create(CultureInfo.InvariantCulture, $"…")`; the fixed headers of IPv4, IPv6, TCP, UDP, VLAN, BLF, and PCAPNG are
@@ -170,6 +200,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **TCP: `TcpConnection.WriteFromClient` / `WriteFromServer` sent nothing for a payload close to `int.MaxValue`.** The segment
+  count was computed in 32 bits and wrapped negative; it is computed in 64 bits now.
+- **TCP:** the window-size, flags and checksum fields now follow the common model: `tcp.flags` is the 12-bit word (text
+  `0x012 [SYN, ACK]`, `0x000 [None]`), `tcp.checksum.status` is numeric (0 bad, 1 good), the option fields are named
+  `tcp.options.sack_perm`, `tcp.options.timestamp.tsval`/`tsecr`, `tcp.options.wscale.shift`/`multiplier`, and the SYN-ACK
+  acknowledgement is shown relative. Filters, exports and value caches that used the old names or texts change accordingly.
+- **HPACK:** the decoder had no dynamic table, so every header that referred to an earlier entry was lost; it is stateful now.
 - **SOME/IP: the packet info showed the service id with a doubled prefix** (`SOME/IP 0x0x1234 …`); it now reads
   `SOME/IP 0x1234 …`. Exports that contain the packet info of SOME/IP packets change accordingly.
 - **IPv6: the Encapsulating Security Payload header was never shown.** `ipv6.esp` (with `ipv6.esp.spi` and `ipv6.esp.seq`)
@@ -262,6 +299,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Breaking
 
+- **`LinkType.WiresharkUpperPdu` is now `LinkType.UpperPdu`** (value 252 and the wire format are unchanged); its display name is  `Upper PDU`. Change the name where you refer to the enum member.
 - **The lazy text moved out of the `ZeroAlloc` namespace.** `LazyString`, `LazyStringError`, and `LazyStringErrorCode` are now in
   `NetworkInspector.Core.Fields`; change the `using` (no other change: the members are the same). `ZA.Lazy(…)` becomes
   `LazyString.FormatLazy(tuple, static s => string.Create(CultureInfo.InvariantCulture, $"…"))`; `FormatTemp()` becomes

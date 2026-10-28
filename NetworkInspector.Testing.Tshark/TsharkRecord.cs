@@ -11,7 +11,7 @@ namespace NetworkInspector.Testing.Tshark;
 /// <param name="FrameLen">Original frame length in bytes (uncaptured length).</param>
 /// <param name="InterfaceName">Interface display name reported by tshark.</param>
 /// <param name="InterfaceId">0-based interface ordinal inside the capture.</param>
-/// <param name="EncapType">Wireshark <c>WTAP_ENCAP_*</c> identifier reported by tshark.</param>
+/// <param name="EncapType">tshark <c>WTAP_ENCAP_*</c> identifier reported by the tool.</param>
 /// <remarks>
 /// Byte-exact frame content is intentionally not part of this record. tshark does not
 /// surface a generic per-frame raw-bytes field through <c>-T fields</c>; raw-content

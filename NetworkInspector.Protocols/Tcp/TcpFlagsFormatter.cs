@@ -49,7 +49,7 @@ internal static class TcpFlagsFormatter
     /// helper arrays below are acceptable here; the packet path never calls it.
     /// </summary>
     /// <param name="flags">Flags byte.</param>
-    /// <returns>Comma separated flag names in the order CWR, ECE, URG, ACK, PSH, RST, SYN, FIN, or <c>None</c>.</returns>
+    /// <returns>Comma separated flag names in the order FIN, SYN, RST, PSH, ACK, URG, ECE, CWR, or <c>None</c>.</returns>
     private static string _BuildFlagString(byte flags)
     {
         if (flags == 0)
@@ -57,14 +57,15 @@ internal static class TcpFlagsFormatter
             return "None";
         }
 
-        // Build flag names in the order of the bits from most to least significant. The final string is created
-        // directly with string.Create (exact length known up front) instead of string.Join over an intermediate list.
-        // names[i] and masks[i] must stay index-aligned.
+        // Build flag names in the order of the bits from LEAST to most significant, so a handshake answer reads
+        // "SYN, ACK" and a data segment "PSH, ACK" - the order users know from other packet analyzers, and the order the
+        // documented field tree shows. The final string is created directly with string.Create (exact length known up
+        // front) instead of string.Join over an intermediate list. names[i] and masks[i] must stay index-aligned.
         ReadOnlySpan<string> names =
         [
-            "CWR", "ECE", "URG", "ACK", "PSH", "RST", "SYN", "FIN"
+            "FIN", "SYN", "RST", "PSH", "ACK", "URG", "ECE", "CWR"
         ];
-        byte[] masks = [_CwrBit, _EceBit, _UrgBit, _AckBit, _PshBit, _RstBit, _SynBit, _FinBit];
+        byte[] masks = [_FinBit, _SynBit, _RstBit, _PshBit, _AckBit, _UrgBit, _EceBit, _CwrBit];
 
         // First pass: compute total length
         int totalLen = 0;

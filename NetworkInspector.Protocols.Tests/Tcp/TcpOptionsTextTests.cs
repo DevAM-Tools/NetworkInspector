@@ -47,11 +47,11 @@ internal sealed class TcpOptionsTextTests
 
     [Test]
     public async Task UserTimeoutShowsValueAndUnit() =>
-        await _AssertText([0x1C, 0x04, 0x80, 0x3C], "tcp.options.user_timeout", "User Timeout: 60 seconds").ConfigureAwait(false);
+        await _AssertText([0x1C, 0x04, 0x80, 0x3C], "tcp.options.user_to", "User Timeout: 60 seconds").ConfigureAwait(false);
 
     [Test]
     public async Task UserTimeoutInMinutes() =>
-        await _AssertText([0x1C, 0x04, 0x00, 0x05], "tcp.options.user_timeout", "User Timeout: 5 minutes").ConfigureAwait(false);
+        await _AssertText([0x1C, 0x04, 0x00, 0x05], "tcp.options.user_to", "User Timeout: 5 minutes").ConfigureAwait(false);
 
     [Test]
     public async Task FastOpenCookieShowsItsLength() =>

@@ -8,7 +8,7 @@ namespace NetworkInspector.Protocols;
 /// dispatch table, keyed by the 6-bit frame ID (not the protected ID / PID byte).
 /// Dispatching applies only to non-Event frames (<c>msgType != 3</c>) with a non-empty
 /// payload and no capture error flags.
-/// <para>DLT_LIN capture format (per Wireshark packet-lin.h / packet-lin.c):</para>
+/// <para>DLT_LIN capture format:</para>
 /// <code>
 /// Byte  0:    Message Format Revision (should be 1)
 /// Bytes 1-3:  Reserved (3 bytes)
@@ -90,7 +90,7 @@ public sealed partial class LinProtocol : IProtocol
     /// <summary>Mask for the 6-bit frame ID within the PID byte.</summary>
     private const byte _FrameIdMask = 0x3F;
 
-    // Error flag bits in byte 7 (per Wireshark packet-lin.h). Bits 6 and 7 are not defined and not decoded, but they
+    // Error flag bits in byte 7 (DLT_LIN layout). Bits 6 and 7 are not defined and not decoded, but they
     // are part of the raw 'lin.errors' value and make it non-zero, which disables payload dispatch.
     private const byte _ErrNoSlaveResponse = 0x01;
     private const byte _ErrFraming = 0x02;
@@ -201,7 +201,7 @@ public sealed partial class LinProtocol : IProtocol
     private FieldId _DataFieldId;
 
     /// <summary>
-    /// Parses a LIN frame in DLT_LIN format (per Wireshark packet-lin.c).
+    /// Parses a LIN frame in DLT_LIN format (DLT_LIN layout).
     /// Dispatches the data payload to sub-protocols keyed by the 6-bit frame ID.
     /// <para>
     /// All fields are decoded eagerly (this protocol has no lazy populator). Truncated captures are accepted: the

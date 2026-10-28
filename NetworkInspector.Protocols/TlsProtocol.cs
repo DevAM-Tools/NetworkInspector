@@ -6,8 +6,10 @@ namespace NetworkInspector.Protocols;
 /// Transport Layer Security (TLS) protocol parser (RFC 8446).
 /// Parses TLS record layer and handshake messages including Client/Server Hello.
 /// No decryption — only handshake metadata and record structure are parsed.
-/// Only records that lie completely inside the TCP segment handed to <see cref="Parse"/> are decoded; a record that
-/// continues in a later segment ends the walk (this protocol does not reassemble records).
+/// Only records that lie completely inside the data handed to <see cref="Parse"/> are decoded. The data is normally a
+/// reassembled unit: TCP buffers the segments of the connection and hands this protocol one record, or the run of handshake
+/// records that completes a handshake message (see <c>TlsRecordDetector</c>), so a Certificate message that spans several
+/// segments and records is parsed whole. A record that is still incomplete (the raw path without reassembly) ends the walk.
 /// <para>Field tree structure (alert fields <c>tls.alert.level</c> / <c>tls.alert.description</c> sit directly under
 /// <c>tls</c>, like the handshake containers):</para>
 /// <code>
@@ -41,8 +43,8 @@ namespace NetworkInspector.Protocols;
 /// The only instance state is the field and protocol ids (assigned by the generated registration code) and the
 /// populator delegate (assigned in <c>_OnStartCustom</c>), all during the single-threaded build phase and read-only
 /// thereafter, so <see cref="IProtocol.Parse"/> may be invoked concurrently from any number of threads on the same
-/// instance without external synchronisation. The protocol keeps no cross-packet state (no trackers, no reassembly),
-/// so it has no first-parse/replay distinction.</para>
+/// instance without external synchronisation. The protocol keeps no cross-packet state (the reassembly lives in the TCP
+/// layer and in the stateless <c>TlsRecordDetector</c>), so it has no first-parse/replay distinction.</para>
 /// <para><b>Index consistency:</b> the lazy populator (<c>_PopulateTls</c> and the <c>_Parse*</c> methods) decides which
 /// fields exist; the <c>_Detect*</c> methods repeat those decisions eagerly so the packet index can record the
 /// content-dependent groups without materialising the tree. The two sets of methods mirror each other and must be
@@ -63,6 +65,9 @@ public sealed partial class TlsProtocol : IProtocol
 
     /// <summary>Index group for always-present TLS fields.</summary>
     private const string _TlsIndexGroup = "tls";
+
+    /// <summary>Content type of a handshake record (RFC 8446 section 5.1): a format fact.</summary>
+    private const byte _HandshakeContentType = 22;
 
     #endregion
 
@@ -356,7 +361,19 @@ public sealed partial class TlsProtocol : IProtocol
             int recordPayloadEnd = offset + TlsRecordHeader.Size + record.Length;
             if (recordPayloadEnd > span.Length)
             {
-                break; // Incomplete record (continues in a later TCP segment, or truncated) — stop parsing
+                break; // Incomplete record (the raw path without reassembly, or truncated) — stop parsing
+            }
+
+            // A handshake message that spans several records is parsed from the joined payloads of those records. Only a
+            // handshake record can start such a run; the common case (a message that ends inside its record) takes the
+            // single-record path below without any copy.
+            if (record.ContentType == _HandshakeContentType
+                && TlsRecordDetector.TryGetUnit(span, offset, out int runEnd, out int runRecords) == TlsRecordDetector.UnitState.Complete
+                && runRecords > 1)
+            {
+                _ParseSpanningHandshake(in container, tlsData, offset, runRecords);
+                offset = runEnd;
+                continue;
             }
 
             string ctText = TlsDisplayTables.GetContentTypeDisplayText(record.ContentType);
@@ -395,8 +412,82 @@ public sealed partial class TlsProtocol : IProtocol
     }
 
     /// <summary>
+    /// Parses a run of handshake records whose messages cross record boundaries (for example a Certificate message above
+    /// 16 KiB, or a ClientHello with a post-quantum key share that is cut into two records). The records get their
+    /// <c>tls.record</c> nodes as usual; the handshake messages are parsed once from the joined payloads.
+    /// </summary>
+    /// <remarks>
+    /// Handshake payloads of consecutive handshake records are one byte stream (RFC 8446 section 5.1), so the message fields
+    /// are decoded from a joined copy. The copy is owned by the field values that slice it, so it lives as long as the
+    /// packet's fields do. This is the cold path: it runs only for messages that really span records, once per such unit;
+    /// all other handshake records are parsed in place without a copy.
+    /// </remarks>
+    /// <param name="container">The <c>tls</c> container.</param>
+    /// <param name="tlsData">The whole TLS unit.</param>
+    /// <param name="runStart">Offset of the first record of the run.</param>
+    /// <param name="runRecords">Number of records in the run (at least 2).</param>
+    private void _ParseSpanningHandshake(in MutField container, ReadOnlyMemory<byte> tlsData, int runStart, int runRecords)
+    {
+        ReadOnlySpan<byte> span = tlsData.Span;
+
+        // Record nodes first, in record order, with the same shape as the single-record path.
+        int recordOffset = runStart;
+        for (int i = 0; i < runRecords; i++)
+        {
+            // The run was validated by TlsRecordDetector.TryGetUnit, so every header is present and complete.
+            _ = TlsRecordHeader.TryParse(span[recordOffset..], out TlsRecordHeader record);
+            string ctText = TlsDisplayTables.GetContentTypeDisplayText(record.ContentType);
+            string versionText = TlsDisplayTables.GetVersionDisplayText(record.Version);
+            MutField recordField = container.AppendWithCustomText(_RecordFieldId, FieldValue.None, "TLS Record Layer: ", ctText);
+            recordField.AppendWithCustomText(_ContentTypeFieldId, FieldValue.NewU64(record.ContentType), ctText);
+            recordField.AppendWithCustomText(_RecordVersionFieldId, FieldValue.NewU64(record.Version), versionText);
+            recordField.Append(_RecordLengthFieldId, FieldValue.NewU64(record.Length));
+            recordOffset += TlsRecordHeader.Size + record.Length;
+        }
+
+        byte[] joined = _JoinHandshakePayloads(span, runStart, runRecords);
+        _ParseHandshakeRecords(in container, joined, joined, 0);
+    }
+
+    /// <summary>
+    /// Copies the payloads of <paramref name="runRecords"/> consecutive handshake records into one array, in record order.
+    /// </summary>
+    /// <param name="span">The TLS unit.</param>
+    /// <param name="runStart">Offset of the first record of the run.</param>
+    /// <param name="runRecords">Number of records in the run; the caller validated them with <c>TlsRecordDetector.TryGetUnit</c>.</param>
+    /// <returns>The joined payloads.</returns>
+    private static byte[] _JoinHandshakePayloads(ReadOnlySpan<byte> span, int runStart, int runRecords)
+    {
+        // First pass: total size. The run is bounded by the unit the reassembly handed over, which is bounded by the
+        // registration's MaxPduSize, so the array cannot grow beyond that limit.
+        int total = 0;
+        int offset = runStart;
+        for (int i = 0; i < runRecords; i++)
+        {
+            int length = BinaryPrimitives.ReadUInt16BigEndian(span[(offset + 3)..]);
+            total += length;
+            offset += TlsRecordHeader.Size + length;
+        }
+
+        // Second pass: copy the payloads.
+        byte[] joined = new byte[total];
+        int written = 0;
+        offset = runStart;
+        for (int i = 0; i < runRecords; i++)
+        {
+            int length = BinaryPrimitives.ReadUInt16BigEndian(span[(offset + 3)..]);
+            span.Slice(offset + TlsRecordHeader.Size, length).CopyTo(joined.AsSpan(written));
+            written += length;
+            offset += TlsRecordHeader.Size + length;
+        }
+
+        return joined;
+    }
+
+    /// <summary>
     /// Parses one or more handshake messages within a single TLS record. A message that does not fit completely into the
-    /// record payload (for example a large Certificate message fragmented over several records) is not decoded.
+    /// record payload is not decoded here: a message that spans records is handled by <see cref="_ParseSpanningHandshake"/>
+    /// before this method is reached, so what remains is a truncated message (the raw path without reassembly).
     /// </summary>
     /// <param name="recordField">
     /// The <c>tls</c> container. The handshake fields are appended here, as siblings of the <c>tls.record</c> nodes
@@ -1070,6 +1161,16 @@ public sealed partial class TlsProtocol : IProtocol
             if (recordPayloadEnd > span.Length)
             {
                 break;
+            }
+
+            // Mirrors the run detection of _PopulateTls: messages that span records are detected on the joined payloads.
+            if (record.ContentType == _HandshakeContentType
+                && TlsRecordDetector.TryGetUnit(span, offset, out int runEnd, out int runRecords) == TlsRecordDetector.UnitState.Complete
+                && runRecords > 1)
+            {
+                _DetectHandshakeRecords(_JoinHandshakePayloads(span, offset, runRecords), ref flags);
+                offset = runEnd;
+                continue;
             }
 
             int payloadOffset = offset + TlsRecordHeader.Size;

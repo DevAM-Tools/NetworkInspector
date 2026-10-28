@@ -353,7 +353,9 @@ internal sealed class TcpHeuristicTests
     public async Task Heuristic_ClientPort80_DoesNotStealServerPort()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
-        byte[] tls = [0x16, 0x03, 0x03, 0x00, 0x01, 0x00];
+        // A complete TLS record: handshake type 22, version 3.3, length 4, payload = a HelloRequest (type 0, length 0). The record
+        // must be framed as one unit by the TLS boundary detector for the reassembled path to hand it to the TLS parser.
+        byte[] tls = [0x16, 0x03, 0x03, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00];
         EthernetLayer ethC = new(_DstMac, _SrcMac);
         IPv4Layer ipC = new(_ClientIp, _ServerIp);
         TcpLayer synTcp = new(80, 9, seqNum: 1000, ackNum: 0, flags: TcpFlags.Syn);

@@ -295,17 +295,49 @@ public static class ProtocolRegistration
                 headerSize: 2),
         });
 
-        // HTTP/1 messages are framed by headers plus Content-Length or chunked encoding.
+        // HTTP/1 messages are framed by headers plus Content-Length or chunked encoding, or by the end of the connection for a
+        // response without a length; the detector also follows HEAD and CONNECT requests (see Http1MessageDetector).
         // Limits: both are raised from the defaults (64 KiB per PDU, 1 MiB buffer per direction) to 16 MiB so that HTTP
         // messages with a larger body can complete. Threat they still bound: a peer announcing a huge body or never
-        // finishing a message, which would otherwise grow the per-stream buffer without end; exceeding either limit
-        // puts the stream into its error state (nothing is truncated silently). Constants chosen by this registration
-        // code, not user-configurable here; open by default compared with the defaults. The exact number 16 MiB has
-        // no recorded derivation.
+        // finishing a message, which would otherwise grow the per-stream buffer without end. Exceeding the buffer limit drops
+        // the message in progress and reports tcp.error.reassembly_limit; the connection and its later messages keep working
+        // (nothing is truncated silently, and one oversized transfer does not switch reassembly off). Constants chosen by
+        // this registration code, not user-configurable here; open by default compared with the defaults. The exact number
+        // 16 MiB has no recorded derivation.
         builder.RegisterStreamReassemblyConfig(httpId, new StreamReassemblyConfig
         {
             BoundaryDetector = new Http1MessageDetector(),
             MaxPduSize = 16 * 1024 * 1024,
+            MaxBufferSize = 16 * 1024 * 1024,
+        });
+
+        // TLS records are framed per record and extended to the records that complete a spanning handshake message
+        // (TlsRecordDetector), so the server name, ALPN and certificates of a split hello or chain are parsed.
+        // Limits: MaxPduSize 2 MiB bounds one framed unit, a handshake message that spans records (the 24-bit handshake
+        // length would allow 16 MiB, but no real certificate chain exceeds a few hundred KiB); the threat is a hostile length
+        // that makes the stream buffer fill up to the cap and then drop. MaxBufferSize 4 MiB bounds the bytes held per
+        // direction; the threat is a peer that never completes a record. Constants chosen by this registration code, not
+        // user-configurable here; secure by default (TLS is exposed to untrusted peers and a unit never needs more).
+        // Exceeding the buffer limit drops the unit in progress and reports tcp.error.reassembly_limit.
+        builder.RegisterStreamReassemblyConfig(tlsId, new StreamReassemblyConfig
+        {
+            BoundaryDetector = new TlsRecordDetector(),
+            MaxPduSize = 2 * 1024 * 1024,
+            MaxBufferSize = 4 * 1024 * 1024,
+        });
+
+        // HTTP/2: the client preface is a unit of its own, then one frame per unit (Http2FrameDetector). A frame header is
+        // accepted only when its type is defined and its payload fits the frame size limit of the direction (16384 until the
+        // peer announces more), so encrypted bytes on a port that usually carries TLS are not buffered as a "frame".
+        // Limits: MaxPduSize is header plus the largest payload the format allows (2^24 - 1, a format fact: the peer may
+        // announce a larger frame size limit in SETTINGS); MaxBufferSize 16 MiB bounds the bytes held per direction (threat:
+        // a peer that announces a huge limit and never completes a frame). Constants of this registration code, not
+        // user-configurable; open by default compared with the defaults, like HTTP/1, because frames above 16 KiB are legal
+        // once announced. Exceeding the buffer limit drops the frame in progress and reports tcp.error.reassembly_limit.
+        builder.RegisterStreamReassemblyConfig(http2Id, new StreamReassemblyConfig
+        {
+            BoundaryDetector = new Http2FrameDetector(),
+            MaxPduSize = Http2FrameHeader.Size + Http2FrameDetector.AbsoluteMaxFrameSize,
             MaxBufferSize = 16 * 1024 * 1024,
         });
         #endregion

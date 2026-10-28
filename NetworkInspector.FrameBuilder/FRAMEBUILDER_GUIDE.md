@@ -1098,7 +1098,8 @@ the wire format, not configuration:
 | `FlexRayLayer` | `frameId` ≤ 2047; `cycleCount` ≤ 63; payload ≤ 254 bytes; `typeIndex` ≤ 127 | ISO 17458-2 |
 | `IPv6HopByHopLayer` | option bytes ≤ 2046 (`MaxOptionBytes`) | RFC 8200 §4.3 |
 | `IPv6RoutingLayer` | type-specific data ≤ 2040 bytes (`MaxTypeSpecificDataBytes`) | RFC 8200 §4.4 |
-| `TcpOptionsBuilder` | option area ≤ 40 bytes | RFC 9293 §3.1 |
+| `TcpOptionsBuilder` | option area ≤ 40 bytes; `WindowScale` shift ≤ 14; `Sack` 1 to 4 blocks | RFC 9293 §3.1, RFC 7323 §2.3, RFC 2018 §3 |
+| `TcpConnection` stream writes | segment count computed in 64 bits (`SegmentCount`), so a payload near `int.MaxValue` cannot wrap to zero segments | — |
 | `TcpConnection.Open` | `Mss` > 0 | — |
 
 ---

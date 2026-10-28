@@ -3,11 +3,11 @@
 namespace NetworkInspector.Protocols.Tests.Infrastructure.TsharkUat;
 
 /// <summary>
-/// Filenames Wireshark binds to Signal Message preference UAT tables (basename without suffix).
-/// They match Wireshark constants in <c>packet-signal-pdu.c</c>; profile filenames use the
-/// basename only (no extension — see <see cref="WiresharkCsvUat.Filesuffix"/>).
+/// Filenames Tshark binds to Signal Message preference UAT tables (basename without suffix).
+/// They match Tshark constants in <c>packet-signal-pdu.c</c>; profile filenames use the
+/// basename only (no extension — see <see cref="TsharkCsvUat.Filesuffix"/>).
 /// </summary>
-internal static class WiresharkSignalMessageFilenames
+internal static class TsharkSignalMessageFilenames
 {
     internal const string Identifiers = "Signal_PDU_identifiers";
 

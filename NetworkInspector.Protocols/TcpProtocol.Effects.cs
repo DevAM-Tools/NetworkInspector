@@ -62,6 +62,15 @@ public sealed partial class TcpProtocol
 
         /// <summary>Spurious retransmission.</summary>
         SpuriousRetransmission = 1 << 13,
+
+        /// <summary>The ACK acknowledges bytes that were never captured.</summary>
+        AckLostSegment = 1 << 14,
+
+        /// <summary>The ACK acknowledges only the front part of a segment.</summary>
+        PartialAck = 1 << 15,
+
+        /// <summary>The ACK acknowledges bytes that were sent more than once.</summary>
+        AmbiguousAck = 1 << 16,
     }
 
     /// <summary>How TCP payload upper-layer dispatch occurred during ingest.</summary>
@@ -79,8 +88,14 @@ public sealed partial class TcpProtocol
         /// <summary>Reassembly path taken but no PDU emitted for this packet.</summary>
         ReassemblyNoEmit = 3,
 
-        /// <summary>Heuristic table matched and dispatched payload.</summary>
+        /// <summary>Heuristic table matched and dispatched the raw payload (no reassembly configuration for the matched protocol).</summary>
         Heuristic = 4,
+
+        /// <summary>
+        /// The payload was not dispatched because it repeats or reorders bytes the application protocol already has or will
+        /// receive in sequence (a retransmission or out-of-order segment on the plain port path). It is shown as segment data.
+        /// </summary>
+        SegmentData = 5,
     }
 
     /// <summary>
@@ -110,7 +125,12 @@ public sealed partial class TcpProtocol
         uint RelativeAck,
         bool SequenceIsRelative,
         bool AckIsRelative,
-        bool StreamLimitReached)
+        bool StreamLimitReached,
+        int AcksPacketId,
+        double Rto,
+        int RtoPacketId,
+        int DupAckPacketId,
+        byte Completeness)
     {
         /// <summary>
         /// The record text (<c>AnalysisEffect { StreamIndex = …, … }</c>) with the invariant culture, so it does not
@@ -135,7 +155,10 @@ public sealed partial class TcpProtocol
                 $"RelativeSeq = {RelativeSeq}, RelativeAck = {RelativeAck}, SequenceIsRelative = {SequenceIsRelative}, ");
             builder.Append(
                 CultureInfo.InvariantCulture,
-                $"AckIsRelative = {AckIsRelative}, StreamLimitReached = {StreamLimitReached}");
+                $"AckIsRelative = {AckIsRelative}, StreamLimitReached = {StreamLimitReached}, ");
+            builder.Append(
+                CultureInfo.InvariantCulture,
+                $"AcksPacketId = {AcksPacketId}, Rto = {Rto}, RtoPacketId = {RtoPacketId}, DupAckPacketId = {DupAckPacketId}, Completeness = {Completeness}");
             builder.Append(" }");
             return builder.ToString();
         }
@@ -148,7 +171,11 @@ public sealed partial class TcpProtocol
     /// </summary>
     /// <param name="ProtocolId">Application protocol the PDU was dispatched to.</param>
     /// <param name="PduBytes">The PDU bytes.</param>
-    public readonly record struct PduEffect(ProtocolId ProtocolId, ReadOnlyMemory<byte> PduBytes);
+    /// <param name="SegmentPacketIds">
+    /// Ids of the packets that carried the bytes of the PDU, in stream order. Recorded so a replay shows the same
+    /// <c>tcp.segments</c> list: the stream buffer that knew the contributors has long since moved on.
+    /// </param>
+    public readonly record struct PduEffect(ProtocolId ProtocolId, ReadOnlyMemory<byte> PduBytes, int[] SegmentPacketIds);
 
     /// <summary>TCP payload dispatch metadata for redissect replay.</summary>
     /// <param name="Mode">How the payload was dispatched during ingest.</param>
@@ -158,12 +185,22 @@ public sealed partial class TcpProtocol
     /// Server port learned by the connection tracker, tried first on replay (valid when <paramref name="HasPreferredPort"/>).
     /// </param>
     /// <param name="HasPreferredPort">Whether <paramref name="PreferredPort"/> carries a value.</param>
+    /// <param name="Forward">
+    /// Direction of the segment relative to the normalized stream key. Recorded because the connection key and the source
+    /// address exist only on the first parse, while a replay must publish the same direction to application protocols
+    /// (see <c>TryGetCurrentStream</c>).
+    /// </param>
+    /// <param name="ReassemblyLimitHit">A reassembly limit dropped buffered bytes while this segment was processed.</param>
+    /// <param name="ReassemblyLimitDiscardedBytes">Number of bytes that limit event dropped.</param>
     public readonly record struct PayloadDispatchEffect(
         PayloadDispatchMode Mode,
         PduEffect[]? Pdus,
         ProtocolId HeuristicProtocolId,
         ushort PreferredPort,
-        bool HasPreferredPort);
+        bool HasPreferredPort,
+        bool Forward,
+        bool ReassemblyLimitHit,
+        int ReassemblyLimitDiscardedBytes);
 
     /// <summary>Combined TCP effects of one layer, recorded once at the end of its first parse.</summary>
     private readonly record struct TcpLayerEffect(AnalysisEffect Analysis, PayloadDispatchEffect Dispatch);
@@ -218,16 +255,22 @@ public sealed partial class TcpProtocol
         PacketId id,
         int layerKey,
         in TcpAnalysisResult analysis,
-        PayloadDispatchMode mode,
-        List<PduEffect>? pdus,
-        ProtocolId heuristicProtocolId,
-        ushort preferredPort = 0,
-        bool hasPreferredPort = false)
+        in DispatchOutcome outcome,
+        bool forward,
+        ushort preferredPort,
+        bool hasPreferredPort)
     {
-        // Snapshot the working list into an exact-size array: the list is a per-parse scratch object, while the
-        // stored effect must be immutable and as small as possible (it lives as long as the store).
+        // Snapshot the working list into an exact-size array: the list is a per-parse scratch object (it is reused for the
+        // next segment), while the stored effect must be immutable and as small as possible (it lives as long as the
+        // store). The common case is exactly one PDU, which gets a one-element array without the enumerator a collection
+        // expression over the list would create.
         PduEffect[]? pduArray = null;
-        if (pdus is not null)
+        List<PduEffect>? pdus = outcome.Pdus;
+        if (pdus is { Count: 1 })
+        {
+            pduArray = [pdus[0]];
+        }
+        else if (pdus is { Count: > 1 })
         {
             pduArray = [.. pdus];
         }
@@ -237,7 +280,15 @@ public sealed partial class TcpProtocol
             layerKey,
             new TcpLayerEffect(
                 _ToAnalysisEffect(in analysis),
-                new PayloadDispatchEffect(mode, pduArray, heuristicProtocolId, preferredPort, hasPreferredPort)));
+                new PayloadDispatchEffect(
+                    outcome.Mode,
+                    pduArray,
+                    outcome.HeuristicProtocolId,
+                    preferredPort,
+                    hasPreferredPort,
+                    forward,
+                    outcome.LimitHit,
+                    outcome.LimitDiscardedBytes)));
     }
 
     /// <summary>

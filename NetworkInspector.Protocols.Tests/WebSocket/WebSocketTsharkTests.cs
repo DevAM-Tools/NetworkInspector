@@ -187,7 +187,7 @@ internal sealed class WebSocketTsharkTests
 
             // NI field: websocket.close.code; tshark field: websocket.payload.close.status_code
             // NI field: websocket.close.reason; tshark field: websocket.payload.close.reason
-            // (Wireshark's WebSocket dissector nests close sub-fields under
+            // (the reference dissector nests close sub-fields under
             // websocket.payload.close.*; NI surfaces them directly under websocket.close.*
             // for a flatter, more discoverable field tree.)
             await TsharkAssert.AssertEquivalentMany(stack, packet, frame,

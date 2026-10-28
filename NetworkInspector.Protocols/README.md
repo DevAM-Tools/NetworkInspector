@@ -21,8 +21,8 @@ automotive buses (CAN, CAN FD, CAN XL, LIN, FlexRay, SOME/IP) in one stack, enab
   SOME/IP-SD and SOME/IP-TP reassembly.
 - **Automotive signal decoding.** Decode CAN or PDU payloads into named, scaled signals from a JSON description
   (DBC-like: start bit, length, byte order, factor, offset, unit, value names, multiplexing).
-- **Cross-validated against Wireshark.** Protocol tests compare field values with `tshark` 4.6.
-- **Wireshark-style field names** (`ip.src`, `tcp.port`, `udp.dstport`, …) for filters, exports, and value caches.
+- **Cross-validated against an independent reference dissector.** Protocol tests compare field values, and for TCP the analysis flags, with `tshark` 4.6.
+- **Dotted, display-filter-style field names** (`ip.src`, `tcp.port`, `udp.dstport`, …) for filters, exports, and value caches.
 - **Extensible.** Write your own dissector with the same attributes and source generator the built-ins use.
 
 ## Install

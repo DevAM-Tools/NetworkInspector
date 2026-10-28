@@ -196,43 +196,81 @@ internal sealed class TcpSessionTests
     }
 
     [Test]
-    public async Task ConnectionState_FinWait_AfterFin()
+    public async Task ConnectionStateFullCloseSequence()
     {
+        // The state is the one of the side that closed FIRST; the FIN is recorded once and acknowledged by the peer's ACK.
+        // SYN, SYN-ACK, ACK, client FIN, client FIN again, server ACK, server FIN, client ACK.
         using Stack stack = ProtocolTestHelper.BuildStack();
-        _DoHandshake(stack);
+        Packet[] handshake = _DoHandshake(stack);
+        Packet clientFin = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1001, 2001, TcpFlags.FinAck), 3, Timestamp.FromMillis(20));
+        Packet clientFinAgain = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1001, 2001, TcpFlags.FinAck), 4, Timestamp.FromMillis(220));
+        Packet serverAck = ProtocolTestHelper.ParseFrame(stack, _ServerFrame(2001, 1002, TcpFlags.Ack), 5, Timestamp.FromMillis(225));
+        Packet serverFin = ProtocolTestHelper.ParseFrame(stack, _ServerFrame(2001, 1002, TcpFlags.FinAck), 6, Timestamp.FromMillis(230));
+        Packet clientAck = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1002, 2002, TcpFlags.Ack), 7, Timestamp.FromMillis(235));
 
-        // Client sends FIN
-        byte[] fin = _ClientFrame(1001, 2001, TcpFlags.FinAck);
-        Packet pFin = ProtocolTestHelper.ParseFrame(stack, fin, 3, Timestamp.FromMillis(20));
-
-        // Verify state transitions after FIN — exact state name depends on implementation
-        await ProtocolTestHelper.AssertFieldExists(stack, pFin, "tcp.analysis.connection_state").ConfigureAwait(false);
+        const string field = "tcp.analysis.connection_state";
+        await ProtocolTestHelper.AssertStringField(stack, handshake[0], field, "SYN_SENT").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertStringField(stack, handshake[1], field, "SYN_RECEIVED").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertStringField(stack, handshake[2], field, "ESTABLISHED").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertStringField(stack, clientFin, field, "FIN_WAIT_1").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertStringField(stack, clientFinAgain, field, "FIN_WAIT_1").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertStringField(stack, serverAck, field, "FIN_WAIT_2").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertStringField(stack, serverFin, field, "LAST_ACK").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertStringField(stack, clientAck, field, "TIME_WAIT").ConfigureAwait(false);
     }
 
     [Test]
-    public async Task ConnectionState_FullClose_SynFinAck()
+    public async Task ConnectionStateRetransmittedFinStaysFinWait1()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();
         _DoHandshake(stack);
+        _ = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1001, 2001, TcpFlags.FinAck), 3, Timestamp.FromMillis(20));
 
-        // Client sends FIN
-        byte[] clientFin = _ClientFrame(1001, 2001, TcpFlags.FinAck);
-        ProtocolTestHelper.ParseFrame(stack, clientFin, 3, Timestamp.FromMillis(20));
+        Packet again = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1001, 2001, TcpFlags.FinAck), 4, Timestamp.FromMillis(220));
 
-        // Server ACKs the FIN
-        byte[] serverAck = _ServerFrame(2001, 1002, TcpFlags.Ack);
-        ProtocolTestHelper.ParseFrame(stack, serverAck, 4, Timestamp.FromMillis(25));
+        // A retransmitted FIN is not the peer's FIN (CLOSING) and not an acknowledgement.
+        await ProtocolTestHelper.AssertStringField(stack, again, "tcp.analysis.connection_state", "FIN_WAIT_1").ConfigureAwait(false);
+    }
 
-        // Server sends its own FIN
-        byte[] serverFin = _ServerFrame(2001, 1002, TcpFlags.FinAck);
-        ProtocolTestHelper.ParseFrame(stack, serverFin, 5, Timestamp.FromMillis(30));
+    [Test]
+    public async Task ConnectionStateSimultaneousCloseIsClosingUntilBothFinsAreAcknowledged()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        _DoHandshake(stack);
+        Packet clientFin = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1001, 2001, TcpFlags.FinAck), 3, Timestamp.FromMillis(20));
+        Packet serverFin = ProtocolTestHelper.ParseFrame(stack, _ServerFrame(2001, 1001, TcpFlags.FinAck), 4, Timestamp.FromMillis(21));
+        Packet clientAck = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1002, 2002, TcpFlags.Ack), 5, Timestamp.FromMillis(22));
+        Packet serverAck = ProtocolTestHelper.ParseFrame(stack, _ServerFrame(2002, 1002, TcpFlags.Ack), 6, Timestamp.FromMillis(23));
 
-        // Client ACKs the server's FIN
-        byte[] clientAck = _ClientFrame(1002, 2002, TcpFlags.Ack);
-        Packet pFinalAck = ProtocolTestHelper.ParseFrame(stack, clientAck, 6, Timestamp.FromMillis(35));
+        const string field = "tcp.analysis.connection_state";
+        await ProtocolTestHelper.AssertStringField(stack, clientFin, field, "FIN_WAIT_1").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertStringField(stack, serverFin, field, "CLOSING").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertStringField(stack, clientAck, field, "CLOSING").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertStringField(stack, serverAck, field, "TIME_WAIT").ConfigureAwait(false);
+    }
 
-        // Connection should be fully closed at this point
-        await ProtocolTestHelper.AssertFieldExists(stack, pFinalAck, "tcp.analysis.connection_state").ConfigureAwait(false);
+    [Test]
+    public async Task ConnectionStateMidStreamIsEstablished()
+    {
+        // A capture that joins a connection has no SYN: the connection carries data, so it is not CLOSED.
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        Packet data = ProtocolTestHelper.ParseFrame(
+            stack, _ClientFrame(5001, 7001, TcpFlags.PshAck, "x"u8), 0, Timestamp.FromMillis(0));
+
+        await ProtocolTestHelper.AssertStringField(
+            stack, data, "tcp.analysis.connection_state", "ESTABLISHED (handshake not captured)").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task ConnectionStateResetStaysResetUntilANewConnection()
+    {
+        using Stack stack = ProtocolTestHelper.BuildStack();
+        _DoHandshake(stack);
+        _ = ProtocolTestHelper.ParseFrame(stack, _ClientFrame(1001, 2001, TcpFlags.Rst), 3, Timestamp.FromMillis(20));
+
+        Packet after = ProtocolTestHelper.ParseFrame(stack, _ServerFrame(2001, 1001, TcpFlags.Ack), 4, Timestamp.FromMillis(21));
+
+        await ProtocolTestHelper.AssertStringField(stack, after, "tcp.analysis.connection_state", "RESET").ConfigureAwait(false);
     }
 
     #endregion

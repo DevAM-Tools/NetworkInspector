@@ -3,22 +3,22 @@
 namespace NetworkInspector.Protocols.Tests.Infrastructure.TsharkUat;
 
 /// <summary>
-/// Emits the minimal Wireshark CSV UAT triple (PDU-Transport identifiers + extended port config,
+/// Emits the minimal Tshark CSV UAT triple (PDU-Transport identifiers + extended port config,
 /// Signal Message identifiers + signal list + binding) so <c>tshark -C &lt;profile&gt;</c>
 /// dissects the same frames that Network Inspector parses from JSON + UDP dispatch.
 /// </summary>
 /// <remarks>
 /// Supports only non-multiplexed Signal Message layouts whose static signals are contiguous in
-/// positional order (matching the Wireshark sequential deserializer). Multiplexed layouts throw
+/// positional order (matching the Tshark sequential deserializer). Multiplexed layouts throw
 /// explicitly so tests do not silently diverge.
 /// </remarks>
 internal static class TsharkPduTransportSignalMessageUatProfile
 {
-    /// <summary>Wireshark sentinel for &quot;any&quot; UDP/TCP port in extended config (<c>packet-pdu-transport.c</c>).</summary>
-    internal const int WiresharkUdpPortAny65536 = 65536;
+    /// <summary>Tshark sentinel for &quot;any&quot; UDP/TCP port in extended config (<c>packet-pdu-transport.c</c>).</summary>
+    internal const int TsharkUdpPortAny65536 = 65536;
 
     /// <summary>
-    /// Builds <c>WIRESHARK_CONFIG_PARENT/profiles/&lt;runId&gt;/</c> and returns that profile folder.
+    /// Builds the per-run profile folder <c>profiles/&lt;runId&gt;/</c> below the configuration directory and returns that profile folder.
     /// </summary>
     internal static string CreateProfileDirectoryUnderEphemeralPersonalDir(string personalRoot, string runId)
     {
@@ -26,7 +26,7 @@ internal static class TsharkPduTransportSignalMessageUatProfile
         string dir = Path.Combine(profilesDir, runId);
         _ = Directory.CreateDirectory(dir);
 
-        WiresharkProfilePreferences.MergeIntoProfilePreferences(dir);
+        TsharkProfilePreferences.MergeIntoProfilePreferences(dir);
         return dir;
     }
 
@@ -43,7 +43,7 @@ internal static class TsharkPduTransportSignalMessageUatProfile
     }
 
     /// <summary>
-    /// Writes PDU-Transport and Signal Message CSV tables consumed by Wireshark preference UATs.
+    /// Writes PDU-Transport and Signal Message CSV tables consumed by Tshark preference UATs.
     /// </summary>
     /// <param name="profileDirectory">Path to one profile (<c>.../profiles/&lt;runId&gt;/</c>).</param>
     /// <param name="udpDestinationPort">UDP destination port used for <c>PDU_Transport_extended_config</c>.</param>
@@ -62,7 +62,7 @@ internal static class TsharkPduTransportSignalMessageUatProfile
             !(signalLayout.MuxGroups.IsDefault || signalLayout.MuxGroups.Length == 0))
         {
             throw new NotSupportedException(
-                "Sequential Wireshark Signal Message UAT parity does not multiplex; use raw Signal-Pdu UDP tests.");
+                "Sequential Tshark Signal Message UAT parity does not multiplex; use raw Signal-Pdu UDP tests.");
         }
 
         EmitPduTransportUdpDescriptors(profileDirectory, udpDestinationPort, pduTransport);
@@ -76,14 +76,14 @@ internal static class TsharkPduTransportSignalMessageUatProfile
         StringBuilder sb = new();
         foreach (PduEntry entry in cfg.Pdus)
         {
-            _ = sb.Append(WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Hex32Upper(entry.PduId)))
+            _ = sb.Append(TsharkCsvUat.UatQuoted(TsharkCsvUat.Hex32Upper(entry.PduId)))
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(entry.Name))
+                .Append(TsharkCsvUat.UatQuoted(entry.Name))
                 .AppendLine();
         }
 
-        string path = Path.Combine(profileDirectory, WiresharkPduTransportFilenames.Identifiers + WiresharkCsvUat.Filesuffix);
-        File.WriteAllText(path, sb.ToString(), _WiresharkUtf8NoBom());
+        string path = Path.Combine(profileDirectory, TsharkPduTransportFilenames.Identifiers + TsharkCsvUat.Filesuffix);
+        File.WriteAllText(path, sb.ToString(), _TsharkUtf8NoBom());
     }
 
     private static void _WritePduTransportExtendedConfig(
@@ -92,30 +92,30 @@ internal static class TsharkPduTransportSignalMessageUatProfile
         int idFieldBits,
         int lengthFieldBits)
     {
-        string path = Path.Combine(profileDirectory, WiresharkPduTransportFilenames.ExtendedConfig + WiresharkCsvUat.Filesuffix);
+        string path = Path.Combine(profileDirectory, TsharkPduTransportFilenames.ExtendedConfig + TsharkCsvUat.Filesuffix);
 
         /*
-         Row order per Wireshark <c>pdu_transport_ext_cfg_uat_fields</c>:
+         Row order per Tshark <c>pdu_transport_ext_cfg_uat_fields</c>:
          tcp, source_port, destination_port, size_of_id_field (bits), size_of_length_field (bits), default_id (hex).
         */
         string line = string.Join(
             ',',
-            WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Bool(false)),
-            WiresharkCsvUat.UatQuoted(WiresharkUdpPortAny65536),
-            WiresharkCsvUat.UatQuoted(udpDestinationPort),
-            WiresharkCsvUat.UatQuoted(idFieldBits),
-            WiresharkCsvUat.UatQuoted(lengthFieldBits),
-            WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Hex32Upper(0)));
+            TsharkCsvUat.UatQuoted(TsharkCsvUat.Bool(false)),
+            TsharkCsvUat.UatQuoted(TsharkUdpPortAny65536),
+            TsharkCsvUat.UatQuoted(udpDestinationPort),
+            TsharkCsvUat.UatQuoted(idFieldBits),
+            TsharkCsvUat.UatQuoted(lengthFieldBits),
+            TsharkCsvUat.UatQuoted(TsharkCsvUat.Hex32Upper(0)));
 
-        File.WriteAllText(path, line + Environment.NewLine, _WiresharkUtf8NoBom());
+        File.WriteAllText(path, line + Environment.NewLine, _TsharkUtf8NoBom());
     }
 
     private static void _WriteSignalMessageIdentifiers(string profileDirectory, SignalMessageLayout layout)
     {
-        string path = Path.Combine(profileDirectory, WiresharkSignalMessageFilenames.Identifiers + WiresharkCsvUat.Filesuffix);
+        string path = Path.Combine(profileDirectory, TsharkSignalMessageFilenames.Identifiers + TsharkCsvUat.Filesuffix);
         string line =
-            $"{WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Hex32Upper(layout.PduId))},{WiresharkCsvUat.UatQuoted(layout.Name)}";
-        File.WriteAllText(path, line + Environment.NewLine, _WiresharkUtf8NoBom());
+            $"{TsharkCsvUat.UatQuoted(TsharkCsvUat.Hex32Upper(layout.PduId))},{TsharkCsvUat.UatQuoted(layout.Name)}";
+        File.WriteAllText(path, line + Environment.NewLine, _TsharkUtf8NoBom());
     }
 
     private static void _WriteSignalMessageSignalList(string profileDirectory, SignalMessageLayout layout)
@@ -128,7 +128,7 @@ internal static class TsharkPduTransportSignalMessageUatProfile
         {
             SignalSpec s = sigs[pos];
             string filter = ProtoFilterSanitizer.FilterToken(s.Name);
-            // NetworkInspector always treats raw signal bits as unsigned; Wireshark UAT uses "uint".
+            // NetworkInspector always treats raw signal bits as unsigned; Tshark UAT uses "uint".
             const string dataType = "uint";
 
             int bitLen = s.BitLength;
@@ -150,44 +150,44 @@ internal static class TsharkPduTransportSignalMessageUatProfile
             // 15: aggregate_sum (true | false)
             // 16: aggregate_avg (true | false)
             // 17: aggregate_int (true | false)
-            sb.Append(WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Hex32Upper(layout.PduId)))     //  1: id
+            sb.Append(TsharkCsvUat.UatQuoted(TsharkCsvUat.Hex32Upper(layout.PduId)))     //  1: id
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(n))                                           //  2: num_of_params
+                .Append(TsharkCsvUat.UatQuoted(n))                                           //  2: num_of_params
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(pos))                                         //  3: pos
+                .Append(TsharkCsvUat.UatQuoted(pos))                                         //  3: pos
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(s.Name))                                      //  4: name
+                .Append(TsharkCsvUat.UatQuoted(s.Name))                                      //  4: name
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(filter))                                      //  5: filter_string
+                .Append(TsharkCsvUat.UatQuoted(filter))                                      //  5: filter_string
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(dataType))                                    //  6: data_type
+                .Append(TsharkCsvUat.UatQuoted(dataType))                                    //  6: data_type
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Bool(s.Endian == SignalEndian.Big))) //  7: big_endian
+                .Append(TsharkCsvUat.UatQuoted(TsharkCsvUat.Bool(s.Endian == SignalEndian.Big))) //  7: big_endian
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(bitLen))                                      //  8: bitlength_base_type
+                .Append(TsharkCsvUat.UatQuoted(bitLen))                                      //  8: bitlength_base_type
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(bitLen))                                      //  9: bitlength_encoded_type
+                .Append(TsharkCsvUat.UatQuoted(bitLen))                                      //  9: bitlength_encoded_type
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(WiresharkCsvUat.CsvDouble(s.Factor)))         // 10: scaler
+                .Append(TsharkCsvUat.UatQuoted(TsharkCsvUat.CsvDouble(s.Factor)))         // 10: scaler
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(WiresharkCsvUat.CsvDouble(s.Offset)))         // 11: offset
+                .Append(TsharkCsvUat.UatQuoted(TsharkCsvUat.CsvDouble(s.Offset)))         // 11: offset
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Bool(false)))                 // 12: multiplexer
+                .Append(TsharkCsvUat.UatQuoted(TsharkCsvUat.Bool(false)))                 // 12: multiplexer
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(-1))                                          // 13: multiplex_value_only
+                .Append(TsharkCsvUat.UatQuoted(-1))                                          // 13: multiplex_value_only
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Bool(false)))                 // 14: hidden
+                .Append(TsharkCsvUat.UatQuoted(TsharkCsvUat.Bool(false)))                 // 14: hidden
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Bool(false)))                 // 15: aggregate_sum
+                .Append(TsharkCsvUat.UatQuoted(TsharkCsvUat.Bool(false)))                 // 15: aggregate_sum
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Bool(false)))                 // 16: aggregate_avg
+                .Append(TsharkCsvUat.UatQuoted(TsharkCsvUat.Bool(false)))                 // 16: aggregate_avg
                 .Append(',')
-                .Append(WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Bool(false)))                 // 17: aggregate_int
+                .Append(TsharkCsvUat.UatQuoted(TsharkCsvUat.Bool(false)))                 // 17: aggregate_int
                 .AppendLine();
         }
 
-        string path = Path.Combine(profileDirectory, WiresharkSignalMessageFilenames.SignalList + WiresharkCsvUat.Filesuffix);
-        File.WriteAllText(path, sb.ToString(), _WiresharkUtf8NoBom());
+        string path = Path.Combine(profileDirectory, TsharkSignalMessageFilenames.SignalList + TsharkCsvUat.Filesuffix);
+        File.WriteAllText(path, sb.ToString(), _TsharkUtf8NoBom());
     }
 
     private static void _WriteSignalMessageBindingPduTransport(
@@ -195,15 +195,15 @@ internal static class TsharkPduTransportSignalMessageUatProfile
         uint pduTransportWireId,
         uint signalPduMessageId)
     {
-        string path = Path.Combine(profileDirectory, WiresharkSignalMessageFilenames.BindingPduTransport + WiresharkCsvUat.Filesuffix);
+        string path = Path.Combine(profileDirectory, TsharkSignalMessageFilenames.BindingPduTransport + TsharkCsvUat.Filesuffix);
         string line = string.Join(
             ',',
-            WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Hex32Upper(pduTransportWireId)),
-            WiresharkCsvUat.UatQuoted(WiresharkCsvUat.Hex32Upper(signalPduMessageId)));
-        File.WriteAllText(path, line + Environment.NewLine, _WiresharkUtf8NoBom());
+            TsharkCsvUat.UatQuoted(TsharkCsvUat.Hex32Upper(pduTransportWireId)),
+            TsharkCsvUat.UatQuoted(TsharkCsvUat.Hex32Upper(signalPduMessageId)));
+        File.WriteAllText(path, line + Environment.NewLine, _TsharkUtf8NoBom());
     }
 
-    private static UTF8Encoding _WiresharkUtf8NoBom() =>
+    private static UTF8Encoding _TsharkUtf8NoBom() =>
         new(encoderShouldEmitUTF8Identifier: false);
 
     private static class ProtoFilterSanitizer

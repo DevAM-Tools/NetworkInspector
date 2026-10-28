@@ -20,6 +20,11 @@ namespace NetworkInspector.Protocols.Tcp;
 /// connection tracker accepted, so the tracker's stream limit bounds this table, and each direction buffer is bounded
 /// by <see cref="StreamReassemblyConfig.MaxBufferSize"/>.
 /// </para>
+/// <para>
+/// <b>Lifetime:</b> a stream ends in one of three ways, so a finished connection stops holding memory: each direction is
+/// closed by its own FIN or RST (<see cref="Close"/>), a reused address/port pair drops the whole stream
+/// (<see cref="Remove"/>), and the engine as a whole lives as long as its protocol instance (a stack swap builds a new one).
+/// </para>
 /// </summary>
 internal sealed class TcpReassemblyEngine
 {
@@ -85,11 +90,38 @@ internal sealed class TcpReassemblyEngine
             return null;
         }
 
-        // The stream id is an engine-local counter handed to stream-aware boundary detectors as their per-stream key,
-        // so it is unique until Clear, which restarts the counter together with the detector state.
+        // The stream id is an engine-local counter handed to stream-aware boundary detectors as their per-stream key. It is
+        // never reused for the life of the engine, so a detector that still holds state for a removed stream cannot confuse
+        // it with a later one.
         TcpStreamState state = new(_NextStreamId++, protocolId, config);
         _Connections[key] = state;
         return state;
+    }
+
+    /// <summary>
+    /// Finds the stream of a connection without creating it. Used by segments without payload (FIN, RST): a connection that
+    /// never carried data must not get a stream just because it ended.
+    /// </summary>
+    /// <param name="key">The normalized connection key.</param>
+    /// <returns>The stream state, or <see langword="null"/> when none exists.</returns>
+    internal TcpStreamState? TryGetStream(in TcpConnectionKey key) =>
+        _Connections.TryGetValue(key, out TcpStreamState? state)
+            ? state
+            : null;
+
+    /// <summary>
+    /// Drops the stream of <paramref name="key"/>, if there is one. Called when the connection tracker started a new
+    /// connection on a reused address/port pair: the cursors and detector state of the old connection must not leak into
+    /// the new one (its first bytes would sit "behind a hole" of the old cursor until the buffer limit kills the stream).
+    /// </summary>
+    /// <param name="key">The normalized connection key.</param>
+    internal void Remove(in TcpConnectionKey key)
+    {
+        if (_Connections.Remove(key, out TcpStreamState? state))
+        {
+            // Clear tells stream-aware detectors to forget the stream id before the buffered bytes go away.
+            state.Clear();
+        }
     }
 
     /// <summary>
@@ -99,11 +131,14 @@ internal sealed class TcpReassemblyEngine
     /// <param name="isForward">Direction of this segment.</param>
     /// <param name="sequence">TCP sequence number of the first payload byte.</param>
     /// <param name="payload">The TCP payload data.</param>
+    /// <param name="packetId">Id of the packet that carries the payload, reported back with each extracted PDU.</param>
     /// <returns><see langword="true"/> if the segment was accepted.</returns>
-    internal static bool FeedSegment(TcpStreamState stream, bool isForward, uint sequence, ReadOnlyMemory<byte> payload)
+    internal static bool FeedSegment(
+        TcpStreamState stream, bool isForward, uint sequence, ReadOnlyMemory<byte> payload, int packetId)
     {
         SegmentBuffer buffer = stream.GetBuffer(isForward);
-        return buffer.TryAppend(sequence, payload);
+        StreamDetectionContext context = _CreateContext(stream, isForward, streamClosed: false);
+        return buffer.TryAppend(sequence, payload, packetId, in context);
     }
 
     /// <summary>
@@ -111,32 +146,60 @@ internal sealed class TcpReassemblyEngine
     /// </summary>
     /// <param name="stream">The stream state.</param>
     /// <param name="isForward">Direction to extract from.</param>
+    /// <param name="streamClosed">
+    /// <see langword="true"/> when the sender of this direction sent FIN: a detector may then frame a message that ends
+    /// with the connection.
+    /// </param>
     /// <param name="pdu">The extracted PDU on success.</param>
+    /// <param name="packetIds">Ids of the packets that carried the PDU's bytes.</param>
     /// <returns><see langword="true"/> if a PDU was extracted.</returns>
-    internal static bool TryExtractPdu(TcpStreamState stream, bool isForward, out ReadOnlyMemory<byte> pdu)
+    internal static bool TryExtractPdu(
+        TcpStreamState stream, bool isForward, bool streamClosed, out ReadOnlyMemory<byte> pdu, out int[] packetIds)
     {
-        // Context for context-aware detectors; built per call as a value type, so there is no allocation.
-        StreamDetectionContext context = new()
-        {
-            StreamId = stream.StreamId,
-            ProtocolId = stream.ProtocolId,
-            HandshakeObserved = stream.HandshakeObserved,
-        };
-
         SegmentBuffer buffer = stream.GetBuffer(isForward);
-        return buffer.TryExtractPdu(in context, out pdu);
+        StreamDetectionContext context = _CreateContext(stream, isForward, streamClosed);
+        return buffer.TryExtractPdu(in context, out pdu, out packetIds);
     }
 
-    /// <summary>Clears all tracked connections and resets the stream counter.</summary>
-    internal void Clear()
+    /// <summary>
+    /// Closes one direction. On FIN the bytes that are still buffered in order are handed out as a final PDU; on RST they are
+    /// dropped. Returns <see langword="true"/> when <paramref name="tail"/> holds bytes to dispatch. After this call the
+    /// direction refuses every further append, so later segments of this direction fall back to the plain port dispatch.
+    /// </summary>
+    /// <param name="stream">The stream state.</param>
+    /// <param name="isForward">Direction whose sender closed.</param>
+    /// <param name="isRst"><see langword="true"/> for RST (discard), <see langword="false"/> for FIN (deliver).</param>
+    /// <param name="tail">The final PDU on success.</param>
+    /// <param name="packetIds">Ids of the packets that carried the tail's bytes.</param>
+    /// <returns><see langword="true"/> if a final PDU was produced.</returns>
+    internal static bool Close(
+        TcpStreamState stream, bool isForward, bool isRst, out ReadOnlyMemory<byte> tail, out int[] packetIds)
     {
-        // Each stream is cleared first so stream-aware detectors drop their per-stream state; only then are the
-        // streams forgotten and the id counter restarted (ids would otherwise be reused with stale detector state).
-        foreach (TcpStreamState state in _Connections.Values)
-        {
-            state.Clear();
-        }
-        _Connections.Clear();
-        _NextStreamId = 0;
+        SegmentBuffer buffer = stream.GetBuffer(isForward);
+        StreamDetectionContext context = _CreateContext(stream, isForward, streamClosed: true);
+        return buffer.Close(in context, isRst, out tail, out packetIds);
     }
+
+    /// <summary>
+    /// Reads and clears the pending limit event of one direction (see <see cref="SegmentBuffer.TakeLimitHit"/>).
+    /// </summary>
+    /// <param name="stream">The stream state.</param>
+    /// <param name="isForward">Direction to read.</param>
+    /// <param name="discardedBytes">Number of buffered bytes the event dropped.</param>
+    /// <returns><see langword="true"/> when a limit event was pending.</returns>
+    internal static bool TakeLimitHit(TcpStreamState stream, bool isForward, out int discardedBytes) =>
+        stream.GetBuffer(isForward).TakeLimitHit(out discardedBytes);
+
+    /// <summary>
+    /// Builds the per-call context for context-aware detectors. A value type, so there is no allocation on the per-segment
+    /// path.
+    /// </summary>
+    private static StreamDetectionContext _CreateContext(TcpStreamState stream, bool isForward, bool streamClosed) => new()
+    {
+        StreamId = stream.StreamId,
+        ProtocolId = stream.ProtocolId,
+        HandshakeObserved = stream.HandshakeObserved,
+        IsForward = isForward,
+        StreamClosed = streamClosed,
+    };
 }

@@ -36,7 +36,9 @@ internal sealed class HttpHardeningTests
     [Arguments("2x0")]
     public async Task StatusCodeThatIsNotAShortNumberIsNotShown(string code)
     {
-        byte[] frame = _BuildHttpFrame($"HTTP/1.1 {code} Odd\r\n\r\n");
+        // Content-Length: 0 keeps the framing explicit; a response without a length runs until the connection closes, and
+        // this test is about the status code, not about framing.
+        byte[] frame = _BuildHttpFrame($"HTTP/1.1 {code} Odd\r\nContent-Length: 0\r\n\r\n");
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -53,7 +55,7 @@ internal sealed class HttpHardeningTests
     [Arguments("65535", 65535UL)]
     public async Task StatusCodeShortNumberIsShown(string code, ulong expected)
     {
-        byte[] frame = _BuildHttpFrame($"HTTP/1.1 {code} Fine\r\n\r\n");
+        byte[] frame = _BuildHttpFrame($"HTTP/1.1 {code} Fine\r\nContent-Length: 0\r\n\r\n");
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)

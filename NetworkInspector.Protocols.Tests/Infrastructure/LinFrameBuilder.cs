@@ -3,7 +3,7 @@
 namespace NetworkInspector.Protocols.Tests;
 
 /// <summary>
-/// Helpers for building LIN frames in DLT_LIN format (per Wireshark packet-lin.h / packet-lin.c).
+/// Helpers for building LIN frames in DLT_LIN format (DLT_LIN).
 /// Wire layout (8-byte fixed header followed by data payload):
 /// <code>
 /// Byte  0:    Message Format Revision (1)

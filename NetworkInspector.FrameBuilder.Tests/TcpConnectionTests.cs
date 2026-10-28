@@ -797,4 +797,36 @@ internal sealed class TcpConnectionTests
     }
 
     #endregion
+
+    #region Segment count
+
+    [Test]
+    [Arguments(0, 1460, 0)]
+    [Arguments(1, 1460, 1)]
+    [Arguments(1460, 1460, 1)]
+    [Arguments(1461, 1460, 2)]
+    [Arguments(2920, 1460, 2)]
+    [Arguments(2921, 1460, 3)]
+    public async Task SegmentCountIsTheCeilingOfPayloadOverMss(int payloadLength, int mss, int expected)
+    {
+        await Assert.That(TcpConnection.SegmentCount(payloadLength, (ushort)mss)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task SegmentCountNearIntMaxDoesNotOverflow()
+    {
+        // payloadLength + mss - 1 exceeds int.MaxValue here; a 32-bit sum would wrap negative and yield zero segments, so
+        // the call would silently send nothing. 2147483647 / 65535 rounds up to 32769.
+        await Assert.That(TcpConnection.SegmentCount(int.MaxValue, ushort.MaxValue)).IsEqualTo(32769);
+        await Assert.That(TcpConnection.SegmentCount(int.MaxValue, 1)).IsEqualTo(int.MaxValue);
+    }
+
+    [Test]
+    public async Task SegmentCountRejectsNegativeLengthAndZeroMss()
+    {
+        await Assert.That(static () => TcpConnection.SegmentCount(-1, 1460)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(static () => TcpConnection.SegmentCount(10, 0)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    #endregion
 }

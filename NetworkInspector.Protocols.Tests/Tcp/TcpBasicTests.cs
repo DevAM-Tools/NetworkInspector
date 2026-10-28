@@ -82,7 +82,11 @@ internal sealed class TcpBasicTests
         {
             await ProtocolTestHelper.AssertBoolField(stack, packet, "tcp.flags.syn", true).ConfigureAwait(false);
             await ProtocolTestHelper.AssertBoolField(stack, packet, "tcp.flags.ack", true).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.ack", 5000).ConfigureAwait(false);
+
+            // The acknowledgement number is shown relative: a SYN-ACK acknowledges the peer's SYN, so the peer's base is the
+            // acknowledged number minus one and the acknowledgement reads 1. The wire value stays available as tcp.ack_raw.
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.ack", 1).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.ack_raw", 5000).ConfigureAwait(false);
         }
     }
 

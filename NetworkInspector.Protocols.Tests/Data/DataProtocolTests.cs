@@ -4,7 +4,7 @@ namespace NetworkInspector.Protocols.Tests;
 
 /// <summary>
 /// Tests for <see cref="DataProtocol"/> — the universal fallback dissector for unrecognized
-/// binary payloads (Wireshark equivalent: "data" protocol).
+/// binary payloads.
 /// <para>
 /// Tests reach the protocol via a WebSocket binary-opcode (2) frame. When WebSocket parses a
 /// binary payload with no matching sub-protocol in the ws.port table, it forwards the payload

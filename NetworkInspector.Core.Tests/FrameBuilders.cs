@@ -1371,7 +1371,7 @@ internal static class FrameBuilders
         byte[] frame = new byte[12 + payloadLen];
 
         // Build priority/VCID field (BE u32 for LINKTYPE_CAN_SOCKETCAN): bits 0-10 = priority, bits 16-23 = VCID.
-        // Wireshark: "The priority/VCID field is big-endian in LINKTYPE_CAN_SOCKETCAN captures, for historical reasons."
+        // The priority/VCID field is big-endian in LINKTYPE_CAN_SOCKETCAN captures, for historical reasons.
         uint rawPrio = (priority & 0x7FF) | ((uint)vcid << 16);
         BinaryPrimitives.WriteUInt32BigEndian(frame.AsSpan(0), rawPrio);
 
@@ -1718,7 +1718,7 @@ internal static class FrameBuilders
         payload ??= [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
         byte dataLen = (byte)Math.Min(payload.Length, 15); // max 15 — fits in 4-bit nibble
 
-        // DLT_LIN (per Wireshark packet-lin.h): 8-byte header + data
+        // DLT_LIN (DLT_LIN layout): 8-byte header + data
         // Byte 0: message format revision (1)
         // Bytes 1-3: reserved
         // Byte 4: payload length[7:4] | msg type[3:2] | checksum type[1:0]

@@ -4,7 +4,7 @@ namespace NetworkInspector.Protocols;
 
 /// <summary>
 /// Text protocol for displaying plain text payloads as a single string field.
-/// Equivalent to Wireshark's "data-text-lines" dissector.
+/// Shows a text payload line by line.
 /// Decodes the entire payload as UTF-8 and appends it as one <c>text</c> string field.
 /// </summary>
 /// <remarks>

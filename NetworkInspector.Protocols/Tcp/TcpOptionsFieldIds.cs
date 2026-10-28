@@ -252,35 +252,35 @@ internal readonly struct TcpOptionsFieldIds
     /// <summary>Echo option container (kind 6, obsolete RFC 1072, 6 bytes).</summary>
     internal FieldId Echo { get; init; }
 
-    /// <summary>Echo option 32-bit value.</summary>
+    /// <summary>
+    /// 32-bit value of the Echo and the Echo Reply option. One field serves both containers: the two options carry the same
+    /// value, and a filter on the value should match either, as the shared field name does in other analyzers.
+    /// </summary>
     internal FieldId EchoValue { get; init; }
 
     /// <summary>Echo Reply option container (kind 7, obsolete RFC 1072, 6 bytes).</summary>
     internal FieldId EchoReply { get; init; }
 
-    /// <summary>Echo Reply option 32-bit value.</summary>
-    internal FieldId EchoReplyValue { get; init; }
-
     /// <summary>CC (connection count) option container (kind 11, RFC 1644, 6 bytes).</summary>
     internal FieldId Cc { get; init; }
 
-    /// <summary>CC option 32-bit value.</summary>
+    /// <summary>
+    /// 32-bit value of the CC, CC.NEW and CC.ECHO options. One field serves all three containers for the same reason as
+    /// <see cref="EchoValue"/>.
+    /// </summary>
     internal FieldId CcValue { get; init; }
 
     /// <summary>CC.NEW option container (kind 12, RFC 1644, 6 bytes).</summary>
     internal FieldId CcNew { get; init; }
 
-    /// <summary>CC.NEW option 32-bit value.</summary>
-    internal FieldId CcNewValue { get; init; }
-
     /// <summary>CC.ECHO option container (kind 13, RFC 1644, 6 bytes).</summary>
     internal FieldId CcEcho { get; init; }
 
-    /// <summary>CC.ECHO option 32-bit value.</summary>
-    internal FieldId CcEchoValue { get; init; }
-
     /// <summary>SCPS capabilities option container (kind 20, 4 bytes).</summary>
     internal FieldId Scps { get; init; }
+
+    /// <summary>SCPS capability byte as sent (all five capability bits together).</summary>
+    internal FieldId ScpsVector { get; init; }
 
     /// <summary>SCPS capability bit 0x80: BETS.</summary>
     internal FieldId ScpsBets { get; init; }

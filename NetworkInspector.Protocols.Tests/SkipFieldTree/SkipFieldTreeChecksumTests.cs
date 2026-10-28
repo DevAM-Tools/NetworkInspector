@@ -145,8 +145,9 @@ internal sealed class SkipFieldTreeChecksumTests
         ValueCache skip = new(stack, configs);
         _ = _ParseExpected(stack, frame, 1, FieldTreeMode.Skip, skip);
 
-        await Assert.That(_StringRow(skip, statusId)).IsEqualTo(_StringRow(build, statusId));
-        await Assert.That(_StringRow(skip, statusId)).IsEqualTo("[Good]");
+        // tcp.checksum.status is numeric (0 bad, 1 good, 2 unverified), so the cache holds an unsigned series.
+        await Assert.That(_U64Row(skip, statusId)).IsEqualTo(_U64Row(build, statusId));
+        await Assert.That(_U64Row(skip, statusId)).IsEqualTo(1UL);
     }
 
     [Test]
@@ -202,6 +203,20 @@ internal sealed class SkipFieldTreeChecksumTests
         EthernetLayer eth = new(dstMac, srcMac);
         IPv6Layer ip = new(srcIp, dstIp);
         return FrameStack.Start(eth).Then(ip).Then(new IcmpV6Layer(128, 0)).CreateWithFixedValues().EmitFrame(body);
+    }
+
+    /// <summary>First recorded value of an unsigned series, or <see cref="ulong.MaxValue"/> when nothing was recorded.</summary>
+    private static ulong _U64Row(ValueCache cache, FieldId fieldId)
+    {
+        foreach (ValueCacheSeries series in cache.Series)
+        {
+            if (series.FieldId == fieldId && series is ValueCacheSeries<ulong> numbers && numbers.Count > 0)
+            {
+                return numbers[0].Value;
+            }
+        }
+
+        return ulong.MaxValue;
     }
 
     private static string _StringRow(ValueCache cache, FieldId fieldId)

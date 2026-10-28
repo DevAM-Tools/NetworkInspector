@@ -20,5 +20,19 @@ public readonly record struct StreamDetectionContext
     /// <summary>Whether the transport handshake (e.g., TCP 3-way handshake) was observed.</summary>
     public bool HandshakeObserved { get; init; }
 
+    /// <summary>
+    /// Direction of the buffered bytes relative to the normalized stream key (<see langword="true"/> for the direction of the
+    /// lower endpoint). Lets a stateful detector keep one cursor per direction and pair what one direction sent with what
+    /// the other answered (for example the request that a response belongs to).
+    /// </summary>
+    public bool IsForward { get; init; }
+
+    /// <summary>
+    /// The transport signalled that the sender will send no more bytes in this direction (for example a TCP FIN). A detector for a format
+    /// whose end is "until the connection closes" (a body without length) may then report the buffered bytes as complete;
+    /// while this is <see langword="false"/> it must report such a message as incomplete.
+    /// </summary>
+    public bool StreamClosed { get; init; }
+
     #endregion
 }

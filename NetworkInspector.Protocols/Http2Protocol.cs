@@ -3,19 +3,24 @@
 namespace NetworkInspector.Protocols;
 
 /// <summary>
-/// HTTP/2 protocol parser (RFC 7540) for the frames of one TCP segment.
-/// Parses the 9-byte frame header of every frame in the segment and extracts type, flags, stream ID, and length.
+/// HTTP/2 protocol parser (RFC 7540) for the frames TCP hands over.
+/// Parses the 9-byte frame header of every frame and extracts type, flags, stream ID, and length.
 /// SETTINGS, PING, GOAWAY, WINDOW_UPDATE, and RST_STREAM payloads are decoded into fields. HEADERS and CONTINUATION
-/// header blocks are decoded with the stateless <see cref="HpackDecoder"/>, so headers that depend on the dynamic
-/// table of earlier blocks are missing from the field tree.
+/// header blocks are decoded with the connection's <see cref="HpackDecoder"/>, one per direction of the TCP stream, so a
+/// header that is sent as a reference to an earlier one (<c>:authority</c>, <c>user-agent</c>, cookies) resolves.
 /// <para>
-/// A segment that starts with the client connection preface shows it as <c>http2.magic</c> and decodes the frames after it.
+/// A unit that starts with the client connection preface shows it as <c>http2.magic</c>.
 /// </para>
 /// <para>
-/// Design: frames are not reassembled across TCP segments (no stream reassembly is registered for HTTP/2). A frame
-/// whose payload extends past the segment is shown with the bytes that are present, and the next frame header is
-/// searched after them. Each frame is walked twice: once eagerly in <c>Parse</c> to record the index groups, and again
-/// lazily in the populator to build the fields (see <c>Parse</c>).
+/// Design: TCP reassembles the byte stream into units (the preface, then one frame each, see <c>Http2FrameDetector</c>), so
+/// a DATA frame of 16 KiB is parsed whole instead of as a dozen fragments. The HPACK decoders are connection state: they are
+/// keyed by the TCP stream index and direction that TCP publishes before it dispatches (see
+/// <c>TcpProtocol.TryGetCurrentStream</c>), updated only on the first parse of a packet, and the decoded headers are
+/// recorded per packet layer so every later parse (and the lazy populator) shows the same headers without touching the
+/// decoders. A header block that continues in CONTINUATION frames is collected until END_HEADERS and shown on the frame that
+/// completes it. Without a TCP stream (no enclosing TCP layer) every block is decoded with a fresh, empty decoder, which
+/// resolves everything that does not depend on earlier blocks. Each frame is walked twice: once eagerly in <c>Parse</c> to
+/// record the index groups, and again lazily in the populator to build the fields (see <c>Parse</c>).
 /// </para>
 /// <para>Field tree structure (abridged; per-type flag fields, settings, and header fields follow the same pattern):</para>
 /// <code>
@@ -31,11 +36,11 @@ namespace NetworkInspector.Protocols;
 /// </code>
 /// </summary>
 /// <remarks>
-/// <para><b>Thread safety:</b> instances are immutable after registration completes.
-/// All mutable state is initialised inside <c>RegisterFieldsCustom</c> / <c>_OnStartCustom</c>
-/// (single-threaded build phase) and is read-only thereafter, so <see cref="IProtocol.Parse"/> may
-/// be invoked concurrently from any number of threads on the same instance without external
-/// synchronisation. Per-thread caches (when present) are stored in <c>[ThreadStatic]</c> fields.</para>
+/// <para><b>Thread safety:</b> the same first-parse/replay rule as <see cref="TcpProtocol"/>. The first parse of a packet
+/// mutates the connection state (the HPACK decoders and the pending header blocks); TCP calls it from the serialized ingest
+/// path only and tells this protocol which case it is. Every replay only reads the effect store (lock-free once an entry is
+/// published) and may run on any number of threads, also while further packets are being ingested. The field ids and the
+/// populator delegates are assigned in the single-threaded build phase and are read-only thereafter.</para>
 /// </remarks>
 [Protocol("http2", "HyperText Transfer Protocol 2", Description = "HTTP/2 (RFC 7540)")]
 [RegisterAtTable(TcpProtocol.PortTableName, TcpPortKey)]
@@ -230,8 +235,13 @@ public sealed partial class Http2Protocol : IProtocol
         // populator's per-frame emission guards. This keeps the presence index content-consistent
         // with materialization and free of false positives, at the deliberate cost of repeating the
         // frame walk (and HPACK decode) that the populator performs lazily.
+        // The header blocks are decoded here, once, against the connection's HPACK state (first parse) or read back from the
+        // record (replay). Both the index detection below and the lazy populator use this one result, so they always agree
+        // and a replay never touches the decoders.
+        HpackDecoder.Header[]?[]? blocks = _ResolveHeaderBlocks(in parentField, data, prefaceLength);
+
         _DetectFrameGroups(
-            data.Span[prefaceLength..],
+            data.Span[prefaceLength..], blocks,
             out bool hasFlags, out bool hasPayload, out bool hasSettings, out bool hasGoaway,
             out bool hasPing, out bool hasWindowUpdate, out bool hasRstStream, out bool hasHeader);
 
@@ -300,8 +310,19 @@ public sealed partial class Http2Protocol : IProtocol
     /// be emitted. This duplicates the populator's frame walk; that is the accepted cost of keeping
     /// the field materialization lazy while the index stays content-consistent.
     /// </summary>
+    /// <param name="span">The frames of this layer (after the preface).</param>
+    /// <param name="blocks">The decoded headers per frame, or null when every block must be decoded with a fresh decoder.</param>
+    /// <param name="hasFlags">A frame of a type with flag fields is present.</param>
+    /// <param name="hasPayload">A frame payload that is not decoded into structured fields is present (raw payload field).</param>
+    /// <param name="hasSettings">A SETTINGS frame with at least one entry is present.</param>
+    /// <param name="hasGoaway">A GOAWAY frame with its fixed part is present.</param>
+    /// <param name="hasPing">A PING frame with its 8 bytes is present.</param>
+    /// <param name="hasWindowUpdate">A WINDOW_UPDATE frame with its increment is present.</param>
+    /// <param name="hasRstStream">An RST_STREAM frame with its error code is present.</param>
+    /// <param name="hasHeader">A HEADERS or CONTINUATION frame that shows at least one decoded header is present.</param>
     private static void _DetectFrameGroups(
         ReadOnlySpan<byte> span,
+        HpackDecoder.Header[]?[]? blocks,
         out bool hasFlags, out bool hasPayload, out bool hasSettings, out bool hasGoaway,
         out bool hasPing, out bool hasWindowUpdate, out bool hasRstStream, out bool hasHeader)
     {
@@ -315,9 +336,9 @@ public sealed partial class Http2Protocol : IProtocol
         hasHeader = false;
 
         // One iteration per frame header that is completely present. The loop must visit exactly the frames that
-        // _PopulateHttp2Fields visits.
+        // _PopulateHttp2Fields visits; "ordinal" is the position that indexes the decoded headers of the frame.
         int offset = 0;
-        while (offset + Http2FrameHeader.Size <= span.Length)
+        for (int ordinal = 0; offset + Http2FrameHeader.Size <= span.Length; ordinal++)
         {
             if (!Http2FrameHeader.TryParse(span[offset..], out Http2FrameHeader frame))
             {
@@ -367,7 +388,7 @@ public sealed partial class Http2Protocol : IProtocol
                         break;
                     case 1: // HEADERS
                     case 9: // CONTINUATION
-                        structured = _DetectHpackHeaders(frame.Type, frame.Flags, payload, ref hasHeader);
+                        structured = _DetectHpackHeaders(frame.Type, frame.Flags, payload, blocks, ordinal, ref hasHeader);
                         break;
                     default:
                         structured = false;
@@ -392,48 +413,35 @@ public sealed partial class Http2Protocol : IProtocol
     /// HPACK block decodes to at least one header (the exact condition under which the populator
     /// appends http2.header fields).
     /// </summary>
-    private static bool _DetectHpackHeaders(byte frameType, byte flags, ReadOnlySpan<byte> payload, ref bool hasHeader)
+    private static bool _DetectHpackHeaders(
+        byte frameType, byte flags, ReadOnlySpan<byte> payload,
+        HpackDecoder.Header[]?[]? blocks, int ordinal, ref bool hasHeader)
     {
-        // Same layout walk as _ParseFramePayload (optional pad length, optional priority block, fragment, padding).
-        // Returns false exactly where _ParseFramePayload returns false: a malformed frame keeps its raw payload field.
-        int hpackOffset = 0;
-        int padLength = 0;
-
-        if (frameType == 1)
+        // Same layout as _ParseFramePayload (one shared definition). Returns false exactly where _ParseFramePayload returns
+        // false: a malformed frame keeps its raw payload field.
+        if (!_TryGetHeaderBlockFragment(frameType, flags, payload, out ReadOnlySpan<byte> fragment))
         {
-            bool padded = (flags & 0x08) != 0;
-            bool priority = (flags & 0x20) != 0;
-
-            if (padded)
-            {
-                if (payload.Length < 1)
-                {
-                    return false;
-                }
-                padLength = payload[0];
-                hpackOffset += 1;
-            }
-            if (priority)
-            {
-                if (payload.Length < hpackOffset + 5)
-                {
-                    return false;
-                }
-                hpackOffset += 5;
-            }
-            if (padLength > 0 && payload.Length - hpackOffset < padLength)
-            {
-                return false;
-            }
+            return false;
         }
 
-        // The decode result is thrown away: only whether it has at least one header matters here. This is the second
-        // decode of the block (the populator decodes it again lazily), the accepted cost named in _DetectFrameGroups.
-        int hpackEnd = payload.Length - padLength;
-        if (hpackOffset < hpackEnd && HpackDecoder.Decode(payload[hpackOffset..hpackEnd]).Count > 0)
+        if (blocks is not null)
+        {
+            // Connection decoding: the headers of this frame were decoded once on the first parse. Nothing is decoded again.
+            if (ordinal < blocks.Length && blocks[ordinal] is { Length: > 0 })
+            {
+                hasHeader = true;
+            }
+
+            return true;
+        }
+
+        // No connection state: decode the fragment with a fresh decoder. The result is thrown away, only whether there is at
+        // least one header matters here; the populator decodes it again lazily, the accepted cost named in _DetectFrameGroups.
+        if (!fragment.IsEmpty && new HpackDecoder().Decode(fragment).Count > 0)
         {
             hasHeader = true;
         }
+
         return true;
     }
 
@@ -459,8 +467,18 @@ public sealed partial class Http2Protocol : IProtocol
             container.Append(_MagicFieldId, FieldValue.NewBytes(http2Data[..offset]));
         }
 
-        // Process all HTTP/2 frames in the segment
-        while (offset + Http2FrameHeader.Size <= span.Length)
+        // The headers decoded on the first parse, found by the same (packet, layer) key it recorded them under. Null means
+        // there is no record (no TCP stream, or the first parse recorded nothing): the blocks are then decoded with a fresh
+        // decoder. This never touches the connection's decoders: this method may run on any thread, long after ingest.
+        HpackDecoder.Header[]?[]? blocks = null;
+        if (container.TryGetEffectLayerKey(http2Data, out int layerKey)
+            && _Effects.TryGet(container.Packet.Id.Value, layerKey, out Http2LayerEffect recorded))
+        {
+            blocks = recorded.Blocks;
+        }
+
+        // Process all HTTP/2 frames in the data; "ordinal" is the position that indexes the decoded headers of the frame.
+        for (int ordinal = 0; offset + Http2FrameHeader.Size <= span.Length; ordinal++)
         {
             if (!Http2FrameHeader.TryParse(span[offset..], out Http2FrameHeader frame))
             {
@@ -502,7 +520,7 @@ public sealed partial class Http2Protocol : IProtocol
                 ReadOnlySpan<byte> payloadSpan = span[payloadStart..payloadEnd];
 
                 // Parse type-specific payloads
-                bool parsed = _ParseFramePayload(in frameContainer, frame.Type, frame.Flags, payloadSpan, payloadData);
+                bool parsed = _ParseFramePayload(in frameContainer, frame.Type, frame.Flags, payloadSpan, payloadData, blocks, ordinal);
 
                 // If not parsed as structured data, show raw payload
                 if (!parsed)
@@ -565,6 +583,8 @@ public sealed partial class Http2Protocol : IProtocol
     /// <param name="flags">The frame flags octet.</param>
     /// <param name="payload">The payload bytes present in the segment (possibly shorter than the declared length).</param>
     /// <param name="payloadMemory">The same bytes as memory, for fields that keep a view instead of a copy.</param>
+    /// <param name="blocks">The decoded headers per frame, or null to decode the header block with a fresh decoder.</param>
+    /// <param name="ordinal">Position of this frame in the layer, the index into <paramref name="blocks"/>.</param>
     /// <returns>
     /// <see langword="true"/> when the payload became structured fields; <see langword="false"/> when the caller must
     /// add the raw payload (unknown type, or a payload too short or malformed for its type). The length guards are
@@ -572,7 +592,8 @@ public sealed partial class Http2Protocol : IProtocol
     /// </returns>
     private bool _ParseFramePayload(
         in MutField frameContainer, byte frameType, byte flags,
-        ReadOnlySpan<byte> payload, ReadOnlyMemory<byte> payloadMemory)
+        ReadOnlySpan<byte> payload, ReadOnlyMemory<byte> payloadMemory,
+        HpackDecoder.Header[]?[]? blocks, int ordinal)
     {
         switch (frameType)
         {
@@ -643,55 +664,28 @@ public sealed partial class Http2Protocol : IProtocol
             case 1: // HEADERS — decode HPACK header block
             case 9: // CONTINUATION — contains HPACK header block fragment
                 {
-                    // Per RFC 7540 §6.2, the HEADERS frame payload is laid out as:
-                    //   [Pad Length (1 byte, if PADDED)]
-                    //   [Stream Dependency (4 bytes) + Weight (1 byte), if PRIORITY]
-                    //   Header Block Fragment
-                    //   [Padding (Pad Length bytes), if PADDED]
-                    // CONTINUATION frames (RFC 7540 §6.10) carry only the header block fragment
-                    // and have neither padding nor priority fields.
-                    int hpackOffset = 0;
-                    int padLength = 0;
-
-                    if (frameType == 1)
+                    // The layout rules (optional pad length and priority block, fragment, padding) live in one shared
+                    // helper, so the index detection, this walk and the connection decoding agree on where the fragment is.
+                    if (!_TryGetHeaderBlockFragment(frameType, flags, payload, out ReadOnlySpan<byte> fragment))
                     {
-                        bool padded = (flags & 0x08) != 0;
-                        bool priority = (flags & 0x20) != 0;
-
-                        if (padded)
-                        {
-                            if (payload.Length < 1)
-                            {
-                                return false;
-                            }
-                            padLength = payload[0];
-                            hpackOffset += 1;
-                        }
-                        if (priority)
-                        {
-                            if (payload.Length < hpackOffset + 5)
-                            {
-                                return false;
-                            }
-                            // Stream dependency is the low 31 bits of the 32-bit big-endian field;
-                            // top bit is the exclusive flag. Currently we surface neither but we
-                            // must still skip the 5-byte priority block so HPACK starts at the
-                            // correct offset.
-                            hpackOffset += 5;
-                        }
-                        // Padding is appended at the end of the payload — exclude it from HPACK.
-                        if (padLength > 0 && payload.Length - hpackOffset < padLength)
-                        {
-                            // Malformed: declared padding exceeds remaining payload; refuse to decode.
-                            return false;
-                        }
+                        return false;
                     }
 
-                    int hpackEnd = payload.Length - padLength;
-                    if (hpackOffset < hpackEnd)
+                    if (blocks is not null)
                     {
-                        _DecodeHpackHeaders(in frameContainer, payload[hpackOffset..hpackEnd]);
+                        // Headers decoded once against the connection state; this frame shows none when the entry is empty
+                        // (for example a HEADERS frame whose block continues in CONTINUATION frames).
+                        if (ordinal < blocks.Length && blocks[ordinal] is { } decoded)
+                        {
+                            _AppendHeaders(in frameContainer, decoded);
+                        }
                     }
+                    else if (!fragment.IsEmpty)
+                    {
+                        // No connection state: a fresh decoder resolves everything that does not depend on earlier blocks.
+                        _AppendHeaders(in frameContainer, new HpackDecoder().Decode(fragment));
+                    }
+
                     return true;
                 }
 
@@ -700,19 +694,9 @@ public sealed partial class Http2Protocol : IProtocol
         }
     }
 
-    /// <summary>
-    /// Decodes HPACK-encoded headers from a HEADERS or CONTINUATION frame payload
-    /// and appends each decoded header as a field to the frame container.
-    /// </summary>
-    private void _DecodeHpackHeaders(in MutField frameContainer, ReadOnlySpan<byte> hpackBlock)
+    /// <summary>Appends each decoded header as a <c>http2.header</c> node with its name and value children.</summary>
+    private void _AppendHeaders(in MutField frameContainer, IReadOnlyList<HpackDecoder.Header> headers)
     {
-        List<HpackDecoder.Header> headers = HpackDecoder.Decode(hpackBlock);
-
-        if (headers.Count == 0)
-        {
-            return;
-        }
-
         foreach (HpackDecoder.Header header in headers)
         {
             MutField headerField = frameContainer.AppendWithCustomText(

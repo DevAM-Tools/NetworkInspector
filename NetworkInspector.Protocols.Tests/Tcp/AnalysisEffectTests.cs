@@ -31,7 +31,12 @@ internal sealed class AnalysisEffectTests
             RelativeAck: 1,
             SequenceIsRelative: true,
             AckIsRelative: true,
-            StreamLimitReached: false);
+            StreamLimitReached: false,
+            AcksPacketId: -1,
+            Rto: double.NaN,
+            RtoPacketId: -1,
+            DupAckPacketId: -1,
+            Completeness: 0);
 
     #endregion
 
@@ -54,7 +59,9 @@ internal sealed class AnalysisEffectTests
 
         await Assert.That(text).StartsWith("AnalysisEffect { StreamIndex = 3, ");
         await Assert.That(text).Contains("InitialRtt = 0.025, AckRtt = Infinity, TimeRelative = 0.015001234, TimeDelta = 1E-06, ");
-        await Assert.That(text).EndsWith("AckIsRelative = True, StreamLimitReached = False }");
+        await Assert.That(text).EndsWith(
+            "AckIsRelative = True, StreamLimitReached = False, AcksPacketId = -1, Rto = NaN, RtoPacketId = -1, "
+            + "DupAckPacketId = -1, Completeness = 0 }");
     }
 
     [Test]

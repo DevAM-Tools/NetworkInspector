@@ -4,7 +4,7 @@ namespace NetworkInspector.Protocols;
 
 /// <summary>
 /// Universal fallback dissector for unrecognized binary payloads.
-/// Equivalent to Wireshark's "data" protocol — simply stores raw bytes and length.
+/// Stores raw bytes and length of a payload that no other protocol claims.
 /// <para>Field tree structure:</para>
 /// <code>
 /// data: Data (42 bytes)

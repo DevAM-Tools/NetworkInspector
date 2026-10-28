@@ -262,4 +262,49 @@ internal sealed class TcpTsharkTests
     }
 
     #endregion
+    #region Flags word, checksum status and option fields
+
+    /// <summary>
+    /// The flags word is twelve bits wide: the accurate-ECN bit (bit 8, formerly the nonce sum) sits in the data-offset byte
+    /// and the three reserved bits above it. The frame builder only writes the low eight bits, so the test sets bit 8 in the
+    /// emitted frame (the checksum is then stale, which this test does not compare).
+    /// </summary>
+    [Test]
+    public async Task Tcp_TwelveBitFlagsWithAccurateEcn_MatchTshark()
+    {
+        byte[] frame = _BuildDataFrame();
+        const int dataOffsetByte = 14 + 20 + 12;
+        frame[dataOffsetByte] |= 0x01;
+        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
+        using (stack)
+        {
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame,
+                ("tcp.flags", "tcp.flags"),
+                ("tcp.flags.ae", "tcp.flags.ae"),
+                ("tcp.flags.ece", "tcp.flags.ece"),
+                ("tcp.flags.cwr", "tcp.flags.cwr"),
+                ("tcp.flags.push", "tcp.flags.push"),
+                ("tcp.flags.ack", "tcp.flags.ack")).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The option fields that were renamed to the common scheme (<c>timestamp.tsval</c>,
+    /// <c>timestamp.tsecr</c>) carry the values of the emitted bytes in both tools.
+    /// </summary>
+    [Test]
+    public async Task Tcp_SynWithOptions_TimestampFields_MatchTshark()
+    {
+        byte[] frame = _BuildSynWithOptionsFrame();
+        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
+        using (stack)
+        {
+            await TsharkAssert.AssertEquivalentMany(stack, packet, frame,
+                ("tcp.options.timestamp.tsval", "tcp.options.timestamp.tsval"),
+                ("tcp.options.timestamp.tsecr", "tcp.options.timestamp.tsecr"),
+                ("tcp.options.wscale.multiplier", "tcp.options.wscale.multiplier")).ConfigureAwait(false);
+        }
+    }
+
+    #endregion
 }

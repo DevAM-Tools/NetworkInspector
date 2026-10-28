@@ -302,8 +302,8 @@ public enum LinkType
     RtacSerial = 250,
     /// <summary>Bluetooth Low Energy Link Layer (DLT_BLUETOOTH_LE_LL).</summary>
     BluetoothLeLl = 251,
-    /// <summary>Wireshark Upper PDU export (DLT_WIRESHARK_UPPER_PDU).</summary>
-    WiresharkUpperPdu = 252,
+    /// <summary>Upper PDU export (DLT 252): a PDU with a tag header, not a link-layer frame.</summary>
+    UpperPdu = 252,
     /// <summary>Linux Netlink (DLT_NETLINK).</summary>
     Netlink = 253,
     /// <summary>Bluetooth Linux Monitor (DLT_BLUETOOTH_LINUX_MONITOR).</summary>
@@ -588,7 +588,7 @@ public static class LinkTypeExtensions
         LinkType.Usbpcap => "USBPcap",
         LinkType.RtacSerial => "RTAC Serial",
         LinkType.BluetoothLeLl => "Bluetooth LE Link Layer",
-        LinkType.WiresharkUpperPdu => "Wireshark Upper PDU",
+        LinkType.UpperPdu => "Upper PDU",
         LinkType.Netlink => "Linux Netlink",
         LinkType.BluetoothLinuxMonitor => "Bluetooth Linux Monitor",
         LinkType.BluetoothBredrBb => "Bluetooth BR/EDR Baseband",

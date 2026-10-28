@@ -136,6 +136,23 @@ internal static class ProtocolTestHelper
     }
 
     /// <summary>
+    /// Asserts that a signed (I64) field exists and has the expected value.
+    /// Uses <c>materialize: true</c> so lazy fields are included in the assertion.
+    /// </summary>
+    internal static async Task AssertI64Field(Stack stack, Packet packet, string fieldName, long expected)
+    {
+        FieldId? fieldId = stack.GetFieldId(fieldName);
+        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+
+        bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true);
+        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+
+        bool ok = value.Data.TryGetAsI64(out long actual);
+        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be I64");
+        await Assert.That(actual).IsEqualTo(expected).Because($"Field '{fieldName}'");
+    }
+
+    /// <summary>
     /// Asserts that an F64 field exists and has the expected value (exact match).
     /// Uses <c>materialize: true</c> so lazy fields are included in the assertion.
     /// </summary>

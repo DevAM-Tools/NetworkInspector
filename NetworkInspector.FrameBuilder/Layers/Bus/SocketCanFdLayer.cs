@@ -80,7 +80,7 @@ public readonly struct SocketCanFdLayer : IStatelessLayer, IRootLayer
         int len = data.Length > MaxFdData ? MaxFdData : data.Length;
         // SocketCAN's canfd_frame stores the actual payload byte count (0..64)
         // in byte 4 — there is no DLC encoding on the wire (the kernel and the
-        // Wireshark dissector both treat byte 4 as a plain length).
+        // reference dissector both treat byte 4 as a plain length).
         _Length = (byte)len;
 
         byte flags = FdfFlag; // CAN-FD frames always have the FDF bit set

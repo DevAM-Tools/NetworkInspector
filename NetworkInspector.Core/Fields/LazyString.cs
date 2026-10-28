@@ -69,6 +69,15 @@ public readonly struct LazyString : IEquatable<LazyString>, IComparable<LazyStri
     /// The state is boxed once (one allocation now); the static lambda captures nothing, so no closure object exists, and the
     /// string is allocated only when the text is first read.
     /// </summary>
+    /// <remarks>
+    /// <b>Accepted cost (decision record):</b> this is one small object per call, also for packets whose info text is never
+    /// read; the packet-info pattern of the protocol parsers (IPv4, UDP, TCP and others) pays it once per packet on ingest.
+    /// It is accepted, not overlooked: the alternative is a struct payload that the field value storage holds inline, which
+    /// needs a change to the shared value layout (a fixed state size and a cached formatter delegate per call site) and
+    /// belongs to the next rework of this class, together with the other lazy-text paths. The object is gen-0 garbage that
+    /// dies with the packet unless the info text is read, so the cost is allocation volume, not retention. A protocol that
+    /// would pay it twice per packet should build the text from a single state (one call), as the TCP layer does.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static LazyString FormatLazy<TState>(TState state, Func<TState, string> formatter)
         => new(new LazyTextFormat<TState>(state, formatter));

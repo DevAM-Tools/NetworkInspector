@@ -17,19 +17,25 @@ internal enum TcpAnalysisFlags : uint
     /// <summary>No analysis flags detected.</summary>
     None = 0,
 
-    /// <summary>Segment is a retransmission (end_seq &lt;= next_seq).</summary>
+    /// <summary>
+    /// Segment is a retransmission: it starts before the end of the data already sent and is neither a fast retransmission,
+    /// a spurious one nor reordering.
+    /// </summary>
     Retransmission = 1 << 0,
 
-    /// <summary>Fast retransmission (retransmission after 3+ duplicate ACKs from the other direction).</summary>
+    /// <summary>Fast retransmission: the peer sent two duplicate ACKs for this sequence number shortly before.</summary>
     FastRetransmission = 1 << 1,
 
-    /// <summary>Out-of-order segment (end_seq &gt; next_seq AND seq != next_seq).</summary>
+    /// <summary>
+    /// Out-of-order segment: it starts before the end of the data already sent, was not sent before, and arrived within the
+    /// reordering window.
+    /// </summary>
     OutOfOrder = 1 << 2,
 
-    /// <summary>Duplicate ACK (same ACK number and window as the previous ACK of this direction, no data).</summary>
+    /// <summary>Duplicate ACK (same sequence, ACK number and window as the previous segment of this direction, no data).</summary>
     DuplicateAck = 1 << 3,
 
-    /// <summary>Lost segment detected (gap in sequence numbers).</summary>
+    /// <summary>Lost segment: the segment starts beyond the end of the data already seen, so bytes in between were not captured.</summary>
     LostSegment = 1 << 4,
 
     /// <summary>Keep-alive probe (seq = next-1, len &lt;= 1).</summary>
@@ -41,26 +47,32 @@ internal enum TcpAnalysisFlags : uint
     /// <summary>Zero window advertised (window = 0, no RST/SYN/FIN).</summary>
     ZeroWindow = 1 << 7,
 
-    /// <summary>Zero window probe (data sent to peer with window = 0).</summary>
+    /// <summary>Zero window probe (one byte sent into a window the peer advertised as zero).</summary>
     ZeroWindowProbe = 1 << 8,
 
-    /// <summary>Zero window probe ACK.</summary>
+    /// <summary>Zero window probe ACK (the peer answers a probe and keeps the window at zero).</summary>
     ZeroWindowProbeAck = 1 << 9,
 
-    /// <summary>Window update (pure ACK with changed window, no SYN/FIN/RST/PSH).</summary>
+    /// <summary>Window update (pure ACK that only changes a non-zero window).</summary>
     WindowUpdate = 1 << 10,
 
-    /// <summary>Window is full (bytes in flight &gt;= the scaled receiver window).</summary>
+    /// <summary>Window is full (the segment reaches the right edge of the window the peer advertised).</summary>
     WindowFull = 1 << 11,
 
-    /// <summary>
-    /// Connection reuses previously seen port pair. Declared (and mirrored in the recorded effect flags), but nothing
-    /// in the connection tracker sets it at present.
-    /// </summary>
+    /// <summary>A new connection starts on an address/port pair that an earlier connection of the capture used.</summary>
     ReusedPorts = 1 << 12,
 
-    /// <summary>Spurious retransmission (data was already ACKed by the reverse flow).</summary>
+    /// <summary>Spurious retransmission (the data was already acknowledged by the peer).</summary>
     SpuriousRetransmission = 1 << 13,
+
+    /// <summary>The ACK acknowledges bytes that were never captured (a gap that the peer already received, common at capture start).</summary>
+    AckLostSegment = 1 << 14,
+
+    /// <summary>The ACK acknowledges only the front part of a segment that is still unacknowledged.</summary>
+    PartialAck = 1 << 15,
+
+    /// <summary>The ACK acknowledges bytes that were sent more than once, so it cannot say which transmission it answers.</summary>
+    AmbiguousAck = 1 << 16,
 }
 
 /// <summary>
@@ -90,7 +102,7 @@ internal readonly record struct TcpAnalysisResult
     /// <summary>Bytes currently in flight (unacknowledged). 0 if not applicable.</summary>
     internal ulong BytesInFlight { get; init; }
 
-    /// <summary>Initial RTT in seconds (SYN → SYN-ACK delta). NaN if not measured.</summary>
+    /// <summary>Initial RTT in seconds (SYN → third handshake packet) of the connection. NaN until it is measured.</summary>
     internal double InitialRtt { get; init; }
 
     /// <summary>ACK RTT in seconds (data → ACK delta). NaN if not measured.</summary>
@@ -103,14 +115,14 @@ internal readonly record struct TcpAnalysisResult
     internal double TimeDelta { get; init; }
 
     /// <summary>
-    /// Calculated (scaled) window size. Zero means not computed.
-    /// <c>window_size_value &lt;&lt; window_scale</c> when the scale factor is known.
+    /// Calculated window size: the advertised window shifted by the sender's scale when the scale is known, otherwise the
+    /// advertised value itself.
     /// </summary>
     internal ulong ScaledWindowSize { get; init; }
 
     /// <summary>
-    /// Window scale factor advertised by the sender of this segment, or -1 when this segment is a SYN
-    /// or the sender's SYN did not carry a scale. The sender's window is shifted by this value.
+    /// Window scaling factor of the sender: <c>-1</c> when unknown (the capture has no SYN of the connection), <c>-2</c>
+    /// when the handshake did not negotiate scaling, otherwise the multiplier <c>1 &lt;&lt; shift</c>.
     /// </summary>
     internal int WindowScaleFactor { get; init; }
 
@@ -158,16 +170,28 @@ internal readonly record struct TcpAnalysisResult
     /// <summary>The stream table refused this key. Header fields are still parsed; <c>tcp.stream</c> is not appended.</summary>
     internal bool StreamLimitReached { get; init; }
 
-    /// <summary>Whether any analysis flag is set.</summary>
-    internal bool HasAnyFlag => Flags != TcpAnalysisFlags.None;
+    /// <summary>Packet id of the segment this ACK acknowledges, or -1 when it acknowledges none that is remembered.</summary>
+    internal int AcksPacketId { get; init; }
+
+    /// <summary>Retransmission timeout in seconds (time since the retransmitted data was first sent). NaN if not applicable.</summary>
+    internal double Rto { get; init; }
+
+    /// <summary>Packet id the retransmission timeout is measured from, or -1.</summary>
+    internal int RtoPacketId { get; init; }
+
+    /// <summary>Packet id of the ACK this duplicate ACK repeats, or -1.</summary>
+    internal int DupAckPacketId { get; init; }
+
+    /// <summary>Completeness bitmask of the conversation up to and including this packet (see <see cref="TcpConnectionState.Completeness"/>).</summary>
+    internal byte Completeness { get; init; }
 
     #endregion
 
     #region Sentinels
 
     /// <summary>
-    /// Default result with no flags and NaN RTT values (NaN means "not measured", unlike 0 which is a valid measurement)
-    /// and a window scale of -1 ("none").
+    /// Default result with no flags and NaN RTT values (NaN means "not measured", unlike 0 which is a valid measurement),
+    /// a window scale factor of -1 ("unknown") and -1 for every "no such packet" id.
     /// </summary>
     internal static TcpAnalysisResult Empty => new()
     {
@@ -177,6 +201,10 @@ internal readonly record struct TcpAnalysisResult
         TimeRelative = double.NaN,
         TimeDelta = double.NaN,
         WindowScaleFactor = -1,
+        AcksPacketId = -1,
+        Rto = double.NaN,
+        RtoPacketId = -1,
+        DupAckPacketId = -1,
     };
 
     #endregion

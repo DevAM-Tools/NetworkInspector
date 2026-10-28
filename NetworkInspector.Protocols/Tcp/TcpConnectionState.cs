@@ -3,143 +3,191 @@
 namespace NetworkInspector.Protocols.Tcp;
 
 /// <summary>
+/// One sent segment (or SYN/FIN) whose acknowledgement has not been seen yet.
+/// </summary>
+/// <remarks>
+/// The list of these entries per direction is what lets the analysis decide "has this byte range been sent before"
+/// (retransmission versus reordering), measure the round trip of the exact acknowledgement, name the packet an ACK
+/// refers to, and compute the retransmission timeout. Thread safety: plain value type inside the owner's array.
+/// </remarks>
+internal struct TcpUnackedSegment
+{
+    /// <summary>First sequence number of the segment; moved forward when an ACK covers only the front of it.</summary>
+    internal uint Seq;
+
+    /// <summary>Sequence number after the segment (SYN and FIN count as one).</summary>
+    internal uint NextSeq;
+
+    /// <summary>Capture time of the segment in nanoseconds.</summary>
+    internal long Nanos;
+
+    /// <summary>Packet that carried the segment (the id the ACK-side fields refer to).</summary>
+    internal int PacketId;
+
+    /// <summary>
+    /// The same bytes were sent again after this entry was recorded. An ACK for the entry cannot say which transmission it
+    /// answers, so it is reported as ambiguous (Karn's algorithm, RFC 6298 section 3). The round trip sample still refers to
+    /// the first transmission, which is the entry's own time.
+    /// </summary>
+    internal bool Retransmitted;
+}
+
+/// <summary>
 /// Per-direction flow state for TCP connection analysis.
-/// Tracks sequence numbers, acknowledgment numbers, window sizes,
-/// and duplicate ACK counters for one direction of a TCP connection.
 /// </summary>
 /// <remarks>
 /// Mutable analysis state, written by <c>TcpConnectionTracker.Analyze</c> during the ordered first parse of each packet.
 /// <b>Thread safety:</b> not thread-safe; it is never read or written by replays (they use recorded effects). All
 /// sequence numbers are raw 32-bit wire values that wrap; comparisons use serial-number arithmetic in the tracker.
+/// <para>
+/// <b>Memory:</b> an idle flow is one small object. The unacked list is allocated on the first data segment and grows by
+/// doubling, so a connection that never carries data (a port scan, a refused connection) costs no list at all.
+/// </para>
 /// </remarks>
 internal sealed class TcpFlowState
 {
-    #region ISN Tracking
+    /// <summary>
+    /// Upper bound for the unacknowledged-segment list of one direction. Limit record: value 10000 entries (about 240 KB per
+    /// direction); threat: a receiver that never acknowledges (or a capture that misses all ACKs) would otherwise grow the
+    /// list with every segment of a long transfer; constant of the analysis (a memory bound, not configurable); posture:
+    /// secure by default, since the data comes from untrusted networks. Reaching the bound is not an error: further
+    /// segments are simply not remembered, so they yield no round trip sample and no "already seen" decision, and the
+    /// list becomes usable again as ACKs arrive. Rejected alternative: unbounded growth, which cripples the host on a
+    /// capture of a long one-way transfer.
+    /// </summary>
+    internal const int MaxUnacked = 10000;
 
-    /// <summary>Initial sequence number from the SYN.</summary>
-    internal uint Isn
-    {
-        get; set;
-    }
+    #region ISN and handshake facts
+
+    /// <summary>Initial sequence number from the SYN of this direction.</summary>
+    internal uint Isn { get; set; }
 
     /// <summary>Whether the ISN has been captured.</summary>
-    internal bool IsnSet
-    {
-        get; set;
-    }
+    internal bool IsnSet { get; set; }
+
+    /// <summary>
+    /// Sequence number that relative numbers of this direction count from: the ISN when the SYN was captured, otherwise one
+    /// before the first sequence number seen (so the first segment of a connection joined mid-stream reads 1, as the first
+    /// data segment after a handshake does). Valid when <see cref="RelativeBaseSet"/>.
+    /// </summary>
+    internal uint RelativeBase { get; set; }
+
+    /// <summary>Whether <see cref="RelativeBase"/> carries a value.</summary>
+    internal bool RelativeBaseSet { get; set; }
 
     /// <summary>Whether any packet has been seen in this direction.</summary>
-    internal bool Seen
-    {
-        get; set;
-    }
+    internal bool Seen { get; set; }
+
+    /// <summary>This direction sent the first pure SYN observed on the connection.</summary>
+    internal bool IsInitiator { get; set; }
 
     #endregion
 
-    #region Sequence Tracking
+    #region Sequence tracking
 
-    /// <summary>Last sequence number seen.</summary>
-    internal uint LastSeq
-    {
-        get; set;
-    }
+    /// <summary>
+    /// Highest end sequence seen in this direction. A zero window probe does not advance it: the probe byte is not
+    /// delivered, so the next real segment starts at the same number.
+    /// </summary>
+    internal uint NextSeq { get; set; }
 
-    /// <summary>Last acknowledgment number seen.</summary>
-    internal uint LastAck
-    {
-        get; set;
-    }
+    /// <summary>Capture time (nanoseconds) of the segment that last advanced <see cref="NextSeq"/>.</summary>
+    internal long NextSeqNanos { get; set; }
 
-    /// <summary>Expected next sequence number (LastSeq + segment length).</summary>
-    internal uint NextSeq
-    {
-        get; set;
-    }
+    /// <summary>Highest continuous end sequence the peer is still expected to acknowledge; valid when <see cref="MaxSeqToBeAckedSet"/>.</summary>
+    internal uint MaxSeqToBeAcked { get; set; }
 
-    /// <summary>Highest sequence number seen so far.</summary>
-    internal uint MaxSeq
-    {
-        get; set;
-    }
+    /// <summary>Whether <see cref="MaxSeqToBeAcked"/> carries a value.</summary>
+    internal bool MaxSeqToBeAckedSet { get; set; }
 
-    /// <summary>Sequence number of the FIN, if observed.</summary>
-    internal uint? FinSeq
-    {
-        get; set;
-    }
+    /// <summary>Acknowledgement number of the last segment of this direction.</summary>
+    internal uint LastAck { get; set; }
+
+    /// <summary>Capture time (nanoseconds) of the last segment of this direction; the reordering window is measured from it.</summary>
+    internal long LastAckNanos { get; set; }
+
+    /// <summary>
+    /// Payload length of the last segment that advanced <see cref="NextSeq"/>; 0 means that segment was a pure ACK. A late
+    /// segment right after a pure ACK is reordering even though the sequence space is contiguous.
+    /// </summary>
+    internal uint LastAckLen { get; set; }
 
     #endregion
 
-    #region Window Tracking
+    #region Window tracking
 
-    /// <summary>Last advertised window size.</summary>
-    internal ushort LastWindow
-    {
-        get; set;
-    }
+    /// <summary>Last advertised (unscaled) window of this direction.</summary>
+    internal ushort LastWindow { get; set; }
 
-    /// <summary>Window scale factor from SYN options (null if not seen).</summary>
-    internal byte? WindowScale
-    {
-        get; set;
-    }
+    /// <summary>
+    /// Window scale state of this direction: <c>-1</c> unknown (no SYN captured), <c>-2</c> no scaling (the handshake did
+    /// not negotiate it on both sides), <c>0..14</c> the shift count.
+    /// </summary>
+    internal int WindowScale { get; set; } = -1;
+
+    /// <summary>
+    /// No ACK has been seen from this direction since its SYN. Before the first ACK the window of a connection is not scaled
+    /// yet (RFC 7323 section 2.2: the window in a SYN is never scaled), which matters for the window-full test.
+    /// </summary>
+    internal bool IsFirstAck { get; set; } = true;
 
     #endregion
 
     #region Duplicate ACK
 
-    /// <summary>Current consecutive duplicate ACK count.</summary>
-    internal uint DupAckCount
-    {
-        get; set;
-    }
+    /// <summary>Current number of consecutive duplicate ACKs this direction sent for <see cref="LastAck"/>.</summary>
+    internal uint DupAckCount { get; set; }
 
-    /// <summary>The ACK number that is being duplicated.</summary>
-    internal uint LastDupAck
-    {
-        get; set;
-    }
+    /// <summary>Packet id of the last segment of this direction that moved the acknowledgement number (the duplicates refer to it).</summary>
+    internal int LastNonDupAckPacketId { get; set; } = -1;
 
     #endregion
 
-    #region Timestamps
+    #region Analysis memory
 
-    /// <summary>Timestamp of the SYN packet (for diagnostics). Initial RTT uses the connection's pure-SYN time.</summary>
-    internal Timestamp? SynTimestamp
-    {
-        get; set;
-    }
+    /// <summary>Whether the bytes-in-flight value of this direction can be trusted (a gap or a missing ACK invalidates it).</summary>
+    internal bool ValidBytesInFlight { get; set; } = true;
+
+    /// <summary>Analysis flags of the previous segment of this direction (keep-alive and probe replies look at the peer's).</summary>
+    internal TcpAnalysisFlags LastSegmentFlags { get; set; }
+
+    #endregion
+
+    #region Close facts
+
+    /// <summary>This direction sent a FIN.</summary>
+    internal bool FinSent { get; set; }
+
+    /// <summary>Sequence number after the FIN; an ACK at or past it acknowledges the FIN.</summary>
+    internal uint FinEndSeq { get; set; }
+
+    /// <summary>The peer acknowledged the FIN.</summary>
+    internal bool FinAcked { get; set; }
+
+    /// <summary>0 when this direction sent the first FIN of the connection, 1 for the second, -1 while none was sent.</summary>
+    internal int FinOrder { get; set; } = -1;
+
+    #endregion
+
+    #region Unacknowledged segments
 
     /// <summary>
-    /// Fixed 256-slot ring for ACK RTT. Index is <c>endSeq &amp; 255</c>.
-    /// A collision overwrites the older entry. One allocation per flow, not per segment.
+    /// Unacked segments, oldest first; null until the first data segment, then doubling up to <see cref="MaxUnacked"/>.
+    /// Only the first <see cref="UnackedCount"/> entries are live.
     /// </summary>
-    /// <remarks>
-    /// Why a fixed ring: the RTT of a data segment is measured when the matching ACK (ack number equals the segment's
-    /// end sequence) arrives, so the sender's timestamps must be remembered. A dictionary or list would grow with
-    /// unacknowledged data; the ring caps memory per flow (about 3 KB across the three parallel arrays) at the price
-    /// that a colliding or very old unacknowledged segment simply yields no RTT sample. The three arrays are
-    /// parallel (structure of arrays) and are only valid together with <see cref="AckRttSlotUsed"/>.
-    /// </remarks>
-    internal uint[] AckRttSeq { get; } = new uint[256];
+    internal TcpUnackedSegment[]? Unacked { get; set; }
 
-    /// <summary>Timestamp nanoseconds paired with <see cref="AckRttSeq"/>.</summary>
-    internal long[] AckRttNanos { get; } = new long[256];
+    /// <summary>Number of live entries in <see cref="Unacked"/>.</summary>
+    internal int UnackedCount { get; set; }
 
-    /// <summary>Whether the ring slot holds a live data-segment timestamp.</summary>
-    internal bool[] AckRttSlotUsed { get; } = new bool[256];
-
-    /// <summary>The previous segment in this direction was a keep-alive.</summary>
-    internal bool LastSegmentWasKeepAlive
-    {
-        get; set;
-    }
-
-    /// <summary>This direction sent the first pure SYN observed on the connection.</summary>
-    internal bool IsInitiator
-    {
-        get; set;
-    }
+    /// <summary>
+    /// Sum of the lengths of the live unacked entries: the bytes this direction has in flight. Maintained on every add,
+    /// acknowledgement and trim instead of summed per segment, because summing would walk up to
+    /// <see cref="MaxUnacked"/> entries for every data segment of a long transfer. It counts bytes that were sent and are not
+    /// acknowledged; a hole in the sequence space (a segment that was never captured) is not in flight from the capture's
+    /// point of view and is not counted.
+    /// </summary>
+    internal uint UnackedBytes { get; set; }
 
     #endregion
 }
@@ -168,61 +216,56 @@ internal sealed class TcpConnectionState
     internal TcpFlowState Reverse { get; } = new();
 
     /// <summary>Whether the initial RTT has been computed for this connection.</summary>
-    internal bool InitialRttSet
-    {
-        get; set;
-    }
+    internal bool InitialRttSet { get; set; }
 
-    /// <summary>Measured initial RTT in seconds (NaN if not yet computed).</summary>
+    /// <summary>Measured initial RTT in seconds (NaN if not yet computed); shown on every later packet of the connection.</summary>
     internal double InitialRttValue { get; set; } = double.NaN;
 
     /// <summary>Timestamp of the most recent pure SYN (no ACK). Used once, on the first pure ACK, as iRTT.</summary>
-    internal Timestamp? PureSynTimestamp
-    {
-        get; set;
-    }
+    internal Timestamp? PureSynTimestamp { get; set; }
 
     /// <summary>Server port learned from the first SYN (destination) or SYN-ACK (source).</summary>
-    internal ushort ServerPort
-    {
-        get; set;
-    }
+    internal ushort ServerPort { get; set; }
 
     /// <summary>Whether <see cref="ServerPort"/> was learned from a SYN.</summary>
-    internal bool ServerPortSet
-    {
-        get; set;
-    }
+    internal bool ServerPortSet { get; set; }
 
     #region Stream timing
 
     /// <summary>Timestamp of the first packet seen in this stream (for tcp.time_relative).</summary>
-    internal Timestamp? FirstTimestamp
-    {
-        get; set;
-    }
+    internal Timestamp? FirstTimestamp { get; set; }
 
     /// <summary>Timestamp of the previous packet seen in this stream (for tcp.time_delta).</summary>
-    internal Timestamp? LastTimestamp
-    {
-        get; set;
-    }
+    internal Timestamp? LastTimestamp { get; set; }
+
+    #endregion
+
+    #region Completeness
 
     /// <summary>
-    /// Connection completeness bitmask tracking which phases have been observed.
-    /// Bit 0 = SYN, Bit 1 = SYN-ACK, Bit 2 = ACK, Bit 3 = DATA, Bit 4 = FIN, Bit 5 = RST.
+    /// Connection completeness bitmask: which parts of a conversation the capture contains so far.
+    /// Bit 0 = SYN, bit 1 = SYN-ACK, bit 2 = ACK that completes the handshake, bit 3 = DATA, bit 4 = FIN, bit 5 = RST.
+    /// The value is the state at the current packet (single pass); the final value of a conversation is not known while
+    /// packets are still arriving, so it is not shown retroactively on earlier packets.
     /// </summary>
-    internal byte Completeness
-    {
-        get; set;
-    }
+    internal byte Completeness { get; set; }
 
-    // Completeness flag constants (bit positions of Completeness). Bit 2 (ACK) is documented above but has no
-    // constant because nothing sets or reads it.
+    /// <summary>Completeness bit: a pure SYN was seen.</summary>
     internal const byte SynSeen = 1 << 0;
+
+    /// <summary>Completeness bit: a SYN-ACK was seen.</summary>
     internal const byte SynAckSeen = 1 << 1;
+
+    /// <summary>Completeness bit: the ACK that completes the handshake was seen.</summary>
+    internal const byte AckSeen = 1 << 2;
+
+    /// <summary>Completeness bit: a segment with payload was seen.</summary>
     internal const byte DataSeen = 1 << 3;
+
+    /// <summary>Completeness bit: a FIN was seen.</summary>
     internal const byte FinSeen = 1 << 4;
+
+    /// <summary>Completeness bit: an RST was seen.</summary>
     internal const byte RstSeen = 1 << 5;
 
     #endregion
@@ -235,10 +278,7 @@ internal sealed class TcpConnectionState
     /// subsequent packets on the same connection reuse this cached ID without
     /// re-running heuristic tests.
     /// </summary>
-    internal ProtocolId? HeuristicProtocolId
-    {
-        get; set;
-    }
+    internal ProtocolId? HeuristicProtocolId { get; set; }
 
     #endregion
 
@@ -248,26 +288,39 @@ internal sealed class TcpConnectionState
     /// Current TCP connection state (e.g., SYN_SENT, ESTABLISHED, FIN_WAIT_1).
     /// Updated by the analyzer after processing each segment.
     /// </summary>
-    internal TcpConnectionPhase Phase
-    {
-        get; set;
-    }
+    internal TcpConnectionPhase Phase { get; set; }
+
+    /// <summary>Number of different directions that have sent a FIN (0..2); orders the two FINs for the close states.</summary>
+    internal int FinCount { get; set; }
+
+    /// <summary>An RST was seen on this connection. A SYN after it starts a new connection.</summary>
+    internal bool ResetSeen { get; set; }
+
+    /// <summary>
+    /// A segment with the ACK flag and without SYN was seen after the handshake started: the handshake is over (or was never
+    /// captured but data and acknowledgements flow). Decides between SYN_RECEIVED and ESTABLISHED.
+    /// </summary>
+    internal bool HandshakeDone { get; set; }
+
+    #endregion
 }
 
 /// <summary>
 /// TCP connection state machine phases, tracking the lifecycle of a connection.
-/// Based on RFC 793 TCP state diagram.
+/// Based on the RFC 9293 state diagram (section 3.3.2).
 /// </summary>
 /// <remarks>
-/// A passive capture sees both endpoints, so this is one simplified connection-level phase (advanced by the segments of
-/// either direction), not the real state of either host. It only leaves <see cref="Closed"/> when a pure SYN is seen, so
-/// a connection joined mid-stream stays in <see cref="Closed"/> and its FIN/ACK segments do not change the phase
-/// (only an RST does). The names are for display; see <c>TcpConnectionTracker</c> for the exact transitions.
+/// A passive capture sees both endpoints, so this is one connection-level phase derived from the facts both directions
+/// produced (who sent a SYN, who sent a FIN, which FIN was acknowledged), not the real state of either host. The phase
+/// reported is the one of the side that closed first (the active closer), so a normal close reads FIN_WAIT_1, FIN_WAIT_2,
+/// TIME_WAIT. A retransmitted FIN or ACK never changes it, because the facts are recorded once. The names are for
+/// display; see <c>TcpConnectionTracker</c> for the derivation.
 /// </remarks>
 internal enum TcpConnectionPhase : byte
 {
     /// <summary>
-    /// No pure SYN seen yet (initial phase), or the connection finished the last-ACK exchange and is closed again.
+    /// Initial value of a connection that has not carried a segment yet. Never reported for a segment, because the phase is
+    /// derived after the segment was recorded; a connection that was joined mid-stream reads <see cref="EstablishedMidStream"/>.
     /// </summary>
     Closed,
 
@@ -286,22 +339,23 @@ internal enum TcpConnectionPhase : byte
     /// <summary>First FIN ACKed, waiting for peer's FIN.</summary>
     FinWait2,
 
-    /// <summary>Peer sent FIN, waiting for application close.</summary>
-    CloseWait,
-
-    /// <summary>Both sides sent FIN, waiting for final ACKs.</summary>
+    /// <summary>Both sides sent FIN, neither FIN is acknowledged yet (simultaneous close).</summary>
     Closing,
 
-    /// <summary>Received FIN after our FIN was ACKed — TIME_WAIT timer running.</summary>
+    /// <summary>Both FINs are acknowledged — TIME_WAIT timer running.</summary>
     TimeWait,
 
     /// <summary>
-    /// Second FIN seen after the first side was in <see cref="CloseWait"/>; the final ACK is awaited. The next ACK moves
-    /// the phase to <see cref="Closed"/>.
+    /// The second FIN was sent after the first one was acknowledged; the acknowledgement of the second FIN is awaited.
     /// </summary>
     LastAck,
 
-    /// <summary>RST received — connection aborted.</summary>
+    /// <summary>RST seen — connection aborted. Only a new connection on the same address/port pair leaves this phase.</summary>
     Reset,
-    #endregion
+
+    /// <summary>
+    /// The capture contains no SYN of this connection (it was joined mid-stream) but it carries data or acknowledgements, so
+    /// it is established as far as anyone can tell.
+    /// </summary>
+    EstablishedMidStream,
 }

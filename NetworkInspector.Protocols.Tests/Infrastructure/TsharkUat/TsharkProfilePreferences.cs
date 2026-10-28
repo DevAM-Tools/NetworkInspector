@@ -3,9 +3,9 @@
 namespace NetworkInspector.Protocols.Tests.Infrastructure.TsharkUat;
 
 /// <summary>
-/// Appends deterministic preference overrides inside a freshly created per-test Wireshark profile.
+/// Appends deterministic preference overrides inside a freshly created per-test Tshark profile.
 /// </summary>
-internal static class WiresharkProfilePreferences
+internal static class TsharkProfilePreferences
 {
     internal static void MergeIntoProfilePreferences(string profileDirectory)
     {

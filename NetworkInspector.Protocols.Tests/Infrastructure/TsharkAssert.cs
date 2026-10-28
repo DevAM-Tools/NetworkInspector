@@ -125,7 +125,7 @@ internal static class TsharkAssert
     }
 
     /// <summary>
-    /// Same as overload without decode-as, plus an explicit Wireshark Decode-As rule
+    /// Same as overload without decode-as, plus an explicit Decode-As rule
     /// (UDP/TCP PDU-Transport heuristic binding parity).
     /// </summary>
     internal static async Task AssertEquivalentMany(

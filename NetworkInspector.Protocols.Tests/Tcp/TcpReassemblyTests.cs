@@ -44,6 +44,17 @@ internal sealed class TcpReassemblyTests
         HandshakeObserved = true,
     };
 
+    /// <summary>Appends a segment the way the engine does, with the default context and an arbitrary packet id.</summary>
+    private static bool _Append(SegmentBuffer buffer, uint sequence, ReadOnlyMemory<byte> payload)
+    {
+        StreamDetectionContext context = _DefaultContext();
+        return buffer.TryAppend(sequence, payload, packetId: 0, in context);
+    }
+
+    /// <summary>Extracts the next PDU; the contributing packet ids are covered by their own tests.</summary>
+    private static bool _Extract(SegmentBuffer buffer, StreamDetectionContext context, out ReadOnlyMemory<byte> pdu) =>
+        buffer.TryExtractPdu(in context, out pdu, out _);
+
     #endregion
 
     #region LengthPrefixDetector
@@ -220,10 +231,10 @@ internal sealed class TcpReassemblyTests
 
         // Append a complete PDU: length=3, data=[A,B,C]
         byte[] segment = [0x00, 0x03, 0x41, 0x42, 0x43];
-        bool appended = buffer.TryAppend(0, segment);
+        bool appended = _Append(buffer, 0, segment);
         await Assert.That(appended).IsTrue();
 
-        bool extracted = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu);
+        bool extracted = _Extract(buffer, _DefaultContext(), out ReadOnlyMemory<byte> pdu);
         await Assert.That(extracted).IsTrue();
         await Assert.That(pdu.Length).IsEqualTo(5);
     }
@@ -236,18 +247,18 @@ internal sealed class TcpReassemblyTests
 
         // First segment: partial PDU (length=5 but only 2 bytes of data)
         byte[] seg1 = [0x00, 0x05, 0xAA, 0xBB];
-        buffer.TryAppend(0, seg1);
+        _Append(buffer, 0, seg1);
 
         // Should be incomplete — can't extract yet
-        bool extracted1 = buffer.TryExtractPdu(_DefaultContext(), out _);
+        bool extracted1 = _Extract(buffer, _DefaultContext(), out _);
         await Assert.That(extracted1).IsFalse();
 
         // Second segment: remaining 3 bytes
         byte[] seg2 = [0xCC, 0xDD, 0xEE];
-        buffer.TryAppend((uint)seg1.Length, seg2);
+        _Append(buffer, (uint)seg1.Length, seg2);
 
         // Now should be complete
-        bool extracted2 = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu);
+        bool extracted2 = _Extract(buffer, _DefaultContext(), out ReadOnlyMemory<byte> pdu);
         await Assert.That(extracted2).IsTrue();
         // Total = prefix(2) + payload(5) = 7
         await Assert.That(pdu.Length).IsEqualTo(7);
@@ -263,20 +274,20 @@ internal sealed class TcpReassemblyTests
         // PDU1: length=2, data=[AA,BB] → 4 bytes
         // PDU2: length=1, data=[CC] → 3 bytes
         byte[] segment = [0x00, 0x02, 0xAA, 0xBB, 0x00, 0x01, 0xCC];
-        buffer.TryAppend(0, segment);
+        _Append(buffer, 0, segment);
 
         // Extract first PDU
-        bool extracted1 = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu1);
+        bool extracted1 = _Extract(buffer, _DefaultContext(), out ReadOnlyMemory<byte> pdu1);
         await Assert.That(extracted1).IsTrue();
         await Assert.That(pdu1.Length).IsEqualTo(4);
 
         // Extract second PDU
-        bool extracted2 = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu2);
+        bool extracted2 = _Extract(buffer, _DefaultContext(), out ReadOnlyMemory<byte> pdu2);
         await Assert.That(extracted2).IsTrue();
         await Assert.That(pdu2.Length).IsEqualTo(3);
 
         // No more PDUs
-        bool extracted3 = buffer.TryExtractPdu(_DefaultContext(), out _);
+        bool extracted3 = _Extract(buffer, _DefaultContext(), out _);
         await Assert.That(extracted3).IsFalse();
     }
 
@@ -287,7 +298,7 @@ internal sealed class TcpReassemblyTests
         SegmentBuffer buffer = new(config);
 
         byte[] data = [0x01, 0x02, 0x03];
-        bool appended = buffer.TryAppend(0, data);
+        bool appended = _Append(buffer, 0, data);
         await Assert.That(appended).IsFalse();
     }
 
@@ -298,7 +309,7 @@ internal sealed class TcpReassemblyTests
         SegmentBuffer buffer = new(config);
 
         byte[] segment = [0x00, 0x03, 0x41, 0x42, 0x43];
-        buffer.TryAppend(0, segment);
+        _Append(buffer, 0, segment);
 
         buffer.Clear();
         await Assert.That(buffer.TotalLength).IsEqualTo(0);
@@ -311,9 +322,9 @@ internal sealed class TcpReassemblyTests
         SegmentBuffer buffer = new(config);
 
         byte[] segment = "Hello\r\n"u8.ToArray();
-        buffer.TryAppend(0, segment);
+        _Append(buffer, 0, segment);
 
-        bool extracted = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu);
+        bool extracted = _Extract(buffer, _DefaultContext(), out ReadOnlyMemory<byte> pdu);
         await Assert.That(extracted).IsTrue();
         await Assert.That(pdu.Length).IsEqualTo(7);
     }
@@ -337,14 +348,14 @@ internal sealed class TcpReassemblyTests
 
         // Buffer 4 bytes; heuristic will return SkipBytes = int.MaxValue (> 4).
         byte[] segment = [0xAA, 0xBB, 0xCC, 0xDD];
-        buffer.TryAppend(0, segment);
+        _Append(buffer, 0, segment);
 
         // Extract triggers detection (Invalid) → resync with overshoot skip.
-        buffer.TryExtractPdu(_DefaultContext(), out _);
+        _Extract(buffer, _DefaultContext(), out _);
 
         // TotalLength must be non-negative; buffer must be in Error state (no more extraction).
         await Assert.That(buffer.TotalLength).IsGreaterThanOrEqualTo(0);
-        bool extractedAfterError = buffer.TryExtractPdu(_DefaultContext(), out _);
+        bool extractedAfterError = _Extract(buffer, _DefaultContext(), out _);
         await Assert.That(extractedAfterError).IsFalse();
     }
 
@@ -356,13 +367,13 @@ internal sealed class TcpReassemblyTests
 
         // Length prefix says 8 payload bytes. The second half arrives first.
         byte[] second = [0x05, 0x06, 0x07, 0x08];
-        buffer.TryAppend(106, second);
-        bool early = buffer.TryExtractPdu(_DefaultContext(), out _);
+        _Append(buffer, 106, second);
+        bool early = _Extract(buffer, _DefaultContext(), out _);
         await Assert.That(early).IsFalse();
 
         byte[] first = [0x00, 0x08, 0x01, 0x02, 0x03, 0x04];
-        buffer.TryAppend(100, first);
-        bool extracted = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu);
+        _Append(buffer, 100, first);
+        bool extracted = _Extract(buffer, _DefaultContext(), out ReadOnlyMemory<byte> pdu);
         await Assert.That(extracted).IsTrue();
         await Assert.That(pdu.Length).IsEqualTo(10);
         await Assert.That(pdu.Span[0]).IsEqualTo((byte)0x00);
@@ -377,13 +388,13 @@ internal sealed class TcpReassemblyTests
         SegmentBuffer buffer = new(config);
 
         byte[] first = [0x00, 0x04, 0x11, 0x22, 0x33, 0x44];
-        buffer.TryAppend(100, first);
-        buffer.TryAppend(100, first);
+        _Append(buffer, 100, first);
+        _Append(buffer, 100, first);
 
-        bool extracted = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu);
+        bool extracted = _Extract(buffer, _DefaultContext(), out ReadOnlyMemory<byte> pdu);
         await Assert.That(extracted).IsTrue();
         await Assert.That(pdu.Length).IsEqualTo(6);
-        bool more = buffer.TryExtractPdu(_DefaultContext(), out _);
+        bool more = _Extract(buffer, _DefaultContext(), out _);
         await Assert.That(more).IsFalse();
     }
 
@@ -397,16 +408,16 @@ internal sealed class TcpReassemblyTests
         StreamReassemblyConfig config = new() { BoundaryDetector = new ZeroLengthDetector() };
         SegmentBuffer buffer = new(config);
         byte[] segment = [0x01, 0x02, 0x03, 0x04];
-        buffer.TryAppend(0, segment);
+        _Append(buffer, 0, segment);
 
-        bool extracted = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu);
-        bool extractedAgain = buffer.TryExtractPdu(_DefaultContext(), out _);
+        bool extracted = _Extract(buffer, _DefaultContext(), out ReadOnlyMemory<byte> pdu);
+        bool extractedAgain = _Extract(buffer, _DefaultContext(), out _);
 
         await Assert.That(extracted).IsFalse();
         await Assert.That(pdu.Length).IsEqualTo(0);
         await Assert.That(buffer.State).IsEqualTo(SegmentBufferState.Error);
         await Assert.That(extractedAgain).IsFalse();
-        await Assert.That(buffer.TotalConsumed).IsEqualTo(0);
+        await Assert.That(buffer.TotalLength).IsEqualTo(segment.Length);
     }
 
     /// <summary>A one-byte PDU is the smallest valid result and is still extracted.</summary>
@@ -416,9 +427,9 @@ internal sealed class TcpReassemblyTests
         StreamReassemblyConfig config = new() { BoundaryDetector = new OneByteDetector() };
         SegmentBuffer buffer = new(config);
         byte[] segment = [0x7F, 0x80];
-        buffer.TryAppend(0, segment);
+        _Append(buffer, 0, segment);
 
-        bool extracted = buffer.TryExtractPdu(_DefaultContext(), out ReadOnlyMemory<byte> pdu);
+        bool extracted = _Extract(buffer, _DefaultContext(), out ReadOnlyMemory<byte> pdu);
 
         await Assert.That(extracted).IsTrue();
         await Assert.That(pdu.Length).IsEqualTo(1);
@@ -453,20 +464,20 @@ internal sealed class TcpReassemblyTests
 
         // Forward direction: complete PDU
         byte[] fwdData = [0x00, 0x02, 0xAA, 0xBB];
-        state.Forward.TryAppend(0, fwdData);
-        bool fwdExtracted = state.Forward.TryExtractPdu(ctx, out ReadOnlyMemory<byte> fwdPdu);
+        _Append(state.Forward, 0, fwdData);
+        bool fwdExtracted = _Extract(state.Forward, ctx, out ReadOnlyMemory<byte> fwdPdu);
         await Assert.That(fwdExtracted).IsTrue();
         await Assert.That(fwdPdu.Length).IsEqualTo(4);
 
         // Reverse direction: incomplete then complete
         byte[] revData1 = [0x00, 0x03, 0x11];
-        state.Reverse.TryAppend(0, revData1);
-        bool revExtracted1 = state.Reverse.TryExtractPdu(ctx, out _);
+        _Append(state.Reverse, 0, revData1);
+        bool revExtracted1 = _Extract(state.Reverse, ctx, out _);
         await Assert.That(revExtracted1).IsFalse();
 
         byte[] revData2 = [0x22, 0x33];
-        state.Reverse.TryAppend((uint)revData1.Length, revData2);
-        bool revExtracted2 = state.Reverse.TryExtractPdu(ctx, out ReadOnlyMemory<byte> revPdu);
+        _Append(state.Reverse, (uint)revData1.Length, revData2);
+        bool revExtracted2 = _Extract(state.Reverse, ctx, out ReadOnlyMemory<byte> revPdu);
         await Assert.That(revExtracted2).IsTrue();
         await Assert.That(revPdu.Length).IsEqualTo(5);
     }
@@ -478,8 +489,8 @@ internal sealed class TcpReassemblyTests
         TcpStreamState state = new(_TestStreamId, _TestProtocolId, config);
 
         byte[] data = [0x00, 0x01, 0xFF];
-        state.Forward.TryAppend(0, data);
-        state.Reverse.TryAppend(0, data);
+        _Append(state.Forward, 0, data);
+        _Append(state.Reverse, 0, data);
 
         state.Clear();
 

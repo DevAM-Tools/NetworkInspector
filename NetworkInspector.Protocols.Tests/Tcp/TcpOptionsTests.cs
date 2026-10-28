@@ -283,7 +283,7 @@ internal sealed class TcpOptionsTests
         using Stack stack = ProtocolTestHelper.BuildStack();
         byte[] echo = [0x06, 0x06, 0x00, 0x00, 0x00, 0x2A];
         Packet packet = _Parse(stack, _BuildFrameWithOptions(TcpFlags.Ack, echo));
-        await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.options.echo.value", 42).ConfigureAwait(false);
+        await ProtocolTestHelper.AssertU64Field(stack, packet, "tcp.options.echo_value", 42).ConfigureAwait(false);
     }
 
     [Test]

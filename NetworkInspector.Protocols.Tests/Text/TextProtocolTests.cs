@@ -4,7 +4,6 @@ namespace NetworkInspector.Protocols.Tests;
 
 /// <summary>
 /// Tests for <see cref="TextProtocol"/> — plain text block display protocol
-/// (Wireshark equivalent: "data-text-lines" dissector).
 /// <para>
 /// Tests reach the protocol via a WebSocket text-opcode (1) frame. When WebSocket parses a
 /// text payload with no matching sub-protocol in the ws.port table, it forwards the payload

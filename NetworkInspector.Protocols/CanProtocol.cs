@@ -97,7 +97,7 @@ public sealed partial class CanProtocol : IProtocol
     private const uint _CAN_ID_MASK_STD = 0x7FF; // 11-bit standard ID
     private const uint _CAN_ID_MASK_EXT = 0x1FFFFFFF; // 29-bit extended ID
 
-    // CAN FD flag bits (byte 5) — Linux SocketCAN spec / Wireshark canonical layout.
+    // CAN FD flag bits (byte 5) — Linux SocketCAN spec layout.
     private const byte _BRS_FLAG = 0x01; // Bit Rate Switch
     private const byte _ESI_FLAG = 0x02; // Error State Indicator
     private const byte _FDF_FLAG = 0x04; // FD Frame
@@ -568,7 +568,7 @@ public sealed partial class CanProtocol : IProtocol
 
         // Parse the 32-bit priority/VCID field.
         // LINKTYPE_CAN_SOCKETCAN (DLT 227) stores this word in big-endian (network) byte order;
-        // see Wireshark packet-socketcan.c: "The priority/VCID field is big-endian in
+        // the priority/VCID field is big-endian in
         // LINKTYPE_CAN_SOCKETCAN captures, for historical reasons."
         // bits 0-10 = priority, bits 16-23 = VCID.
         uint rawPrio = BinaryPrimitives.ReadUInt32BigEndian(span);

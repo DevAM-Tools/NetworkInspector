@@ -7,8 +7,8 @@ namespace NetworkInspector.Testing.Tshark;
 /// invocations across the Network Inspector test projects.
 /// </summary>
 /// <remarks>
-/// <para>The personal Wireshark configuration directory is overridden via
-/// <c>WIRESHARK_CONFIG_DIR</c> to a non-existent folder so tshark falls back to builtin
+/// <para>The personal tshark configuration directory is overridden via
+/// <see cref="ConfigDirVariable"/> to a non-existent folder so tshark falls back to builtin
 /// defaults and skips user Lua post-dissectors. Such plugins (e.g. <c>postdissector.lua</c>)
 /// can print extra lines to stdout per packet, which would derail the structured tshark
 /// output parsers used by Network Inspector tests.</para>
@@ -17,7 +17,13 @@ namespace NetworkInspector.Testing.Tshark;
 internal static class TsharkProcess
 {
     /// <summary>
-    /// Path used as <c>WIRESHARK_CONFIG_DIR</c>. Intentionally non-existent so tshark
+    /// Name of the environment variable through which tshark finds its personal configuration directory. The name is fixed by
+    /// the tool, so it is a constant of the tool contract and not a setting.
+    /// </summary>
+    internal const string ConfigDirVariable = "WIRESHARK_CONFIG_DIR";
+
+    /// <summary>
+    /// Path used as the value of <see cref="ConfigDirVariable"/>. Intentionally non-existent so tshark
     /// loads no user Lua plugins.
     /// </summary>
     private static readonly string _NoLuaConfigDir =
@@ -30,7 +36,7 @@ internal static class TsharkProcess
     /// <param name="arguments">Plain tshark CLI arguments (without any profile-related flags).</param>
     /// <param name="profileDir">
     /// Optional path to a per-test profile directory. When supplied, the parent directory
-    /// is exposed as <c>WIRESHARK_CONFIG_DIR</c> (so tshark resolves the profile under
+    /// is exposed as <see cref="ConfigDirVariable"/> (so tshark resolves the profile under
     /// <c>profiles/&lt;name&gt;/</c>) and <c>-C &lt;name&gt;</c> is prepended to
     /// <paramref name="arguments"/>. The profile directory itself contains no
     /// <c>init.lua</c>, so user Lua plugins remain suppressed by virtue of the empty
@@ -81,7 +87,7 @@ internal static class TsharkProcess
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
-        info.Environment["WIRESHARK_CONFIG_DIR"] = configDir;
+        info.Environment[ConfigDirVariable] = configDir;
         return info;
     }
 

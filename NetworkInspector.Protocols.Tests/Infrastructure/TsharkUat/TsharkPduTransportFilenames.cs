@@ -5,7 +5,7 @@ namespace NetworkInspector.Protocols.Tests.Infrastructure.TsharkUat;
 /// <summary>
 /// PDU-Transport preference UAT basenames (<c>packet-pdu-transport.c</c>).
 /// </summary>
-internal static class WiresharkPduTransportFilenames
+internal static class TsharkPduTransportFilenames
 {
     internal const string Identifiers = "PDU_Transport_identifiers";
 

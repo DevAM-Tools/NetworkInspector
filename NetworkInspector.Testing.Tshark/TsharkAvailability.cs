@@ -9,7 +9,7 @@ namespace NetworkInspector.Testing.Tshark;
 /// <para>tshark is mandatory for cross-validation tests by default. When it is missing
 /// on <c>PATH</c>, the extraction methods on <see cref="TsharkVerifier"/> throw at the
 /// call site so a release/CI run cannot silently lose its evidence.</para>
-/// <para>Local developers without Wireshark may set
+/// <para>Local developers without tshark may set
 /// <c>NETWORKINSPECTOR_ALLOW_MISSING_TSHARK=1</c>; that downgrades the missing-tshark
 /// error to a silent skip. Tests that opt into the escape hatch can call
 /// <see cref="ShouldSkip"/> at the top of the test body and <c>return</c> early to

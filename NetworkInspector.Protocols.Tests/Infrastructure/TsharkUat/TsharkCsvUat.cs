@@ -3,22 +3,22 @@
 namespace NetworkInspector.Protocols.Tests.Infrastructure.TsharkUat;
 
 /// <summary>
-/// Helpers for emitting Wireshark UAT-backed tables (<c>epan/uat_load.l</c>): comma-separated
+/// Helpers for emitting Tshark UAT-backed tables (<c>epan/uat_load.l</c>): comma-separated
 /// records where each field is either a <c>binstring</c> (even-length ASCII hex digit pairs) or a
 /// <c>quoted_string</c>. Unquoted alphanumerics are parsed as hex pairs, so booleans, decimals,
 /// and PDU names must be wrapped in double quotes.
 /// </summary>
-internal static class WiresharkCsvUat
+internal static class TsharkCsvUat
 {
     /// <summary>
-    /// Wireshark resolves profile UAT paths via <c>get_persconffile_path(filename, from_profile)</c>
+    /// Tshark resolves profile UAT paths via <c>get_persconffile_path(filename, from_profile)</c>
     /// using the basename from <c>packet-*.c</c> <c>DATAFILE_*</c> macros — no <c>.csv</c> suffix.
     /// </summary>
     internal const string Filesuffix = "";
 
     /// <summary>Returns an uppercase 8-nibble ASCII hex string without 0x prefix.</summary>
     /// <remarks>
-    /// Wireshark UAT <c>UAT_HEX</c> columns must reach the lexer as <c>quoted_string</c> tokens (ASCII hex inside
+    /// Tshark UAT <c>UAT_HEX</c> columns must reach the lexer as <c>quoted_string</c> tokens (ASCII hex inside
     /// quotes). Combine with <see cref="UatQuoted"/> when emitting profile rows — bare 8-nibble strings are parsed as
     /// <c>binstring</c> and fail hex validation (<c>epan/uat_load.l</c>).
     /// </remarks>
@@ -39,7 +39,7 @@ internal static class WiresharkCsvUat
         value.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// Wraps <paramref name="value"/> in a Wireshark UAT <c>quoted_string</c> (outer double quotes,
+    /// Wraps <paramref name="value"/> in a Tshark UAT <c>quoted_string</c> (outer double quotes,
     /// inner <c>\"</c> / <c>\\</c> escapes per <c>uat_load.l</c>).
     /// </summary>
     internal static string UatQuoted(int value) =>

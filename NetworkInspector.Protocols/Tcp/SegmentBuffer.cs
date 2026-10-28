@@ -20,8 +20,18 @@ internal enum SegmentBufferState
     /// </summary>
     Resyncing,
 
-    /// <summary>Unrecoverable error — no more PDUs can be extracted.</summary>
-    Error
+    /// <summary>
+    /// Unrecoverable error — no more PDUs can be extracted. Reserved for a broken framing contract (a detector that reports
+    /// an impossible length, or a configuration without a detector) and for a failed resync. Running into the buffer limit
+    /// is not an error of this kind (see <see cref="SegmentBuffer.TakeLimitHit"/>).
+    /// </summary>
+    Error,
+
+    /// <summary>
+    /// The sender closed this direction (FIN or RST). Terminal: nothing is appended any more and no PDU can follow, so a
+    /// finished stream stops holding buffers and detector state.
+    /// </summary>
+    Closed,
 }
 
 /// <summary>
@@ -30,8 +40,16 @@ internal enum SegmentBufferState
 /// with the detector from <see cref="StreamReassemblyConfig"/>.
 /// <para>
 /// <b>State machine:</b> Initial → Synchronized (on first append; Error instead when the configuration has no detector)
-/// → Resyncing (on invalid data) → back to Synchronized when the resync heuristic succeeds, otherwise Error
-/// (unrecoverable failure, impossible PDU length, or buffer overflow). Error is terminal until <see cref="Clear"/>.
+/// → Resyncing (on invalid data) → back to Synchronized when the resync heuristic succeeds, otherwise Error (failed resync
+/// or an impossible PDU length). Synchronized → Closed on <see cref="Close"/>. Error and Closed are terminal until
+/// <see cref="Clear"/>.
+/// </para>
+/// <para>
+/// <b>Buffer limit:</b> exceeding <see cref="StreamReassemblyConfig.MaxBufferSize"/> is an expected failure and does not end
+/// the stream: the message in progress is dropped, the detector forgets the stream and the segment that hit the limit starts
+/// a new prefix. Why not Error: one oversized transfer on a keep-alive connection would otherwise switch reassembly off for
+/// every later message of the connection, with nothing in the output that says why. The drop is reported through
+/// <see cref="TakeLimitHit"/> so the caller can name the limit in the field tree.
 /// </para>
 /// <para>
 /// <b>Thread safety:</b> not thread-safe. A buffer belongs to one TCP direction of one stream and is touched only by the
@@ -51,11 +69,11 @@ internal sealed class SegmentBuffer
     /// <summary>Sequence-ordered byte store: one contiguous prefix plus segments held behind a hole.</summary>
     private readonly SequenceStreamBuffer _Stream;
 
-    /// <summary>Total bytes successfully consumed as complete PDUs.</summary>
-    internal int TotalConsumed { get; private set; }
-
-    /// <summary>Total bytes discarded during resynchronization.</summary>
-    internal int TotalDiscarded { get; private set; }
+    /// <summary>
+    /// Bytes dropped because a limit was hit or a resync skipped them (diagnostics for the limit message). A long, because
+    /// a connection that keeps hitting the limit can discard more than <see cref="int.MaxValue"/> bytes over its lifetime.
+    /// </summary>
+    internal long TotalDiscarded { get; private set; }
 
     /// <summary>Current buffer state.</summary>
     internal SegmentBufferState State { get; private set; } = SegmentBufferState.Initial;
@@ -68,6 +86,18 @@ internal sealed class SegmentBuffer
 
     /// <summary>Largest PDU a detector may report (copied from the configuration).</summary>
     private readonly int _MaxPduSize;
+
+    /// <summary>
+    /// Set when a limit dropped buffered bytes, until <see cref="TakeLimitHit"/> reads it. Deliberately a pending flag and
+    /// not a counter: the caller reports the event once per packet, on the packet that caused it.
+    /// </summary>
+    private bool _LimitHit;
+
+    /// <summary>Bytes dropped by the pending limit event (valid while <see cref="_LimitHit"/> is set).</summary>
+    private int _LimitDiscardedBytes;
+
+    /// <summary>Value of <see cref="SequenceStreamBuffer.RebaseCount"/> the detector state was last reset for.</summary>
+    private int _SeenRebaseCount;
 
     #endregion
 
@@ -103,12 +133,17 @@ internal sealed class SegmentBuffer
     /// </summary>
     /// <param name="sequence">TCP sequence number of the first payload byte.</param>
     /// <param name="payload">TCP payload; empty is accepted and ignored.</param>
-    /// <returns><see langword="true"/> if the segment was accepted; <see langword="false"/> if there is no detector or the buffer is full.</returns>
-    internal bool TryAppend(uint sequence, ReadOnlyMemory<byte> payload)
+    /// <param name="packetId">Id of the packet that carries the payload; reported back with each extracted PDU.</param>
+    /// <param name="context">Stream identity, used to reset the detector when the buffer limit drops the message in progress.</param>
+    /// <returns>
+    /// <see langword="true"/> if the segment was accepted; <see langword="false"/> if there is no detector, the direction is
+    /// closed or failed, or the segment alone exceeds the buffer limit.
+    /// </returns>
+    internal bool TryAppend(uint sequence, ReadOnlyMemory<byte> payload, int packetId, in StreamDetectionContext context)
     {
-        // Error is terminal: a stream that overflowed or lost framing stops buffering, so a bad stream cannot keep
-        // consuming memory.
-        if (State == SegmentBufferState.Error)
+        // Error and Closed are terminal: a stream that lost framing or whose sender is finished stops buffering, so it
+        // cannot keep consuming memory.
+        if (State is SegmentBufferState.Error or SegmentBufferState.Closed)
         {
             return false;
         }
@@ -124,15 +159,48 @@ internal sealed class SegmentBuffer
             }
         }
 
-        // The sequence buffer refuses data that would exceed the per-direction cap (MaxBufferSize). That is an
-        // expected failure for a hostile or stalled peer, and the stream is abandoned (Error) rather than truncated.
-        if (!_Stream.TryAppend(sequence, payload))
+        if (_Stream.TryAppend(sequence, payload, packetId))
         {
-            State = SegmentBufferState.Error;
-            return false;
+            // A rebase put earlier bytes in FRONT of the prefix a stateful detector already inspected, so its position
+            // into the prefix is stale. Dropping the detector state makes it start over on the rebuilt prefix.
+            if (_Stream.RebaseCount != _SeenRebaseCount)
+            {
+                _SeenRebaseCount = _Stream.RebaseCount;
+                ResetDetector(context.StreamId);
+            }
+
+            return true;
         }
 
-        return true;
+        // The sequence buffer refused the segment because it would exceed the per-direction cap (MaxBufferSize). That is
+        // an expected failure for a stalled peer, a hole that is never filled or a message larger than the cap, and it is
+        // handled so the connection survives: the message in progress is lost, not the connection. The held bytes are
+        // dropped and counted, the detector forgets the stream, and the current segment starts a new prefix that the
+        // detector judges on its own. The drop is reported through TakeLimitHit instead of being truncated silently.
+        int discarded = _Stream.BufferedLength;
+        TotalDiscarded += discarded;
+        _Stream.Clear();
+        ResetDetector(context.StreamId);
+        _LimitHit = true;
+        _LimitDiscardedBytes = discarded;
+
+        // A segment that is larger than the whole cap on its own is refused again here; the buffer stays usable.
+        return _Stream.TryAppend(sequence, payload, packetId);
+    }
+
+    /// <summary>
+    /// Reports and clears the pending limit event: <see langword="true"/> once after bytes were dropped because a limit was
+    /// hit. The caller shows it on the packet that caused it, which is why it is read right after the append or the extract.
+    /// </summary>
+    /// <param name="discardedBytes">Number of buffered bytes the event dropped; 0 when there was no event.</param>
+    /// <returns>Whether a limit event was pending.</returns>
+    internal bool TakeLimitHit(out int discardedBytes)
+    {
+        discardedBytes = _LimitHit ? _LimitDiscardedBytes : 0;
+        bool hit = _LimitHit;
+        _LimitHit = false;
+        _LimitDiscardedBytes = 0;
+        return hit;
     }
 
     /// <summary>
@@ -140,14 +208,16 @@ internal sealed class SegmentBuffer
     /// </summary>
     /// <param name="context">Stream detection context for context-aware detectors.</param>
     /// <param name="pdu">The extracted PDU data on success. The memory is owned by the caller.</param>
+    /// <param name="packetIds">Ids of the packets that carried the bytes of the PDU, in stream order; empty on failure.</param>
     /// <returns>
     /// <see langword="true"/> if a complete PDU was extracted. A complete result of length 0, longer than
     /// the PDU cap, or longer than the contiguous prefix moves the buffer to <see cref="SegmentBufferState.Error"/>
     /// and returns <see langword="false"/>.
     /// </returns>
-    internal bool TryExtractPdu(in StreamDetectionContext context, out ReadOnlyMemory<byte> pdu)
+    internal bool TryExtractPdu(in StreamDetectionContext context, out ReadOnlyMemory<byte> pdu, out int[] packetIds)
     {
         pdu = default;
+        packetIds = [];
 
         // Only a synchronized buffer with in-order bytes can yield a PDU; bytes behind a hole are not inspected.
         if (State != SegmentBufferState.Synchronized || _Detector == null || _Stream.ContiguousLength == 0)
@@ -157,8 +227,8 @@ internal sealed class SegmentBuffer
 
         // One contiguous array: the detector sees a span, not a concatenation of arrival order.
         // Detectors that implement IStreamPduBoundaryDetector additionally receive the stream context (stream id,
-        // handshake observed) so they can keep per-stream state; plain detectors only see the bytes. The span is
-        // valid only until the next mutating call on the sequence buffer, which is why it is not stored.
+        // direction, handshake observed, closed) so they can keep per-stream state; plain detectors only see the bytes. The
+        // span is valid only until the next mutating call on the sequence buffer, which is why it is not stored.
         ReadOnlySpan<byte> view = _Stream.ContiguousSpan;
         PduBoundaryResult result = _Detector is IStreamPduBoundaryDetector streamDetector
             ? streamDetector.Detect(view, in context)
@@ -180,11 +250,11 @@ internal sealed class SegmentBuffer
 
             // The PDU is copied into its own array: the sequence buffer reuses and slides its storage after Consume, and
             // the PDU is later attached to the packet as an additional buffer that must outlive the stream state. This
-            // is the only per-PDU allocation.
+            // and the packet id array are the only per-PDU allocations.
             byte[] owned = new byte[pduLength];
             view[..pduLength].CopyTo(owned);
+            packetIds = _Stream.GetContributingPacketIds(pduLength);
             _Stream.Consume(pduLength);
-            TotalConsumed += pduLength;
             pdu = owned;
             return true;
         }
@@ -195,10 +265,65 @@ internal sealed class SegmentBuffer
         if (result.IsInvalid)
         {
             State = SegmentBufferState.Resyncing;
-            _TryResync();
+            _TryResync(context.StreamId);
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Closes this direction because its sender sent FIN or RST. On FIN the bytes that are still buffered in order are
+    /// handed out as one last PDU (a message that ends with the connection, or one the capture cut short); on RST they are
+    /// dropped, because the peer aborted and the bytes were never a complete message. Either way the direction refuses all
+    /// further appends afterwards.
+    /// </summary>
+    /// <remarks>
+    /// Run the normal extraction loop with <see cref="StreamDetectionContext.StreamClosed"/> set before calling this, so a
+    /// message that is complete only because the stream ended is framed by its detector and not delivered here as a blob.
+    /// What remains is, by definition, incomplete. Bytes held behind a hole are dropped: their predecessors never arrived.
+    /// </remarks>
+    /// <param name="context">Stream identity, used to reset the detector.</param>
+    /// <param name="discard"><see langword="true"/> on RST: drop everything, deliver nothing.</param>
+    /// <param name="tail">The remaining in-order bytes (caller-owned) when the method returns <see langword="true"/>.</param>
+    /// <param name="packetIds">Ids of the packets that carried the tail, in stream order.</param>
+    /// <returns><see langword="true"/> when <paramref name="tail"/> holds a PDU to dispatch.</returns>
+    internal bool Close(in StreamDetectionContext context, bool discard, out ReadOnlyMemory<byte> tail, out int[] packetIds)
+    {
+        tail = default;
+        packetIds = [];
+        bool deliver = false;
+
+        if (State == SegmentBufferState.Synchronized && _Stream.ContiguousLength > 0)
+        {
+            int length = _Stream.ContiguousLength;
+            if (!discard && length <= _MaxPduSize)
+            {
+                byte[] owned = new byte[length];
+                _Stream.ContiguousSpan.CopyTo(owned);
+                packetIds = _Stream.GetContributingPacketIds(length);
+                tail = owned;
+                deliver = true;
+            }
+            else if (!discard)
+            {
+                // More bytes than one PDU may hold: the tail cannot be delivered. This is the PDU limit, reported like the
+                // buffer limit, never a silent truncation.
+                TotalDiscarded += length;
+                _LimitHit = true;
+                _LimitDiscardedBytes = length;
+            }
+            else
+            {
+                TotalDiscarded += length;
+            }
+        }
+
+        // The direction is finished: the detector drops its per-stream state, the buffers are released and the state is
+        // terminal. Held segments behind a hole are dropped with the clear.
+        ResetDetector(context.StreamId);
+        _Stream.Clear();
+        State = SegmentBufferState.Closed;
+        return deliver;
     }
 
     /// <summary>
@@ -218,8 +343,9 @@ internal sealed class SegmentBuffer
     internal void Clear()
     {
         _Stream.Clear();
-        TotalConsumed = 0;
         TotalDiscarded = 0;
+        _LimitHit = false;
+        _LimitDiscardedBytes = 0;
         State = _Detector != null ? SegmentBufferState.Initial : SegmentBufferState.Error;
     }
 
@@ -232,7 +358,8 @@ internal sealed class SegmentBuffer
     /// Ends in Synchronized on success and in Error when there is no heuristic, no data, or the heuristic fails or
     /// reports a skip count beyond the held bytes (which would be a heuristic bug or a hostile result).
     /// </summary>
-    private void _TryResync()
+    /// <param name="streamId">Stream identity, used to reset the detector after bytes were skipped.</param>
+    private void _TryResync(ulong streamId)
     {
         if (_ResyncHeuristic == null || _Stream.ContiguousLength == 0)
         {
@@ -250,6 +377,10 @@ internal sealed class SegmentBuffer
         // Skipped bytes are discarded for good (counted in TotalDiscarded), not delivered as a partial PDU.
         _Stream.Consume(result.SkipBytes);
         TotalDiscarded += result.SkipBytes;
+
+        // The skipped bytes were consumed without a completed PDU, so a detector that remembers a position into the prefix
+        // would now point at the wrong byte: it starts over at the new front.
+        ResetDetector(streamId);
         State = SegmentBufferState.Synchronized;
     }
 

@@ -9,7 +9,8 @@ namespace NetworkInspector.Protocols.Tcp;
 /// case-insensitively. No method keyword list is checked.
 /// </summary>
 /// <remarks>
-/// The rules follow Wireshark's HTTP heuristic, including the rejection of a first line of exactly 8 characters.
+/// The rules follow the established content-based HTTP detection of common packet analyzers, including the rejection of a
+/// first line of exactly 8 characters (an inherited rule; the reason for it is not recorded).
 /// <b>Thread safety:</b> stateless; safe to call concurrently. Cost: one scan for LF over the payload and two short
 /// comparisons, no allocation (spans only).
 /// </remarks>
@@ -46,7 +47,7 @@ internal sealed class HttpHeuristicParser(ProtocolId protocolId) : IHeuristicPar
             line = line[..^1];
         }
 
-        // Wireshark rejects a line whose length is exactly 8.
+        // A first line of exactly 8 characters is rejected: an inherited rule of the established detection, reason not recorded.
         if (line.Length == 8)
         {
             return false;
@@ -141,7 +142,7 @@ internal sealed class TlsHeuristicParser(ProtocolId protocolId) : IHeuristicPars
 /// <summary>
 /// Heuristic parser that detects HTTP/2 by the client connection preface.
 /// The HTTP/2 connection preface starts with "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" (24 bytes).
-/// Only the preface is matched; a bare HTTP/2 frame header is not (this mirrors Wireshark).
+/// Only the preface is matched; a bare HTTP/2 frame header is not (a bare 9-octet frame header has no fixed byte pattern to match).
 /// </summary>
 /// <remarks>
 /// Consequence: a stream is only recognized when the capture contains the start of the client side. <b>Thread safety:</b>
@@ -150,7 +151,7 @@ internal sealed class TlsHeuristicParser(ProtocolId protocolId) : IHeuristicPars
 /// <param name="protocolId">Protocol that a match dispatches to.</param>
 internal sealed class Http2HeuristicParser(ProtocolId protocolId) : IHeuristicParser
 {
-    /// <summary>HTTP/2 client connection preface. Wireshark accepts only this magic, not a bare frame header.</summary>
+    /// <summary>HTTP/2 client connection preface. Only this magic is accepted, not a bare frame header.</summary>
     private static ReadOnlySpan<byte> _Http2Preface => Http2Protocol.ConnectionPreface;
 
     /// <inheritdoc/>
