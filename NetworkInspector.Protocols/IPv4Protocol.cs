@@ -57,7 +57,7 @@ namespace NetworkInspector.Protocols;
 /// lock). Every later parse of an already-parsed id is a replay: it reads the recorded
 /// defragmentation outcome from the protocol-owned effect store instead of touching the fragment
 /// buffers, and is safe to run on any number of threads concurrently. The watermark
-/// <see cref="_IngestWatermark"/> separates both paths without any caller-supplied mode flag.</para>
+/// <see cref="_Gate"/> separates both paths without any caller-supplied mode flag.</para>
 /// </remarks>
 [Protocol("ip", "Internet Protocol Version 4", Description = "IPv4 (RFC 791)")]
 [RegisterAtTable(EthernetProtocol.EtherTypeTableName, EtherTypeKey)]
@@ -269,9 +269,10 @@ public sealed partial class IPv4Protocol : IProtocol
     private OptionFieldIds _OptionFieldIds;
 
     // IP fragment reassembly engine — datagram-based, keyed by (src, dst, id, protocol).
-    // Mutated only by the ordered first parse of a packet (see _IsReplay); replays never touch it. The memory and
-    // fragment-count limits for hostile fragment streams are enforced inside the defragmenter, not in this class.
-    private readonly DatagramDefragmenter<DatagramFragmentKey> _Defragmenter = new();
+    // Mutated only by the ordered first parse of a packet (see _Gate); replays never touch it. The memory and
+    // fragment-count limits for hostile fragment streams are enforced inside the reassembler, not in this class; the IPv4
+    // preset reproduces the limits and the largest-duplicate-wins rule this protocol always had.
+    private readonly FragmentReassembler<DatagramFragmentKey> _Defragmenter = new(FragmentReassemblyOptions.IPv4);
 
     /// <summary>
     /// Pre-allocates the lazy-field populator delegate and builds the IP-protocol dispatch cache.
@@ -412,7 +413,7 @@ public sealed partial class IPv4Protocol : IProtocol
     /// <para>
     /// Fragmented packets are stateful: the first parse feeds the fragment into the shared
     /// defragmenter and records the outcome, every later parse of that packet id replays the recorded
-    /// outcome and leaves the fragment buffers untouched. See <see cref="_IsReplay"/>.
+    /// outcome and leaves the fragment buffers untouched. See <see cref="_Gate"/>.
     /// </para>
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
@@ -430,20 +431,17 @@ public sealed partial class IPv4Protocol : IProtocol
             return ParseError.Custom(ProtocolName, "Parse data is not a slice of this packet's buffers.");
         }
 
-        // First parse or replay: decided from the watermark alone. Only the outermost first parse of a packet may
-        // raise the watermark. A nested IPv4 parse of the same packet (for example IP-in-IP)
-        // must still count as a first parse, so the watermark stays below the packet id until the outermost call ends;
-        // raising it from the inner call would turn the packet's remaining layers into replays.
-        bool isReplay = _IsReplay(packet.Id);
-        bool raiseWatermark = !isReplay && _ParseNesting == 0;
-        if (!isReplay)
-        {
-            _ParseNesting++;
-        }
+        // First parse or replay: decided by the ingest gate alone. Only the outermost first parse of a packet raises the
+        // watermark. A nested IPv4 parse of the same packet (for example IP-in-IP) must still count as a first parse, so
+        // the watermark stays below the packet id until the outermost scope ends; raising it from the inner scope would
+        // turn the packet's remaining layers into replays. A replay holds the inert default scope.
+        bool isReplay = _Gate.IsReplay(packet.Id);
+        IngestScope scope = isReplay
+            ? default
+            : _Gate.Enter(packet.Id);
 
-        // finally, not a plain epilogue: the nesting counter must return to zero and the watermark must advance
-        // even when the body returns an error, otherwise one failed packet would leave every later packet a
-        // "nested first parse" that never raises the watermark.
+        // finally, not a plain epilogue: the scope must end and the watermark must advance even when the body returns an
+        // error, otherwise one failed packet would leave every later packet a "nested first parse" that never raises it.
         try
         {
             return _ParseBody(in parentField, data, in context, layerKey, isReplay);
@@ -457,14 +455,7 @@ public sealed partial class IPv4Protocol : IProtocol
             // reader that finds no entry falls back to the field tree.
             _ThreadCache = null;
 
-            if (!isReplay)
-            {
-                _ParseNesting--;
-                if (raiseWatermark)
-                {
-                    _RaiseWatermark(packet.Id);
-                }
-            }
+            scope.Dispose();
         }
     }
 
@@ -600,8 +591,13 @@ public sealed partial class IPv4Protocol : IProtocol
                         header.Identification, protocol);
                     int byteOffset = fragOffset * 8; // convert to byte offset
 
-                    reassembled = _Defragmenter.ProcessFragment(
-                        key, byteOffset, moreFragments, data.Span.Slice(payloadStart, payloadLen));
+                    FragmentOutcome outcome = _Defragmenter.Add(
+                        in key, byteOffset, moreFragments, data.Span.Slice(payloadStart, payloadLen), parentField.Packet.Id.Value);
+
+                    // Only a completed datagram is dispatched; every other outcome (pending or refused) shows the fragment alone.
+                    reassembled = outcome.Kind == FragmentOutcomeKind.Complete
+                        ? outcome.Payload
+                        : null;
                     _RecordDefragEffect(parentField.Packet.Id, layerKey, reassembled);
                 }
 

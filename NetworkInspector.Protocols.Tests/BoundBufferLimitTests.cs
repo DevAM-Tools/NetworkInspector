@@ -43,9 +43,14 @@ internal sealed class BoundBufferLimitTests
         }
     }
 
-    private static Stack _BuildStack(string targetProtocolName)
+    private static Stack _BuildStack(string targetProtocolName, params (string Name, SettingValue Value)[] settingOverrides)
     {
         using SettingsManager settings = new();
+        foreach ((string name, SettingValue value) in settingOverrides)
+        {
+            settings.PreloadValue(name, value);
+        }
+
         StackBuilder builder = new(settings, new FrameInterfaceRegistry());
         ProtocolRegistration.RegisterStandardProtocols(builder);
         builder.RegisterProtocol(new BufferFillerProtocol(targetProtocolName), static (b, id, _) =>
@@ -139,14 +144,12 @@ internal sealed class BoundBufferLimitTests
     [Test]
     public async Task SomeIpTpMessageReassembledWithAFullBufferTableIsReported()
     {
-        using Stack stack = _BuildStack("someip");
+        // The probe calls SOME/IP directly on its own port, so the datagram is accepted through content-based detection.
+        using Stack stack = _BuildStack("someip", ("someip.heuristic", SettingValue.Bool(true)));
 
         // A single last segment at offset 0 completes the message at once.
-        SomeIpTpLayer tp = new(serviceId: 0x1234, methodId: 0x0042, tpOffsetIn16Bytes: 0, moreSegments: false);
-        EthernetLayer eth = new(_DstMac, _SrcMac);
-        IPv4Layer ip = new(new IPv4Address(0x0A000001), new IPv4Address(0x0A000002));
-        UdpLayer udp = new(40000, _ProbePort);
-        byte[] frame = FrameStack.Start(eth).Then(ip).Then(udp).Then(tp).CreateWithFixedValues().EmitFrame(new byte[8]);
+        byte[] message = SomeIpFrames.TpMessage(0, new byte[16], more: false, messageType: 0x20);
+        byte[] frame = _UdpFrame(message);
 
         Packet packet = ProtocolTestHelper.ParseFrame(stack, frame, 0, Timestamp.FromMillis(0));
 

@@ -11,6 +11,98 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`SomeIpRegistration`** — the one place where a SOME/IP configuration becomes stack state: 21 `someip.*` settings (the
+  configuration file, nine switches, the ports that are never learned, and ten limits with their range and seven texts each),
+  `Register(builder)`, `Register(builder, stream)`, `Register(builder, config)` and `TryLoadConfig`. Every problem is a returned
+  `SettingsLoadWarning`; a missing or broken file still registers the protocol without names. TCP framing uses
+  `someip.tcp_max_message_size` (16 MiB) and `someip.tcp_resync`; a message above the limit is never framed and its drop is
+  reported as `tcp.error.reassembly_limit`.
+- **`SomeIpSettings`** — the immutable effective settings of the SOME/IP parser.
+- **Content-based SOME/IP detection** (`someip.heuristic`, off by default) on `udp.heuristic` and `tcp.heuristic`: a plausible
+  header (length of at least 8, protocol version 1, a defined message type) is decoded on any port.
+- **Plaintext of an encrypted transport.** A protocol that decrypts TLS or DTLS owns the dispatch table of its transport
+  (`tls.port`, `dtls.port`, keyed by the server port) and marks the plaintext it hands on (thread-local `PlaintextHandoff`,
+  guarded by the packet id); SOME/IP binds the ports of `tls_ports` and `dtls_ports` in that table and accepts a unit when the
+  marker carries a listed port. The TLS and DTLS parsers of this version do not decrypt and register no table, so a configuration
+  that lists such ports is reported with one warning per list: the ports have no effect until a decrypting protocol is in the
+  stack.
+- **`TcpPortCache`** — the thread-local ports of the TCP segment being dispatched, the counterpart of `UdpPortCache`, so an
+  application protocol reached without a dispatch key can tell whether it is on one of its ports.
+- **SOME/IP service discovery is decoded by the new parser.** The `someip_sd` container is lazy and expands on demand; an eager
+  scan announces to the index exactly the groups the expanded tree will hold, including one group per diagnostic, so a filter on a
+  diagnostic is answered without opening the message. New: the option runs an entry references (`options_referenced`), the service
+  and eventgroup names from the description (`someip_sd.entry.service.name`, `someip_sd.entry.eventgroup.name`), the annotations
+  `(ANY)`, `(other service)`, `(infinite)` and `(unknown)`, the entry kind in the type ("Stop Offer Service", "Subscribe
+  Eventgroup Nack"), configuration items split into key and value, load balancing, raw bytes for what is not a whole entry or
+  option (`someip_sd.entries.raw`, `someip_sd.options.raw`), and the diagnostics `someip_sd.error.*` (13 kinds). The packet info
+  lists the kinds of the entries (`SOME/IP-SD [Find] [Offer] (multicast)`). The reserved bits of an eventgroup entry
+  (`someip_sd.entry.reserved2`) and the reserved byte of an endpoint option (`someip_sd.option.reserved2`) are shown, and
+  configuration items go through the payload text decoder, so a control character from the wire is escaped (`\x1B`) instead of
+  reaching a console that prints the tree.
+- **A SOME/IP message with the TP flag and fewer than four payload bytes is malformed.** It shows its bytes raw and one
+  `someip.tp.error.malformed` that names the shortfall; its bytes are no longer decoded as method parameters.
+- **SOME/IP port learning (`someip.learn_sd_ports`, off by default).** UDP endpoints that service discovery announces decode from
+  the announcement on and are marked `someip.learned_port`; TCP endpoints, ignored ports (`someip.learn_sd_ports_ignore`), the
+  other-service id and withdrawn offers teach nothing. A packet's decision is recorded by its first parse, so a re-parse never
+  changes.
+- **SOME/IP-TP is reassembled by the Core `FragmentReassembler`.** Segments of a message are collected across packets (key: service,
+  method, client, session, base message type, interface version) with alignment 16, first bytes winning on overlap, restart on a second
+  segment at offset 0, least-recently-used eviction and the three limits `someip.tp_max_sessions`, `someip.tp_max_message_size` and
+  `someip.tp_max_buffered_bytes`. The segment that completes the message shows the payload, `someip.tp.segments` (the contributors
+  in offset order), `segment_count`, `reassembled_length` and `partial`; the last segment behind a hole delivers the decodable prefix
+  once (`someip.tp.region`, `someip.tp.error.gap`) and a late segment completes the message. New diagnostics: `someip.tp.error.reset`,
+  `.overlap`, `.malformed`, `.size_limit`, `.evicted`, `.dropped`.
+- **SOME/IP payloads are decoded into typed fields from the service description.** Every usage site of a type is its own
+  filterable field (`someip.payload.<service>.v<major>.<member>[.in|.out].<path>`, or the `filter_name` of the site) with the
+  type of its value: unsigned and signed integers, floating-point values, booleans, strings, UUIDs; containers carry no value.
+  The decode is lazy: a parse records the index group of the member direction and attaches `someip.payload`, and the
+  parameters are built when somebody reads them. Covered: base types with byte order and lookup names, strings (UTF-8, ASCII,
+  UTF-16BE/LE; control characters and invalid bytes are escaped, one terminating NUL and a byte order mark are removed),
+  padding, variable, fixed and nested arrays with element bounds, structures with or without a length field, aliases, TLV
+  lists and structures (all eight wire types, tag length instead of inline length, unknown ids as `someip.payload.tlv.unknown`),
+  unions and bitfields. Anything that does not fit is a `someip.payload.error` and never an exception; bytes behind the last
+  parameter are `someip.payload.unparsed`. `someip.decode_payload` and `someip.show_type_metadata` act; `someip.max_type_depth`
+  and `someip.max_payload_nodes` stop a decode with a diagnostic that names the setting and its value.
+- **SOME/IP end-to-end protection (profiles 04, 44, 08).** A protected member shows `someip.e2e` with its header fields before
+  the parameters, which decode as for an unprotected member. `someip.verify_e2e_crc` (off by default) verifies profiles 04 and 44
+  with CRC-32/AUTOSAR over the header bytes (TP flag cleared), the first eight header bytes and the payload behind the header, and
+  adds `someip.e2e.crc_calculated` and `someip.e2e.crc_valid`; a segmented message verifies on the segment that completes it. A
+  payload shorter than the header and an unknown profile are shown raw with `someip.e2e.error`.
+- **SOME/IP method timing (`someip.method_timing`, off by default).** A response shows `someip.timing` with `request_in` and `delay`
+  (or `request_missing`); a request shows nothing. Pairing uses service, method, client, session, interface version and capture
+  interface (`someip.method_timing_ignore_interface` pairs across interfaces) and takes the latest pending request. A segmented
+  request registers with its first segment, a segmented response pairs on the segment that completes it. `someip.timing_max_pending`
+  bounds the pending requests; the oldest is forgotten and its response says so. The pair is stored with the response, so a re-parse
+  shows what the first parse showed.
+- **SOME/IP DTLS detection (`someip.detect_dtls`, off by default).** A datagram on a SOME/IP UDP port that starts with a DTLS
+  record header (content type 20 to 63, version 0xFEFC to 0xFEFF, a first record that fits) and is not a plausible SOME/IP message goes
+  to the DTLS parser. On UDP, `someip.heuristic` now also requires the first message to fit into the datagram.
+- **`HexCase` and a letter-case choice for the hex text of `MacAddress`, `Eui64`, `Uuid`, and `IPv6Address`.** Upper case stays
+  the default. `Format(HexCase.Lower)`, `FormatInto(destination, HexCase.Lower)`, and the format specifier `x` (`ToString("x")`,
+  `$"{address:x}"`, `TryFormat` with the span, also the UTF-8 overload) write lower case; `X` and the empty format give upper
+  case. Another specifier throws `FormatException` instead of being ignored.
+- **`icmpv6.nd.error.hop_limit`:** a Neighbor Discovery message whose enclosing IPv6 hop limit is not 255 is reported (RFC 4861
+  section 6.1.2).
+- **`FragmentReassembler<TKey>`, `FragmentReassemblyOptions`, and `FragmentOutcome`** — one generic, bounded, pooled fragment
+  reassembler for every fragmenting protocol. The options choose the limits (open datagrams, total buffered bytes, datagram
+  extent, fragments per datagram), the alignment of non-last fragments, the overlap policy (largest duplicate wins, discard
+  the datagram, first bytes win), the eviction policy (oldest created, least recently used), restart on offset 0, and the gap
+  policy (report the decodable prefix once, then the full datagram). Contributor tags come back in offset order, so a
+  completing outcome lists the packets that contributed.
+- **`udp.heuristic` table.** UDP tries content-based parsers after no `udp.port` parser consumed the payload; the standard
+  stack registers the table empty and parsers add themselves. A parser reached this way reads the datagram's ports through
+  the thread-local `UdpPortCache`. The decision is stateless, so a re-parse behaves the same.
+- **`tcp.error.resync`.** A TCP stream that skipped bytes to resynchronize its message boundary now shows the number of
+  skipped bytes on the segment that carried them (and again on a re-parse). `PayloadDispatchEffect` gained the optional last
+  parameter `ResyncSkippedBytes`.
+- **Schemas and examples ship in the `NetworkInspector.Protocols` package** under `Schemas/`: the three JSON schemas (PDU
+  Transport, Signal Message, SOME/IP) and a compact example for every configuration under `Schemas/examples/` —
+  `pdu-transport/pdu_names.json`, `signal-message/can_and_pdu_bindings.json` and `multiplexed.json`, four `someip/`
+  examples, and the settings group files of a profile in `profile/`. Before, no schema was packed.
+- **`IngestGate` and `IngestScope`** (`NetworkInspector.Core.Protocols`) — the first-parse versus replay decision of a
+  stateful protocol in one type: `IsReplay(id)`, `Enter(id)` (a scope whose outermost end raises the watermark, also on an
+  exception), and `Watermark`. IPv4, IPv6, TCP, and UDP use it instead of four copies of the watermark and nesting fields;
+  their behavior is unchanged.
 - **`NetworkInspector.Plugins`** — the core-tier plugin contract: `IPlugin` (entry point found by the pre-scan through its
   own interface list), `IPluginBuilder`, `IPluginContext`, `IPluginLog`, `PluginInfo`, `PluginDependency`,
   `SourceRegistration`/`SourceCreate`/`SourceRequest` for Core `IFrameSource` sources,
@@ -98,6 +190,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **SOME/IP messages are decoded by a new message core.** A unit holds any number of messages (up to
+  `someip.max_messages_per_unit`, default 100). The tree adds `someip.msgtype.base` (the message type without the TP and ACK
+  flags, so one filter selects a request whether or not it is segmented or acknowledged), the names of the service, the method
+  and the client from the service description, the display text `0x1234 (Name)` (`(unknown)` where a description exists but
+  does not know the id), and named diagnostics for a length below 8, a message cut off by the data, a protocol version other
+  than 1, bytes behind the last message and a header cut short. The ids are shown in upper-case hex. The packet info reads
+  `SOME/IP 0xF232 (ClimateControl) REQUEST`, or `SOME/IP (3 messages)` for a bundle.
+- **A TCP stream that resynchronizes now delivers the message behind the skipped bytes at once.** The buffer looks for the next
+  message again in the same call instead of at the next segment, so a stream that ends right behind a damaged region still
+  delivers it. The skipped bytes are reported as before (`tcp.error.resync`).
+
+- **A message that the capture length cut shows `[Unverified]` instead of `[Bad]`** in `icmp.checksum.status` and
+  `icmpv6.checksum.status`: the parsers compare the payload length of the enclosing IP header with the message they received.
+- **ICMP, ICMPv6 (Neighbor Discovery, Multicast Listener Discovery) and ARP decode what the messages carry.** ICMPv4 and
+  ICMPv6 error messages show the next-hop MTU (`icmp.mtu`, `icmpv6.mtu`), the parameter pointer (`icmp.pointer`,
+  `icmpv6.pointer`), the RFC 4884 length (`icmp.length`, `icmpv6.length`) and the unused or reserved bytes. The quoted
+  datagram shows addresses, protocol, TTL or hop limit and, for quoted TCP, UDP and echo, the ports or the identifier and
+  sequence number (`icmp.orig_ip.*`, `icmpv6.orig_ipv6.*`); quoted bytes that do not start with an IP header are shown as
+  `data` instead of being dropped, and Source Quench is an error type. ICMPv6 echo payloads are shown as `icmpv6.data`.
+  Router Advertisement flags are decoded completely (M, O, H, preference, P, S), the Prefix Information option shows
+  the R and P flags, and the Route Information, DNS Search List, PREF64, Captive-Portal, Redirected Header, Advertisement
+  Interval, Home Agent, Nonce and RA Flags Extension options are decoded. The link-layer address option follows its
+  length (8 bytes MAC, 16 bytes EUI-64, other lengths raw bytes) instead of showing six bytes of any address as a MAC. MLDv2
+  queries and reports are decoded (`icmpv6.mld.*`, `icmpv6.mldr.*`) and a query no longer shows its raw response code as a
+  delay. A zero-length or truncated option ends the option walk with `icmpv6.nd.error.option_length`. ICMP and ICMPv6 codes
+  have display text, the type, code, option, ARP opcode and hardware type tables are complete, and the packet info shows
+  echo identifiers, error codes, Neighbor Discovery targets and link-layer addresses. ARP flags follow RFC 5227
+  (`arp.isgratuitous` only for requests and replies, new `arp.isannouncement`, `arp.isprobe` excludes gratuitous packets),
+  the info text names gratuitous, announcement and probe packets, and the ATM hardware types (16, 19, 21) use the RFC 2225
+  layout. The container text of an ICMP or ICMPv6 message names its real length instead of "8 bytes". ICMPv4 Router
+  Advertisement (`icmp.num_addrs`, `icmp.addr_entry_size`, `icmp.lifetime`, one `icmp.router_address` and `icmp.pref_level` per
+  complete entry), Timestamp Request and Reply (identifier, sequence number and the three `icmp.*_timestamp` fields in
+  milliseconds) and Address Mask Request and Reply (identifier, sequence number and `icmp.address_mask`) are decoded; a message
+  that the capture cut short shows the fields up to the last complete one and the rest as `icmp.data`. These types no longer
+  show their whole body as `icmp.data`.
+- **Breaking: field names of ICMP and ICMPv6 follow the common abbreviations.** `icmp.redirect_gw` is `icmp.redir_gw`;
+  `icmp.resp_in_ip` and its children are `icmp.orig_ip`; `icmpv6.nd.ra.flags` / `.flag.managed` / `.flag.other` are
+  `icmpv6.nd.ra.flag` / `.flag.m` / `.flag.o`; `icmpv6.nd.na.flags` and its flags are `icmpv6.nd.na.flag` and `.flag.r`,
+  `.s`, `.o`; `icmpv6.nd.target_address` is split into `icmpv6.nd.ns.target_address`, `icmpv6.nd.na.target_address` and
+  `icmpv6.nd.rd.target_address`; `icmpv6.nd.redirect.dst` is `icmpv6.nd.rd.destination_address`; the option fields
+  `icmpv6.nd.opt*` are `icmpv6.opt*` (`.len` is `.length`, `.prefix.flag.onlink` and `.auto` are `.prefix.flag.l` and `.a`).
+  Filters, exports and value caches that use the old names must change.
+- **Allocation: the ICMP, ICMPv6 and ARP parsers no longer box precomputed texts.** Table strings are passed as `LazyString`
+  (a bare `string` bound to the generic overload and boxed a copy per field), the container titles and byte counts come from
+  shared tables, and Neighbor Discovery addresses are no longer copied into `System.Net.IPAddress` objects; their display text now uses the same upper-case IPv6 format as every other IPv6 text (`Target Address: 2001:DB8::1`).
 - **TCP analysis rewritten on an ordered list of unacknowledged segments.** Per direction the tracker remembers the segments
   that are not yet acknowledged (bounded at 10000, allocated on the first data segment) and compares every segment and ACK
   against them with serial-number arithmetic. Result: a gap is only `lost_segment`, a late segment is `out_of_order` (not a
@@ -299,6 +436,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Breaking
 
+- **The SOME/IP parser is rewritten; the old configuration format, service discovery and SOME/IP-TP reassembly are
+  replaced.** `SomeIpProtocol` takes a compiled service description and the effective settings
+  (`new SomeIpProtocol(model, in settings)`; `SomeIpRegistration.Register(builder)` creates it), and `SomeIpProtocol.UdpPortKey`
+  and `TcpPortKey` are removed (`DefaultPort` replaces both). The old `someip.config_file` format (`services[].methods[]` with
+  `service_id`/`method_id` only) is no longer read: the new format carries a `schema_version` and is described by the schema
+  `Schemas/someip-config.schema.json`. The segmented-message fields changed (see below). A unit on a
+  port that is not bound to SOME/IP is accepted only with `someip.heuristic` on or as the declared plaintext of an encrypted
+  transport.
+
+- **`DatagramDefragmenter<TKey>` is replaced by `FragmentReassembler<TKey>`** (namespace `NetworkInspector.Core.Reassembly`).
+  `ProcessFragment(key, offset, moreFragments, data)` becomes `Add(in key, offset, moreFragments, data, contributor)` and
+  returns a `FragmentOutcome` instead of `byte[]?`: the completed datagram is `outcome.Payload` when `outcome.Kind` is
+  `Complete`, and every refusal carries a `DiscardReason` (extent, alignment, buffer limit, fragment limit, overlap,
+  conflicting end, beyond end). The constructor takes `FragmentReassemblyOptions` (presets `FragmentReassemblyOptions.IPv4`
+  and `.IPv6` reproduce the former `new()` and `new(dropOnOverlap: true)`). `DatagramFragmentBuffer` and `FragmentAddResult`
+  are removed. IPv4 and IPv6 behave as before.
 - **`LinkType.WiresharkUpperPdu` is now `LinkType.UpperPdu`** (value 252 and the wire format are unchanged); its display name is  `Upper PDU`. Change the name where you refer to the enum member.
 - **The lazy text moved out of the `ZeroAlloc` namespace.** `LazyString`, `LazyStringError`, and `LazyStringErrorCode` are now in
   `NetworkInspector.Core.Fields`; change the `using` (no other change: the members are the same). `ZA.Lazy(…)` becomes

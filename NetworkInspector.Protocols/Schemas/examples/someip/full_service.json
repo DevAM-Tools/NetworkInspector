@@ -1,0 +1,128 @@
+{
+  "schema_version": "1.0",
+  "udp_ports": [30490, 30512],
+  "tcp_ports": [30501],
+  "tls_ports": [30501],
+  "dtls_ports": [30512],
+  "clients": {
+    "1": "CockpitECU",
+    "2": "Gateway"
+  },
+  "services": [
+    {
+      "service_id": 62002,
+      "major_version": 2,
+      "name": "ClimateControl",
+      "methods": [
+        {
+          "kind": "method",
+          "id": 1,
+          "name": "SetTemperature",
+          "in": [
+            { "name": "request", "type_reference": "temperature_request", "ui_name": "Requested Temperature" }
+          ],
+          "out": ["ack_result"],
+          "e2e_profile": "04"
+        },
+        {
+          "kind": "method",
+          "id": 2,
+          "name": "GetStatus",
+          "in": [],
+          "out": {
+            "1": "status_tlv"
+          },
+          "transformation_properties": {
+            "size_of_string_length": 2
+          }
+        },
+        {
+          "kind": "field",
+          "name": "FanSpeed",
+          "get_id": 10,
+          "set_id": 11,
+          "notifier_id": 12,
+          "type_reference": "fan_speed"
+        },
+        {
+          "kind": "event_group",
+          "id": 1,
+          "name": "ClimateEvents"
+        }
+      ],
+      "data_types": [
+        {
+          "category": "base_type",
+          "name": "temperature_celsius",
+          "type_reference": "int16"
+        },
+        {
+          "category": "base_type",
+          "name": "fan_speed",
+          "type_reference": "uint8",
+          "lookup_values": {
+            "0": "Off",
+            "1": "Low",
+            "2": "Medium",
+            "3": "High",
+            "4": "Max"
+          }
+        },
+        {
+          "category": "base_type",
+          "name": "zone_name",
+          "type_reference": "string",
+          "pad_to": 4
+        },
+        {
+          "category": "structure",
+          "name": "temperature_request",
+          "members": [
+            { "name": "target_c", "filter_name": "climate.settemp.target_c", "ui_name": "Target Temperature (Celsius)", "type_reference": "temperature_celsius" },
+            { "name": "zone", "type_reference": "zone_name" }
+          ]
+        },
+        {
+          "category": "base_type",
+          "name": "ack_result",
+          "type_reference": "uint8",
+          "lookup_values": {
+            "0": "Accepted",
+            "1": "RejectedOutOfRange",
+            "2": "RejectedZoneUnknown"
+          }
+        },
+        {
+          "category": "tlv_structure",
+          "name": "status_tlv",
+          "members": {
+            "1": { "name": "current_c", "filter_name": "climate.status.current_c", "ui_name": "Current Temperature (Celsius)", "type_reference": "temperature_celsius" },
+            "2": { "name": "active_zone", "type_reference": "zone_name" },
+            "3": { "name": "fan_state", "type_reference": "fan_speed" }
+          }
+        }
+      ]
+    },
+    {
+      "service_id": 62002,
+      "major_version": 1,
+      "name": "ClimateControl",
+      "methods": [
+        {
+          "kind": "method",
+          "id": 1,
+          "name": "SetTemperature",
+          "in": ["legacy_temperature"],
+          "out": []
+        }
+      ],
+      "data_types": [
+        {
+          "category": "base_type",
+          "name": "legacy_temperature",
+          "type_reference": "uint8"
+        }
+      ]
+    }
+  ]
+}

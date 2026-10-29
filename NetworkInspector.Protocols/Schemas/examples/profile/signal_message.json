@@ -1,0 +1,5 @@
+{
+  "signal_message.config_file": "configs/can_and_pdu_bindings.json",
+  "signal_message.show_raw": false,
+  "signal_message.show_enum": true
+}

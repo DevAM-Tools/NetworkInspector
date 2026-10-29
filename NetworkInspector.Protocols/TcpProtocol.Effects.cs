@@ -192,6 +192,7 @@ public sealed partial class TcpProtocol
     /// </param>
     /// <param name="ReassemblyLimitHit">A reassembly limit dropped buffered bytes while this segment was processed.</param>
     /// <param name="ReassemblyLimitDiscardedBytes">Number of bytes that limit event dropped.</param>
+    /// <param name="ResyncSkippedBytes">Bytes the stream buffer skipped to resynchronize while this segment was processed.</param>
     public readonly record struct PayloadDispatchEffect(
         PayloadDispatchMode Mode,
         PduEffect[]? Pdus,
@@ -200,7 +201,8 @@ public sealed partial class TcpProtocol
         bool HasPreferredPort,
         bool Forward,
         bool ReassemblyLimitHit,
-        int ReassemblyLimitDiscardedBytes);
+        int ReassemblyLimitDiscardedBytes,
+        int ResyncSkippedBytes = 0);
 
     /// <summary>Combined TCP effects of one layer, recorded once at the end of its first parse.</summary>
     private readonly record struct TcpLayerEffect(AnalysisEffect Analysis, PayloadDispatchEffect Dispatch);
@@ -221,26 +223,14 @@ public sealed partial class TcpProtocol
     private readonly EffectStore<TcpLayerEffect> _Effects = new();
 
     /// <summary>
-    /// Highest packet id that completed a first parse; <c>-1</c> until the first packet was parsed.
-    /// <para>
-    /// The single writer is the ordered first-parse path (<see cref="_RaiseWatermark"/>), which the
-    /// session serializes under its parse lock. Readers use <see cref="_IsReplay"/>. Written after
-    /// the effect slot of that packet, so a reader that observes the raised watermark also observes
-    /// the effects (release/acquire via <see langword="volatile"/>).
-    /// </para>
-    /// <para>
-    /// <see cref="PacketId.Value"/> is an <see cref="int"/>, so this is <see langword="volatile"/>
-    /// <see cref="int"/> with plain reads and writes — same pattern as
-    /// <see cref="Stack"/>'s parse watermark.
-    /// </para>
+    /// First parse versus replay for this protocol (<see cref="IngestGate"/>). Only the ordered first-parse path, which the
+    /// session serializes under its parse lock, enters a scope; the outermost scope raises the watermark after the effect
+    /// slots of that packet were written, so a reader that observes the raised watermark also observes the effects
+    /// (release/acquire). The protocol can be entered again while the same packet is still parsed (nested layers, for example
+    /// tunnels); only the outermost scope raises the watermark, otherwise a further layer of the same packet would look like a
+    /// replay and find no recorded effect.
     /// </summary>
-    private volatile int _IngestWatermark = -1;
-
-    /// <summary>
-    /// In-flight first-parse nesting for this protocol on the serialized ingest thread.
-    /// Replay does not touch this field. The outermost finally raises the watermark.
-    /// </summary>
-    private int _ParseNesting;
+    private readonly IngestGate _Gate = new();
 
     #endregion
 
@@ -288,7 +278,8 @@ public sealed partial class TcpProtocol
                     hasPreferredPort,
                     forward,
                     outcome.LimitHit,
-                    outcome.LimitDiscardedBytes)));
+                    outcome.LimitDiscardedBytes,
+                    outcome.ResyncSkippedBytes)));
     }
 
     /// <summary>
@@ -304,24 +295,6 @@ public sealed partial class TcpProtocol
 
         return null;
     }
-
-    /// <summary>
-    /// Raises the first-parse watermark monotonically. Only the ordered first-parse path calls this,
-    /// so a plain read-then-write is sufficient — no competing writer can interleave.
-    /// </summary>
-    private void _RaiseWatermark(PacketId id)
-    {
-        if (id.Value > _IngestWatermark)
-        {
-            _IngestWatermark = id.Value;
-        }
-    }
-
-    /// <summary>
-    /// Whether the given packet id was already parsed once and must therefore replay its recorded
-    /// effects instead of mutating the connection tracker or the reassembly engine.
-    /// </summary>
-    private bool _IsReplay(PacketId id) => id.Value <= _IngestWatermark;
 
     #endregion
 }

@@ -296,6 +296,9 @@ public readonly record struct IPv6Address
         Span<char> destination, out int charsWritten,
         ReadOnlySpan<char> format, IFormatProvider? provider)
     {
+        // The specifier is read before anything is written, so an invalid one fails even when the buffer is too small.
+        ReadOnlySpan<char> hex = HexDigits.Table(HexDigits.ParseCase(format));
+
         if (!TryGetStringSize(format, provider, out int needed) || destination.Length < needed)
         {
             charsWritten = 0;
@@ -324,7 +327,7 @@ public readonly record struct IPv6Address
             {
                 destination[pos++] = ':';
             }
-            pos += _WriteHexGroup(groups[i], destination[pos..]);
+            pos += _WriteHexGroup(groups[i], destination[pos..], hex);
             i++;
         }
         charsWritten = pos;
@@ -400,9 +403,11 @@ public readonly record struct IPv6Address
     #region Convenience Formatting
 
     /// <summary>Writes the compressed IPv6 address into the destination span.</summary>
-    public int FormatInto(Span<char> destination)
+    /// <param name="destination">Target buffer; it must be large enough for the whole text.</param>
+    /// <param name="hexCase">Letter case of the hex digits; <see cref="HexCase.Upper"/> by default.</param>
+    public int FormatInto(Span<char> destination, HexCase hexCase = HexCase.Upper)
     {
-        TryFormat(destination, out int written, default, null);
+        TryFormat(destination, out int written, _Specifier(hexCase), null);
         return written;
     }
 
@@ -410,19 +415,25 @@ public readonly record struct IPv6Address
     /// <remarks>
     /// Allocates exactly the result string (the text is built on the stack first). Use <see cref="FormatInto"/> or
     /// <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> when the caller owns a buffer.
+    /// <param name="hexCase">Letter case of the hex digits; <see cref="HexCase.Upper"/> by default. The format specifier <c>x</c> of <c>ToString</c> and of interpolation selects <see cref="HexCase.Lower"/>.</param>
     /// </remarks>
-    public string Format()
+    public string Format(HexCase hexCase = HexCase.Upper)
     {
         Span<char> buf = stackalloc char[MaxFormattedLength];
-        TryFormat(buf, out int written, default, null);
+        TryFormat(buf, out int written, _Specifier(hexCase), null);
         return new string(buf[..written]);
     }
 
     /// <inheritdoc/>
-    public string ToString(string? format, IFormatProvider? formatProvider) => Format();
+    public string ToString(string? format, IFormatProvider? formatProvider) => Format(HexDigits.ParseCase(format));
 
     /// <inheritdoc/>
     public override string ToString() => Format();
+
+    private static string _Specifier(HexCase hexCase) =>
+        hexCase == HexCase.Lower
+            ? "x"
+            : "X";
 
     #endregion
 
@@ -519,9 +530,8 @@ public readonly record struct IPv6Address
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int _WriteHexGroup(ushort value, Span<char> dest)
+    private static int _WriteHexGroup(ushort value, Span<char> dest, ReadOnlySpan<char> hex)
     {
-        ReadOnlySpan<char> hex = "0123456789ABCDEF";
         if (value >= 0x1000)
         {
             dest[0] = hex[value >> 12];

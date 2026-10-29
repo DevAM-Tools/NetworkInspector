@@ -58,7 +58,7 @@ namespace NetworkInspector.Protocols;
 /// guarantees this under its parse lock). Every later parse of an already-parsed id is a replay: it
 /// reads the recorded defragmentation outcome from the protocol-owned effect store instead of
 /// touching the fragment buffers, and is safe to run on any number of threads concurrently. The
-/// watermark <see cref="_IngestWatermark"/> separates both paths without any caller-supplied mode
+/// watermark <see cref="_Gate"/> separates both paths without any caller-supplied mode
 /// flag.</para>
 /// </remarks>
 [Protocol("ipv6", "Internet Protocol Version 6", Description = "IPv6 (RFC 8200)")]
@@ -369,7 +369,7 @@ public sealed partial class IPv6Protocol : IProtocol
     // RFC 5722: overlapping fragments MUST cause the entire datagram to be silently discarded.
     // Only the ordered first-parse path may call into it (it is not thread-safe); replays read the outcome from
     // the effect store in IPv6Protocol.Effects.cs instead.
-    private readonly DatagramDefragmenter<IPv6DatagramFragmentKey> _Defragmenter = new(dropOnOverlap: true);
+    private readonly FragmentReassembler<IPv6DatagramFragmentKey> _Defragmenter = new(FragmentReassemblyOptions.IPv6);
 
     /// <summary>
     /// Pre-allocates the lazy-field populator delegate and builds the next-header dispatch cache.
@@ -472,7 +472,7 @@ public sealed partial class IPv6Protocol : IProtocol
     /// <para>
     /// Fragmented packets are stateful: the first parse feeds the fragment into the shared
     /// defragmenter and records the outcome, every later parse of that packet id replays the recorded
-    /// outcome and leaves the fragment buffers untouched. See <see cref="_IsReplay"/>.
+    /// outcome and leaves the fragment buffers untouched. See <see cref="_Gate"/>.
     /// </para>
     /// <para>
     /// Thread safety: a first parse must be serialized by the caller (ordered ingest); replays may run on any
@@ -495,18 +495,17 @@ public sealed partial class IPv6Protocol : IProtocol
             return ParseError.Custom(ProtocolName, "Parse data is not a slice of this packet's buffers.");
         }
 
-        // Decide between first parse and replay once, before any nested layer runs. Nesting is counted on first
-        // parses only (replays never write protocol state), and only the outermost first parse raises the watermark:
-        // raising it earlier would make a later layer of the same packet look like a replay and skip the defragmenter.
-        bool isReplay = _IsReplay(packet.Id);
-        bool raiseWatermark = !isReplay && _ParseNesting == 0;
-        if (!isReplay)
-        {
-            _ParseNesting++;
-        }
+        // Decide between first parse and replay once, before any nested layer runs. The ingest gate counts nesting on first
+        // parses only (replays never write protocol state, they hold the inert default scope), and only the outermost
+        // scope raises the watermark: raising it earlier would make a later layer of the same packet look like a replay
+        // and skip the defragmenter.
+        bool isReplay = _Gate.IsReplay(packet.Id);
+        IngestScope scope = isReplay
+            ? default
+            : _Gate.Enter(packet.Id);
 
-        // The finally block runs on every exit (error results and exceptions included), so the nesting counter
-        // cannot leak and the packet is always marked as parsed once, even when its first parse failed.
+        // The finally block runs on every exit (error results and exceptions included), so the scope cannot leak and the
+        // packet is always marked as parsed once, even when its first parse failed.
         try
         {
             return _ParseBody(in parentField, data, in context, layerKey, isReplay);
@@ -520,14 +519,7 @@ public sealed partial class IPv6Protocol : IProtocol
             // reader that finds no entry falls back to the field tree.
             _ThreadCache = null;
 
-            if (!isReplay)
-            {
-                _ParseNesting--;
-                if (raiseWatermark)
-                {
-                    _RaiseWatermark(packet.Id);
-                }
-            }
+            scope.Dispose();
         }
     }
 
@@ -759,7 +751,7 @@ public sealed partial class IPv6Protocol : IProtocol
         // Cache IPv6 addresses in the thread-local field directly on this protocol
         // so downstream transport protocols (TCP, UDP) can read them without
         // sibling-walk field-tree navigation.
-        SetCachedAddresses(parentField.Packet.Id, src, dst);
+        SetCachedAddresses(parentField.Packet.Id, src, dst, header.HopLimit);
 
         // Dispatch to next protocol using the final next-header value (after walking extension chain)
         int payloadStart = extOffset; // after fixed header + all extension headers
@@ -797,8 +789,13 @@ public sealed partial class IPv6Protocol : IProtocol
                         IPv6DatagramFragmentKey key = new(src.High, src.Low, dst.High, dst.Low, fragIdentification);
                         int byteOffset = fragOffset * 8; // convert to byte offset
 
-                        reassembled = _Defragmenter.ProcessFragment(
-                            key, byteOffset, moreFragments, data.Span.Slice(payloadStart, payloadLen));
+                        FragmentOutcome outcome = _Defragmenter.Add(
+                            in key, byteOffset, moreFragments, data.Span.Slice(payloadStart, payloadLen), parentField.Packet.Id.Value);
+
+                        // Only a completed datagram is dispatched; every other outcome (pending or refused) shows the fragment alone.
+                        reassembled = outcome.Kind == FragmentOutcomeKind.Complete
+                            ? outcome.Payload
+                            : null;
                         _RecordDefragEffect(parentField.Packet.Id, layerKey, reassembled);
                     }
 
@@ -1175,12 +1172,39 @@ public sealed partial class IPv6Protocol : IProtocol
     /// </para>
     /// </summary>
     [ThreadStatic]
-    private static (int PacketId, IPv6Address Src, IPv6Address Dst)? _ThreadCache;
+    private static (int PacketId, IPv6Address Src, IPv6Address Dst, byte HopLimit)? _ThreadCache;
 
-    /// <summary>Caches the IPv6 src/dst addresses for the current packet on this thread.</summary>
+    /// <summary>
+    /// Caches the IPv6 src/dst addresses and the hop limit for the current packet on this thread. The hop limit travels
+    /// with the addresses because ICMPv6 needs it while it parses, also in the mode that builds no field tree (where the
+    /// IPv6 container and its bytes do not exist), and the index must not depend on that mode.
+    /// </summary>
+    /// <param name="packetId">The packet being parsed.</param>
+    /// <param name="src">Source address.</param>
+    /// <param name="dst">Destination address.</param>
+    /// <param name="hopLimit">Hop limit of the header; 0 when the writer does not know it (tests only).</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void SetCachedAddresses(PacketId packetId, IPv6Address src, IPv6Address dst)
-        => _ThreadCache = (packetId.Value, src, dst);
+    internal static void SetCachedAddresses(PacketId packetId, IPv6Address src, IPv6Address dst, byte hopLimit = 0)
+        => _ThreadCache = (packetId.Value, src, dst, hopLimit);
+
+    /// <summary>
+    /// Attempts to read the cached hop limit for the specified packet; false when nothing is cached for it.
+    /// Like the addresses it describes the innermost IPv6 layer parsed so far, and it is valid only while the IPv6 parse is
+    /// still on the call stack (the entry is cleared in the <c>finally</c> block of <c>Parse</c>).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool TryGetCachedHopLimit(PacketId packetId, out byte hopLimit)
+    {
+        (int PacketId, IPv6Address Src, IPv6Address Dst, byte HopLimit)? c = _ThreadCache;
+        if (c.HasValue && c.Value.PacketId == packetId.Value)
+        {
+            hopLimit = c.Value.HopLimit;
+            return true;
+        }
+
+        hopLimit = 0;
+        return false;
+    }
 
     /// <summary>
     /// Attempts to read the cached IPv6 addresses for the specified packet.
@@ -1190,7 +1214,7 @@ public sealed partial class IPv6Protocol : IProtocol
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static bool TryGetCachedAddresses(PacketId packetId, out IPv6Address src, out IPv6Address dst)
     {
-        (int PacketId, IPv6Address Src, IPv6Address Dst)? c = _ThreadCache;
+        (int PacketId, IPv6Address Src, IPv6Address Dst, byte HopLimit)? c = _ThreadCache;
         if (c.HasValue && c.Value.PacketId == packetId.Value)
         {
             src = c.Value.Src;

@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.0",
+  "udp_ports": [30520],
+  "services": [
+    {
+      "service_id": 62010,
+      "major_version": 1,
+      "name": "SensorFusion",
+      "methods": [
+        {
+          "kind": "method",
+          "id": 1,
+          "name": "ReportFrame",
+          "in": ["sensor_frame"],
+          "out": [],
+          "e2e_profile": "08"
+        },
+        {
+          "kind": "event",
+          "id": 5,
+          "name": "CalibrationEvent",
+          "type_reference": "calibration_data",
+          "transformation_properties": {
+            "size_of_struct_length": 0
+          }
+        }
+      ],
+      "data_types": [
+        {
+          "category": "base_type",
+          "name": "sensor_id",
+          "type_reference": "uuid"
+        },
+        {
+          "category": "base_type",
+          "name": "timestamp_ns",
+          "type_reference": "uint64"
+        },
+        {
+          "category": "base_type",
+          "name": "confidence",
+          "type_reference": "float"
+        },
+        {
+          "category": "base_type",
+          "name": "heading_rad",
+          "type_reference": "double"
+        },
+        {
+          "category": "array",
+          "name": "fixed_matrix_row",
+          "type_reference": "float",
+          "size": 4
+        },
+        {
+          "category": "array",
+          "name": "detections",
+          "type_reference": "detection"
+        },
+        {
+          "category": "structure",
+          "name": "detection",
+          "members": [
+            { "name": "x", "type_reference": "float" },
+            { "name": "y", "type_reference": "float" },
+            { "name": "confidence", "type_reference": "confidence" }
+          ]
+        },
+        {
+          "category": "structure",
+          "name": "sensor_frame",
+          "members": [
+            { "name": "sensor_id", "type_reference": "sensor_id" },
+            { "name": "timestamp", "type_reference": "timestamp_ns" },
+            { "name": "heading", "type_reference": "heading_rad" },
+            { "name": "matrix_row", "type_reference": "fixed_matrix_row" },
+            { "name": "detections", "type_reference": "detections" }
+          ]
+        },
+        {
+          "category": "structure",
+          "name": "calibration_data",
+          "members": [
+            { "name": "sensor_id", "type_reference": "sensor_id" },
+            { "name": "offset_x", "type_reference": "float" },
+            { "name": "offset_y", "type_reference": "float" }
+          ]
+        }
+      ]
+    }
+  ]
+}

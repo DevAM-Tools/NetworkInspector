@@ -4,7 +4,7 @@ namespace NetworkInspector.Protocols.Tests;
 
 /// <summary>
 /// Covers the reassembling protocols whose cross-packet buffers would be corrupted by a concurrent
-/// re-parse: IPv4 and IPv6 fragmentation and SOME/IP-TP segmentation.
+/// re-parse: IPv4 and IPv6 fragmentation. SOME/IP-TP segmentation is covered by the SOME/IP test classes.
 /// <para>
 /// The decisive case is re-parsing the <i>completing</i> fragment on its own, the way a UI does when
 /// the user selects that packet. Its reassembled payload exists only because the earlier fragments
@@ -107,36 +107,6 @@ internal sealed class ReparseReassemblyIdentityTests
         await PacketFieldComparer.AssertFieldIdentical(stack, completingFirstParse, reparse);
     }
 
-    [Test]
-    public async Task SomeIpTpSegments_ReparseWholeSequence_Identical()
-    {
-        List<byte[]> segments = _BuildSomeIpTpSegments();
-        using Stack stack = _BuildStack();
-
-        await _AssertSequenceReparseIdentical(stack, segments);
-    }
-
-    /// <summary>
-    /// The SOME/IP-TP counterpart: the last segment carries the reassembled payload only because the
-    /// earlier segments were added to the reassembler during their first parse.
-    /// </summary>
-    [Test]
-    public async Task SomeIpTpSegments_ReparseLastSegmentAlone_Identical()
-    {
-        List<byte[]> segments = _BuildSomeIpTpSegments();
-        using Stack stack = _BuildStack();
-        Packet lastFirstParse = _ParseAll(stack, segments)[^1];
-
-        // Sanity: the reassembled payload must be present on the last segment.
-        FieldId payloadFieldId = stack.GetFieldId("someip.payload")!.Value;
-        await Assert.That(lastFirstParse.TryGetFieldValue(payloadFieldId, out _, materialize: true)).IsTrue();
-
-        int lastId = segments.Count - 1;
-        Packet reparse = _ParseExpected(stack, _CreateFrame(stack, segments[lastId], lastId), lastId);
-
-        await PacketFieldComparer.AssertFieldIdentical(stack, lastFirstParse, reparse);
-    }
-
     /// <summary>
     /// Parses a frame the test expects to succeed. A false return means the fixture is broken.
     /// </summary>
@@ -215,29 +185,6 @@ internal sealed class ReparseReassemblyIdentityTests
                         StatelessStack<EthernetLayer, StackEnd>>>>,
             NoTrailer,
             NoInterceptor> stack = FrameStack.Start(eth).Then(ip).Then(frag).Then(udp).CreateWithFixedValues();
-
-        return _CollectFrames(in stack, _Payload(3000));
-    }
-
-    /// <summary>
-    /// Eth / IPv4 / UDP / SOME/IP-TP with a 3000-byte payload. Application segmentation emits three
-    /// self-contained datagrams, each a complete SOME/IP-TP segment.
-    /// </summary>
-    private static List<byte[]> _BuildSomeIpTpSegments()
-    {
-        EthernetLayer eth = new(_DstMac, _SrcMac, maxFrameSize: _MtuFrameBytes);
-        IPv4Layer ip = new(_SrcIp4, _DstIp4, dontFragment: false);
-        const ushort someIpPort = (ushort)SomeIpProtocol.UdpPortKey;
-        UdpLayer udp = new(someIpPort, someIpPort, Auto.Explicit((ushort)0));
-        SomeIpTpLayer someIpTp = new(serviceId: 0x0123, methodId: 0x4567, sessionId: 1);
-
-        CreatedStack<
-            StatelessStack<SomeIpTpLayer,
-                StatelessStack<UdpLayer,
-                    StatelessStack<IPv4Layer,
-                        StatelessStack<EthernetLayer, StackEnd>>>>,
-            NoTrailer,
-            NoInterceptor> stack = FrameStack.Start(eth).Then(ip).Then(udp).Then(someIpTp).CreateWithFixedValues();
 
         return _CollectFrames(in stack, _Payload(3000));
     }

@@ -25,9 +25,10 @@ internal sealed class Icmpv6MalformedTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(truncated);
         using (stack)
         {
-            // Type may or may not be present depending on parser strictness;
-            // primary requirement is that IPv6 parsing still completed.
+            // The IPv6 layer completed, and the 2-byte ICMPv6 header is below the 8-byte minimum, so no ICMPv6 container
+            // may be created for it: a regression that accepted the short message would fail the second assertion.
             await ProtocolTestHelper.AssertU64Field(stack, packet, "ipv6.nxt", 58).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertProtocolNotPresent(stack, packet, "icmpv6").ConfigureAwait(false);
         }
     }
 
@@ -53,6 +54,11 @@ internal sealed class Icmpv6MalformedTests
         using (stack)
         {
             await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.type", 134).ConfigureAwait(false);
+
+            // The walk ended at the broken option and said so, instead of dropping the rest silently. The option sits at
+            // message offset 16: the 4-byte ICMPv6 header plus the 12-byte Router Advertisement fixed part.
+            await ProtocolTestHelper.AssertStringField(
+                stack, packet, "icmpv6.nd.error.option_length", "Invalid option length (zero) at offset 16").ConfigureAwait(false);
         }
     }
 

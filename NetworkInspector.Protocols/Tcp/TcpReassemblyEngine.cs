@@ -191,6 +191,15 @@ internal sealed class TcpReassemblyEngine
         stream.GetBuffer(isForward).TakeLimitHit(out discardedBytes);
 
     /// <summary>
+    /// Reads and clears the bytes one direction skipped to resynchronize (see <see cref="SegmentBuffer.TakeResyncSkip"/>).
+    /// </summary>
+    /// <param name="stream">The stream state.</param>
+    /// <param name="isForward">Direction to read.</param>
+    /// <returns>The number of skipped bytes; 0 when the stream stayed in sync.</returns>
+    internal static int TakeResyncSkip(TcpStreamState stream, bool isForward) =>
+        stream.GetBuffer(isForward).TakeResyncSkip();
+
+    /// <summary>
     /// Builds the per-call context for context-aware detectors. A value type, so there is no allocation on the per-segment
     /// path.
     /// </summary>

@@ -60,7 +60,7 @@ namespace NetworkInspector.Protocols;
 /// this under its parse lock). Every later parse of an already-parsed id is a replay: it only reads
 /// the protocol-owned effect store and is safe to run on any number of threads concurrently, even
 /// while further packets are being parsed for the first time. The watermark
-/// <see cref="_IngestWatermark"/> separates both paths without any caller-supplied mode flag.</para>
+/// <see cref="_Gate"/> separates both paths without any caller-supplied mode flag.</para>
 /// <para><b>Reassembly:</b> DNS, HTTP/1, TLS and HTTP/2 are reassembled before their parser runs: the segments of a
 /// direction are ordered by sequence number in a buffer, and every PDU the application protocol's boundary detector finds
 /// is handed over whole. This also holds for a protocol that was found by content (the heuristic table) on a port without
@@ -461,6 +461,11 @@ public sealed partial class TcpProtocol : IProtocol
     // closed stream) and dropped the message in progress. Reported on the segment that caused it, never silent.
     [StringField("tcp.error.reassembly_limit", "Reassembly limit reached", IndexGroup = "tcp.error")]
     private FieldId _ReassemblyLimitFieldId;
+
+    // The stream lost its message boundary and the resynchronization heuristic skipped bytes to find the next one. Reported on
+    // the segment whose bytes triggered it, so skipped bytes are never invisible.
+    [StringField("tcp.error.resync", "Stream resynchronized", IndexGroup = "tcp.error")]
+    private FieldId _ResyncFieldId;
 
     #endregion
 
@@ -1034,7 +1039,7 @@ public sealed partial class TcpProtocol : IProtocol
     /// The first parse of a packet id drives the connection tracker and the reassembly engine and
     /// records the resulting analysis and dispatch decisions; every later parse of that id replays
     /// those recordings and leaves both engines untouched. The watermark
-    /// (<see cref="_IsReplay"/>) separates both paths. A first parse that ends in an exception
+    /// (<see cref="_Gate"/>) separates both paths. A first parse that ends in an exception
     /// records nothing, so its replay degrades to the stateless raw-port path (the watermark is
     /// still raised in the <see langword="finally"/>, so the packet can never re-enter the first-parse path).
     /// </para>
@@ -1057,19 +1062,16 @@ public sealed partial class TcpProtocol : IProtocol
             return ParseError.Custom(ProtocolName, "Parse data is not a slice of this packet's buffers.");
         }
 
-        // First parse or replay is decided only by the watermark; there is deliberately no caller-supplied mode flag.
+        // First parse or replay is decided only by the ingest gate; there is deliberately no caller-supplied mode flag.
         // TCP can be entered again while the same packet is still being parsed (nested layers, for example tunnels).
-        // The watermark is raised only by the outermost first-parse call, so an inner layer of the same packet still sees
-        // its own packet id as "not yet parsed" and takes the first-parse path too. _ParseNesting is a plain int: it is only
-        // touched on the serialized first-parse path, replays never read or write it.
-        bool isReplay = _IsReplay(packet.Id);
-        bool raiseWatermark = !isReplay && _ParseNesting == 0;
-        if (!isReplay)
-        {
-            _ParseNesting++;
-        }
+        // The watermark is raised only by the outermost scope, so an inner layer of the same packet still sees its own
+        // packet id as "not yet parsed" and takes the first-parse path too. A replay holds the inert default scope.
+        bool isReplay = _Gate.IsReplay(packet.Id);
+        IngestScope scope = isReplay
+            ? default
+            : _Gate.Enter(packet.Id);
 
-        // The watermark must be raised in finally, also after errors and exceptions: otherwise a later parse of this id would
+        // The scope must end in finally, also after errors and exceptions: otherwise a later parse of this id would
         // re-enter the first-parse path and mutate the tracker a second time.
         try
         {
@@ -1077,14 +1079,7 @@ public sealed partial class TcpProtocol : IProtocol
         }
         finally
         {
-            if (!isReplay)
-            {
-                _ParseNesting--;
-                if (raiseWatermark)
-                {
-                    _RaiseWatermark(packet.Id);
-                }
-            }
+            scope.Dispose();
         }
     }
 

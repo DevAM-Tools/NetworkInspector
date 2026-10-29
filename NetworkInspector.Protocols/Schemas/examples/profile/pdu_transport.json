@@ -1,0 +1,6 @@
+{
+  "pdu_transport.config_file": "configs/pdu_names.json",
+  "pdu_transport.udp_dispatch_ports": [47290],
+  "pdu_transport.id_field_size": 2,
+  "pdu_transport.length_field_size": 2
+}

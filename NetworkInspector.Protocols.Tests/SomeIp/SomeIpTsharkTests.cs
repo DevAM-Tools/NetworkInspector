@@ -1,308 +1,490 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
-namespace NetworkInspector.Protocols.Tests;
+namespace NetworkInspector.Protocols.Tests.SomeIp;
 
 /// <summary>
-/// Symmetric tshark cross-validation tests for the SOME/IP dissector (Plan §3.3.12).
-/// Covers the base 16-byte header, SOME/IP-TP segment fields, and SOME/IP-SD
-/// OfferService entry.
+/// Cross-validation of the SOME/IP parser against the external dissector: header, service discovery, segmentation, TCP framing and
+/// the decoded payload of a configuration that is written to both sides. Each test builds the frames by hand, lets the parser and the
+/// tool dissect the same bytes, and compares the values field by field.
+/// <para>
+/// The tool is mandatory (<see cref="TsharkVerifier"/>); a developer machine without it may set the documented escape hatch, which
+/// turns the test into a deliberate skip. The tool does not claim port 30490 by itself, so every call passes an explicit
+/// decode-as rule. Known intended differences are asserted as differences, with the reason beside the assertion.
+/// </para>
+/// <para><b>Thread-safety:</b> stateless tests; every test uses its own temporary files.</para>
 /// </summary>
-/// <remarks>
-/// <para>
-/// tshark does <b>not</b> auto-dissect port 30490 as SOME/IP without an explicit
-/// Decode-As rule. All calls therefore pass <c>decodeAs: _SomeIpDecodeAs</c>
-/// (<c>"-d udp.port==30490,someip"</c>) to force dissection.
-/// </para>
-/// <para>
-/// Comparison uses <see cref="TsharkAssert.AssertEquivalentMany"/> which in turn uses
-/// <see cref="TsharkEquivalence.AreEquivalent"/> for semantic (not literal) equality.
-/// Bool-typed NI fields ("True"/"False") are automatically bridged to tshark's "1"/"0"
-/// representation.
-/// </para>
-/// <para><b>Thread safety:</b> Stateless tests; no shared mutable state.</para>
-/// </remarks>
-internal sealed class SomeIpTsharkTests
+internal sealed class SomeIpTsharkTests : SomeIpPayloadKit
 {
-    /// <summary>Decode-As rule that forces tshark to dissect UDP port 30490 as SOME/IP.</summary>
-    /// <remarks>
-    /// Without this rule tshark does not recognise port 30490 as SOME/IP, so all
-    /// SOME/IP-specific fields are absent from tshark output and every assertion fails.
-    /// </remarks>
-    private const string _SomeIpDecodeAs = "udp.port==30490,someip";
+    private const string _UdpDecodeAs = "udp.port==30490,someip";
+    private const string _TcpDecodeAs = "tcp.port==30490,someip";
 
-    #region Shared addresses
+    private static byte[] _Udp(byte[] message) => FrameBuilderTestExtensions.WrapRawUdp(message, 12345, 30490);
 
-    private static readonly MacAddress _DstMac = MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
-    private static readonly MacAddress _SrcMac = MacAddress.FromBytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
-    private static readonly IPv4Address _SrcIp = new(0xC0A80101); // 192.168.1.1
-    private static readonly IPv4Address _DstIp = new(0xC0A80102); // 192.168.1.2
+    #region Header
 
-    #endregion
-
-    #region Frame builders
-
-    /// <summary>
-    /// Wraps a <see cref="SomeIpLayer"/> in a standard Eth+IPv4+UDP frame on port 30490
-    /// so tshark's SOME/IP heuristic triggers without UAT configuration.
-    /// </summary>
-    private static byte[] _BuildSomeIpUdp(SomeIpLayer someIp, ReadOnlySpan<byte> payload)
-    {
-        EthernetLayer eth = new(_DstMac, _SrcMac);
-        IPv4Layer ip = new(_SrcIp, _DstIp);
-        UdpLayer udp = new(srcPort: 12345, dstPort: (ushort)SomeIpProtocol.UdpPortKey);
-        return FrameStack.Start(eth).Then(ip).Then(udp).Then(someIp).CreateWithFixedValues().EmitFrame(payload);
-    }
-
-    /// <summary>
-    /// Wraps a <see cref="SomeIpTpLayer"/> in a standard Eth+IPv4+UDP frame on port 30490.
-    /// </summary>
-    private static byte[] _BuildSomeIpTpUdp(SomeIpTpLayer tp, ReadOnlySpan<byte> payload)
-    {
-        EthernetLayer eth = new(_DstMac, _SrcMac);
-        IPv4Layer ip = new(_SrcIp, _DstIp);
-        UdpLayer udp = new(srcPort: 12345, dstPort: (ushort)SomeIpProtocol.UdpPortKey);
-        return FrameStack.Start(eth).Then(ip).Then(udp).Then(tp).CreateWithFixedValues().EmitFrame(payload);
-    }
-
-    /// <summary>
-    /// Builds a minimal SOME/IP-SD OfferService payload (28 bytes, no options).
-    /// Wire format:
-    /// <code>
-    /// [0]     flags (0xC0 = reboot+unicast)
-    /// [1-3]   reserved
-    /// [4-7]   entries array length (big-endian uint32) = 16
-    /// [8]     entry type  = 0x01 (OfferService)
-    /// [9]     index1      = 0
-    /// [10]    index2      = 0
-    /// [11]    numOpt      = 0
-    /// [12-13] serviceId   (big-endian)
-    /// [14-15] instanceId  (big-endian)
-    /// [16]    majorVersion
-    /// [17-19] TTL         (24-bit big-endian)
-    /// [20-23] minorVersion (big-endian)
-    /// [24-27] options array length = 0
-    /// </code>
-    /// </summary>
-    private static byte[] _BuildSdOfferServicePayload(
-        byte flags,
-        ushort serviceId,
-        ushort instanceId,
-        byte majorVer,
-        uint ttl)
-    {
-        byte[] sd = new byte[28];
-        sd[0] = flags;
-        // bytes 1-3: reserved (zero)
-        BinaryPrimitives.WriteUInt32BigEndian(sd.AsSpan(4, 4), 16u); // entries array length = 16
-        // Entry (16 bytes starting at offset 8)
-        sd[8] = 0x01; // OfferService
-        sd[9] = 0;    // index1
-        sd[10] = 0;   // index2
-        sd[11] = 0;   // numOpt = 0
-        BinaryPrimitives.WriteUInt16BigEndian(sd.AsSpan(12, 2), serviceId);
-        BinaryPrimitives.WriteUInt16BigEndian(sd.AsSpan(14, 2), instanceId);
-        sd[16] = majorVer;
-        // TTL is a 24-bit big-endian field at bytes 17-19
-        sd[17] = (byte)((ttl >> 16) & 0xFF);
-        sd[18] = (byte)((ttl >> 8) & 0xFF);
-        sd[19] = (byte)(ttl & 0xFF);
-        // minorVersion bytes 20-23: leave zero
-        // options array length bytes 24-27: leave zero
-        return sd;
-    }
-
-    #endregion
-
-    #region Base header tests
-
-    /// <summary>
-    /// Builds a SOME/IP Request frame and verifies that all seven base header fields
-    /// reported by NI match tshark's PDML output exactly.
-    /// </summary>
     [Test]
-    public async Task Tshark_RequestMessage_AllHeaderFields_MatchNi()
+    [Arguments((byte)0x00, (byte)0x00)]
+    [Arguments((byte)0x80, (byte)0x00)]
+    [Arguments((byte)0x81, (byte)0x05)]
+    [Arguments((byte)0x02, (byte)0x00)]
+    public async Task EveryHeaderFieldEqualsTheToolsValue(byte messageType, byte returnCode)
     {
-        SomeIpLayer someIp = new(
-            serviceId: 0x1234,
-            methodId: 0x0042,
-            clientId: 0x0001,
-            sessionId: 0x0010,
-            messageType: SomeIpMessageType.Request);
-        byte[] frame = _BuildSomeIpUdp(someIp, [0xDE, 0xAD, 0xBE, 0xEF]);
+        if (TsharkAvailability.ShouldSkip())
+        {
+            return;
+        }
+
+        byte[] frame = _Udp(SomeIpBytes.Message(0x1234, 0x0042, [0xDE, 0xAD, 0xBE, 0xEF], 0x0001, 0x0010, messageType, returnCode, 3));
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
+            await TsharkAssert.AssertEquivalentMany(
+                stack,
+                packet,
+                frame,
+                1,
+                null,
+                _UdpDecodeAs,
+                ("someip.messageid", "someip.messageid"),
                 ("someip.serviceid", "someip.serviceid"),
                 ("someip.methodid", "someip.methodid"),
                 ("someip.length", "someip.length"),
-                // NI field: someip.msgtype — tshark 4.6 field: someip.messagetype
-                ("someip.msgtype", "someip.messagetype"),
-                ("someip.returncode", "someip.returncode"),
                 ("someip.clientid", "someip.clientid"),
-                ("someip.sessionid", "someip.sessionid")).ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>
-    /// Verifies that a Response message type (0x80) is reported identically by NI
-    /// and tshark.
-    /// </summary>
-    [Test]
-    public async Task Tshark_ResponseMessage_MessageType_MatchNi()
-    {
-        SomeIpLayer someIp = new(
-            serviceId: 0xABCD,
-            methodId: 0x0001,
-            messageType: SomeIpMessageType.Response);
-        byte[] frame = _BuildSomeIpUdp(someIp, []);
-        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
-        using (stack)
-        {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
-                // NI field: someip.msgtype — tshark 4.6 field: someip.messagetype
-                ("someip.msgtype", "someip.messagetype")).ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>
-    /// Verifies that an Error message (0x81) with a non-zero return code is reported
-    /// identically by NI and tshark.
-    /// </summary>
-    [Test]
-    public async Task Tshark_ErrorMessage_ReturnCode_MatchNi()
-    {
-        SomeIpLayer someIp = new(
-            serviceId: 0x1111,
-            methodId: 0x0002,
-            messageType: SomeIpMessageType.Error,
-            returnCode: 0x05);
-        byte[] frame = _BuildSomeIpUdp(someIp, []);
-        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
-        using (stack)
-        {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
-                // NI field: someip.msgtype — tshark 4.6 field: someip.messagetype
+                ("someip.sessionid", "someip.sessionid"),
                 ("someip.msgtype", "someip.messagetype"),
+                ("someip.msgtype.ack", "someip.messagetype.ack"),
+                ("someip.msgtype.tp", "someip.messagetype.tp"),
                 ("someip.returncode", "someip.returncode")).ConfigureAwait(false);
         }
     }
 
-    /// <summary>
-    /// Verifies that a Notification message type (0x02) is reported identically by NI
-    /// and tshark.
-    /// </summary>
-    [Test]
-    public async Task Tshark_Notification_MessageType_MatchNi()
-    {
-        SomeIpLayer someIp = new(
-            serviceId: 0x4242,
-            methodId: 0x8001,
-            messageType: SomeIpMessageType.Notification);
-        byte[] frame = _BuildSomeIpUdp(someIp, [1, 2, 3]);
-        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
-        using (stack)
-        {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
-                // NI field: someip.msgtype — tshark 4.6 field: someip.messagetype
-                ("someip.msgtype", "someip.messagetype")).ConfigureAwait(false);
-        }
-    }
-
     #endregion
 
-    #region SOME/IP-TP segment tests
+    #region Service discovery
 
-    /// <summary>
-    /// Builds the first TP segment (offset = 0, More Segments = true) and verifies that
-    /// the TP flag, segment offset, and More Segments indicator match tshark's output.
-    /// </summary>
     [Test]
-    public async Task Tshark_TpFirstSegment_TpFlagAndOffset_MatchNi()
+    public async Task AnOfferWithAnEndpointOptionEqualsTheTool()
     {
-        SomeIpTpLayer tp = new(
-            serviceId: 0x1234,
-            methodId: 0x0042,
-            tpOffsetIn16Bytes: 0,
-            moreSegments: true);
-        // Payload must be a multiple of the 16-byte fragment alignment.
-        byte[] payload = new byte[32];
-        byte[] frame = _BuildSomeIpTpUdp(tp, payload);
-        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
-        using (stack)
+        if (TsharkAvailability.ShouldSkip())
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
-                // NI field: someip.msgtype.tp — tshark 4.6 field: someip.messagetype.tp
-                ("someip.msgtype.tp", "someip.messagetype.tp"),
-                ("someip.tp.offset", "someip.tp.offset"),
-                // NI field: someip.tp.more — tshark 4.6 field: someip.tp.flags.more_segments
-                ("someip.tp.more", "someip.tp.flags.more_segments")).ConfigureAwait(false);
+            return;
         }
-    }
 
-    /// <summary>
-    /// Builds the last TP segment (offset = 2 × 16 bytes = 32 bytes, More Segments = false)
-    /// and verifies that the More Segments flag and the byte offset match tshark's output.
-    /// </summary>
-    [Test]
-    public async Task Tshark_TpLastSegment_MoreFalse_MatchNi()
-    {
-        // tpOffsetIn16Bytes=2 → byte offset 32 reported in someip.tp.offset
-        SomeIpTpLayer tp = new(
-            serviceId: 0x1234,
-            methodId: 0x0042,
-            tpOffsetIn16Bytes: 2,
-            moreSegments: false);
-        byte[] payload = new byte[32];
-        byte[] frame = _BuildSomeIpTpUdp(tp, payload);
+        byte[] frame = new SomeIpSdBuilder()
+            .Offer(0x1234, 0x0001, 2, 7, 3)
+            .Ipv4Option([192, 168, 1, 10], 0x11, 30501)
+            .BuildFrame();
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
-                // NI field: someip.tp.more — tshark 4.6 field: someip.tp.flags.more_segments
-                ("someip.tp.more", "someip.tp.flags.more_segments"),
-                ("someip.tp.offset", "someip.tp.offset")).ConfigureAwait(false);
-        }
-    }
-
-    #endregion
-
-    #region SOME/IP-SD test
-
-    /// <summary>
-    /// Builds a SOME/IP-SD OfferService message and verifies the reboot flag, unicast
-    /// flag, entry type, and service ID using <see cref="TsharkAssert.AssertEquivalentMany"/>.
-    /// <para>
-    /// The message ID 0xFFFF8100 (Service 0xFFFF, Method 0x8100) triggers tshark's
-    /// SOME/IP-SD sub-dissector. The NI field paths use the <c>someip_sd.*</c> prefix
-    /// which the SOME/IP protocol parser registers via <c>SomeIpSdParser</c>.
-    /// </para>
-    /// </summary>
-    [Test]
-    public async Task Tshark_ServiceDiscovery_OfferService_MatchNi()
-    {
-        SomeIpLayer someIp = new(
-            serviceId: 0xFFFF,
-            methodId: 0x8100,
-            messageType: SomeIpMessageType.Notification,
-            sessionId: 1);
-        byte[] sdPayload = _BuildSdOfferServicePayload(
-            flags: 0xC0,       // reboot=1, unicast=1
-            serviceId: 0x0042,
-            instanceId: 0x0001,
-            majorVer: 1,
-            ttl: 3);
-        byte[] frame = _BuildSomeIpUdp(someIp, sdPayload);
-        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
-        using (stack)
-        {
-            await TsharkAssert.AssertEquivalentMany(stack, packet, frame, 1, null, _SomeIpDecodeAs,
-                // NI uses someip_sd.* prefix; tshark 4.6 uses someipsd.* (no underscore)
+            await TsharkAssert.AssertEquivalentMany(
+                stack,
+                packet,
+                frame,
+                1,
+                null,
+                _UdpDecodeAs,
                 ("someip_sd.flags.reboot", "someipsd.flags.reboot"),
                 ("someip_sd.flags.unicast", "someipsd.flags.unicast"),
+                ("someip_sd.entries_length", "someipsd.length_entriesarray"),
+                ("someip_sd.options_length", "someipsd.length_optionsarray"),
                 ("someip_sd.entry.type", "someipsd.entry.type"),
-                ("someip_sd.entry.serviceid", "someipsd.entry.serviceid")).ConfigureAwait(false);
+                ("someip_sd.entry.index1", "someipsd.entry.index1"),
+                ("someip_sd.entry.n_opt_1", "someipsd.entry.numopt1"),
+                ("someip_sd.entry.serviceid", "someipsd.entry.serviceid"),
+                ("someip_sd.entry.instanceid", "someipsd.entry.instanceid"),
+                ("someip_sd.entry.majorver", "someipsd.entry.majorver"),
+                ("someip_sd.entry.ttl", "someipsd.entry.ttl"),
+                ("someip_sd.entry.minorver", "someipsd.entry.minorver"),
+                ("someip_sd.option.length", "someipsd.option.length"),
+                ("someip_sd.option.type", "someipsd.option.type"),
+                ("someip_sd.option.ipv4", "someipsd.option.ipv4address"),
+                ("someip_sd.option.port", "someipsd.option.port"),
+                ("someip_sd.option.proto", "someipsd.option.proto")).ConfigureAwait(false);
         }
+    }
+
+    [Test]
+    public async Task AConfigurationOptionEqualsTheToolsLengthAndType()
+    {
+        if (TsharkAvailability.ShouldSkip())
+        {
+            return;
+        }
+
+        // One option per frame: the tool lists every occurrence of a repeated field and the comparison reads the first.
+        byte[] frame = new SomeIpSdBuilder()
+            .Offer(0x1234, 0x0001, 2, 7, 3)
+            .ConfigurationOption("key=value")
+            .BuildFrame();
+        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
+        using (stack)
+        {
+            await TsharkAssert.AssertEquivalentMany(
+                stack,
+                packet,
+                frame,
+                1,
+                null,
+                _UdpDecodeAs,
+                ("someip_sd.option.length", "someipsd.option.length"),
+                ("someip_sd.option.type", "someipsd.option.type")).ConfigureAwait(false);
+        }
+    }
+
+    [Test]
+    public async Task ASubscribeEntryAndALoadBalancingOptionEqualTheTool()
+    {
+        if (TsharkAvailability.ShouldSkip())
+        {
+            return;
+        }
+
+        byte[] frame = new SomeIpSdBuilder()
+            .Subscribe(0x1234, 0x0001, 2, 5, eventgroup: 0x0010, counter: 3, initial: true)
+            .LoadBalancingOption(priority: 4, weight: 9)
+            .BuildFrame();
+        (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
+        using (stack)
+        {
+            await TsharkAssert.AssertEquivalentMany(
+                stack,
+                packet,
+                frame,
+                1,
+                null,
+                _UdpDecodeAs,
+                ("someip_sd.entry.type", "someipsd.entry.type"),
+                ("someip_sd.entry.eventgroupid", "someipsd.entry.eventgroupid"),
+                ("someip_sd.entry.counter", "someipsd.entry.counter"),
+                ("someip_sd.entry.ttl", "someipsd.entry.ttl"),
+                ("someip_sd.option.type", "someipsd.option.type"),
+                ("someip_sd.option.lb_priority", "someipsd.option.priority"),
+                ("someip_sd.option.lb_weight", "someipsd.option.weight")).ConfigureAwait(false);
+        }
+    }
+
+    #endregion
+
+    #region Segmentation
+
+    [Test]
+    public async Task TheSegmentFieldsAndTheReassembledLengthEqualTheTool()
+    {
+        if (TsharkAvailability.ShouldSkip())
+        {
+            return;
+        }
+
+        byte[][] frames =
+        [
+            SomeIpFrames.TpFrame(0, new byte[16], more: true, messageType: 0x20),
+            SomeIpFrames.TpFrame(16, new byte[16], more: true, messageType: 0x20),
+            SomeIpFrames.TpFrame(32, new byte[8], more: false, messageType: 0x20),
+        ];
+        (Stack stack, Packet[] packets) = _ParseAll(frames);
+        using (stack)
+        {
+            string[] fields = ["frame.number", "someip.messagetype.tp", "someip.tp.offset", "someip.tp.flags.more_segments", "someip.tp.reassembled.length"];
+            List<string?[]> tool = TsharkVerifier.GetFieldValuesPerPacket(frames, fields, 1, _UdpDecodeAs);
+
+            for (int i = 0; i < frames.Length; i++)
+            {
+                await Assert.That(_IsTrue(tool[i][1])).IsTrue().Because("the TP flag of every segment");
+                await Assert.That(ulong.Parse(tool[i][2]!, CultureInfo.InvariantCulture)).IsEqualTo(_U64(stack, packets[i], "someip.tp.offset"));
+                await Assert.That(_IsTrue(tool[i][3])).IsEqualTo(_Bool(stack, packets[i], "someip.tp.more"));
+            }
+
+            // The tool reports the reassembled length on the segment that completes the message; the parser does the same.
+            await Assert.That(ulong.Parse(tool[2][4]!, CultureInfo.InvariantCulture)).IsEqualTo(_U64(stack, packets[2], "someip.tp.reassembled_length"));
+            await Assert.That(_U64(stack, packets[2], "someip.tp.reassembled_length")).IsEqualTo(40UL);
+        }
+    }
+
+    #endregion
+
+    #region TCP framing
+
+    [Test]
+    public async Task TwoMessagesSplitAcrossThreeSegmentsAreReportedOnTheSamePacketsAsByTheTool()
+    {
+        if (TsharkAvailability.ShouldSkip())
+        {
+            return;
+        }
+
+        byte[] first = SomeIpBytes.Message(0x1234, 0x0001, new byte[24]);
+        byte[] second = SomeIpBytes.Message(0x1234, 0x0002, new byte[8]);
+        TcpTestConversation conversation = new(30490);
+        conversation.Handshake();
+        conversation.ClientSend(SomeIpBytes.Concat(first, second), mss: 28);
+        byte[][] frames = [.. conversation.Frames];
+        (Stack stack, Packet[] packets) = _ParseAll(frames);
+        using (stack)
+        {
+            List<string?[]> tool = TsharkVerifier.GetFieldValuesPerPacket(frames, ["frame.number", "someip.messageid"], 1, _TcpDecodeAs);
+
+            for (int i = 0; i < frames.Length; i++)
+            {
+                List<ulong> own = [];
+                if (stack.GetFieldId("someip.messageid") is { } id)
+                {
+                    own.AddRange(_AllU64(packets[i], id));
+                }
+
+                List<ulong> theirs = [];
+                if (tool[i][1] is { Length: > 0 } text)
+                {
+                    theirs.AddRange(text.Split(',').Select(static t => _ParseHex(t)));
+                }
+
+                await Assert.That(own).IsEquivalentTo(theirs).Because($"message ids reported on packet {i}");
+            }
+        }
+    }
+
+    #endregion
+
+    #region Payload
+
+    private static readonly string _PayloadConfig = Json(
+        Join(
+            Method(
+                1,
+                "Seq",
+                Sites(
+                    Site("a", "uint8"),
+                    Site("b", "i16le"),
+                    Site("c", "float"),
+                    Site("d", "state_t"),
+                    Site("e", "words_t"),
+                    Site("f", "triple_t"),
+                    Site("g", "rec"),
+                    Site("h", "flags_t"),
+                    Site("i", "string"),
+                    Site("j", "uint64")),
+                "[]"),
+            Method(
+                2,
+                "Tlv",
+                "[]",
+                "{\"1\":{\"name\":\"t1\",\"type_reference\":\"uint8\"},\"2\":{\"name\":\"t2\",\"type_reference\":\"uint16\"},"
+                + "\"3\":{\"name\":\"t3\",\"type_reference\":\"string\"}}"),
+            Method(3, "Uni", "[]", Sites(Site("u", "union_t"))),
+            "{\"kind\":\"event\",\"id\":4,\"name\":\"Ev\",\"type_reference\":\"wide_flags_t\"}"),
+        Join(
+            "{\"category\":\"base_type\",\"name\":\"i16le\",\"type_reference\":\"int16\",\"byte_order\":\"little_endian\"}",
+            "{\"category\":\"base_type\",\"name\":\"state_t\",\"type_reference\":\"uint8\",\"lookup_values\":{\"1\":\"Idle\",\"2\":\"Active\"}}",
+            "{\"category\":\"array\",\"name\":\"words_t\",\"type_reference\":\"uint16\"}",
+            "{\"category\":\"array\",\"name\":\"triple_t\",\"type_reference\":\"uint8\",\"size\":3}",
+            "{\"category\":\"structure\",\"name\":\"rec\",\"members\":[{\"name\":\"x\",\"type_reference\":\"uint8\"},{\"name\":\"y\",\"type_reference\":\"uint16\"}]}",
+            "{\"category\":\"bitfield\",\"name\":\"flags_t\",\"bits\":8,\"members\":{\"0\":{\"name\":\"ready\"},\"3\":{\"name\":\"fault\"}}}",
+            "{\"category\":\"bitfield\",\"name\":\"wide_flags_t\",\"bits\":16,\"members\":{\"0\":{\"name\":\"low\"},\"15\":{\"name\":\"high\"}}}",
+            "{\"category\":\"union\",\"name\":\"union_t\",\"members\":{\"1\":{\"name\":\"ua\",\"type_reference\":\"uint16\"},\"2\":{\"name\":\"ub\",\"type_reference\":\"uint8\"}}}"));
+
+    [Test]
+    public async Task EveryDecodedLeafOfSequentialTlvUnionAndBitfieldPayloadsEqualsTheToolsValue()
+    {
+        if (TsharkAvailability.ShouldSkip())
+        {
+            return;
+        }
+
+        string work = Path.Combine(Path.GetTempPath(), "ni_someip_uat_" + Guid.NewGuid().ToString("N"));
+        _ = Directory.CreateDirectory(work);
+        try
+        {
+            using SomeIpTestStack s = SomeIpTestStack.Create(_PayloadConfig);
+            SomeIpCompiledModel model = _Compile(_PayloadConfig);
+            TsharkSomeIpUatProfile profile = TsharkSomeIpUatProfile.Emit(work, "ni_someip", model, out string profileDirectory);
+
+            SomeIpBytes sequential = new SomeIpBytes()
+                .U8(200).U8(0x34).U8(0x12).F32(1.5f).U8(2)
+                .U32(4).U16(10).U16(20)
+                .U8(7).U8(8).U8(9)
+                .U32(3).U8(5).U16(0x0102)
+                .U8(0x09)
+                .U32(5).Utf8("hello")
+                .U64(0x0102030405060708UL);
+            SomeIpBytes tlv = new();
+            tlv.U16(0x0001).U8(0x7F).U16(0x1002).U16(0xBEEF).U16(0x5003).U8(2).Utf8("hi");
+            SomeIpBytes union = new SomeIpBytes().U32(4 + 2).U32(1).U16(0x1234);
+            byte[] eventBits = new SomeIpBytes().U16(0x8001).ToArray();
+
+            await _AssertLeaves(s, profile, profileDirectory, UdpFrame(sequential.ToArray(), 1, 0x00), "seq.in").ConfigureAwait(false);
+            await _AssertLeaves(s, profile, profileDirectory, UdpFrame(tlv.ToArray(), 2, 0x80), "tlv.out").ConfigureAwait(false);
+            await _AssertLeaves(s, profile, profileDirectory, UdpFrame(union.ToArray(), 3, 0x80), "uni.out").ConfigureAwait(false);
+            await _AssertLeaves(s, profile, profileDirectory, UdpFrame(eventBits, 4, 0x02), "ev").ConfigureAwait(false);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    private static SomeIpCompiledModel _Compile(string json)
+    {
+        using MemoryStream stream = new(Encoding.UTF8.GetBytes(json));
+        _ = SomeIpRegistration.TryLoadConfig(stream, out SomeIpConfig? config, out _);
+        return SomeIpConfigCompiler.Compile(config!, new List<SettingsLoadWarning>());
+    }
+
+    /// <summary>Compares every leaf the parser decoded under <paramref name="prefix"/> with the value the tool reports for its filter.</summary>
+    private static async Task _AssertLeaves(
+        SomeIpTestStack s, TsharkSomeIpUatProfile profile, string profileDirectory, byte[] frame, string prefix)
+    {
+        Packet packet = s.Parse(frame);
+        int compared = 0;
+        foreach (string name in _LeafNames(s, packet, profile, prefix))
+        {
+            // A string: the tool names the value after the parameter, so the decoded text is compared with the tail of its display
+            // string. An enumeration: the tool shows "2 (Active)" where the parser shows "Active (2)"; the name has to appear in both.
+            List<Field> own = FieldsOf(s, packet, name);
+            if (own.Count == 1 && own[0].Value.Data.TryGetAsString(out string? text))
+            {
+                PdmlField? shown = TsharkVerifier.GetPdmlField(frame, profile.FilterOf(name), 1, _UdpDecodeAs, profileDirectory);
+                await Assert.That(shown).IsNotNull().Because($"the tool reports '{profile.FilterOf(name)}' for '{name}'");
+                await Assert.That(shown!.Value.ShowName!.EndsWith(": " + text, StringComparison.Ordinal)).IsTrue()
+                    .Because($"'{name}': parser '{text}' vs tool '{shown.Value.ShowName}'");
+                compared++;
+                continue;
+            }
+
+            if (own.Count == 1
+                && own[0].Value.Data.TryGetAsU64(out _)
+                && own[0].TryGetCustomText(out LazyString named)
+                && !named.IsNull
+                && ((string)named).Contains(" (", StringComparison.Ordinal))
+            {
+                string enumName = ((string)named)[..((string)named).IndexOf(" (", StringComparison.Ordinal)];
+                PdmlField? shown = TsharkVerifier.GetPdmlField(frame, profile.FilterOf(name), 1, _UdpDecodeAs, profileDirectory);
+                await Assert.That(shown!.Value.ShowName!).Contains("(" + enumName + ")").Because($"the enumeration name of '{name}'");
+            }
+
+            List<string?> values = [.. own.Select(static f => _Text(f))];
+            if (values.Any(static t => t is null))
+            {
+                continue;
+            }
+
+            string? tool = TsharkVerifier.GetFieldValue(frame, profile.FilterOf(name), 1, _UdpDecodeAs, profileDirectory);
+            await Assert.That(tool).IsNotNull().Because($"the tool reports '{profile.FilterOf(name)}' for '{name}'");
+            List<string?> theirs = [.. tool!.Split(',')];
+            await Assert.That(TsharkEquivalence.AreEquivalentSet(values, theirs)).IsTrue()
+                .Because($"'{name}': parser [{string.Join(", ", values)}] vs tool [{tool}]");
+            compared++;
+        }
+
+        await Assert.That(compared).IsGreaterThan(0).Because($"leaves of '{prefix}' compared");
+    }
+
+    /// <summary>The registered names of the fields under <paramref name="prefix"/> that have a counterpart in the tool, in tree order.</summary>
+    private static List<string> _LeafNames(SomeIpTestStack s, Packet packet, TsharkSomeIpUatProfile profile, string prefix)
+    {
+        List<string> names = [];
+        foreach (Field field in packet.IterFieldsDfs(materialize: true))
+        {
+            string? name = s.Stack.GetField(field.FieldId)?.Name;
+            if (name is not null
+                && name.StartsWith(Prefix, StringComparison.Ordinal)
+                && name.Contains(prefix, StringComparison.Ordinal)
+                && profile.HasFilter(name)
+                && !names.Contains(name))
+            {
+                names.Add(name);
+            }
+        }
+
+        return names;
+    }
+
+    /// <summary>The value of a parser leaf as text, or null for a container (no value).</summary>
+    private static string? _Text(Field field)
+    {
+        FieldValueData data = field.Value.Data;
+        if (data.TryGetAsU64(out ulong u))
+        {
+            return u.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (data.TryGetAsI64(out long i))
+        {
+            return i.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (data.TryGetAsF64(out double d))
+        {
+            return d.ToString("R", CultureInfo.InvariantCulture);
+        }
+
+        if (!data.TryGetAsBool(out bool b))
+        {
+            return null;
+        }
+
+        if (b)
+        {
+            return "1";
+        }
+
+        return "0";
+    }
+
+    #endregion
+
+    #region Helpers
+
+    private static (Stack Stack, Packet[] Packets) _ParseAll(byte[][] frames)
+    {
+#pragma warning disable CA2000 // The caller disposes the stack.
+        StackBuilder builder = new(new SettingsManager(), new FrameInterfaceRegistry());
+#pragma warning restore CA2000
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        Stack stack = builder.Build();
+        Packet[] packets = new Packet[frames.Length];
+        for (int i = 0; i < frames.Length; i++)
+        {
+            packets[i] = ProtocolTestHelper.ParseFrame(stack, frames[i], i, Timestamp.FromMillis(i));
+        }
+
+        return (stack, packets);
+    }
+
+    /// <summary>The tool prints ids as hex text with a 0x prefix; the parser stores numbers.</summary>
+    private static bool _IsTrue(string? text) => text is "1" or "True" or "true";
+
+    private static ulong _ParseHex(string text) =>
+        ulong.Parse(text.Replace("0x", string.Empty, StringComparison.Ordinal), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+
+    private static ulong _U64(Stack stack, Packet packet, string name) =>
+        _AllU64(packet, stack.GetFieldId(name)!.Value).First();
+
+    private static bool _Bool(Stack stack, Packet packet, string name)
+    {
+        FieldId id = stack.GetFieldId(name)!.Value;
+        foreach (Field field in packet.IterFieldsDfs(materialize: true))
+        {
+            if (field.FieldId == id && field.Value.Data.TryGetAsBool(out bool value))
+            {
+                return value;
+            }
+        }
+
+        return false;
+    }
+
+    private static List<ulong> _AllU64(Packet packet, FieldId id)
+    {
+        List<ulong> values = [];
+        foreach (Field field in packet.IterFieldsDfs(materialize: true))
+        {
+            if (field.FieldId == id && field.Value.Data.TryGetAsU64(out ulong value))
+            {
+                values.Add(value);
+            }
+        }
+
+        return values;
     }
 
     #endregion

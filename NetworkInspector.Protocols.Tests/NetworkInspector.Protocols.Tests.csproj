@@ -1,6 +1,14 @@
 ﻿<!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <!-- The shipped schemas and examples are test fixtures: copied next to the test assembly and read by path at run time,
+         so a test always checks the files the package ships. Negative samples live only in the test project. -->
+    <Content Include="..\NetworkInspector.Protocols\Schemas\**\*.json"
+             Link="Schemas\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures\**\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
     <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />
     <ProjectReference Include="..\NetworkInspector.FrameBuilder\NetworkInspector.FrameBuilder.csproj" />

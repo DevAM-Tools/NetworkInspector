@@ -1,0 +1,34 @@
+{
+  "schema_version": "1.0",
+  "udp_ports": [30490],
+  "tcp_ports": [30490],
+  "services": [
+    {
+      "service_id": 62001,
+      "major_version": 1,
+      "name": "VehicleSpeed",
+      "methods": [
+        {
+          "kind": "method",
+          "id": 1,
+          "name": "GetSpeed",
+          "in": [],
+          "out": ["speed_value"]
+        },
+        {
+          "kind": "event",
+          "id": 2,
+          "name": "SpeedNotification",
+          "type_reference": "speed_value"
+        }
+      ],
+      "data_types": [
+        {
+          "category": "base_type",
+          "name": "speed_value",
+          "type_reference": "uint16"
+        }
+      ]
+    }
+  ]
+}

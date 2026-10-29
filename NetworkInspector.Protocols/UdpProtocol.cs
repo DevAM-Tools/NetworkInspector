@@ -21,7 +21,7 @@ namespace NetworkInspector.Protocols;
 /// and must therefore stay ordered and single-threaded (the session guarantees this under its parse
 /// lock). Every later parse of an already-parsed id is a replay: it only reads the protocol-owned
 /// effect store and is safe to run on any number of threads concurrently, including while further
-/// packets are being parsed for the first time. The watermark <see cref="_IngestWatermark"/>
+/// packets are being parsed for the first time. The watermark <see cref="_Gate"/>
 /// separates both paths without any caller-supplied mode flag.</para>
 /// </remarks>
 [Protocol("udp", "User Datagram Protocol", Description = "UDP (RFC 768)")]
@@ -42,6 +42,12 @@ public sealed partial class UdpProtocol : IProtocol
 
     /// <summary>Dispatch table name for UDP port-based protocol lookup.</summary>
     public const string PortTableName = "udp.port";
+
+    /// <summary>
+    /// Heuristic table that is tried after no port parser consumed the payload. UDP finds it by this name when the stack
+    /// starts (the source generator does not support heuristic table attributes), like TCP does with <c>tcp.heuristic</c>.
+    /// </summary>
+    public const string HeuristicTableName = "udp.heuristic";
 
     #endregion
 
@@ -115,6 +121,9 @@ public sealed partial class UdpProtocol : IProtocol
     // Port dispatch table
     [ProtocolTableU64(PortTableName, "UDP Port")]
     private ProtocolTableId _PortTableId;
+
+    // Content-based fallback table, resolved by name in _OnStartCustom; invalid when the stack registered none.
+    private HeuristicProtocolTableId _HeuristicTableId;
 
     // Runtime setting for checksum verification. Off by default: verification costs one pass over the datagram per packet
     // and needs the enclosing IP addresses for the pseudo-header.
@@ -192,6 +201,7 @@ public sealed partial class UdpProtocol : IProtocol
         _Ipv6DstFieldId = stack.GetFieldId("ipv6.dst") ?? FieldId.Invalid;
         _Ipv4ProtocolId = stack.GetProtocolId("ip") ?? ProtocolId.Invalid;
         _Ipv6ProtocolId = stack.GetProtocolId("ipv6") ?? ProtocolId.Invalid;
+        _HeuristicTableId = stack.GetHeuristicProtocolTableId(HeuristicTableName) ?? HeuristicProtocolTableId.Invalid;
     }
 
     /// <summary>
@@ -219,7 +229,7 @@ public sealed partial class UdpProtocol : IProtocol
     /// <para>
     /// The first parse of a packet id draws stream indices from <see cref="UdpStreamTracker"/> and
     /// records them; every later parse of that id replays the recorded assignment and never touches
-    /// the tracker. Both paths are separated by the watermark — see <see cref="_IsReplay"/>.
+    /// the tracker. Both paths are separated by the watermark — see <see cref="_Gate"/>.
     /// </para>
     /// </summary>
     /// <param name="parentField">Parent field that receives the decoded protocol container and child fields.</param>
@@ -237,16 +247,15 @@ public sealed partial class UdpProtocol : IProtocol
             return ParseError.Custom(ProtocolName, "Parse data is not a slice of this packet's buffers.");
         }
 
-        // First parse or replay is decided only by the watermark (no caller-supplied mode flag). Only the outermost
-        // first-parse call raises the watermark (see _ParseNesting), so nested UDP layers of one packet are all first parses.
-        bool isReplay = _IsReplay(packet.Id);
-        bool raiseWatermark = !isReplay && _ParseNesting == 0;
-        if (!isReplay)
-        {
-            _ParseNesting++;
-        }
+        // First parse or replay is decided only by the ingest gate (no caller-supplied mode flag). Only the outermost
+        // scope raises the watermark, so nested UDP layers of one packet are all first parses. A replay holds the inert
+        // default scope.
+        bool isReplay = _Gate.IsReplay(packet.Id);
+        IngestScope scope = isReplay
+            ? default
+            : _Gate.Enter(packet.Id);
 
-        // The watermark is raised in finally, also after errors and exceptions, so a later parse of this id can never
+        // The scope ends in finally, also after errors and exceptions, so a later parse of this id can never
         // re-enter the first-parse path and draw a second stream index from the tracker.
         try
         {
@@ -254,14 +263,7 @@ public sealed partial class UdpProtocol : IProtocol
         }
         finally
         {
-            if (!isReplay)
-            {
-                _ParseNesting--;
-                if (raiseWatermark)
-                {
-                    _RaiseWatermark(packet.Id);
-                }
-            }
+            scope.Dispose();
         }
     }
 
@@ -448,26 +450,51 @@ public sealed partial class UdpProtocol : IProtocol
 
         // Dispatch by port on parentField (sibling dispatch — reuse payloadData, no copy). The lower port is tried first
         // (the server side is usually the well-known, lower port); the higher port is only tried if the lower one consumed
-        // nothing. Unlike TCP there is no connection state, hence no learned server port, no reassembly and no heuristic
-        // table, and the dispatch is stateless, so replays need no recorded dispatch decision.
+        // nothing. Unlike TCP there is no connection state, hence no learned server port and no reassembly; the dispatch is
+        // stateless, so replays need no recorded dispatch decision. The optional heuristic table runs last.
         if (payloadLen > 0)
         {
             ushort lowPort = Math.Min(srcPort, dstPort);
             ushort highPort = Math.Max(srcPort, dstPort);
 
-            ParseResult result = parentField.TryCallNextProtocolU64(_PortTableId, lowPort, payloadData, in context);
-            if (result.TryPropagateError(out ParseResult error))
+            // Publish the ports for a parser reached through the heuristic table (it gets no dispatch key). Same thread, same
+            // packet; withdrawn in the finally below so no later parser can mistake it for its own packet's ports.
+            UdpPortCache.Publish(parentField.Packet.Id, srcPort, dstPort);
+            try
             {
-                return error;
-            }
-
-            if (!result.TryGetConsumed(out _) && lowPort != highPort)
-            {
-                ParseResult highResult = parentField.TryCallNextProtocolU64(_PortTableId, highPort, payloadData, in context);
-                if (highResult.TryPropagateError(out ParseResult highError))
+                ParseResult result = parentField.TryCallNextProtocolU64(_PortTableId, lowPort, payloadData, in context);
+                if (result.TryPropagateError(out ParseResult error))
                 {
-                    return highError;
+                    return error;
                 }
+
+                bool consumed = result.TryGetConsumed(out _);
+                if (!consumed && lowPort != highPort)
+                {
+                    ParseResult highResult = parentField.TryCallNextProtocolU64(_PortTableId, highPort, payloadData, in context);
+                    if (highResult.TryPropagateError(out ParseResult highError))
+                    {
+                        return highError;
+                    }
+
+                    consumed = highResult.TryGetConsumed(out _);
+                }
+
+                // Content-based fallback, like TCP: only when no port parser consumed anything. Stateless (UDP keeps no
+                // connection state), so a replay runs the same test and reaches the same parser; a callee that keeps its
+                // own cross-packet state records its own replay effects.
+                if (!consumed && _HeuristicTableId.IsValid)
+                {
+                    ParseResult heuristic = parentField.TryCallHeuristicProtocol(_HeuristicTableId, payloadData, in context);
+                    if (heuristic.TryPropagateError(out ParseResult heuristicError))
+                    {
+                        return heuristicError;
+                    }
+                }
+            }
+            finally
+            {
+                UdpPortCache.Clear();
             }
         }
 

@@ -1,0 +1,7 @@
+{
+  "pdus": [
+    { "id": 4097, "name": "EngineStatus", "comment": "Cyclic, sent by the engine ECU; decoded by the engine_status message of the signal-message example." },
+    { "id": 4098, "name": "GearboxStatus" },
+    { "id": 8193, "name": "BodyLights", "comment": "Event-driven; the id is also used on CAN by the body_control example." }
+  ]
+}

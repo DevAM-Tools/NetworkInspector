@@ -36,6 +36,8 @@
 19. [Source Generator Output](#19-source-generator-output)
 20. [Current Dispatch Table Map](#20-current-dispatch-table-map)
 21. [Checklist for New Protocols](#21-checklist-for-new-protocols)
+22. [Fragment Reassembly](#22-fragment-reassembly)
+23. [Testing A Protocol That Keeps State](#23-testing-a-protocol-that-keeps-state)
 
 ---
 
@@ -126,7 +128,7 @@ while the first-parse thread is still working through later packets. So a `Stack
 owned by one *first-parse* thread, not by one thread outright. This means:
 
 - **No locks, no synchronization primitives** in protocol code.
-- Protocol instance fields that are written during parsing need the watermark and
+- Protocol instance fields that are written during parsing need the ingest gate and
   effect-store pattern described below; everything else must be set up during the build
   phase (`OnStartCustom()`) and treated as read-only afterwards, or kept in
   `[ThreadStatic]` fields. Most protocols are stateless and need neither.
@@ -140,7 +142,7 @@ export). The same packet data may be fed to `Parse()` again at any time. This me
 - **No mutable per-packet state** stored on the protocol instance between parse calls.
   All packet-specific state lives in the field tree (`MutField` / `FieldValue`).
   Protocols that genuinely need cross-packet state (connection trackers, reassembly and
-  fragment buffers) are the documented exception and must follow the watermark plus
+  fragment buffers) are the documented exception and must follow the ingest gate plus
   effect-store pattern described under *First parse vs. re-parse* below — otherwise a
   concurrent re-parse races on that state.
 - Caches and dispatch tables are **per-stack** state, initialized once in `OnStartCustom()`
@@ -155,18 +157,34 @@ field-tree mode, cache, index, replay-record flag, first protocol, and observers
 `ParseContext` still does not carry a separate parse-intent enum. Each stateful protocol
 decides for itself whether a call is a first parse or a re-parse.
 
-**Mechanism — watermark.** Every stateful protocol holds
-`private volatile int _IngestWatermark = -1`, the highest packet id whose first parse completed.
-`_IsReplay(id)` is `id.Value <= _IngestWatermark` (plain volatile read).
+**Mechanism — ingest gate.** Every stateful protocol owns one `private readonly IngestGate _Gate = new();`
+(`NetworkInspector.Core.Protocols`). Its watermark is the highest packet id whose first parse completed;
+`_Gate.IsReplay(id)` is `id.Value <= watermark` (one volatile read, safe from any thread). The pattern at the top of
+`Parse`:
+
+```csharp
+bool isReplay = _Gate.IsReplay(packet.Id);
+IngestScope scope = isReplay
+    ? default                      // inert scope: a replay never raises the watermark
+    : _Gate.Enter(packet.Id);      // throws InvalidOperationException for an id that is already replayed
+try { return _ParseBody(/* ... */, isReplay); }
+finally { scope.Dispose(); }       // the outermost scope raises the watermark
+```
+
+A protocol that has no cleanup in the `finally` can write `if (_Gate.IsReplay(id)) { return _Replay(...); }` followed by
+`using IngestScope scope = _Gate.Enter(id);`.
 
 - `id > watermark` → **first parse**: mutate cross-packet state (trackers, reassembly and
   fragment buffers) and record a compact **effect** for the packet.
 - `id <= watermark` → **re-parse**: read the recorded effect only. Never mutate shared
   state. A missing effect degrades to a stateless path — it never falls back to mutation.
 
-The watermark is raised in a `finally` at the end of `IProtocol.Parse` (outermost ingest only),
-so even error and exception exits close the door: a later re-parse of that id can never
-re-enter the first-parse path.
+Only the outermost scope raises the watermark, because a nested parse of the same packet (a tunnel parses a protocol twice)
+must still take the first-parse path. The raise happens in `IngestScope.Dispose`, so even error and exception exits close
+the door: a later re-parse of that id can never re-enter the first-parse path. Record every effect inside the scope, before
+it ends: the watermark write is the release that publishes the effects to replaying threads. The nesting counter is a plain
+`int` because only the ordered first-parse thread touches it; an `Interlocked` maximum was rejected because there is no
+second writer to race with.
 
 Authors implement `IProtocol.Parse`. `Stack.CallProtocol` stamps `ParseContext.SelfProtocolId`
 and then invokes the bound `ParseDelegate`. A raw `protocol.Parse(...)` or a cached
@@ -205,7 +223,7 @@ with ids from a monotonic allocator starting at 0, while `TryGetPacket` re-parse
 `_TryReparseFrame`. `Packet.TryParse` with `ParseOptions.Index` is safe on a re-parse:
 `TryBeginPacket` returns false and the index is not mutated.
 
-Stateful protocols still use their own watermark (`id <= protocol watermark` → replay) because
+Stateful protocols still use their own ingest gate (`_Gate.IsReplay(id)`, `id <= protocol watermark` → replay) because
 they are not invoked for every packet. The dense check lives on the `Stack`, which sees every
 `TryParse` call.
 
@@ -213,13 +231,13 @@ they are not invoked for every packet. The dense check lives on the `Stack`, whi
 
 | Protocol | Cross-packet state | Measure |
 |----------|--------------------|---------|
-| `TcpProtocol` | `_ConnectionTracker`, `_ReassemblyEngine` | Watermark + `EffectStore<TcpLayerEffect>` (analysis facts, dispatch mode, reassembled PDU bytes). Re-parse without effect → stateless raw-port dispatch. |
-| `UdpProtocol` | `_StreamTracker` | Watermark + `EffectStore<StreamEffect>`. Re-parse without effect → no `udp.stream` field. |
-| `IPv4Protocol` | `_Defragmenter` fragment buffers | Watermark + `EffectStore<DefragLayerEffect>` holding the reassembled datagram (only for the completing fragment). Re-parse without effect → fragment fields, no reassembly. |
-| `IPv6Protocol` | `_Defragmenter` fragment buffers | Same as IPv4. |
-| `SomeIpProtocol` | `_TpReassembler` sessions | Watermark + `EffectStore<SomeIpTpReassemblyResult>`. Re-parse without effect → segment reported without reassembly. |
+| `TcpProtocol` | `_ConnectionTracker`, `_ReassemblyEngine` | `IngestGate` + `EffectStore<TcpLayerEffect>` (analysis facts, dispatch mode, reassembled PDU bytes). Re-parse without effect → stateless raw-port dispatch. |
+| `UdpProtocol` | `_StreamTracker` | `IngestGate` + `EffectStore<StreamEffect>`. Re-parse without effect → no `udp.stream` field. The `udp.heuristic` fallback is stateless: a replay asks the table again and reaches the same parser. |
+| `IPv4Protocol` | `_Defragmenter` (`FragmentReassembler<DatagramFragmentKey>`, preset `IPv4`) fragment buffers | `IngestGate` + `EffectStore<DefragLayerEffect>` holding the reassembled datagram (only for the completing fragment). Re-parse without effect → fragment fields, no reassembly. See §22. |
+| `IPv6Protocol` | `_Defragmenter` (`FragmentReassembler<IPv6DatagramFragmentKey>`, preset `IPv6`) fragment buffers | Same as IPv4. |
+| `SomeIpProtocol` | the acceptance decision of a unit that is not on a bound port (decrypted hand-off, content-based detection, learned ports); the segment sessions of SOME/IP-TP (`FragmentReassembler<SomeIpTpKey>` behind `SomeIpTpSessions`); the ports learned from service discovery; the pending requests of method timing (`SomeIpTimingTracker`, no lock: only the ordered first parse touches it) | `IngestGate` + `EffectStore<SomeIpMessageEffect>` (one record per key: the unit decision, and for a segmented message its `FragmentOutcome`; a message at the key of its unit shares the record; a response also stores its timing pair there). A unit on a bound port decides from the published ports alone and records nothing. Re-parse without effect → the decision is evaluated again from immutable state, a segment shows its TP word and a named `someip.tp.error.dropped`. The segment list is lazy and reads only the published effect. |
 | `EthernetProtocol`, `IPv4Protocol`, `IPv6Protocol` | address caches | `[ThreadStatic]` — thread-local, safe as-is. |
-| `SignalMessageProtocol`, `CanProtocol`, `SomeIpProtocol` name maps, all `*SparseCache` / `*DelegateCache` | dispatch and display lookups | Written during registration / `OnStart` only, immutable during parsing — safe as-is. |
+| `SignalMessageProtocol`, `CanProtocol`, the `SomeIpCompiledModel` and `SomeIpSettings` of `SomeIpProtocol`, all `*SparseCache` / `*DelegateCache` | dispatch and display lookups | Written during registration / `OnStart` only, immutable during parsing — safe as-is. |
 
 All other protocols hold no cross-packet mutable state.
 
@@ -524,7 +542,7 @@ if (_IpSrcFieldId.IsValid
 The sibling-walk approach above is a safe fallback, but it is **not the primary
 pattern for hot-path cross-protocol data** such as IP addresses for checksum
 validation. The production pattern is a **per-thread, per-packet cache** stored
-in a `[ThreadStatic]` field on the *providing* protocol class.
+in a `[ThreadStatic]` field on the *providing* protocol class. `UdpPortCache` and `TcpPortCache` (the source and destination port of the datagram or segment being dispatched, guarded by the packet id and withdrawn when the dispatch is done) are the same pattern for application protocols that are reached without a dispatch key (the heuristic tables, framed TCP messages, the single-owner port cache of TCP) and have to know the port they were reached on. `PlaintextHandoff` is the same pattern for a protocol that decrypts a transport: it publishes the transport and the connection port before it hands the plaintext on, and the receiving protocol compares the port with the ports its configuration lists for that transport; the decrypting protocol withdraws it in a `finally`. The decrypting protocol also owns the dispatch table of its transport (`tls.port`, `dtls.port`, keyed by the server port), where SOME/IP binds the ports its configuration lists; when no such table exists at SOME/IP's registration, which is the case in the shipped stack because its TLS and DTLS parsers do not decrypt, SOME/IP reports one warning per non-empty list.
 
 **Why thread-local instead of sibling walk?**
 
@@ -898,7 +916,10 @@ fields remain in place.
 
 Lazy materialization is **not worth the complexity** when:
 
-- The protocol is a **leaf** (no sub-dispatch) with very few fields (e.g., ARP with 4 fields).
+- The protocol is a **leaf** (no sub-dispatch) with very few fields (e.g., VLAN with 4 fields). `ArpProtocol` is the
+  documented exception: a packet carries 12 to 14 of its 33 registered fields but it stays eager, because it never dispatches, its size is bounded by the header
+  (at most 1028 bytes), and its packet info text reads most of the fields anyway, so a populator would parse the same bytes
+  twice.
 - The fields are needed **eagerly by every packet** anyway (e.g., addresses for checksums).
 - The populator would be trivial (just appending 2-3 fields).
 
@@ -1160,7 +1181,7 @@ parent tables (`can.id`, `lin.id`, `flexray.id`, `pdu_transport.id`, `udp.port`,
 via `dispatch_bindings`. Parse needs **no dispatch-key lookup** — the table already
 selected the correct protocol instance.
 
-See schema: `NetworkInspector.Protocols/Schemas/signal-message-config.schema.json`.
+See schema: `NetworkInspector.Protocols/Schemas/signal-message-config.schema.json`; compact examples: `Schemas/examples/signal-message/` (`can_and_pdu_bindings.json`, `multiplexed.json`) and, with the settings that reference them, `Schemas/examples/profile/`.
 JSON may be loaded from a file setting (`signal_message.config_file`, may be empty)
 or from a caller-owned stream (`SignalMessageRegistration.TryLoadConfig` /
 `Register(builder, stream)`). Stream/object registration **adds** messages on top of
@@ -1307,7 +1328,7 @@ Group JSON and referenced `*_config_file` JSON are capped by `SettingsManager.Ma
 }
 ```
 
-`id` must equal the on-wire PDU ID (same integer the Signal Message binding uses as `key`).
+`id` must equal the on-wire PDU ID (same integer the Signal Message binding uses as `key`). A shipped example with comments is `Schemas/examples/pdu-transport/pdu_names.json`; the matching settings group files (`pdu_transport.json`, `signal_message.json`) are in `Schemas/examples/profile/`, with the referenced files in a `configs/` folder of the profile.
 
 **`signal-messages.json`** — schema `Schemas/signal-message-config.schema.json`. This is the dispatch configuration:
 
@@ -1430,6 +1451,18 @@ if (!result.TryGetConsumed(out _))
 
 `TryCallHeuristicProtocol()` scans registered heuristic parsers and calls the
 **first matching** protocol. The order of heuristic parsers determines priority.
+
+### 11.4a UDP heuristic table
+
+UDP owns the heuristic table `udp.heuristic` (`UdpProtocol.HeuristicTableName`), registered empty by
+`RegisterStandardProtocols`. `UdpProtocol` finds it by name in `OnStartCustom` (like TCP does with `tcp.heuristic`) and calls
+it **only after no port parser consumed the payload**: first `udp.port` with the lower port, then with the higher port, then the
+heuristic table. The decision is stateless (UDP keeps no connection state), so a re-parse takes the same path; a parser that
+keeps its own cross-packet state follows §2 itself.
+
+A heuristic parser gets no dispatch key. It reads the datagram's ports from `UdpPortCache.TryGet(packetId, out src, out dst)`,
+which `UdpProtocol` publishes on the calling thread before it dispatches and withdraws when the datagram is done; the packet-id
+guard makes a stale entry of another packet harmless. A parser reached from TCP reads the same from `TcpPortCache`; on a replay TCP publishes the ports again, so a decision that depends on them is the same as on the first parse.
 
 ### 11.5 Performance Consideration
 
@@ -1738,6 +1771,7 @@ container — there is no nested `*.hdr` intermediate container.
 | `tcp`    | —             | ports, checksum, seq/ack, hdr_len, flags (+ sub-flags), window, urgent ptr, options, len, payload |
 | `tls`    | —             | per record: `tls.record` (content_type, version, length) followed by handshake/alert as siblings |
 | `dtls`   | —             | per record: `dtls.record` (content_type, version, epoch, seq, length) followed by handshake as siblings; the handshake header is decoded only for epoch 0, and a connection ID record (type 25) has no `length` field and ends the walk |
+| `someip` | the message tree: container, the ten header fields, `msgtype` children, names, diagnostics and the raw payload of an unconfigured message (the packet index must see every group at parse time, and the fields are cheap); for a discovery message the eager scan of its payload | `someip_sd` (flags, entries, options, their diagnostics), expanded from the stored payload bytes; the scan and the population are two visitors of one walk, so the groups the scan records equal the fields the population appends. `someip.payload` of a configured member (typed parameters, array elements, TLV members, unions, bits, diagnostics), decoded from the stored payload bytes by the populator of its member direction; the group of the member direction is a superset (13c.3) |
 | signal message (`SignalMessageProtocol`) | — | static signals (physical F64); mux container + `.value` + matching mux-group signals; optional `.raw` / `.enum` |
 
 ### 13b.2 Implementation Sketch
@@ -1811,6 +1845,16 @@ resource-record sections to record `dns.opt`, `dns.ds`, `dns.rrsig`, `dns.nsec`,
 
 A field that is declared but **never emitted** (dead field) must **not** have its
 group recorded — doing so would be a false positive.
+
+**One documented deviation: the SOME/IP payload groups are supersets.** A SOME/IP message of a configured member records the
+index group of its member direction (`someip.payload.<service>.v<major>.<member>[.in|.out]`) although the parameters are
+decoded only when the payload container is read. Deciding exactly which parameters exist would mean running the whole
+decoder in `Parse()`, which is the cost the lazy container exists to avoid. Two cases leave a recorded group without a field:
+a TLV member that the message does not carry, and a payload cut off before its parameters. **There is no false negative**
+(a message that holds a parameter is always in the group), and the false positives are verified on the tree by the filter,
+exactly as a filter verifies every candidate. The generic payload fields share the group `someip.payload`, which is recorded
+for every message that has a payload container. The index tests of SOME/IP assert exactness for fully decodable messages and
+assert the superset explicitly for the two cases above.
 
 ### 13c.4 Prefer eager fields; defer only with enough candidates
 
@@ -2474,6 +2518,7 @@ partial void OnStartCustom(Stack stack)
 | `lin.id` | `LinProtocol` | `u64` (6-bit frame ID, not the protected ID) | Signal Message and sub-protocols by LIN 6-bit frame ID. Skipped for Event (`msgType=3`) and when the capture error-flags byte is non-zero. |
 | `someip.messageid` | `SomeIpProtocol` | `u64` | Payload deserializers by SOME/IP Message ID |
 | `tcp.heuristic` | `TcpProtocol` | heuristic | `HttpProtocol`, `TlsProtocol`, `Http2Protocol` (content-based) |
+| `udp.heuristic` | `UdpProtocol` | heuristic | tried after no `udp.port` parser consumed the payload; parsers add themselves (the SOME/IP parser registers here when it is registered) |
 
 TCP stream settings (group `tcp`, defaults in parentheses):
 
@@ -2499,8 +2544,8 @@ Fixed limits of the other application and bus protocols (constants, not settings
 
 - DNS over TCP: the reassembly accepts a PDU of up to 65537 bytes, the largest legal message (65535 bytes) plus its 2-byte length prefix.
 - JSON: a key or string value longer than 65536 (bytes without escapes, characters with escapes) is cut, and `json.error.string_limit` follows the field and names the limit.
-- SOME/IP-TP: at most 1024 reassembly sessions (the least recently used one is evicted and reported as `someip.tp.dropped`) and 1 MiB per message. A segment that is not the last must carry a non-zero multiple of 16 bytes, and no segment may start beyond the end fixed by the last segment; a violating session is dropped and reported as `someip.tp.dropped`.
-- Reassembled IPv4 or IPv6 datagrams and SOME/IP-TP messages are bound to the packet as additional buffers; a packet holds at most 255 of them, and a reassembly that would exceed it is reported as a parse error that names the limit.
+- SOME/IP: the ten limits of the group `someip` (README, "SOME/IP configuration") are settings, not constants. A message above `someip.tcp_max_message_size` is never framed from a TCP stream; the drop is reported as `tcp.error.reassembly_limit`. A unit with more than `someip.max_messages_per_unit` messages shows the rest as raw trailing bytes under the last decoded message, with `someip.error.unit_limit`.
+- Reassembled IPv4 or IPv6 datagrams and framed TCP messages are bound to the packet as additional buffers; a packet holds at most 255 of them, and a reassembly that would exceed it is reported as a parse error that names the limit.
 
 HTTP on TCP ports 80 and 8080 is reassembled with `Http1MessageDetector` before `HttpProtocol.Parse`. A port that has more than one registered protocol is not reassembled; every registered parser is still tried.
 
@@ -2513,7 +2558,7 @@ What the TCP layer adds beyond the header, and the limits behind it:
 - **Completeness** (`tcp.completeness`, `tcp.completeness.str`, one `tcp.completeness.*` flag per part) records which parts of the conversation the capture contains. The value at a packet describes the packets before it.
 - **Relative numbers** (`tcp.seq`, `tcp.ack`, `tcp.nxtseq`) subtract the initial sequence number of the direction. A connection joined mid-stream uses the first number seen as its base.
 - **Stream lifecycle.** A FIN from both sides or an RST ends the reassembly of a stream. A new SYN on the same address and port pair after the close starts a new stream and sets `tcp.analysis.reused_ports`.
-- **Reassembled protocols.** DNS, HTTP/1, TLS and HTTP/2 are reassembled per direction, each with its own framing detector. A protocol that the heuristic table (`tcp.heuristic`) picks gets the same reassembly. A reassembled PDU lists the packets that delivered it (`tcp.segments`), and each segment shows `tcp.segment.count`. A reassembly that reaches its limit sets `tcp.error.reassembly_limit` and names the limit; nothing is truncated silently.
+- **Reassembled protocols.** DNS, HTTP/1, TLS, HTTP/2 and SOME/IP are reassembled per direction, each with its own framing detector. A protocol that the heuristic table (`tcp.heuristic`) picks gets the same reassembly. A reassembled PDU lists the packets that delivered it (`tcp.segments`), and each segment shows `tcp.segment.count`. A reassembly that reaches its limit sets `tcp.error.reassembly_limit` and names the limit; nothing is truncated silently. When a stream loses its message boundary and the protocol's resynchronization heuristic skips bytes to find the next one, the segment that carried them shows `tcp.error.resync` with the number of skipped bytes, and the message behind them is extracted by the same call (the buffer looks again right after a successful resynchronization, so it does not wait for the next segment). TCP publishes the ports of the segment through `TcpPortCache` for the whole payload dispatch, first parse and replay alike.
 
 | Protocol | Largest PDU | Buffer per direction | Why |
 |----------|-------------|----------------------|-----|
@@ -2631,3 +2676,97 @@ Frame ──[frame.link_type]──► Ethernet ──[eth.type]──► IPv4/I
 - [ ] Field tree example in class XML doc comment
 - [ ] ASCII-art header diagram in header struct doc comment
 - [ ] Protocol-specific parsing notes and RFC references
+
+---
+
+## 22. Fragment Reassembly
+
+Every protocol that carries one message in several fragments (IPv4, IPv6, SOME/IP-TP, and later ISO-TP, DoIP, or L2CAP) uses
+the one reassembler of Core, `FragmentReassembler<TKey>`. A protocol supplies the key type that identifies one datagram and a
+`FragmentReassemblyOptions` value; Core supplies the table of open datagrams, the check order, pooled fragment copies,
+eviction, the limits, and one `FragmentOutcome` per call. Protocol code never sees a fragment list.
+
+```csharp
+private readonly FragmentReassembler<MyKey> _Reassembler = new(FragmentReassemblyOptions.IPv4);
+
+FragmentOutcome outcome = _Reassembler.Add(in key, byteOffset, moreFragments, fragmentBytes, contributor: packet.Id.Value);
+byte[]? datagram = outcome.Kind == FragmentOutcomeKind.Complete ? outcome.Payload : null;
+```
+
+The reassembler is not thread-safe by design: call `Add` only from the ordered first parse, record the outcome in the
+packet's effect, and let every later parse replay the recorded outcome (§2). A concurrent re-parse that calls `Add` corrupts
+the fragment buffers.
+
+### 22.1 Options
+
+| Option | IPv4 preset | IPv6 preset | SOME/IP-TP | Meaning |
+|--------|-------------|-------------|------------|---------|
+| `MaxPending` | 1,024 | 1,024 | `someip.tp_max_sessions` | open datagrams; at the limit one is evicted (secure by default) |
+| `MaxBufferedBytes` | unbounded | unbounded | `someip.tp_max_buffered_bytes` | stored bytes of all open datagrams together (the IP presets keep today's open default) |
+| `MaxDatagramLength` | 65,535 | 65,535 | `someip.tp_max_message_size` | extent limit, measured as offset plus length, so one fragment at a huge offset allocates nothing |
+| `MaxFragments` | 8,192 | 8,192 | unbounded | fragments per datagram; `Unbounded` when the alignment already bounds the list |
+| `NonLastAlignment` | 1 | 1 | 16 | every fragment but the last is a non-empty multiple of this (a format fact, 16 for SOME/IP-TP) |
+| `OverlapPolicy` | `KeepLargestDuplicate` | `DiscardDatagram` | `KeepFirst` | `KeepFirst` stores only uncovered pieces and flags differing bytes |
+| `EvictionPolicy` | `OldestCreated` | `OldestCreated` | `LeastRecentlyUsed` | `LeastRecentlyUsed` keeps an active long transfer alive |
+| `RestartOnZeroOffset` | no | no | yes | a second fragment at offset 0 starts the datagram over (a late first fragment does not) |
+| `GapPolicy` | `WaitForCompletion` | `WaitForCompletion` | `PrefixOnLastThenComplete` | `PrefixOnLastThenComplete` reports the decodable prefix once, then the full datagram |
+
+`TryValidate` names the offending option and its range. The constructor throws `ArgumentException` for invalid options,
+because a bad value is a programming error of the owner; an owner that exposes a value as a user setting validates it
+against the setting's own range first.
+
+### 22.2 Check order of `Add`
+
+1. **Extent** (threat: one fragment at a huge offset requests a huge buffer): refused before anything is copied; an open
+   datagram of the key is released.
+2. **Alignment**: refused without creating a datagram, so an empty flood opens nothing.
+3. **Lookup or create**, with count eviction; an existing datagram becomes the most recently used one.
+4. **Restart** when the option is on and the offset is 0.
+5. **Budget**: other datagrams are evicted in policy order until the fragment fits; the datagram being filled is never the
+   victim; a datagram that alone does not fit is released (`BufferLimit`).
+6. **Insert** with the overlap policy (scanning from the tail, so in-order arrival is O(1)).
+7. **Completion**: the payload is a plain array bound to the packet, the contributor tags come in offset order.
+8. **Gap**: under `PrefixOnLastThenComplete` the call that fixed the total length reports the decodable prefix once.
+9. Otherwise **Pending**, which carries no arrays.
+
+### 22.3 Using the outcome
+
+| `Kind` | Meaning | Carries |
+|--------|---------|---------|
+| `Pending` | stored, not complete | nothing |
+| `Complete` | datagram built, datagram released | `Payload`, `Contributors` (offset order), `FragmentCount` |
+| `PartialPrefix` | last fragment arrived, a hole remains | `Payload` (prefix then covered ranges), `PrefixLength`, `Gaps`, `CoveredAfterGap`, `Contributors` |
+| `Discarded` | fragment refused | `DiscardReason` (`ExtentLimit`, `Alignment`, `BufferLimit`, `FragmentLimit`, `Overlap`, `ConflictingEnd`, `BeyondEnd`) |
+| `NotRecorded` | replay without a recorded result | nothing (the default value) |
+
+`Flags` adds `Restarted`, `OverlapConflict`, `EvictedForCount`, and `EvictedForBudget`; `EvictedCount` counts the other
+datagrams the call evicted. The arrays of a delivering outcome are never written after the call, so an outcome can be stored
+in a published effect and read from any thread. The contributor is an opaque tag the caller passes per fragment (the packet
+id): the list returned with a delivering outcome is the list of contributing packets, and it names packets parsed earlier or
+the current one, never a later one.
+
+`BufferedBytes` counts stored payload bytes. The pooled arrays behind them can be up to twice as large, because the pool
+rounds a rental up to a power of two.
+
+---
+
+## 23. Testing A Protocol That Keeps State
+
+A protocol that pairs, reassembles or learns across packets needs two proofs on top of its field tests. SOME/IP is the worked
+example (`SomeIpTsharkTests`, `SomeIpParallelRedissectTests`).
+
+**Equivalence with an external decoder from one description.** When the protocol has a description file, the test writes the
+external decoder's configuration tables from the compiled model (`TsharkSomeIpUatProfile`) instead of keeping a second copy by
+hand. Two rules make the mapping honest: the tool names a value by the filter string of the table row that declares it, so the
+generator writes a fresh copy of every type for every usage site (one leaf, one filter string, one map entry from the parser's
+registered name); and a value the tool cannot express (a UUID) throws instead of dropping out of the comparison. Compare typed
+values, not display text, except where the tool only has text (a string, the name of an enumeration). The tool is mandatory
+by default; a machine without it sets the documented escape hatch, which turns the test into a visible skip.
+
+**Parallel re-dissection of a mixed capture.** Build a deterministic capture (fixed seed, fixed times) that exercises every
+stateful feature, ingest it in order, take the baseline of every materialized tree, and let eight readers re-parse in random order
+in two phases: after the ingest, and while the ingest is running with each reader taking only packets whose first parse has
+completed. The expected tree of a packet never changes after its first parse (every cross-packet fact is stored with the packet), so
+no interleaving can change the verdict; a reader that sees a different tree has found a shared write. A second test checks that the
+capture really contains the fields of the features it claims, because a scenario that silently stops triggering would turn the proof
+into a no-op.

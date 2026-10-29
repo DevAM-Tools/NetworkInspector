@@ -60,8 +60,9 @@ Console.WriteLine(ts);  // 2023-11-14T22:13:20.000000000Z
 | `Uuid` | `01020304-0506-0708-090A-0B0C0D0E0F10` | `FromBytes`, `TryParse` |
 | `Timestamp` | `2023-11-14T22:13:20.000000000Z` | `FromNanos`, `FromMicros`, `FromMillis`, `FromSecs`, `Now` |
 
-Text output uses uppercase hex; `TryParse` accepts either case. `Parse` is available through the generic
-`IParsable<T>` / `ISpanParsable<T>` interfaces; call `TryParse` directly for untrusted text.
+Text output of `MacAddress`, `Eui64`, `Uuid`, and `IPv6Address` uses uppercase hex by default; `TryParse` accepts either case.
+Lower case is a per-call choice (see "Choose The Letter Case"). `Parse` is available through the generic `IParsable<T>` /
+`ISpanParsable<T>` interfaces; call `TryParse` directly for untrusted text.
 
 ## Common Tasks
 
@@ -82,6 +83,19 @@ if (ip6.TryFormat(buffer, out int written, default, null))
 {
     Console.Out.Write(buffer[..written]);
 }
+```
+
+### Choose The Letter Case
+
+Upper case is the default, so existing exports and filters keep matching. Lower case (the spelling RFC 5952 recommends for
+IPv6) is selected per call, with the `HexCase` enumeration or with the format specifier `x`; `X` and the empty format give
+upper case. Any other specifier throws `FormatException`, so a specifier that would have no effect is never ignored silently.
+
+```csharp
+string upper = mac.Format();                 // "AB:CD:EF:01:23:45"
+string lower = mac.Format(HexCase.Lower);    // "ab:cd:ef:01:23:45"
+string text = $"{ip6:x}";                    // "2001:db8::1"
+int written = uuid.FormatInto(buffer, HexCase.Lower);
 ```
 
 ### Use As Keys

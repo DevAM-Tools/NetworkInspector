@@ -100,8 +100,8 @@ internal sealed class Icmpv6NdpTests
         {
             await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.type", 134).ConfigureAwait(false);
             await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.ra.cur_hop_limit", 64).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.nd.ra.flag.managed", true).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.nd.ra.flag.other", false).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.nd.ra.flag.m", true).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.nd.ra.flag.o", false).ConfigureAwait(false);
             await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.ra.router_lifetime", 1800).ConfigureAwait(false);
             await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.ra.reachable_time", 30_000).ConfigureAwait(false);
             await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.ra.retrans_timer", 1000).ConfigureAwait(false);
@@ -120,9 +120,9 @@ internal sealed class Icmpv6NdpTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.opt.type", 1).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.opt.len", 1).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertMacField(stack, packet, "icmpv6.nd.opt.linkaddr", "00:11:22:33:44:55").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.opt.type", 1).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.opt.length", 1).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertMacField(stack, packet, "icmpv6.opt.linkaddr", "00:11:22:33:44:55").ConfigureAwait(false);
         }
     }
 
@@ -138,8 +138,8 @@ internal sealed class Icmpv6NdpTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.opt.type", 5).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.opt.mtu", 1500).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.opt.type", 5).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.opt.mtu", 1500).ConfigureAwait(false);
         }
     }
 
@@ -161,13 +161,13 @@ internal sealed class Icmpv6NdpTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.opt.type", 3).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.opt.prefix.length", 64).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.nd.opt.prefix.flag.onlink", true).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.nd.opt.prefix.flag.auto", true).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.opt.prefix.valid_lifetime", 86_400).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.opt.prefix.preferred_lifetime", 14_400).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertIPv6Field(stack, packet, "icmpv6.nd.opt.prefix", "2001:db8::").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.opt.type", 3).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.opt.prefix.length", 64).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.opt.prefix.flag.l", true).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.opt.prefix.flag.a", true).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.opt.prefix.valid_lifetime", 86_400).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.opt.prefix.preferred_lifetime", 14_400).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertIPv6Field(stack, packet, "icmpv6.opt.prefix", "2001:db8::").ConfigureAwait(false);
         }
     }
 
@@ -181,7 +181,7 @@ internal sealed class Icmpv6NdpTests
         using (stack)
         {
             await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.type", 135).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertIPv6Field(stack, packet, "icmpv6.nd.target_address", "2001:db8::1").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertIPv6Field(stack, packet, "icmpv6.nd.ns.target_address", "2001:db8::1").ConfigureAwait(false);
         }
     }
 
@@ -197,12 +197,12 @@ internal sealed class Icmpv6NdpTests
         using (stack)
         {
             await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.type", 136).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.nd.na.flag.router", true).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.nd.na.flag.solicited", true).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.nd.na.flag.override", false).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertIPv6Field(stack, packet, "icmpv6.nd.target_address", "2001:db8::1").ConfigureAwait(false);
-            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.nd.opt.type", 2).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertMacField(stack, packet, "icmpv6.nd.opt.linkaddr", "00:11:22:33:44:55").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.nd.na.flag.r", true).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.nd.na.flag.s", true).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertBoolField(stack, packet, "icmpv6.nd.na.flag.o", false).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertIPv6Field(stack, packet, "icmpv6.nd.na.target_address", "2001:db8::1").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.opt.type", 2).ConfigureAwait(false);
+            await ProtocolTestHelper.AssertMacField(stack, packet, "icmpv6.opt.linkaddr", "00:11:22:33:44:55").ConfigureAwait(false);
         }
     }
 
@@ -222,8 +222,8 @@ internal sealed class Icmpv6NdpTests
         using (stack)
         {
             await ProtocolTestHelper.AssertU64Field(stack, packet, "icmpv6.type", 137).ConfigureAwait(false);
-            await ProtocolTestHelper.AssertIPv6Field(stack, packet, "icmpv6.nd.target_address", "2001:db8::1").ConfigureAwait(false);
-            await ProtocolTestHelper.AssertIPv6Field(stack, packet, "icmpv6.nd.redirect.dst", "2001:db8::42").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertIPv6Field(stack, packet, "icmpv6.nd.rd.target_address", "2001:db8::1").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertIPv6Field(stack, packet, "icmpv6.nd.rd.destination_address", "2001:db8::42").ConfigureAwait(false);
         }
     }
 
@@ -240,7 +240,7 @@ internal sealed class Icmpv6NdpTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await ProtocolTestHelper.AssertDisplayText(stack, packet, "icmpv6.nd.ra.flags", "[M, O]").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertDisplayText(stack, packet, "icmpv6.nd.ra.flag", "[M, O]").ConfigureAwait(false);
         }
     }
 
@@ -255,7 +255,7 @@ internal sealed class Icmpv6NdpTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await ProtocolTestHelper.AssertDisplayText(stack, packet, "icmpv6.nd.ra.flags", "[M]").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertDisplayText(stack, packet, "icmpv6.nd.ra.flag", "[M]").ConfigureAwait(false);
         }
     }
 
@@ -270,7 +270,7 @@ internal sealed class Icmpv6NdpTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await ProtocolTestHelper.AssertDisplayText(stack, packet, "icmpv6.nd.ra.flags", "[None]").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertDisplayText(stack, packet, "icmpv6.nd.ra.flag", "[None]").ConfigureAwait(false);
         }
     }
 
@@ -284,7 +284,7 @@ internal sealed class Icmpv6NdpTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await ProtocolTestHelper.AssertDisplayText(stack, packet, "icmpv6.nd.na.flags", "[R, S]").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertDisplayText(stack, packet, "icmpv6.nd.na.flag", "[R, S]").ConfigureAwait(false);
         }
     }
 
@@ -298,7 +298,7 @@ internal sealed class Icmpv6NdpTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await ProtocolTestHelper.AssertDisplayText(stack, packet, "icmpv6.nd.na.flags", "[R, S, O]").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertDisplayText(stack, packet, "icmpv6.nd.na.flag", "[R, S, O]").ConfigureAwait(false);
         }
     }
 
@@ -312,7 +312,7 @@ internal sealed class Icmpv6NdpTests
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
         {
-            await ProtocolTestHelper.AssertDisplayText(stack, packet, "icmpv6.nd.na.flags", "[None]").ConfigureAwait(false);
+            await ProtocolTestHelper.AssertDisplayText(stack, packet, "icmpv6.nd.na.flag", "[None]").ConfigureAwait(false);
         }
     }
 

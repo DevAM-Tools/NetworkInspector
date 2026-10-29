@@ -22,8 +22,13 @@ way, and query across packets. Pair it with `NetworkInspector.Protocols` for the
 - **Cross-packet presence index.** `PacketIndex` records which protocols and fields occur in which packets in
   Roaring bitmaps, for fast filtering over millions of packets.
 - **Columnar value caches.** `ValueCache` records selected field values into RAM columns during the first parse.
-- **Stateful protocols done right.** TCP stream reassembly, IP defragmentation, and per-packet effect stores make
-  re-parsing any packet, on any thread, give the same result as the first pass.
+- **Stateful protocols done right.** TCP stream reassembly, the generic `FragmentReassembler<TKey>` (IPv4, IPv6, and
+  every later fragmenting protocol, configured by `FragmentReassemblyOptions` with limits, alignment, overlap, eviction,
+  restart, and gap policies), and per-packet effect stores make re-parsing any packet, on any thread, give the same
+  result as the first pass. Every call of the reassembler returns a `FragmentOutcome` that names what happened, so a
+  refused fragment is a reported reason and not a silent `null`. `IngestGate` is the one first-parse-versus-replay
+  decision a stateful protocol needs: `IsReplay(id)` for the replay path, `Enter(id)` for the scope of the first parse, and
+  the outermost scope raises the watermark that publishes the packet's recorded effects.
 - **Results instead of exceptions.** Parsing returns `bool` plus a `ParseFailure` code; malformed input becomes
   `packet.error` fields, not crashes.
 - **Declarative dissectors.** The bundled Roslyn source generator writes the registration code for your own

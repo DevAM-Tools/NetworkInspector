@@ -191,14 +191,14 @@ internal sealed class TcpProtocolTests
             ackFlagVal.Data.TryGetAsBool(out bool boolVal2);
             await Assert.That(boolVal2).IsTrue();
 
-            // Sequence number
-            FieldId? seqId = stack.GetFieldId("tcp.seq");
+            // Sequence number: the wire value is in tcp.seq_raw, tcp.seq is relative to the first segment of the stream
+            FieldId? seqId = stack.GetFieldId("tcp.seq_raw");
             packet.TryGetFieldValue(seqId!.Value, out FieldValue seqVal, materialize: true); // materialize: true — need complete field tree for assertion
             seqVal.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(5000UL);
 
-            // Ack number
-            FieldId? ackId = stack.GetFieldId("tcp.ack");
+            // Acknowledgment number (wire value, see above)
+            FieldId? ackId = stack.GetFieldId("tcp.ack_raw");
             packet.TryGetFieldValue(ackId!.Value, out FieldValue ackVal, materialize: true); // materialize: true — need complete field tree for assertion
             ackVal.Data.TryGetAsU64(out ulong u64Val3);
             await Assert.That(u64Val3).IsEqualTo(6000UL);

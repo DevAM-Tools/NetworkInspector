@@ -234,33 +234,36 @@ public readonly record struct MacAddress :
     /// <inheritdoc/>
     /// <remarks>
     /// Writes six uppercase hex pairs separated by colons straight into the destination through
-    /// <see cref="HexDigits.WriteUpperPair"/>; no builder, no intermediate buffer. The one length check up front plus
+    /// <see cref="HexDigits.WritePair"/>; no builder, no intermediate buffer. The one length check up front plus
     /// the exact-size slice keeps the seventeen stores free of per-store bounds checks after JIT.
     /// </remarks>
     public bool TryFormat(
         Span<char> destination, out int charsWritten,
         ReadOnlySpan<char> format, IFormatProvider? provider)
     {
+        // The specifier is read before anything is written, so an invalid one fails even when the buffer is too small.
+        ReadOnlySpan<char> hex = HexDigits.Table(HexDigits.ParseCase(format));
+
         if (destination.Length < FormattedLength)
         {
             charsWritten = 0;
             return false;
         }
 
-        // The (int) casts keep the low 32 bits of the shifted value on purpose: WriteUpperPair reads only the low byte, so
+        // The (int) casts keep the low 32 bits of the shifted value on purpose: WritePair reads only the low byte, so
         // the dropped high bits cannot change the text (and no overflow check applies to a deliberate truncation).
         Span<char> d = destination[..FormattedLength];
-        HexDigits.WriteUpperPair(d, 0, (int)(RawValue >> 40));
+        HexDigits.WritePair(d, 0, (int)(RawValue >> 40), hex);
         d[2] = ':';
-        HexDigits.WriteUpperPair(d, 3, (int)(RawValue >> 32));
+        HexDigits.WritePair(d, 3, (int)(RawValue >> 32), hex);
         d[5] = ':';
-        HexDigits.WriteUpperPair(d, 6, (int)(RawValue >> 24));
+        HexDigits.WritePair(d, 6, (int)(RawValue >> 24), hex);
         d[8] = ':';
-        HexDigits.WriteUpperPair(d, 9, (int)(RawValue >> 16));
+        HexDigits.WritePair(d, 9, (int)(RawValue >> 16), hex);
         d[11] = ':';
-        HexDigits.WriteUpperPair(d, 12, (int)(RawValue >> 8));
+        HexDigits.WritePair(d, 12, (int)(RawValue >> 8), hex);
         d[14] = ':';
-        HexDigits.WriteUpperPair(d, 15, (int)RawValue);
+        HexDigits.WritePair(d, 15, (int)RawValue, hex);
         charsWritten = FormattedLength;
         return true;
     }
@@ -314,9 +317,11 @@ public readonly record struct MacAddress :
     #region Convenience Formatting
 
     /// <summary>Writes the formatted MAC address into the destination span.</summary>
-    public int FormatInto(Span<char> destination)
+    /// <param name="destination">Target buffer; it must be large enough for the whole text.</param>
+    /// <param name="hexCase">Letter case of the hex digits; <see cref="HexCase.Upper"/> by default.</param>
+    public int FormatInto(Span<char> destination, HexCase hexCase = HexCase.Upper)
     {
-        TryFormat(destination, out int written, default, null);
+        TryFormat(destination, out int written, _Specifier(hexCase), null);
         return written;
     }
 
@@ -324,19 +329,25 @@ public readonly record struct MacAddress :
     /// <remarks>
     /// Allocates exactly the result string (the text is built on the stack first). Use <see cref="FormatInto"/> or
     /// <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> when the caller owns a buffer.
+    /// <param name="hexCase">Letter case of the hex digits; <see cref="HexCase.Upper"/> by default. The format specifier <c>x</c> of <c>ToString</c> and of interpolation selects <see cref="HexCase.Lower"/>.</param>
     /// </remarks>
-    public string Format()
+    public string Format(HexCase hexCase = HexCase.Upper)
     {
         Span<char> buf = stackalloc char[FormattedLength];
-        TryFormat(buf, out int written, default, null);
+        TryFormat(buf, out int written, _Specifier(hexCase), null);
         return new string(buf[..written]);
     }
 
     /// <inheritdoc/>
-    public string ToString(string? format, IFormatProvider? formatProvider) => Format();
+    public string ToString(string? format, IFormatProvider? formatProvider) => Format(HexDigits.ParseCase(format));
 
     /// <inheritdoc/>
     public override string ToString() => Format();
+
+    private static string _Specifier(HexCase hexCase) =>
+        hexCase == HexCase.Lower
+            ? "x"
+            : "X";
 
     #endregion
 

@@ -210,10 +210,10 @@ Core brings Values.
 | Layer | Protocols |
 | --- | --- |
 | Link | Ethernet II, VLAN (802.1Q, 802.1ad), LLC/SNAP, Linux SLL, Linux SLL2 |
-| Network | IPv4, IPv6 (with fragment reassembly), ARP, ICMPv4, ICMPv6 |
+| Network | IPv4, IPv6 (with fragment reassembly), ARP (including ATMARP), ICMPv4, ICMPv6 (Neighbor Discovery, Multicast Listener Discovery) |
 | Transport | TCP (stream reassembly and analysis), UDP |
 | Application | DNS, DHCPv4, DHCPv6, HTTP/1.x, HTTP/2, TLS, DTLS, WebSocket, JSON, Text |
-| Automotive | CAN (classic, FD, XL), LIN, FlexRay, SOME/IP (SD, TP), PDU Transport, signal messages |
+| Automotive | CAN (classic, FD, XL), LIN, FlexRay, SOME/IP (service discovery, segmented messages, typed payloads from a service description, end-to-end protection, method timing), PDU Transport, signal messages |
 
 Details and configuration: [Protocols README](NetworkInspector.Protocols/README.md).
 

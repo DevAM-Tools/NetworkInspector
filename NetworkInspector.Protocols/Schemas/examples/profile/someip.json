@@ -1,0 +1,4 @@
+{
+  "someip.config_file": "configs/full_service.json",
+  "someip.tp_max_message_size": 33554432
+}

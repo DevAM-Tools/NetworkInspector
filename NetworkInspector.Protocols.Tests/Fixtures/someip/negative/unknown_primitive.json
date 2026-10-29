@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "services": [
+    {
+      "service_id": 4097,
+      "major_version": 1,
+      "name": "Probe",
+      "methods": [
+        { "kind": "method", "id": 1, "name": "Get", "in": [], "out": ["wide_value"] }
+      ],
+      "data_types": [
+        { "category": "base_type", "name": "wide_value", "type_reference": "uint24" }
+      ]
+    }
+  ]
+}

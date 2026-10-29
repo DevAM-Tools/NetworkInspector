@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0",
+  "udp_ports": [30520],
+  "services": [
+    {
+      "service_id": 62020,
+      "major_version": 1,
+      "name": "Diagnostics",
+      "methods": [
+        {
+          "kind": "method",
+          "id": 1,
+          "name": "ReadRecord",
+          "in": [ { "name": "selector", "type_reference": "record_selector" } ],
+          "out": [ { "name": "record", "type_reference": "record_value" } ],
+          "transformation_properties": { "size_of_string_length": 2 }
+        },
+        {
+          "kind": "event",
+          "id": 2,
+          "name": "StatusFlags",
+          "type_reference": "status_flags"
+        },
+        {
+          "kind": "field",
+          "name": "Label",
+          "get_id": 3,
+          "set_id": 4,
+          "notifier_id": 32770,
+          "type_reference": "label_text"
+        },
+        {
+          "kind": "event",
+          "id": 5,
+          "name": "Matrix",
+          "type_reference": "matrix_2x3"
+        }
+      ],
+      "data_types": [
+        { "category": "base_type", "name": "record_selector", "type_reference": "uint8", "lookup_values": { "1": "Odometer", "2": "Vin" } },
+        { "category": "base_type", "name": "odometer_km", "type_reference": "uint32", "byte_order": "little_endian" },
+        { "category": "base_type", "name": "vin_text", "type_reference": "string", "encoding": "ascii", "fixed_length": 17 },
+        { "category": "base_type", "name": "label_text", "type_reference": "string", "encoding": "utf-16be" },
+        { "category": "base_type", "name": "note_text", "type_reference": "string", "size_of_length": 1 },
+        { "category": "alias", "name": "distance", "type_reference": "odometer_km" },
+        {
+          "category": "union",
+          "name": "record_value",
+          "size_of_length": 4,
+          "size_of_type": 4,
+          "members": {
+            "1": { "name": "odometer", "type_reference": "distance" },
+            "2": { "name": "vin", "type_reference": "vin_text" },
+            "3": { "name": "note", "type_reference": "note_text" }
+          }
+        },
+        {
+          "category": "bitfield",
+          "name": "status_flags",
+          "bits": 16,
+          "members": {
+            "0": { "name": "ready" },
+            "3": { "name": "fault", "ui_name": "Fault present" },
+            "15": { "name": "test_mode" }
+          }
+        },
+        { "category": "array", "name": "matrix_row", "type_reference": "int16", "size": 3 },
+        { "category": "array", "name": "matrix_2x3", "type_reference": "matrix_row", "min_elements": 2, "max_elements": 2 }
+      ]
+    }
+  ]
+}

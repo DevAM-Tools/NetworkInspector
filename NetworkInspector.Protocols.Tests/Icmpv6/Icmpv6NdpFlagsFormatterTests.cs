@@ -3,64 +3,70 @@
 namespace NetworkInspector.Protocols.Tests;
 
 /// <summary>
-/// Unit tests for <see cref="Icmpv6NdpFlagsFormatter"/> covering all RA (4 entries)
-/// and NA (8 entries) flag combinations.
+/// Tests for <see cref="Icmpv6NdpFlagsFormatter"/>: the precomputed display strings of the Router Advertisement flags
+/// byte and the Neighbor Advertisement flag bits.
 /// </summary>
 internal sealed class Icmpv6NdpFlagsFormatterTests
 {
-    #region Router Advertisement (2 flags: M, O)
+    #region Router Advertisement flags (one byte)
 
     [Test]
-    public async Task FormatRa_NoFlags() =>
-        await Assert.That(Icmpv6NdpFlagsFormatter.FormatRa(false, false)).IsEqualTo("[None]");
+    [Arguments((byte)0x00, "[None]")]
+    [Arguments((byte)0x80, "[M]")]
+    [Arguments((byte)0x40, "[O]")]
+    [Arguments((byte)0xC0, "[M, O]")]
+    [Arguments((byte)0x20, "[H]")]
+    [Arguments((byte)0x08, "[Prf=High]")]
+    [Arguments((byte)0x10, "[Prf=Reserved]")]
+    [Arguments((byte)0x18, "[Prf=Low]")]
+    [Arguments((byte)0xA8, "[M, H, Prf=High]")]
+    [Arguments((byte)0x04, "[P]")]
+    [Arguments((byte)0x02, "[S]")]
+    [Arguments((byte)0xFE, "[M, O, H, Prf=Low, P, S]")]
+    public async Task FormatRaNamesEverySetFlag(byte flags, string expected) =>
+        await Assert.That(Icmpv6NdpFlagsFormatter.FormatRa(flags)).IsEqualTo(expected);
 
     [Test]
-    public async Task FormatRa_Managed() =>
-        await Assert.That(Icmpv6NdpFlagsFormatter.FormatRa(true, false)).IsEqualTo("[M]");
+    public async Task FormatRaIgnoresTheReservedBit() =>
+        await Assert.That(Icmpv6NdpFlagsFormatter.FormatRa(0x01)).IsEqualTo("[None]");
 
     [Test]
-    public async Task FormatRa_Other() =>
-        await Assert.That(Icmpv6NdpFlagsFormatter.FormatRa(false, true)).IsEqualTo("[O]");
+    public async Task FormatRaSharesOneStringPerFlagByte() =>
+        // The table hands out the same reference every time, which is what makes the call allocation-free.
+        await Assert.That(ReferenceEquals(Icmpv6NdpFlagsFormatter.FormatRa(0xC0), Icmpv6NdpFlagsFormatter.FormatRa(0xC0))).IsTrue();
 
     [Test]
-    public async Task FormatRa_ManagedAndOther() =>
-        await Assert.That(Icmpv6NdpFlagsFormatter.FormatRa(true, true)).IsEqualTo("[M, O]");
+    [Arguments((byte)0, "Medium (0)")]
+    [Arguments((byte)1, "High (1)")]
+    [Arguments((byte)2, "Reserved (2)")]
+    [Arguments((byte)3, "Low (3)")]
+    public async Task RouterPreferenceTextNamesTheTwoBits(byte preference, string expected) =>
+        await Assert.That(Icmpv6NdpFlagsFormatter.RouterPreferenceText(preference)).IsEqualTo(expected);
 
     #endregion
 
-    #region Neighbor Advertisement (3 flags: R, S, O)
+    #region Neighbor Advertisement flags (3 flags)
 
     [Test]
-    public async Task FormatNa_NoFlags() =>
-        await Assert.That(Icmpv6NdpFlagsFormatter.FormatNa(false, false, false)).IsEqualTo("[None]");
+    [Arguments(false, false, false, "[None]")]
+    [Arguments(true, false, false, "[R]")]
+    [Arguments(false, true, false, "[S]")]
+    [Arguments(false, false, true, "[O]")]
+    [Arguments(true, true, false, "[R, S]")]
+    [Arguments(true, false, true, "[R, O]")]
+    [Arguments(false, true, true, "[S, O]")]
+    [Arguments(true, true, true, "[R, S, O]")]
+    public async Task FormatNaNamesEverySetFlag(bool router, bool solicited, bool overrideFlag, string expected) =>
+        await Assert.That(Icmpv6NdpFlagsFormatter.FormatNa(router, solicited, overrideFlag)).IsEqualTo(expected);
 
     [Test]
-    public async Task FormatNa_Router() =>
-        await Assert.That(Icmpv6NdpFlagsFormatter.FormatNa(true, false, false)).IsEqualTo("[R]");
-
-    [Test]
-    public async Task FormatNa_Solicited() =>
-        await Assert.That(Icmpv6NdpFlagsFormatter.FormatNa(false, true, false)).IsEqualTo("[S]");
-
-    [Test]
-    public async Task FormatNa_Override() =>
-        await Assert.That(Icmpv6NdpFlagsFormatter.FormatNa(false, false, true)).IsEqualTo("[O]");
-
-    [Test]
-    public async Task FormatNa_RouterSolicited() =>
-        await Assert.That(Icmpv6NdpFlagsFormatter.FormatNa(true, true, false)).IsEqualTo("[R, S]");
-
-    [Test]
-    public async Task FormatNa_RouterOverride() =>
-        await Assert.That(Icmpv6NdpFlagsFormatter.FormatNa(true, false, true)).IsEqualTo("[R, O]");
-
-    [Test]
-    public async Task FormatNa_SolicitedOverride() =>
-        await Assert.That(Icmpv6NdpFlagsFormatter.FormatNa(false, true, true)).IsEqualTo("[S, O]");
-
-    [Test]
-    public async Task FormatNa_AllSet() =>
-        await Assert.That(Icmpv6NdpFlagsFormatter.FormatNa(true, true, true)).IsEqualTo("[R, S, O]");
+    [Arguments(false, false, false, "none")]
+    [Arguments(true, false, false, "rtr")]
+    [Arguments(false, true, false, "sol")]
+    [Arguments(false, false, true, "ovr")]
+    [Arguments(true, true, true, "rtr, sol, ovr")]
+    public async Task FormatNaInfoUsesTheShortWords(bool router, bool solicited, bool overrideFlag, string expected) =>
+        await Assert.That(Icmpv6NdpFlagsFormatter.FormatNaInfo(router, solicited, overrideFlag)).IsEqualTo(expected);
 
     #endregion
 }

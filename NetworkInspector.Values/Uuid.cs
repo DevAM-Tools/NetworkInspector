@@ -209,6 +209,9 @@ public readonly record struct Uuid :
         Span<char> destination, out int charsWritten,
         ReadOnlySpan<char> format, IFormatProvider? provider)
     {
+        // The specifier is read before anything is written, so an invalid one fails even when the buffer is too small.
+        ReadOnlySpan<char> hex = HexDigits.Table(HexDigits.ParseCase(format));
+
         if (destination.Length < FormattedLength)
         {
             charsWritten = 0;
@@ -217,28 +220,28 @@ public readonly record struct Uuid :
 
         // Extract hex nibbles directly from the ulong fields using shifts and write them through the shared
         // HexDigits helper: no intermediate byte array, no builder. The (int) casts keep the low 32 bits on purpose:
-        // WriteUpperPair reads only the low byte, so the dropped high bits cannot change the text.
+        // WritePair reads only the low byte, so the dropped high bits cannot change the text.
         // Format: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
-        HexDigits.WriteUpperPair(destination, 0, (int)(High >> 56));
-        HexDigits.WriteUpperPair(destination, 2, (int)(High >> 48));
-        HexDigits.WriteUpperPair(destination, 4, (int)(High >> 40));
-        HexDigits.WriteUpperPair(destination, 6, (int)(High >> 32));
+        HexDigits.WritePair(destination, 0, (int)(High >> 56), hex);
+        HexDigits.WritePair(destination, 2, (int)(High >> 48), hex);
+        HexDigits.WritePair(destination, 4, (int)(High >> 40), hex);
+        HexDigits.WritePair(destination, 6, (int)(High >> 32), hex);
         destination[8] = '-';
-        HexDigits.WriteUpperPair(destination, 9, (int)(High >> 24));
-        HexDigits.WriteUpperPair(destination, 11, (int)(High >> 16));
+        HexDigits.WritePair(destination, 9, (int)(High >> 24), hex);
+        HexDigits.WritePair(destination, 11, (int)(High >> 16), hex);
         destination[13] = '-';
-        HexDigits.WriteUpperPair(destination, 14, (int)(High >> 8));
-        HexDigits.WriteUpperPair(destination, 16, (int)High);
+        HexDigits.WritePair(destination, 14, (int)(High >> 8), hex);
+        HexDigits.WritePair(destination, 16, (int)High, hex);
         destination[18] = '-';
-        HexDigits.WriteUpperPair(destination, 19, (int)(Low >> 56));
-        HexDigits.WriteUpperPair(destination, 21, (int)(Low >> 48));
+        HexDigits.WritePair(destination, 19, (int)(Low >> 56), hex);
+        HexDigits.WritePair(destination, 21, (int)(Low >> 48), hex);
         destination[23] = '-';
-        HexDigits.WriteUpperPair(destination, 24, (int)(Low >> 40));
-        HexDigits.WriteUpperPair(destination, 26, (int)(Low >> 32));
-        HexDigits.WriteUpperPair(destination, 28, (int)(Low >> 24));
-        HexDigits.WriteUpperPair(destination, 30, (int)(Low >> 16));
-        HexDigits.WriteUpperPair(destination, 32, (int)(Low >> 8));
-        HexDigits.WriteUpperPair(destination, 34, (int)Low);
+        HexDigits.WritePair(destination, 24, (int)(Low >> 40), hex);
+        HexDigits.WritePair(destination, 26, (int)(Low >> 32), hex);
+        HexDigits.WritePair(destination, 28, (int)(Low >> 24), hex);
+        HexDigits.WritePair(destination, 30, (int)(Low >> 16), hex);
+        HexDigits.WritePair(destination, 32, (int)(Low >> 8), hex);
+        HexDigits.WritePair(destination, 34, (int)Low, hex);
 
         charsWritten = FormattedLength;
         return true;
@@ -293,9 +296,11 @@ public readonly record struct Uuid :
     #region Convenience Formatting
 
     /// <summary>Writes the formatted UUID into the destination span.</summary>
-    public int FormatInto(Span<char> destination)
+    /// <param name="destination">Target buffer; it must be large enough for the whole text.</param>
+    /// <param name="hexCase">Letter case of the hex digits; <see cref="HexCase.Upper"/> by default.</param>
+    public int FormatInto(Span<char> destination, HexCase hexCase = HexCase.Upper)
     {
-        TryFormat(destination, out int written, default, null);
+        TryFormat(destination, out int written, _Specifier(hexCase), null);
         return written;
     }
 
@@ -303,19 +308,25 @@ public readonly record struct Uuid :
     /// <remarks>
     /// Allocates exactly the result string (the text is built on the stack first). Use <see cref="FormatInto"/> or
     /// <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> when the caller owns a buffer.
+    /// <param name="hexCase">Letter case of the hex digits; <see cref="HexCase.Upper"/> by default. The format specifier <c>x</c> of <c>ToString</c> and of interpolation selects <see cref="HexCase.Lower"/>.</param>
     /// </remarks>
-    public string Format()
+    public string Format(HexCase hexCase = HexCase.Upper)
     {
         Span<char> buf = stackalloc char[FormattedLength];
-        TryFormat(buf, out int written, default, null);
+        TryFormat(buf, out int written, _Specifier(hexCase), null);
         return new string(buf[..written]);
     }
 
     /// <inheritdoc/>
-    public string ToString(string? format, IFormatProvider? formatProvider) => Format();
+    public string ToString(string? format, IFormatProvider? formatProvider) => Format(HexDigits.ParseCase(format));
 
     /// <inheritdoc/>
     public override string ToString() => Format();
+
+    private static string _Specifier(HexCase hexCase) =>
+        hexCase == HexCase.Lower
+            ? "x"
+            : "X";
 
     #endregion
 

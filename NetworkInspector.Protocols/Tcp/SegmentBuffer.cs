@@ -96,6 +96,13 @@ internal sealed class SegmentBuffer
     /// <summary>Bytes dropped by the pending limit event (valid while <see cref="_LimitHit"/> is set).</summary>
     private int _LimitDiscardedBytes;
 
+    /// <summary>
+    /// Bytes skipped by resynchronization since <see cref="TakeResyncSkip"/> last read them. A pending sum, like the limit
+    /// event: the caller reports it once, on the packet whose bytes triggered it. Without it the skipped bytes only showed up
+    /// in <see cref="TotalDiscarded"/>, which no packet displays.
+    /// </summary>
+    private int _ResyncSkipped;
+
     /// <summary>Value of <see cref="SequenceStreamBuffer.RebaseCount"/> the detector state was last reset for.</summary>
     private int _SeenRebaseCount;
 
@@ -204,6 +211,18 @@ internal sealed class SegmentBuffer
     }
 
     /// <summary>
+    /// Reads and clears the bytes that resynchronization skipped since the last call, so the caller can show them on the
+    /// packet whose bytes triggered the resynchronization. A stream that lost synchronization skips bytes silently otherwise.
+    /// </summary>
+    /// <returns>The number of skipped bytes; 0 when the stream stayed in sync.</returns>
+    internal int TakeResyncSkip()
+    {
+        int skipped = _ResyncSkipped;
+        _ResyncSkipped = 0;
+        return skipped;
+    }
+
+    /// <summary>
     /// Tries to extract the next complete PDU from the contiguous (in-order) prefix.
     /// </summary>
     /// <param name="context">Stream detection context for context-aware detectors.</param>
@@ -216,6 +235,28 @@ internal sealed class SegmentBuffer
     /// </returns>
     internal bool TryExtractPdu(in StreamDetectionContext context, out ReadOnlyMemory<byte> pdu, out int[] packetIds)
     {
+        // A successful resynchronization leaves the buffer at a position that may already hold a complete PDU: look again at once
+        // instead of at the next segment, otherwise the message right behind a damaged region would wait for traffic that may never
+        // come (a stream that ends there). The loop is bounded: a pass repeats only when the resynchronization discarded at least
+        // one byte, and the buffer is finite. A recursive call was rejected because a hostile stream of many implausible regions
+        // would make the depth grow with the buffer.
+        while (true)
+        {
+            bool extracted = _ExtractOnce(in context, out pdu, out packetIds, out bool resynchronized);
+            if (extracted || !resynchronized)
+            {
+                return extracted;
+            }
+        }
+    }
+
+    /// <summary>
+    /// One extraction pass; see <see cref="TryExtractPdu"/>. <paramref name="resynchronized"/> is true when the pass discarded
+    /// bytes to find a boundary and the buffer is synchronized again.
+    /// </summary>
+    private bool _ExtractOnce(in StreamDetectionContext context, out ReadOnlyMemory<byte> pdu, out int[] packetIds, out bool resynchronized)
+    {
+        resynchronized = false;
         pdu = default;
         packetIds = [];
 
@@ -259,13 +300,15 @@ internal sealed class SegmentBuffer
             return true;
         }
 
-        // Invalid framing: try to find the next plausible PDU start. A successful resync still returns false from
-        // this call (no PDU was extracted); the next call examines the bytes after the skipped region. Incomplete
+        // Invalid framing: try to find the next plausible PDU start. A resync that discarded bytes makes the caller look again at
+        // once (see TryExtractPdu), so the message behind the skipped region is extracted by the same call. Incomplete
         // (need more bytes) falls through to false as well, and the buffer waits for more segments.
         if (result.IsInvalid)
         {
             State = SegmentBufferState.Resyncing;
+            int skippedBefore = _ResyncSkipped;
             _TryResync(context.StreamId);
+            resynchronized = State == SegmentBufferState.Synchronized && _ResyncSkipped > skippedBefore;
         }
 
         return false;
@@ -346,6 +389,7 @@ internal sealed class SegmentBuffer
         TotalDiscarded = 0;
         _LimitHit = false;
         _LimitDiscardedBytes = 0;
+        _ResyncSkipped = 0;
         State = _Detector != null ? SegmentBufferState.Initial : SegmentBufferState.Error;
     }
 
@@ -377,6 +421,7 @@ internal sealed class SegmentBuffer
         // Skipped bytes are discarded for good (counted in TotalDiscarded), not delivered as a partial PDU.
         _Stream.Consume(result.SkipBytes);
         TotalDiscarded += result.SkipBytes;
+        _ResyncSkipped += result.SkipBytes;
 
         // The skipped bytes were consumed without a completed PDU, so a detector that remembers a position into the prefix
         // would now point at the wrong byte: it starts over at the new front.

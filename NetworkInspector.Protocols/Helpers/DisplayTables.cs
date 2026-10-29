@@ -297,33 +297,70 @@ internal static class DisplayTables
 
     #endregion
 
-    #region IPv4 Header Length Display Text (common IHL*4 values: 20..60)
+    #region Byte Count Display Text ("N bytes", 0..2048)
 
-    private static readonly string[] _HeaderLengthTable = _BuildHeaderLengthTable();
+    // Why a table: container representations such as "64 bytes" are needed for every parsed packet of several
+    // protocols (IPv4 header length, ICMP and ICMPv6 message length, ARP message length). Formatting the number into a
+    // fresh string per packet is garbage on the eager parse path, which must allocate nothing. The value range of the
+    // lengths that occur is small and dense (a header or a message that fits a standard MTU), so one shared string per
+    // length is cheaper than any per-packet work. 2049 entries cost about 100 KB once at type initialisation and
+    // cover every IPv4 header length (at most 60), every ARP message (at most 1028) and every ICMP message that fits
+    // a 2 KiB frame; a larger jumbo-frame message takes the allocating fallback, which is rare by definition.
+    private static readonly string[] _ByteCountTable = _BuildByteCountTable();
 
     /// <summary>
-    /// Returns precomputed "N bytes" display text for header lengths 0-60.
-    /// Falls back to dynamic formatting (one allocation) for out-of-range values.
+    /// Returns precomputed "N bytes" display text for lengths 0-2048. Falls back to dynamic formatting (one
+    /// allocation) for larger or negative values.
     /// </summary>
-    /// <param name="headerLength">The header length in bytes; negative values take the fallback path.</param>
-    internal static string GetHeaderLengthDisplayText(int headerLength)
+    /// <param name="byteCount">The length in bytes; negative values take the fallback path.</param>
+    internal static string GetByteCountDisplayText(int byteCount)
     {
         // One unsigned comparison covers both bounds: a negative length wraps to a huge uint and misses the table.
-        if ((uint)headerLength < (uint)_HeaderLengthTable.Length)
+        if ((uint)byteCount < (uint)_ByteCountTable.Length)
         {
-            return _HeaderLengthTable[headerLength];
+            return _ByteCountTable[byteCount];
         }
-        return $"{headerLength} bytes";
+        return string.Create(CultureInfo.InvariantCulture, $"{byteCount} bytes");
     }
 
-    private static string[] _BuildHeaderLengthTable()
+    /// <summary>
+    /// Returns precomputed "N bytes" display text for IPv4 header lengths. Same table as
+    /// <see cref="GetByteCountDisplayText"/>; the name is kept so the IPv4 parser does not change.
+    /// </summary>
+    /// <param name="headerLength">The header length in bytes; negative values take the fallback path.</param>
+    internal static string GetHeaderLengthDisplayText(int headerLength) => GetByteCountDisplayText(headerLength);
+
+    private static string[] _BuildByteCountTable()
     {
-        // Covers IPv4 IHL range: 5*4=20 to 15*4=60 (IHL is a 4-bit count of 32-bit words). Entries 0..19 are
-        // filled as well so a malformed (too short) header still prints without taking the allocating fallback.
-        string[] table = new string[61];
-        for (int i = 0; i <= 60; i++)
+        // Entries below 20 are filled as well so a malformed (too short) header still prints without the allocating
+        // fallback; the build runs once, so the formatting cost here is irrelevant.
+        string[] table = new string[2049];
+        for (int i = 0; i < table.Length; i++)
         {
-            table[i] = $"{i} bytes";
+            table[i] = string.Create(CultureInfo.InvariantCulture, $"{i} bytes");
+        }
+        return table;
+    }
+
+    #endregion
+
+    #region Decimal Text (0..255)
+
+    // Why a table: a byte that has no name (an unnamed ICMP code, the code 0 of every echo) must still print as its
+    // number. Calling ToString per packet allocates a string for the most frequent ICMP packets, so the 256 possible
+    // texts are built once and shared.
+    private static readonly string[] _DecimalTable = _BuildDecimalTable();
+
+    /// <summary>Returns the shared decimal text of a byte value; never allocates.</summary>
+    /// <param name="value">The value to print.</param>
+    internal static string GetDecimalText(byte value) => _DecimalTable[value];
+
+    private static string[] _BuildDecimalTable()
+    {
+        string[] table = new string[256];
+        for (int i = 0; i < table.Length; i++)
+        {
+            table[i] = i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -354,16 +391,20 @@ internal static class DisplayTables
     #region ARP Opcode Display Text
 
     /// <summary>
-    /// Returns display text for ARP opcodes.
-    /// Well-known values (1-9) get named text, others fall back to numeric.
+    /// Returns display text for ARP opcodes: the registered values 0 to 25 and 65535 get a name, others fall back to
+    /// the number.
     /// </summary>
     /// <param name="opcode">The 16-bit ARP operation code.</param>
     /// <remarks>
     /// A switch instead of a table: the named values are few and dense, and the 16-bit opcode of a normal ARP packet
-    /// is 1 or 2. Only an unknown opcode allocates (its number string).
+    /// is 1 or 2, which the compiler resolves with a jump table. Only an unknown opcode allocates (its number
+    /// string), and that is a malformed or experimental packet, not the hot case. The names follow the IANA
+    /// registry (RFC 826 requests and replies, RFC 903 RARP, RFC 1293 InARP, RFC 2225 ATMARP NAK, RFC 2022 MARS,
+    /// RFC 2176 MAPOS UNARP).
     /// </remarks>
     internal static string GetArpOpcodeDisplayText(ushort opcode) => opcode switch
     {
+        0 => "reserved (0)",
         1 => "request (1)",
         2 => "reply (2)",
         3 => "RARP request (3)",
@@ -373,18 +414,50 @@ internal static class DisplayTables
         7 => "DRARP error (7)",
         8 => "InARP request (8)",
         9 => "InARP reply (9)",
+        10 => "ARP NAK (10)",
+        11 => "MARS request (11)",
+        12 => "MARS multi (12)",
+        13 => "MARS mserv (13)",
+        14 => "MARS join (14)",
+        15 => "MARS leave (15)",
+        16 => "MARS NAK (16)",
+        17 => "MARS unserv (17)",
+        18 => "MARS sjoin (18)",
+        19 => "MARS sleave (19)",
+        20 => "MARS grouplist request (20)",
+        21 => "MARS grouplist reply (21)",
+        22 => "MARS redirect map (22)",
+        23 => "MAPOS UNARP (23)",
+        24 => "experimental 1 (24)",
+        25 => "experimental 2 (25)",
+        65535 => "reserved (65535)",
         _ => opcode.ToString(CultureInfo.InvariantCulture)
+    };
+
+    /// <summary>
+    /// Returns the packet-info summary of an ARP packet whose opcode has no request/reply wording of its own
+    /// (DRARP error, ATMARP NAK and every opcode the parser does not know).
+    /// </summary>
+    /// <param name="opcode">The 16-bit ARP operation code.</param>
+    /// <remarks>Allocates for unknown opcodes only; the registered request and reply forms never reach this method.</remarks>
+    internal static string GetArpOpcodeInfoText(ushort opcode) => opcode switch
+    {
+        7 => "DRARP Error",
+        10 => "ARP NAK",
+        _ => string.Create(CultureInfo.InvariantCulture, $"Unknown ARP opcode 0x{opcode:x4}"),
     };
 
     #endregion
 
-    #region ARP Hardware Type Display Text (256 entries for u8 range)
+    #region ARP Hardware Type Display Text (258 entries: registered values 0..38, 256, 257)
 
+    // Why 258 entries and not 65536: only the registered hardware types are named; the rest print as numbers. A dense
+    // table up to the highest registered value (257) keeps the lookup a single bounds check and costs under 3 KB.
     private static readonly string[] _ArpHwTypeTable = _BuildArpHwTypeTable();
 
     /// <summary>Returns the display text for a 16-bit ARP hardware type.</summary>
     /// <param name="hwType">
-    /// The hardware type. Values below 256 use the table; larger values are legal on the wire but unnamed, so they take
+    /// The hardware type. Values inside the table use it; larger values are legal on the wire but unnamed, so they take
     /// the allocating numeric fallback instead of a 64K-entry table for a rare case.
     /// </param>
     internal static string GetArpHwTypeDisplayText(ushort hwType)
@@ -398,7 +471,7 @@ internal static class DisplayTables
 
     private static string[] _BuildArpHwTypeTable()
     {
-        string[] table = new string[256];
+        string[] table = new string[258];
         table[0] = "Reserved (0)";
         table[1] = "Ethernet (1)";
         table[2] = "Experimental Ethernet (2)";
@@ -420,10 +493,29 @@ internal static class DisplayTables
         table[18] = "Fibre Channel (18)";
         table[19] = "ATM (19)";
         table[20] = "Serial Line (20)";
+        table[21] = "ATM (21)";
+        table[22] = "MIL-STD-188-220 (22)";
+        table[23] = "Metricom STRIP (23)";
+        table[24] = "IEEE 1394.1995 (24)";
+        table[25] = "MAPOS (25)";
+        table[26] = "Twinaxial (26)";
+        table[27] = "EUI-64 (27)";
+        table[28] = "HIPARP (28)";
+        table[29] = "IP and ARP over ISO 7816-3 (29)";
+        table[30] = "ARPSec (30)";
         table[31] = "IPsec tunnel (31)";
         table[32] = "InfiniBand (32)";
+        table[33] = "TIA-102 Project 25 Common Air Interface (33)";
+        table[34] = "Wiegand Interface (34)";
+        table[35] = "Pure IP (35)";
+        table[36] = "HW_EXP1 (36)";
+        table[37] = "HFI (37)";
+        table[38] = "Unified Bus (38)";
+        table[256] = "HW_EXP2 (256)";
+        table[257] = "AEthernet (257)";
 
-        for (int i = 0; i < 256; i++)
+        // Unregistered values print as the number. Entries are shared strings, so the lookup never allocates.
+        for (int i = 0; i < table.Length; i++)
         {
             table[i] ??= i.ToString(CultureInfo.InvariantCulture);
         }
@@ -444,9 +536,12 @@ internal static class DisplayTables
     {
         string[] table = new string[256];
         table[0] = "Echo (ping) reply (0)";
+        table[1] = "Reserved (1)";
+        table[2] = "Reserved (2)";
         table[3] = "Destination unreachable (3)";
         table[4] = "Source quench (4)";
         table[5] = "Redirect (5)";
+        table[6] = "Alternate host address (6)";
         table[8] = "Echo (ping) request (8)";
         table[9] = "Router advertisement (9)";
         table[10] = "Router solicitation (10)";
@@ -458,14 +553,48 @@ internal static class DisplayTables
         table[16] = "Information reply (16)";
         table[17] = "Address mask request (17)";
         table[18] = "Address mask reply (18)";
+        table[19] = "Reserved (for security) (19)";
         table[30] = "Traceroute (30)";
+        table[31] = "Datagram Conversion Error (31)";
+        table[32] = "Mobile Host Redirect (32)";
+        table[33] = "IPv6 Where-Are-You (33)";
+        table[34] = "IPv6 I-Am-Here (34)";
+        table[35] = "Mobile Registration Request (35)";
+        table[36] = "Mobile Registration Reply (36)";
+        table[37] = "Domain Name Request (37)";
+        table[38] = "Domain Name Reply (38)";
+        table[39] = "SKIP (39)";
         table[40] = "Photuris (40)";
+        table[41] = "Experimental mobility protocols (41)";
         table[42] = "Extended echo request (42)";
         table[43] = "Extended echo reply (43)";
 
+        // Unassigned types print as the number; the entries are shared strings, so a lookup never allocates.
         for (int i = 0; i < 256; i++)
         {
             table[i] ??= i.ToString(CultureInfo.InvariantCulture);
+        }
+        return table;
+    }
+
+    // Container titles ("Internet Control Message Protocol, <type>"): the title depends on the type byte only, so the
+    // 256 possible strings are concatenated once here and shared. Without the table the eager parse path would box a
+    // (prefix, type text) tuple for every ICMP packet only to build the same few strings when the title is read.
+    private static readonly string[] _IcmpContainerTitleTable = _BuildPrefixedTable("Internet Control Message Protocol, ", _IcmpTypeTable);
+
+    /// <summary>Returns the shared container title of an ICMPv4 message, for example "Internet Control Message Protocol, Echo (ping) request (8)".</summary>
+    /// <param name="type">The 8-bit ICMPv4 type.</param>
+    internal static string GetIcmpContainerTitle(byte type) => _IcmpContainerTitleTable[type];
+
+    /// <summary>Concatenates a prefix with every entry of a 256-entry text table once, so lookups never allocate.</summary>
+    /// <param name="prefix">Text put in front of every entry.</param>
+    /// <param name="source">The table whose entries are prefixed; must be initialised before this call (static field order).</param>
+    private static string[] _BuildPrefixedTable(string prefix, string[] source)
+    {
+        string[] table = new string[source.Length];
+        for (int i = 0; i < table.Length; i++)
+        {
+            table[i] = string.Concat(prefix, source[i]);
         }
         return table;
     }
@@ -480,9 +609,10 @@ internal static class DisplayTables
     /// <param name="type">The ICMPv4 type; the meaning of a code depends on it.</param>
     /// <param name="code">The ICMPv4 code.</param>
     /// <remarks>
-    /// Only types 3, 5, 11 and 12 define named codes; every other combination prints the plain number. Unlike the
-    /// type tables this is a nested switch (type x code is sparse, a table would be mostly empty), so a code without
-    /// a name allocates its number string.
+    /// Types 3, 5, 6, 9, 11, 12, 40, 42 and 43 define named codes; every other combination prints the plain number.
+    /// Unlike the type tables this is a nested switch (type x code is sparse, a table would be mostly empty). The
+    /// number fallback comes from <see cref="GetDecimalText"/>, so an unnamed code (and the code 0 of every echo, the
+    /// most frequent ICMP packet) does not allocate a string.
     /// </remarks>
     internal static string GetIcmpCodeDisplayText(byte type, byte code) => type switch
     {
@@ -504,7 +634,7 @@ internal static class DisplayTables
             13 => "Communication administratively prohibited (13)",
             14 => "Host precedence violation (14)",
             15 => "Precedence cutoff in effect (15)",
-            _ => code.ToString(CultureInfo.InvariantCulture)
+            _ => GetDecimalText(code)
         },
         5 => code switch // Redirect
         {
@@ -512,22 +642,57 @@ internal static class DisplayTables
             1 => "Redirect for host (1)",
             2 => "Redirect for ToS and network (2)",
             3 => "Redirect for ToS and host (3)",
-            _ => code.ToString(CultureInfo.InvariantCulture)
+            _ => GetDecimalText(code)
         },
         11 => code switch // Time Exceeded
         {
             0 => "TTL exceeded in transit (0)",
             1 => "Fragment reassembly time exceeded (1)",
-            _ => code.ToString(CultureInfo.InvariantCulture)
+            _ => GetDecimalText(code)
         },
         12 => code switch // Parameter Problem
         {
             0 => "Pointer indicates the error (0)",
             1 => "Missing a required option (1)",
             2 => "Bad length (2)",
-            _ => code.ToString(CultureInfo.InvariantCulture)
+            _ => GetDecimalText(code)
         },
-        _ => code.ToString(CultureInfo.InvariantCulture)
+        6 => code switch // Alternate Host Address
+        {
+            0 => "Alternate address for host (0)",
+            _ => GetDecimalText(code)
+        },
+        9 => code switch // Router Advertisement (RFC 1256, RFC 3344)
+        {
+            0 => "Normal router advertisement (0)",
+            16 => "Does not route common traffic (16)",
+            _ => GetDecimalText(code)
+        },
+        40 => code switch // Photuris
+        {
+            0 => "Bad SPI (0)",
+            1 => "Authentication Failed (1)",
+            2 => "Decompression Failed (2)",
+            3 => "Decryption Failed (3)",
+            4 => "Need Authentication (4)",
+            5 => "Need Authorization (5)",
+            _ => GetDecimalText(code)
+        },
+        42 => code switch // Extended Echo Request (RFC 8335)
+        {
+            0 => "No error (0)",
+            _ => GetDecimalText(code)
+        },
+        43 => code switch // Extended Echo Reply (RFC 8335)
+        {
+            0 => "No error (0)",
+            1 => "Malformed Query (1)",
+            2 => "No Such Interface (2)",
+            3 => "No Such Table Entry (3)",
+            4 => "Multiple Interfaces Satisfy Query (4)",
+            _ => GetDecimalText(code)
+        },
+        _ => GetDecimalText(code)
     };
 
     #endregion
@@ -548,6 +713,9 @@ internal static class DisplayTables
         table[2] = "Packet Too Big (2)";
         table[3] = "Time Exceeded (3)";
         table[4] = "Parameter Problem (4)";
+        table[100] = "Private experimentation (100)";
+        table[101] = "Private experimentation (101)";
+        table[127] = "Reserved for expansion of ICMPv6 error messages (127)";
 
         // Informational messages (128-255)
         table[128] = "Echo (ping) request (128)";
@@ -566,10 +734,208 @@ internal static class DisplayTables
         table[141] = "Inverse Neighbor Discovery Solicitation (141)";
         table[142] = "Inverse Neighbor Discovery Advertisement (142)";
         table[143] = "Multicast Listener Report v2 (143)";
+        table[144] = "Home Agent Address Discovery Request (144)";
+        table[145] = "Home Agent Address Discovery Reply (145)";
+        table[146] = "Mobile Prefix Solicitation (146)";
+        table[147] = "Mobile Prefix Advertisement (147)";
+        table[148] = "Certification Path Solicitation (148)";
+        table[149] = "Certification Path Advertisement (149)";
+        table[150] = "Experimental Mobility (150)";
+        table[151] = "Multicast Router Advertisement (151)";
+        table[152] = "Multicast Router Solicitation (152)";
+        table[153] = "Multicast Router Termination (153)";
+        table[154] = "FMIPv6 (154)";
+        table[155] = "RPL Control (155)";
+        table[156] = "Locator Update (156)";
+        table[157] = "Duplicate Address Request (157)";
+        table[158] = "Duplicate Address Confirmation (158)";
+        table[159] = "MPL Control Message (159)";
+        table[160] = "Extended Echo request (160)";
+        table[161] = "Extended Echo reply (161)";
+        table[200] = "Private experimentation (200)";
+        table[201] = "Private experimentation (201)";
+        table[255] = "Reserved for expansion of ICMPv6 informational messages (255)";
 
+        // Unassigned types print as the number; the entries are shared strings, so a lookup never allocates.
         for (int i = 0; i < 256; i++)
         {
             table[i] ??= i.ToString(CultureInfo.InvariantCulture);
+        }
+        return table;
+    }
+
+    // Same idea as the ICMPv4 title table: the title depends on the type byte only, so it is built once.
+    private static readonly string[] _Icmpv6ContainerTitleTable = _BuildPrefixedTable("Internet Control Message Protocol v6, ", _Icmpv6TypeTable);
+
+    /// <summary>Returns the shared container title of an ICMPv6 message, for example "Internet Control Message Protocol v6, Echo (ping) request (128)".</summary>
+    /// <param name="type">The 8-bit ICMPv6 type.</param>
+    internal static string GetIcmpv6ContainerTitle(byte type) => _Icmpv6ContainerTitleTable[type];
+
+    /// <summary>
+    /// Returns display text for an ICMPv6 code, contextualized by type (RFC 4443, RFC 2894, RFC 4620, RFC 8335).
+    /// </summary>
+    /// <param name="type">The ICMPv6 type; the meaning of a code depends on it.</param>
+    /// <param name="code">The ICMPv6 code.</param>
+    /// <remarks>
+    /// A nested switch for the same reason as <see cref="GetIcmpCodeDisplayText"/>: type x code is sparse. A code
+    /// without a name prints its number from <see cref="GetDecimalText"/>, so no path allocates.
+    /// </remarks>
+    internal static string GetIcmpv6CodeDisplayText(byte type, byte code) => type switch
+    {
+        1 => code switch // Destination Unreachable
+        {
+            0 => "No route to destination (0)",
+            1 => "Administratively prohibited (1)",
+            2 => "Beyond scope of source address (2)",
+            3 => "Address unreachable (3)",
+            4 => "Port unreachable (4)",
+            5 => "Source address failed ingress/egress policy (5)",
+            6 => "Reject route to destination (6)",
+            7 => "Error in Source Routing Header (7)",
+            8 => "Headers too long (8)",
+            _ => GetDecimalText(code)
+        },
+        3 => code switch // Time Exceeded
+        {
+            0 => "Hop limit exceeded in transit (0)",
+            1 => "Fragment reassembly time exceeded (1)",
+            _ => GetDecimalText(code)
+        },
+        4 => code switch // Parameter Problem
+        {
+            0 => "Erroneous header field encountered (0)",
+            1 => "Unrecognized Next Header type encountered (1)",
+            2 => "Unrecognized IPv6 option encountered (2)",
+            3 => "IPv6 First Fragment has incomplete IPv6 Header Chain (3)",
+            4 => "SR Upper-layer Header Error (4)",
+            5 => "Unrecognized Next Header type encountered by intermediate node (5)",
+            6 => "Extension header too big (6)",
+            7 => "Extension header chain too long (7)",
+            8 => "Too many extension headers (8)",
+            9 => "Too many options in extension header (9)",
+            10 => "Option too big (10)",
+            _ => GetDecimalText(code)
+        },
+        138 => code switch // Router Renumbering
+        {
+            0 => "Command (0)",
+            1 => "Result (1)",
+            255 => "Sequence number reset (255)",
+            _ => GetDecimalText(code)
+        },
+        139 => code switch // Node Information Query
+        {
+            0 => "Query subject = IPv6 addresses (0)",
+            1 => "Query subject = DNS name or empty (1)",
+            2 => "Query subject = IPv4 addresses (2)",
+            _ => GetDecimalText(code)
+        },
+        140 => code switch // Node Information Reply
+        {
+            0 => "Successful (0)",
+            1 => "Refused (1)",
+            2 => "Unknown query type (2)",
+            _ => GetDecimalText(code)
+        },
+        160 => code switch // Extended Echo request
+        {
+            0 => "No error (0)",
+            _ => GetDecimalText(code)
+        },
+        161 => code switch // Extended Echo reply
+        {
+            0 => "No error (0)",
+            1 => "Malformed Query (1)",
+            2 => "No Such Interface (2)",
+            3 => "No Such Table Entry (3)",
+            4 => "Multiple Interfaces Satisfy Query (4)",
+            _ => GetDecimalText(code)
+        },
+        _ => GetDecimalText(code)
+    };
+
+    #endregion
+
+    #region NDP Option Display Text (256 entries each)
+
+    // Why tables: an NDP message carries several options, and every option container shows its name and its length.
+    // Both texts depend on one byte, so building them per option would allocate two strings (or two lazy-text boxes)
+    // per option of every materialised Router Advertisement. 256 shared strings each remove that work.
+    private static readonly string[] _NdpOptionTable = _BuildNdpOptionTable();
+    private static readonly string[] _NdpOptionLengthTable = _BuildNdpOptionLengthTable();
+
+    /// <summary>Returns the option container text, for example "Prefix Information (3)"; unassigned types print "Unknown Option (n)".</summary>
+    /// <param name="optionType">The NDP option type byte.</param>
+    internal static string GetNdpOptionDisplayText(byte optionType) => _NdpOptionTable[optionType];
+
+    /// <summary>Returns the option length text, for example "4 (32 bytes)"; the length is counted in 8-byte units.</summary>
+    /// <param name="lengthUnits">The option length byte (units of 8 bytes, including type and length).</param>
+    internal static string GetNdpOptionLengthDisplayText(byte lengthUnits) => _NdpOptionLengthTable[lengthUnits];
+
+    private static string[] _BuildNdpOptionTable()
+    {
+        string[] table = new string[256];
+        table[1] = "Source Link-Layer Address";
+        table[2] = "Target Link-Layer Address";
+        table[3] = "Prefix Information";
+        table[4] = "Redirected Header";
+        table[5] = "MTU";
+        table[6] = "NBMA Shortcut Limit Option";
+        table[7] = "Advertisement Interval";
+        table[8] = "Home Agent Information";
+        table[9] = "Source Address List";
+        table[10] = "Target Address List";
+        table[11] = "CGA";
+        table[12] = "RSA Signature";
+        table[13] = "Timestamp";
+        table[14] = "Nonce";
+        table[15] = "Trust Anchor";
+        table[16] = "Certificate";
+        table[17] = "IP Address/Prefix Option";
+        table[18] = "New Router Prefix Information";
+        table[19] = "Link-layer Address";
+        table[20] = "Neighbor Advertisement Acknowledgment";
+        table[21] = "PvD ID";
+        table[23] = "MAP";
+        table[24] = "Route Information";
+        table[25] = "RDNSS";
+        table[26] = "RA Flags Extension";
+        table[27] = "Handover Key Request";
+        table[28] = "Handover Key Reply";
+        table[29] = "Handover Assist Information";
+        table[30] = "Mobile Node Identifier Option";
+        table[31] = "DNS Search List";
+        table[32] = "Proxy Signature (PS)";
+        table[33] = "Address Registration Option";
+        table[34] = "6LoWPAN Context Option";
+        table[35] = "Authoritative Border Router";
+        table[36] = "6LoWPAN Capability Indication Option";
+        table[37] = "DHCP Captive-Portal";
+        table[38] = "PREF64 Option";
+        table[39] = "Crypto-ID Parameters Option (CIPO)";
+        table[40] = "NDP Signature Option (NDPSO)";
+        table[41] = "Resource Directory Address Option";
+        table[42] = "Consistent Uptime Option";
+        table[138] = "CARD Request";
+        table[139] = "CARD Reply";
+        table[144] = "Encrypted DNS Option";
+        table[253] = "RFC3692-style Experiment 1";
+        table[254] = "RFC3692-style Experiment 2";
+
+        // Every entry ends with the numeric type so the text stays unambiguous when two registrations share a name.
+        for (int i = 0; i < table.Length; i++)
+        {
+            table[i] = string.Create(CultureInfo.InvariantCulture, $"{table[i] ?? "Unknown Option"} ({i})");
+        }
+        return table;
+    }
+
+    private static string[] _BuildNdpOptionLengthTable()
+    {
+        string[] table = new string[256];
+        for (int i = 0; i < table.Length; i++)
+        {
+            table[i] = string.Create(CultureInfo.InvariantCulture, $"{i} ({i * 8} bytes)");
         }
         return table;
     }

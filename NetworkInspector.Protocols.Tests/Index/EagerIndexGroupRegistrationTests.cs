@@ -165,6 +165,24 @@ internal sealed class EagerIndexGroupRegistrationTests
         return FrameStack.Start(eth).Then(ip).Then(dst).Then(udp).CreateWithFixedValues().EmitFrame([0xCA, 0xFE]);
     }
 
+    /// <summary>Ethernet + IPv4 + UDP 30490 carrying one plain SOME/IP request with a payload.</summary>
+    private static byte[] _BuildSomeIpRequestFrame() =>
+        FrameBuilderTestExtensions.WrapRawUdp(SomeIpBytes.Message(0x1234, 0x0042, [1, 2, 3, 4], messageType: 0x20), 40000, 30490);
+
+    /// <summary>
+    /// One SOME/IP datagram with every header-level diagnostic: a length below the minimum, a message of an unknown protocol
+    /// version, a message cut off by the datagram, and the group of the payload of a plain message in front.
+    /// </summary>
+    private static byte[] _BuildSomeIpBundleWithFaultsFrame() =>
+        FrameBuilderTestExtensions.WrapRawUdp(
+            SomeIpBytes.Concat(
+                SomeIpBytes.Message(0x1111, 0x0001, [9]),
+                SomeIpBytes.Message(0x2222, 0x0002, lengthOverride: 4),
+                SomeIpBytes.Message(0x3333, 0x0003, protocolVersion: 2),
+                SomeIpBytes.Message(0x4444, 0x0004, [1, 2], lengthOverride: 100)),
+            40000,
+            30490);
+
     /// <summary>Ethernet + IPv6 + UDP with a Fragment extension header (single complete fragment).</summary>
     private static byte[] _BuildIPv6FragmentFrame()
     {
@@ -368,6 +386,8 @@ internal sealed class EagerIndexGroupRegistrationTests
         yield return static () => ("ipv6-fragment", _BuildIPv6FragmentFrame());
         yield return static () => ("icmpv6-router-solicitation", _BuildIcmpv6RouterSolicitationFrame());
         yield return static () => ("icmpv6-router-advertisement-options", _BuildIcmpv6RouterAdvertisementWithOptionsFrame());
+        yield return static () => ("someip-request", _BuildSomeIpRequestFrame());
+        yield return static () => ("someip-bundle-with-faults", _BuildSomeIpBundleWithFaultsFrame());
     }
 
     /// <summary>

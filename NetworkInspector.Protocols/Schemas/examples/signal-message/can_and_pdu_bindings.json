@@ -1,0 +1,36 @@
+{
+  "messages": [
+    {
+      "name": "engine_status",
+      "ui_name": "Engine Status",
+      "description": "One message bound to a CAN identifier and a PDU Transport id: both dispatch bindings decode the same 8 bytes.",
+      "byte_length": 8,
+      "dispatch_bindings": [
+        { "table": "can.id", "key": 256 },
+        { "table": "pdu_transport.id", "key": 4097 }
+      ],
+      "signals": [
+        {
+          "name": "engine_status.rpm", "ui_name": "Engine Speed",
+          "start_bit": 0, "bit_length": 16, "byte_order": "little_endian",
+          "factor": 0.25, "unit": "rpm", "min": 0, "max": 8000
+        },
+        {
+          "name": "engine_status.coolant_temp", "ui_name": "Coolant Temperature",
+          "start_bit": 16, "bit_length": 8, "byte_order": "little_endian",
+          "factor": 1, "offset": -40, "unit": "degC", "min": -40, "max": 215
+        },
+        {
+          "name": "engine_status.state", "ui_name": "Engine State",
+          "start_bit": 24, "bit_length": 4, "byte_order": "little_endian",
+          "value_names": { "0": "Off", "1": "Cranking", "2": "Running", "3": "Stalling" }
+        },
+        {
+          "name": "engine_status.torque", "ui_name": "Torque",
+          "start_bit": 39, "bit_length": 16, "byte_order": "big_endian",
+          "factor": 0.1, "unit": "Nm"
+        }
+      ]
+    }
+  ]
+}

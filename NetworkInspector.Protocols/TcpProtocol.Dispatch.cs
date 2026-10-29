@@ -32,6 +32,9 @@ public sealed partial class TcpProtocol
 
         /// <summary>Number of buffered bytes the limit event dropped.</summary>
         internal int LimitDiscardedBytes;
+
+        /// <summary>Bytes the stream buffer skipped to resynchronize while this segment was processed.</summary>
+        internal int ResyncSkippedBytes;
     }
 
     /// <summary>
@@ -127,6 +130,35 @@ public sealed partial class TcpProtocol
     /// recorded here.
     /// </summary>
     private ParseResult _DispatchTcpPayload(
+        in MutField parentField,
+        ushort srcPort, ushort dstPort,
+        uint sequence,
+        byte flags,
+        ReadOnlyMemory<byte> payload,
+        int totalConsumed,
+        in ParseContext context,
+        in TcpAnalysisResult analysis,
+        int layerKey,
+        bool isReplay)
+    {
+        // Publish the ports for the application protocols called from here, on the first parse and on a replay alike: most of the
+        // ways TCP reaches a protocol (framed messages of a stream, the single-owner port cache, the heuristic table) carry no
+        // dispatch key, and a protocol that decides by port reads them here. The finally withdraws them, so a protocol reached
+        // later without TCP never sees the ports of an earlier segment that happened to carry the same packet id on this thread.
+        TcpPortCache.Publish(parentField.Packet.Id, srcPort, dstPort);
+        try
+        {
+            return _DispatchTcpPayloadPublished(
+                in parentField, srcPort, dstPort, sequence, flags, payload, totalConsumed, in context, in analysis, layerKey, isReplay);
+        }
+        finally
+        {
+            TcpPortCache.Clear();
+        }
+    }
+
+    /// <summary>The payload dispatch proper; runs with the ports of the segment published (see <see cref="_DispatchTcpPayload"/>).</summary>
+    private ParseResult _DispatchTcpPayloadPublished(
         in MutField parentField,
         ushort srcPort, ushort dstPort,
         uint sequence,
@@ -498,11 +530,20 @@ public sealed partial class TcpProtocol
             _AppendSegmentData(in parentField, payload, analysis.Flags, in context);
         }
 
-        // The limit event is reported last, after the PDUs, so a replay (which reports it at the same place) and the first
-        // parse produce the fields in the same order.
+        // Bytes the stream buffer skipped to resynchronize (a detector said Invalid, the heuristic found the next header). Read
+        // after the extraction and the close, which are the places that can trigger it; reported once, on this packet.
+        outcome.ResyncSkippedBytes += TcpReassemblyEngine.TakeResyncSkip(stream, forward);
+
+        // The limit event and the resynchronization are reported last, after the PDUs, so a replay (which reports them at the
+        // same place, in the same order) and the first parse produce the fields in the same order.
         if (outcome.LimitHit)
         {
             _AppendReassemblyLimitField(in parentField, outcome.LimitDiscardedBytes, in context);
+        }
+
+        if (outcome.ResyncSkippedBytes > 0)
+        {
+            _AppendResyncField(in parentField, outcome.ResyncSkippedBytes, in context);
         }
 
         return 0;
@@ -752,6 +793,11 @@ public sealed partial class TcpProtocol
         {
             _AppendReassemblyLimitField(in parentField, dispatch.ReassemblyLimitDiscardedBytes, in context);
         }
+
+        if (dispatch.ResyncSkippedBytes > 0)
+        {
+            _AppendResyncField(in parentField, dispatch.ResyncSkippedBytes, in context);
+        }
     }
 
     #endregion
@@ -827,6 +873,18 @@ public sealed partial class TcpProtocol
         parentField.Append(_ReassemblyLimitFieldId, FieldValue.NewString(string.Create(
             CultureInfo.InvariantCulture,
             $"TCP reassembly limit (MaxBufferSize or MaxPduSize) reached: {discardedBytes} buffered bytes of the message in progress were dropped")));
+        context.RecordGroupPresence(_TcpErrorGroupId);
+    }
+
+    /// <summary>
+    /// Shows that the stream buffer discarded bytes to find the next message boundary again. The bytes are gone from the
+    /// stream (they never become a message), so the packet that carried them is the only place that can say so.
+    /// </summary>
+    private void _AppendResyncField(in MutField parentField, int skippedBytes, in ParseContext context)
+    {
+        parentField.Append(_ResyncFieldId, FieldValue.NewString(string.Create(
+            CultureInfo.InvariantCulture,
+            $"{skippedBytes} bytes skipped to resynchronize the stream")));
         context.RecordGroupPresence(_TcpErrorGroupId);
     }
 

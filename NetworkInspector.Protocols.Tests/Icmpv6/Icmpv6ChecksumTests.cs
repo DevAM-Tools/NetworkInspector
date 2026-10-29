@@ -57,6 +57,22 @@ internal sealed class Icmpv6ChecksumTests
     }
 
     [Test]
+    public async Task Checksum_Status_Good_ForANeighborAdvertisement()
+    {
+        // The checksum covers the whole message; a Neighbor Advertisement with an option is longer than an echo and
+        // exercises the pseudo header with a multicast destination.
+        using Stack stack = ProtocolTestHelper.BuildStackWithSettings(
+            ("icmpv6.verify_checksum", SettingValue.Bool(true)));
+
+        byte[] target = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01];
+        byte[] option = Icmpv6PacketBuilder.BuildLinkLayerAddressOption(2, [0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        byte[] frame = Icmpv6PacketBuilder.Build(136, 0, Icmpv6PacketBuilder.BuildNeighborAdvertisementBody(true, true, true, target, option));
+        Packet packet = ProtocolTestHelper.ParseFrame(stack, frame, packetIndex: 0, timestamp: Timestamp.FromMillis(0));
+
+        await ProtocolTestHelper.AssertStringField(stack, packet, "icmpv6.checksum.status", "[Good]").ConfigureAwait(false);
+    }
+
+    [Test]
     public async Task Checksum_Status_Absent_WhenDisabled()
     {
         using Stack stack = ProtocolTestHelper.BuildStack();

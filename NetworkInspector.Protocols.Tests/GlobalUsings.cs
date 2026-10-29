@@ -45,14 +45,21 @@ global using NetworkInspector.Testing.Tshark;
 global using NetworkInspector.Protocols;
 global using NetworkInspector.Protocols.Can;
 global using NetworkInspector.Protocols.Dns;
+global using NetworkInspector.Protocols.Helpers;
 global using NetworkInspector.Protocols.Http2;
 global using NetworkInspector.Protocols.Icmpv6;
 global using NetworkInspector.Protocols.IPv4;
 global using NetworkInspector.Exporters.Text;
 global using NetworkInspector.Protocols.PduTransport;
 global using NetworkInspector.Protocols.SignalMessage;
+global using NetworkInspector.Protocols.SomeIp;
+global using NetworkInspector.Protocols.SomeIp.Config;
+global using NetworkInspector.Protocols.SomeIp.Payload;
+global using NetworkInspector.Protocols.SomeIp.Model;
 global using NetworkInspector.Protocols.Tcp;
+global using NetworkInspector.Protocols.Udp;
 global using NetworkInspector.Protocols.Tests.Infrastructure.Bridges;
+global using NetworkInspector.Protocols.Tests.Infrastructure.SomeIp;
 global using NetworkInspector.Protocols.Tests.Infrastructure.TsharkUat;
 #endregion
 

@@ -166,25 +166,28 @@ public readonly record struct Eui64 :
     /// <inheritdoc/>
     /// <remarks>
     /// Writes eight uppercase hex pairs separated by colons straight into the destination through
-    /// <see cref="HexDigits.WriteUpperPair"/>; no builder, no intermediate buffer. The pair for byte i starts at
+    /// <see cref="HexDigits.WritePair"/>; no builder, no intermediate buffer. The pair for byte i starts at
     /// <c>i * 3</c> and is followed by a colon for every byte but the last.
     /// </remarks>
     public bool TryFormat(
         Span<char> destination, out int charsWritten,
         ReadOnlySpan<char> format, IFormatProvider? provider)
     {
+        // The specifier is read before anything is written, so an invalid one fails even when the buffer is too small.
+        ReadOnlySpan<char> hex = HexDigits.Table(HexDigits.ParseCase(format));
+
         if (destination.Length < FormattedLength)
         {
             charsWritten = 0;
             return false;
         }
 
-        // The (int) cast keeps the low 32 bits of the shifted value on purpose: WriteUpperPair reads only the low byte, so
+        // The (int) cast keeps the low 32 bits of the shifted value on purpose: WritePair reads only the low byte, so
         // the dropped high bits cannot change the text (and no overflow check applies to a deliberate truncation).
         Span<char> d = destination[..FormattedLength];
         for (int i = 0; i < 8; i++)
         {
-            HexDigits.WriteUpperPair(d, i * 3, (int)(RawValue >> (56 - (i * 8))));
+            HexDigits.WritePair(d, i * 3, (int)(RawValue >> (56 - (i * 8))), hex);
             if (i < 7)
             {
                 d[(i * 3) + 2] = ':';
@@ -244,9 +247,11 @@ public readonly record struct Eui64 :
     #region Convenience Formatting
 
     /// <summary>Writes the formatted EUI-64 into the destination span.</summary>
-    public int FormatInto(Span<char> destination)
+    /// <param name="destination">Target buffer; it must be large enough for the whole text.</param>
+    /// <param name="hexCase">Letter case of the hex digits; <see cref="HexCase.Upper"/> by default.</param>
+    public int FormatInto(Span<char> destination, HexCase hexCase = HexCase.Upper)
     {
-        TryFormat(destination, out int written, default, null);
+        TryFormat(destination, out int written, _Specifier(hexCase), null);
         return written;
     }
 
@@ -254,19 +259,25 @@ public readonly record struct Eui64 :
     /// <remarks>
     /// Allocates exactly the result string (the text is built on the stack first). Use <see cref="FormatInto"/> or
     /// <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> when the caller owns a buffer.
+    /// <param name="hexCase">Letter case of the hex digits; <see cref="HexCase.Upper"/> by default. The format specifier <c>x</c> of <c>ToString</c> and of interpolation selects <see cref="HexCase.Lower"/>.</param>
     /// </remarks>
-    public string Format()
+    public string Format(HexCase hexCase = HexCase.Upper)
     {
         Span<char> buf = stackalloc char[FormattedLength];
-        TryFormat(buf, out int written, default, null);
+        TryFormat(buf, out int written, _Specifier(hexCase), null);
         return new string(buf[..written]);
     }
 
     /// <inheritdoc/>
-    public string ToString(string? format, IFormatProvider? formatProvider) => Format();
+    public string ToString(string? format, IFormatProvider? formatProvider) => Format(HexDigits.ParseCase(format));
 
     /// <inheritdoc/>
     public override string ToString() => Format();
+
+    private static string _Specifier(HexCase hexCase) =>
+        hexCase == HexCase.Lower
+            ? "x"
+            : "X";
 
     #endregion
 

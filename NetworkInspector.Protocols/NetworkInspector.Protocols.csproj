@@ -23,6 +23,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Schemas and examples ship with the package so users can validate their files in an editor and start from a
+         working configuration; the profile examples show how the settings reference the configuration files. -->
+    <None Include="Schemas\**\*.json" Pack="true" PackagePath="Schemas\" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
     <ProjectReference Include="..\NetworkInspector.Generators\NetworkInspector.Generators.csproj"
                       OutputItemType="Analyzer"

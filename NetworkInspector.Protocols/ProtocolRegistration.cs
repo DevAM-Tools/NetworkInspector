@@ -89,9 +89,9 @@ public static class ProtocolRegistration
     /// </para>
     /// </remarks>
     /// <returns>
-    /// Warnings from PDU Transport (config load, field-size clamps) and Signal Message
-    /// (config load, compile skips, registration skips). Empty when both succeed with
-    /// no external config.
+    /// Warnings from PDU Transport (config load, field-size clamps), Signal Message
+    /// (config load, compile skips, registration skips) and SOME/IP (settings, config load, compile
+    /// skips, port bindings). Empty when all succeed with no external config.
     /// </returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> is <see langword="null"/>.</exception>
     public static IReadOnlyList<SettingsLoadWarning> RegisterStandardProtocols(this IStackBuilder builder)
@@ -206,11 +206,6 @@ public static class ProtocolRegistration
         ProtocolId canId = builder.RegisterProtocol(can);
         can.RegisterFields(builder, canId);
 
-        // SOME/IP — auto-registered at udp.port = 30490 and tcp.port = 30490
-        SomeIpProtocol someip = new();
-        ProtocolId someipId = builder.RegisterProtocol(someip);
-        someip.RegisterFields(builder, someipId);
-
         // FlexRay — auto-registered at frame.link_type = 210 (DLT_FLEXRAY)
         FlexRayProtocol flexray = new();
         ProtocolId flexrayId = builder.RegisterProtocol(flexray);
@@ -259,6 +254,16 @@ public static class ProtocolRegistration
         // Signal messages — JSON-driven per-message protocols (no meta loader protocol)
         warnings.AddRange(SignalMessageRegistration.Register(builder));
 
+        #region UDP Heuristic Protocol Detection
+        // The table UDP tries after no port parser consumed the payload. It is registered empty: parsers that detect their
+        // protocol from the content add themselves (the SOME/IP parser does so when it is registered). UDP finds the table by
+        // its name when the stack starts, so the registration order relative to the parsers does not matter.
+        _ = builder.RegisterHeuristicProtocolTable(
+            udpId, UdpProtocol.HeuristicTableName, "UDP Heuristic",
+            "Content-based application protocol detection for UDP payload");
+
+        #endregion
+
         #region TCP Heuristic Protocol Detection
         // Register the heuristic table on TCP and wire up content-based parsers.
         // This must come after all target protocols (HTTP, TLS, HTTP/2) are registered
@@ -271,6 +276,11 @@ public static class ProtocolRegistration
         builder.RegisterHeuristicParser(tcpHeuristicTableId, new HttpHeuristicParser(httpId));
         builder.RegisterHeuristicParser(tcpHeuristicTableId, new TlsHeuristicParser(tlsId));
         builder.RegisterHeuristicParser(tcpHeuristicTableId, new Http2HeuristicParser(http2Id));
+
+        // SOME/IP registers its ports, its TCP framing and its content-based detection here, after both heuristic tables exist, so
+        // that its parser comes last in both of them (the detection of a plausible header is the weakest evidence of the
+        // parsers and must not shadow HTTP, TLS or HTTP/2). The registration returns every warning of the configuration.
+        warnings.AddRange(SomeIpRegistration.Register(builder));
 
         #endregion
 

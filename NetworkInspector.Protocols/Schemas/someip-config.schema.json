@@ -1,0 +1,432 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://networkinspector.dev/schemas/someip-config.schema.json",
+  "title": "SOME/IP Service Description Configuration",
+  "description": "Configuration for the SOME/IP parser: transport ports, client names, and per-service definitions (methods, events, fields, eventgroups, data type graph). Schema version contract: the major number changes only on breaking format changes; the minor number changes for additive extensions. Loaders accept files whose major version they support. Cross-reference rules (a type_reference must name a primitive or a type of the same service; no reference cycles; unique names per service) are enforced by the loader, not by this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [ "schema_version" ],
+  "properties": {
+    "schema_version": {
+      "description": "Format version of this file as 'major.minor' (e.g. '1.0').",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "udp_ports": { "$ref": "#/$defs/port_list" },
+    "tcp_ports": { "$ref": "#/$defs/port_list" },
+    "tls_ports": {
+      "description": "Ports of TLS connections whose plaintext is SOME/IP. Bound in table tls.port of a protocol that decrypts TLS; when no such protocol is in the stack, the registration reports one warning for the list and the ports have no effect. The TLS parser of this version does not decrypt.",
+      "$ref": "#/$defs/port_list"
+    },
+    "dtls_ports": {
+      "description": "Ports of DTLS flows whose plaintext is SOME/IP. Bound in table dtls.port of a protocol that decrypts DTLS; when no such protocol is in the stack, the registration reports one warning for the list and the ports have no effect. The DTLS parser of this version does not decrypt.",
+      "$ref": "#/$defs/port_list"
+    },
+    "clients": {
+      "description": "Optional mapping of client ID (decimal string, 0..65535) to a display name, resolved in message headers.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[0-9]+$" },
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "services": {
+      "description": "Service definitions. The same service_id may appear under multiple major_version entries; the same (service_id, major_version) pair must not appear twice.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/service" }
+    }
+  },
+  "$defs": {
+    "port_list": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "service_id", "major_version", "name" ],
+      "properties": {
+        "service_id": { "type": "integer", "minimum": 0, "maximum": 65534 },
+        "major_version": {
+          "description": "Interface major version; selected by the message header's interface version field.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "name": {
+          "description": "Display name of the service. The derived registered field names use the token form of this name (lower-case ASCII letters, digits and underscores; every other character becomes an underscore).",
+          "type": "string",
+          "minLength": 1
+        },
+        "methods": {
+          "description": "Service members: method calls, events, fields, and eventgroups. Member IDs must be unique within the service version; a field reserves each of its accessor IDs.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/member" }
+        },
+        "data_types": {
+          "description": "Data type graph for this service version. Types reference each other by 'name' within the same service; primitive names (uint8 ... uuid) may be used directly as type references anywhere. Type names must be unique within the service and must not equal a primitive name.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/data_type" }
+        }
+      }
+    },
+    "member": {
+      "description": "One service member, discriminated by 'kind'.",
+      "oneOf": [
+        { "$ref": "#/$defs/method_call" },
+        { "$ref": "#/$defs/event" },
+        { "$ref": "#/$defs/field" },
+        { "$ref": "#/$defs/event_group" }
+      ]
+    },
+    "method_call": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "kind", "id", "name", "in", "out" ],
+      "properties": {
+        "kind": { "const": "method" },
+        "id": { "description": "16-bit method ID.", "type": "integer", "minimum": 0, "maximum": 65535 },
+        "name": { "type": "string", "minLength": 1 },
+        "in": { "$ref": "#/$defs/parameter_list" },
+        "out": { "$ref": "#/$defs/parameter_list" },
+        "e2e_profile": { "$ref": "#/$defs/e2e_profile" },
+        "transformation_properties": { "$ref": "#/$defs/transformation_properties" }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "kind", "id", "name", "type_reference" ],
+      "properties": {
+        "kind": { "const": "event" },
+        "id": { "description": "16-bit event ID.", "type": "integer", "minimum": 0, "maximum": 65535 },
+        "name": { "type": "string", "minLength": 1 },
+        "type_reference": { "$ref": "#/$defs/type_reference" },
+        "e2e_profile": { "$ref": "#/$defs/e2e_profile" },
+        "transformation_properties": { "$ref": "#/$defs/transformation_properties" }
+      }
+    },
+    "field": {
+      "description": "A readable/writable field. At least one of get_id, set_id, notifier_id must be present; each maps a wire ID to the same payload type. A getter request carries no payload; a getter response, a setter request and response, and a notifier carry the field's type.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "kind", "name", "type_reference" ],
+      "anyOf": [
+        { "required": [ "get_id" ] },
+        { "required": [ "set_id" ] },
+        { "required": [ "notifier_id" ] }
+      ],
+      "properties": {
+        "kind": { "const": "field" },
+        "name": { "type": "string", "minLength": 1 },
+        "get_id": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "set_id": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "notifier_id": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "type_reference": { "$ref": "#/$defs/type_reference" },
+        "e2e_profile": { "$ref": "#/$defs/e2e_profile" },
+        "transformation_properties": { "$ref": "#/$defs/transformation_properties" }
+      }
+    },
+    "event_group": {
+      "description": "Named eventgroup collection; resolved by service discovery entries carrying an eventgroup ID.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "kind", "id", "name" ],
+      "properties": {
+        "kind": { "const": "event_group" },
+        "id": { "description": "16-bit eventgroup ID.", "type": "integer", "minimum": 0, "maximum": 65535 },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "parameter_list": {
+      "description": "Method parameter list. Shape encodes the wire encoding: an array means sequential parameters in declaration order; an object keyed by TLV ID (decimal string, 0..4095) means TLV-encoded members. Each entry is either a bare type reference or an object with optional name overrides plus the type reference.",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/usage_site" }
+        },
+        {
+          "type": "object",
+          "propertyNames": { "pattern": "^[0-9]+$" },
+          "additionalProperties": { "$ref": "#/$defs/usage_site" }
+        }
+      ]
+    },
+    "usage_site": {
+      "description": "One usage of a data type. A bare string is the type reference; an object adds a parameter name and optional overrides. 'name' is the parameter's display name and the source of its path token (defaults to the referenced type's name); 'filter_name' overrides the registered field name (filter string) and must be a dotted identifier the host accepts; 'ui_name' overrides the display name. The default registered name is the path-derived identity someip.payload.<service>.v<major>.<member>[.in|.out].<path>.",
+      "oneOf": [
+        { "$ref": "#/$defs/type_reference" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [ "type_reference" ],
+          "properties": {
+            "name": { "description": "Parameter name; defaults to the referenced type's name.", "type": "string", "minLength": 1 },
+            "filter_name": { "description": "Registered field name (filter string) override.", "type": "string", "minLength": 1, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
+            "ui_name": { "description": "Display name override; defaults to 'name'.", "type": "string", "minLength": 1 },
+            "type_reference": { "$ref": "#/$defs/type_reference" }
+          }
+        }
+      ]
+    },
+    "type_reference": {
+      "description": "A data type name defined in the service's data_types, or one of the wire primitives used directly.",
+      "type": "string",
+      "minLength": 1
+    },
+    "e2e_profile": {
+      "description": "End-to-end protection profile applied to this member's payload. Absence means unprotected. Supported profiles: '04' and '44' (12-byte header, CRC verifiable), '08' (16-byte header, CRC shown but not verified).",
+      "type": "string",
+      "enum": [ "04", "44", "08" ]
+    },
+    "transformation_properties": {
+      "description": "Per-member serialization defaults. Each size is in bytes. For string and array length fields: 0 or absent means use the format default (4 bytes). For structure length fields: 0 means no leading length field on the wire; absent means the format default (4 bytes). A type-level size_of_length overrides these for that type; a TLV tag that supplies a length overrides both.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "size_of_string_length": { "type": "integer", "enum": [ 0, 1, 2, 4 ] },
+        "size_of_array_length": { "type": "integer", "enum": [ 0, 1, 2, 4 ] },
+        "size_of_struct_length": { "type": "integer", "enum": [ 0, 1, 2, 4 ] }
+      }
+    },
+    "data_type": {
+      "description": "One data type definition, discriminated by 'category'.",
+      "oneOf": [
+        { "$ref": "#/$defs/base_type" },
+        { "$ref": "#/$defs/array_type" },
+        { "$ref": "#/$defs/structure_type" },
+        { "$ref": "#/$defs/tlv_structure_type" },
+        { "$ref": "#/$defs/union_type" },
+        { "$ref": "#/$defs/bitfield_type" },
+        { "$ref": "#/$defs/alias_type" }
+      ]
+    },
+    "base_type": {
+      "description": "Named base type over one wire primitive. Numeric primitives take an optional byte_order; the string primitive takes an optional encoding, fixed_length and size_of_length.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "category", "name", "type_reference" ],
+      "properties": {
+        "category": { "const": "base_type" },
+        "name": { "description": "Reference name within the service.", "type": "string", "minLength": 1 },
+        "type_reference": {
+          "description": "Wire primitive.",
+          "type": "string",
+          "enum": [ "uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64", "float", "double", "bool", "string", "uuid" ]
+        },
+        "byte_order": {
+          "description": "Byte order of a multi-byte numeric primitive. Default big_endian (the protocol's wire order). Not allowed for string, bool, uint8, int8 and uuid.",
+          "type": "string",
+          "enum": [ "big_endian", "little_endian" ]
+        },
+        "encoding": {
+          "description": "String encoding (string primitive only). Default utf-8. A terminating NUL is stripped from the display; the byte count stays visible.",
+          "type": "string",
+          "enum": [ "utf-8", "ascii", "utf-16be", "utf-16le" ]
+        },
+        "fixed_length": {
+          "description": "String primitive only: a value greater than 0 means the string occupies exactly this many bytes on the wire with no length field. 0 or absent means a length-prefixed (dynamic) string.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "size_of_length": {
+          "description": "String primitive only: size in bytes of this string's length field, overriding the member's transformation property at every usage site. Absent means inherit.",
+          "type": "integer",
+          "enum": [ 1, 2, 4 ]
+        },
+        "lookup_values": {
+          "description": "Optional mapping of raw integer values (decimal string keys, negative allowed for signed primitives) to display names. Not allowed for float, double, string and uuid.",
+          "type": "object",
+          "propertyNames": { "pattern": "^-?[0-9]+$" },
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "pad_to": { "$ref": "#/$defs/pad_to" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type_reference": { "const": "string" } }, "required": [ "type_reference" ] },
+          "then": { "not": { "required": [ "byte_order" ] } },
+          "else": { "not": { "anyOf": [ { "required": [ "encoding" ] }, { "required": [ "fixed_length" ] }, { "required": [ "size_of_length" ] } ] } }
+        },
+        {
+          "if": { "properties": { "type_reference": { "enum": [ "float", "double", "string", "uuid" ] } }, "required": [ "type_reference" ] },
+          "then": { "not": { "required": [ "lookup_values" ] } }
+        },
+        {
+          "if": { "properties": { "type_reference": { "enum": [ "uint8", "int8", "bool", "uuid" ] } }, "required": [ "type_reference" ] },
+          "then": { "not": { "required": [ "byte_order" ] } }
+        }
+      ]
+    },
+    "array_type": {
+      "description": "Array of one element type. A multi-dimensional array is an array whose element type is another array type; each dimension carries its own length field or fixed size.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "category", "name", "type_reference" ],
+      "properties": {
+        "category": { "const": "array" },
+        "name": { "type": "string", "minLength": 1 },
+        "type_reference": { "$ref": "#/$defs/type_reference" },
+        "size": {
+          "description": "Optional fixed element count. Absent or 0 means variable length (byte-count length field on the wire unless supplied by an enclosing TLV tag); a value greater than 0 means fixed size with no length field.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "min_elements": {
+          "description": "Optional lower bound of the decoded element count; a count below it is reported as a diagnostic, decoding continues.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_elements": {
+          "description": "Optional upper bound of the decoded element count; a count above it is reported as a diagnostic, decoding continues.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "size_of_length": {
+          "description": "Size in bytes of this array's length field (variable-length arrays only), overriding the member's transformation property at every usage site. Absent means inherit.",
+          "type": "integer",
+          "enum": [ 1, 2, 4 ]
+        },
+        "pad_to": { "$ref": "#/$defs/pad_to" }
+      }
+    },
+    "structure_type": {
+      "description": "Plain structure: members serialized sequentially in declaration order, optionally preceded by a length field (see transformation_properties.size_of_struct_length, or size_of_length here).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "category", "name", "members" ],
+      "properties": {
+        "category": { "const": "structure" },
+        "name": { "type": "string", "minLength": 1 },
+        "size_of_length": {
+          "description": "Size in bytes of this structure's leading length field, overriding the member's transformation property at every usage site. 0 means no length field; absent means inherit.",
+          "type": "integer",
+          "enum": [ 0, 1, 2, 4 ]
+        },
+        "pad_to": { "$ref": "#/$defs/pad_to" },
+        "members": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/structure_member" }
+        }
+      }
+    },
+    "structure_member": {
+      "description": "One member of a plain structure. 'name' is the member's display name and the source of its path token; 'filter_name' overrides the registered field name (filter string); 'ui_name' overrides the display name.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "type_reference" ],
+      "properties": {
+        "name": { "description": "Member name; defaults to the referenced type's name.", "type": "string", "minLength": 1 },
+        "filter_name": { "description": "Registered field name (filter string) override.", "type": "string", "minLength": 1, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
+        "ui_name": { "description": "Display name override; defaults to 'name'.", "type": "string", "minLength": 1 },
+        "type_reference": { "$ref": "#/$defs/type_reference" },
+        "pad_to": { "$ref": "#/$defs/pad_to" }
+      }
+    },
+    "tlv_structure_type": {
+      "description": "TLV structure: members identified by 12-bit TLV IDs, order-independent on the wire. Keys are decimal strings of the TLV ID (0..4095).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "category", "name", "members" ],
+      "properties": {
+        "category": { "const": "tlv_structure" },
+        "name": { "type": "string", "minLength": 1 },
+        "members": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[0-9]+$" },
+          "additionalProperties": { "$ref": "#/$defs/tlv_member" }
+        }
+      }
+    },
+    "tlv_member": {
+      "description": "One member of a TLV structure or one alternative of a union. 'name' is the member's display name and path token; 'filter_name' overrides the registered field name (filter string); 'ui_name' overrides the display name.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "type_reference" ],
+      "properties": {
+        "name": { "description": "Member name; defaults to 'member_<id>'.", "type": "string", "minLength": 1 },
+        "filter_name": { "description": "Registered field name (filter string) override.", "type": "string", "minLength": 1, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
+        "ui_name": { "description": "Display name override; defaults to 'name'.", "type": "string", "minLength": 1 },
+        "type_reference": { "$ref": "#/$defs/type_reference" }
+      }
+    },
+    "union_type": {
+      "description": "Union: a length field, a type selector field, then the member whose selector matches. Selector 0 is reserved for the empty union. Keys are decimal strings of the selector (1..4294967295).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "category", "name", "members" ],
+      "properties": {
+        "category": { "const": "union" },
+        "name": { "type": "string", "minLength": 1 },
+        "size_of_length": {
+          "description": "Size in bytes of the union's length field. Default 4. A TLV tag that supplies a length overrides it.",
+          "type": "integer",
+          "enum": [ 1, 2, 4 ]
+        },
+        "size_of_type": {
+          "description": "Size in bytes of the union's type selector field. Default 4.",
+          "type": "integer",
+          "enum": [ 1, 2, 4 ]
+        },
+        "pad_to": { "$ref": "#/$defs/pad_to" },
+        "members": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[1-9][0-9]*$" },
+          "additionalProperties": { "$ref": "#/$defs/tlv_member" }
+        }
+      }
+    },
+    "bitfield_type": {
+      "description": "Bitfield: an unsigned value of 8, 16, 32 or 64 bits with named bits. Keys are decimal strings of the bit number (0 = least significant); every key must be below 'bits'.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "category", "name", "bits", "members" ],
+      "properties": {
+        "category": { "const": "bitfield" },
+        "name": { "type": "string", "minLength": 1 },
+        "bits": { "type": "integer", "enum": [ 8, 16, 32, 64 ] },
+        "byte_order": {
+          "description": "Byte order of the bitfield value (16, 32 and 64 bits). Default big_endian.",
+          "type": "string",
+          "enum": [ "big_endian", "little_endian" ]
+        },
+        "members": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[0-9]+$" },
+          "additionalProperties": { "$ref": "#/$defs/bit_member" }
+        }
+      }
+    },
+    "bit_member": {
+      "description": "One named bit of a bitfield.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "name" ],
+      "properties": {
+        "name": { "description": "Bit name; also the source of its path token.", "type": "string", "minLength": 1 },
+        "filter_name": { "description": "Registered field name (filter string) override.", "type": "string", "minLength": 1, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
+        "ui_name": { "description": "Display name override; defaults to 'name'.", "type": "string", "minLength": 1 }
+      }
+    },
+    "alias_type": {
+      "description": "Alias: a name for another type (or a primitive). Decodes exactly as the referenced type; the alias name is used for display and as the path token at usage sites that give no member name.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "category", "name", "type_reference" ],
+      "properties": {
+        "category": { "const": "alias" },
+        "name": { "type": "string", "minLength": 1 },
+        "type_reference": { "$ref": "#/$defs/type_reference" }
+      }
+    },
+    "pad_to": {
+      "description": "Optional alignment: after consuming this value, advance to the next multiple of this byte alignment relative to the start of the payload. 0 or absent means no padding.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 64
+    }
+  }
+}

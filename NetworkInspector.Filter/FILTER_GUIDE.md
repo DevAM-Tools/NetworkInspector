@@ -961,13 +961,20 @@ $vlan[1] { vlan.id == 200 }
 # SOME/IP: XY only under someip when messageid matches
 $someip {
   someip.messageid == 0x1234
-  && someip.method_id == 1
+  && someip.methodid == 1
 }
 
-# Nested scope: from someip subtree, BFS-find a deeper named node
+# Nested scope: from the someip subtree, find a deeper named node (the service discovery container)
 $someip {
   someip.messageid == 0x1234
-  && $sd { someip.sd.entries_length > 0 }
+  && $someip_sd { someip_sd.entries_length > 0 }
+}
+
+# SOME/IP payload parameters decoded from a service description: the derived name is
+# someip.payload.<service>.v<major>.<member>[.in|.out].<path>, or the filter_name of the parameter
+$someip {
+  someip.payload.climatecontrol.v2.settemperature.in.request.zone == 7
+  && someip.timing.delay > 0.01
 }
 
 # Combine with classic outside

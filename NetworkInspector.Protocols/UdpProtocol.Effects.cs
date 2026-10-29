@@ -40,32 +40,14 @@ public sealed partial class UdpProtocol
     private readonly EffectStore<StreamEffect> _Effects = new();
 
     /// <summary>
-    /// Highest packet id that completed a first parse; <c>-1</c> until the first packet was parsed.
-    /// <para>
-    /// The single writer is the ordered first-parse path (<see cref="_RaiseWatermark"/>), which the
-    /// session serializes under its parse lock. Readers use <see cref="_IsReplay"/>. Written after
-    /// the effect slots of that packet, so a reader that observes the raised watermark also observes
-    /// the effects (release/acquire via <see langword="volatile"/>).
-    /// </para>
-    /// <para>
-    /// <see cref="PacketId.Value"/> is an <see cref="int"/>, so this is <see langword="volatile"/>
-    /// <see cref="int"/> with plain reads and writes — same pattern as
-    /// <see cref="Stack"/>'s parse watermark.
-    /// </para>
+    /// First parse versus replay for this protocol (<see cref="IngestGate"/>). Only the ordered first-parse path, which the
+    /// session serializes under its parse lock, enters a scope; the outermost scope raises the watermark after the effect
+    /// slots of that packet were written, so a reader that observes the raised watermark also observes the effects
+    /// (release/acquire). The protocol can be entered again while the same packet is still parsed (nested layers, for example
+    /// tunnels); only the outermost scope raises the watermark, otherwise a further layer of the same packet would look like a
+    /// replay and find no recorded effect.
     /// </summary>
-    private volatile int _IngestWatermark = -1;
-
-    /// <summary>
-    /// In-flight first-parse nesting for this protocol on the serialized ingest thread.
-    /// Replay does not touch this field. The outermost finally raises the watermark.
-    /// <para>
-    /// UDP can be entered again while the same packet is still being parsed (nested layers, for example tunnels). Raising the
-    /// watermark when an inner call finishes would make any further UDP layer of the same packet id look like a replay
-    /// (and find no recorded effect), so only the outermost first-parse call raises it. A plain <see cref="int"/> is enough because only the serialized
-    /// first-parse path reads or writes it.
-    /// </para>
-    /// </summary>
-    private int _ParseNesting;
+    private readonly IngestGate _Gate = new();
 
     #endregion
 
@@ -82,24 +64,6 @@ public sealed partial class UdpProtocol
     /// </summary>
     private bool _TryGetStreamEffect(PacketId id, int layerKey, out StreamEffect effect) =>
         _Effects.TryGet(id.Value, layerKey, out effect);
-
-    /// <summary>
-    /// Raises the first-parse watermark monotonically. Only the ordered first-parse path calls this,
-    /// so a plain read-then-write is sufficient — no competing writer can interleave.
-    /// </summary>
-    private void _RaiseWatermark(PacketId id)
-    {
-        if (id.Value > _IngestWatermark)
-        {
-            _IngestWatermark = id.Value;
-        }
-    }
-
-    /// <summary>
-    /// Whether the given packet id was already parsed once and must therefore replay its recorded
-    /// effects instead of mutating cross-packet state.
-    /// </summary>
-    private bool _IsReplay(PacketId id) => id.Value <= _IngestWatermark;
 
     #endregion
 }

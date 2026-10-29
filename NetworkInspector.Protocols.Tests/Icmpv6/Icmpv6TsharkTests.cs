@@ -85,12 +85,8 @@ internal sealed class Icmpv6TsharkTests
         IcmpV6NeighborSolicitationLayer ns = new(IPv6Address.FromBytes(target));
         byte[] frame = FrameStack.Start(eth).Then(ip).Then(ns).CreateWithFixedValues().EmitFrame([]);
 
+        // The field name is the same in tshark and in this stack, so there is no fallback name: a mismatch must fail.
         string? value = TsharkVerifier.GetFieldValue(frame, "icmpv6.nd.ns.target_address");
-        // tshark exposes this as icmpv6.nd.ns.target_address; fall back to generic.
-        if (value is null)
-        {
-            value = TsharkVerifier.GetFieldValue(frame, "icmpv6.nd.target_address");
-        }
         await Assert.That(value).IsNotNull().Because("tshark must report a target address field");
         await Assert.That(value).IsEqualTo("2001:db8::1");
     }

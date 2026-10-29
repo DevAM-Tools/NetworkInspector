@@ -1,0 +1,35 @@
+{
+  "messages": [
+    {
+      "name": "body_control",
+      "ui_name": "Body Control",
+      "description": "A multiplexed message: the page selector decides which of two signal groups the third byte carries.",
+      "byte_length": 4,
+      "dispatch_bindings": [ { "table": "udp.port", "key": 47300 } ],
+      "signals": [
+        { "name": "body_control.heartbeat", "ui_name": "Heartbeat", "start_bit": 0, "bit_length": 8, "byte_order": "little_endian" }
+      ],
+      "mux_signal": { "name": "body_control.page", "ui_name": "Page", "start_bit": 8, "bit_length": 4, "byte_order": "little_endian" },
+      "mux_groups": [
+        {
+          "mux_value": 0,
+          "signals": [
+            {
+              "name": "body_control.door_state", "ui_name": "Door State", "start_bit": 16, "bit_length": 8, "byte_order": "little_endian",
+              "value_names": { "0": "Closed", "1": "Open" }
+            }
+          ]
+        },
+        {
+          "mux_value": 1,
+          "signals": [
+            {
+              "name": "body_control.lamp_level", "ui_name": "Lamp Level", "start_bit": 16, "bit_length": 8, "byte_order": "little_endian",
+              "unit": "%", "min": 0, "max": 100
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
