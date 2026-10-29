@@ -6,7 +6,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>ni</ToolCommandName>
     <PackageId>NetworkInspector.CLI</PackageId>
-    <Description>Command-line interface for the Network Inspector stack. Provides ni convert and ni export commands for working with network captures.</Description>
+    <Description>Command-line interface for the Network Inspector stack. Provides ni convert and ni export for network and automotive captures, ni plugins to load extensions, and ni settings and ni profile for settings profiles.</Description>
     <PackageTags>network;pcap;pcapng;blf;capture;cli;tool</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>

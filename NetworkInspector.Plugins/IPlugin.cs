@@ -4,8 +4,8 @@ namespace NetworkInspector.Plugins;
 
 /// <summary>
 /// Entry point of a core-tier plugin. The entry type is a public, non-abstract, non-generic class with a public
-/// parameterless constructor that lists this interface (or <c>IHostPlugin</c>, <c>IAppPlugin</c> of the higher tiers) in
-/// its own interface list; the pre-scan finds it by that interface without loading the assembly.
+/// parameterless constructor that lists this interface (or an interface of a higher tier that derives from it) in its own
+/// interface list; the pre-scan finds it by that interface without loading the assembly.
 /// <para>
 /// Order: <see cref="Configure"/> for every plugin, then the higher tier methods, then the application is composed, then
 /// <see cref="StartAsync"/> in load order; at exit <see cref="StopAsync"/> in reverse load order while sessions still

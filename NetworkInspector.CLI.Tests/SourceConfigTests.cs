@@ -150,19 +150,6 @@ internal sealed class SourceConfigTests
         await Assert.That(ReferenceEquals(kept, own)).IsTrue();
     }
 
-    [Test]
-    public async Task OptionsAsJsonUsesJsonStringsAndTheLastTextOfAKeyWins()
-    {
-        using BuiltInRegistry registry = new();
-        SourceConfig config = SourceConfig.Parse("random:count=1,seed=5,count=9", registry.Registry);
-
-        IReadOnlyDictionary<string, JsonElement> options = config.OptionsAsJson();
-
-        await Assert.That(options.Count).IsEqualTo(2);
-        await Assert.That(options["count"].GetString()).IsEqualTo("9");
-        await Assert.That(options["seed"].GetString()).IsEqualTo("5");
-    }
-
     #endregion
 
     #region Errors

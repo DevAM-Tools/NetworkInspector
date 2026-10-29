@@ -9,6 +9,83 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+---
+
+## [0.19.0] — Plugins for `ni`, reference-grade TCP, TLS, HTTP/2, and SOME/IP analysis, and restarts you can steer
+
+Delta since 0.18.0. Version is `0.19.0` in `Directory.Build.props`.
+
+**NetworkInspector can now be extended without changing it.** A plugin is an ordinary .NET class library with one entry
+class. `ni` loads it from the folders in the application setting `plugins.paths`, and every command uses what it
+contributes: a plugin protocol is decoded and filterable, a plugin source is an input of `ni convert` and `ni export`, a
+plugin format is an output, and a plugin setting is listed and changed with `ni settings`. The standard protocols, the
+file and random sources, and the nine export formats run on the same contract as four built-in plugins, so a plugin can do
+whatever the built-ins do. Three packages carry the plugin system: `NetworkInspector.Plugins` (the contract),
+`NetworkInspector.Plugins.Loader` (find, load, start, and stop plugins in any application), and
+`NetworkInspector.BuiltInPlugins`. `ni` also gained settings profiles (`ni settings`, `ni profile`, `--profile`), the CSV
+format, and `--overwrite`.
+
+**The protocol stack analyses traffic the way the reference does.** TCP analysis is rewritten on an ordered list of
+unacknowledged segments (lost, out-of-order, retransmitted, and spurious segments, duplicate and partial ACKs, bytes in
+flight, connection state, completeness), TLS records and HTTP/2 frames are reassembled across segments with a stateful
+HPACK decoder, SOME/IP is rewritten with typed payloads from a service description, service discovery, SOME/IP-TP
+reassembly, end-to-end protection, and method timing, and ICMP, ICMPv6 (Neighbor Discovery, MLDv2), and ARP decode
+everything their messages carry. Fragmenting protocols share one bounded `FragmentReassembler<TKey>`.
+
+**Sessions make a restart observable and controllable.** A restart is a generation change (`ISessionReader.Generation`),
+`TryRestart` takes options (what happens to running jobs), returns a report, and raises an event, and a restart that fails
+leaves the session `Faulted` instead of resuming with inconsistent ids. The `ZeroAlloc` dependency is gone; the fixed
+headers of IPv4, IPv6, TCP, UDP, VLAN, BLF, and PCAPNG are decoded by hand and faster.
+
+### Highlights
+
+| Area | What you get | Start here |
+| --- | --- | --- |
+| Plugins | Protocols, sources, formats, and settings as a DLL that `ni` loads | [Plugin guide](docs/plugins/guide.md) |
+| Own host | Load the same plugins in your application | [Loader README](NetworkInspector.Plugins.Loader/README.md) |
+| CLI | `ni plugins`, `ni settings`, `ni profile`, `--profile`, CSV, `--overwrite` | [CLI README](NetworkInspector.CLI/README.md) |
+| TCP, TLS, HTTP/2 | Reference-grade analysis and reassembly | `tcp.analysis.*`, `tcp.completeness` |
+| SOME/IP | Typed payloads, SD, TP, E2E, method timing | `someip.*`, `Schemas/someip-config.schema.json` |
+| ICMP, ICMPv6, ARP | Complete message decoding, common field names | `icmp.*`, `icmpv6.*`, `arp.*` |
+| Sessions | Restart generations, options, reports, `Faulted` | [Session guide](NetworkInspector.Sessions/SESSION_GUIDE.md) |
+
+Try the plugin system with the sample plugin:
+
+```bash
+dotnet build samples/Sample.Protocol/Sample.Protocol.csproj -c Release
+ni settings set plugins.paths samples/Sample.Protocol/bin/Release/net10.0 --scope application
+ni plugins list
+ni export "SampleGen:count=5" -o sample.sampletxt -f SampleText
+```
+
+### Upgrade notes
+
+Every breaking change is described in detail in the sections below. In short:
+
+| You used | Now |
+| --- | --- |
+| `ISession.Restart(factory)` | `TryRestart(factory, out report, out failure)` or the overload with `RestartOptions`; a restart ends running stack-bound jobs by default |
+| `SessionPhase` switches | Handle the new value `Faulted` |
+| Own `ISessionReader`, `ISession`, `IReadOnlySetting` implementations | Add `Generation`, `CurrentStack`, `Fault`, the new `TryGetPacket` overload, `TryRestart`, `Restarted`, the `TryAddJob` overload, and `Activation` |
+| `ISession.TryRemoveJob` exceptions | `false` with `JobStillRunning` |
+| `DatagramDefragmenter<TKey>` | `FragmentReassembler<TKey>` with `FragmentReassemblyOptions.IPv4` or `.IPv6` |
+| `ZeroAlloc` (`LazyString`, `ZA.Lazy`, `FormatTemp`, `ToTempString`) | `NetworkInspector.Core.Fields.LazyString`, `LazyString.FormatLazy`, `Format`, `ToString`, `TryFormat` |
+| `LinkType.WiresharkUpperPdu` | `LinkType.UpperPdu` |
+| The old `someip.config_file` format, `SomeIpProtocol.UdpPortKey` and `TcpPortKey` | The new format with `schema_version`, `SomeIpRegistration.Register(builder)`, `SomeIpProtocol.DefaultPort` |
+| ICMP, ICMPv6, and TCP field names and texts in filters and exports | The new names (listed under Changed and Fixed) |
+| `tcp.max_tracked_streams` default 100000 | Default 10000; set it back per profile if you need more |
+| CLI settings in the settings base folder | Move them to `<base>/default/`; application settings live in `<base>/application/` |
+| `ni` replacing existing outputs | Add `--overwrite` |
+| `ExportErrorKind` switches | Handle `StackMismatch` |
+
+### Known limitations
+
+- **Only the core tier exists.** `PluginTier.Host` and `PluginTier.App` are reserved for applications of a higher tier;
+  `ni` is a core-tier application, and a plugin that declares a higher tier is listed as `Skipped` and its assembly is not
+  loaded.
+
 ### Added
 
 - **`SomeIpRegistration`** — the one place where a SOME/IP configuration becomes stack state: 21 `someip.*` settings (the
@@ -115,18 +192,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`SettingsRegistrar`** has a public, validated constructor, so plugins can register settings into managers they own;
   `default(SettingsRegistrar)` now fails with an `InvalidOperationException` that names the missing manager.
 - **`SettingScope`** (`Application`, `Profile`, `Session`) — the one scope enumeration of Core settings.
-- **`NetworkInspector.Plugins.Loader`** (not packed) — the plugin loader shared by the CLI, the host, and the app:
-  a metadata-only pre-scan (`System.Reflection.Metadata`; no assembly is loaded to look at it) that finds entry types by the
+- **`NetworkInspector.Plugins.Loader`** (new package) — the plugin loader of `ni` and of every application that wants to
+  load the same plugins: a metadata-only pre-scan (`System.Reflection.Metadata`; no assembly is loaded to look at it) that finds entry types by the
   plugin interfaces they list, a per-file scan cache keyed by path, length, and last write time, one collectible load
   context per plugin assembly, `PluginRegistry` (stack contributions, plugin settings, source kinds, and export formats with
   one consistent snapshot for readers), `PluginLifecycle` (start in load order and stop in reverse order, each bounded by the
   application settings `plugins.startTimeoutSeconds` and `plugins.stopTimeoutSeconds`), `PluginContext`, and the settings
   helpers `PluginPathsSetting`, `PluginTimeoutSettings`, and `RegistrationOptions`. Every failure of a plugin is a `Failed`
-  record with a reason; plugins of a higher tier than the application are `Skipped` and their assemblies are not loaded.
+  record with a reason; plugins of a higher tier than the application are `Skipped` and their assemblies are not loaded. A
+  plugin built against a newer version of an application assembly (contract, Core, framework) is refused before any of its
+  code runs, with a reason that names both versions (`The plugin was built against NetworkInspector.Plugins 0.20.0.0, but
+  this application provides 0.19.0.0; build the plugin against 0.19.0.0 or older, or update the application.`); the same
+  or an older version runs with the application's copy.
   `ExportTargets` adds the target rules every export runner applies: `TryPrepare` (full path, parent folder, refused overwrite,
   folder-versus-file mix-ups), `TryCheck` (the same rules without deleting anything, for a check before a long run), and
-  `DeletePartial` (cleanup of an export that ended without `OnFinish`).
-- **`NetworkInspector.BuiltInPlugins`** (not packed) — the functionality of the application as four core-tier plugins on the
+  `DeletePartial` (cleanup of an export that ended without `OnFinish`). The package README shows the whole sequence of
+  load, stack build, start, source use, and stop in one compilable program.
+- **`NetworkInspector.BuiltInPlugins`** (new package) — the functionality of the application as four core-tier plugins on the
   same contract as external ones, created by `NetworkInspectorBuiltIns.CreateAll()`: `NetworkInspector.StandardProtocols`,
   `NetworkInspector.FileSources` (BLF, PCAPNG, legacy PCAP, ASC), `NetworkInspector.RandomSource`, and
   `NetworkInspector.Exporters` (frames as BLF, PCAPNG, ASC; packets as CSV, JSON, Text, PBF, Parquet, DuckDB). Every
@@ -138,7 +220,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`SettingProblemKind`: `WrongType`, `BelowMinimum`, `AboveMaximum`, `NotFinite`, `UnknownEnum`, `InvalidPath`,
   `UnknownSetting`) with one message that names the setting and the accepted values. `Setting.TryValidate` and
   `Setting.TrySetPendingValue` do not throw for wrong values. `SettingActivation` (`Immediate`, `SessionReset`, `Restart`)
-  and `Setting.Activation` say when a host should use a changed value.
+  and `Setting.Activation` say when an application should use a changed value.
 - **Core settings: lookup, per-key apply, and merge saves.** `SettingsManager.TryGetSetting` and `FindSimilar`; the per-key
   `ApplyChanges(names)` and `ResetChanges(names)` with the `PendingChanged` event; `SaveChanged(names)` merges single
   keys into the group files under the cross-process folder lock `.ni-settings.lock` (waits up to two seconds, then
@@ -149,17 +231,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   longer than 120 characters get a shortened folder name with a hash and a `.name` file.
 - **CLI: `ni plugins list`, `ni settings list|get|set|reset`, `ni profile list|create|rename|delete`.** Plugins are loaded
   from the application setting `plugins.paths`; the commands print one precise line per mistake, with a suggestion for a
-  misspelled name or key. Plugin log lines go to `logs/ni.log` (10 MiB, 5 files) in the settings base.
+  misspelled name or key. Plugin log lines (`<level> <plugin>: <text>`) go to the error output and to `logs/ni.log`
+  (10 MiB, 5 files) in the settings base. `plugins.paths` is empty by default, so no foreign code is loaded until you add
+  a folder.
 - **CLI: CSV export** (`-f csv:delimiter=;,header=false,bom=false,columns=ip.src;udp.dstport`), plugin source kinds
   (`SampleGen:count=10`) and plugin formats, and `--overwrite` for `convert` and `export`.
 - **`NetworkInspector.Testing.Traces`** (test support, not packed) — deterministic capture files for tests, built once per
   cache folder and shared by parallel tests and processes: `TraceKit` (`GetAsync(recipe)`), `TraceRecipe`, and the recipes
   `MixedEthernetRecipe`, `CanSignalsRecipe` (with `CanSignalTrace` and `SignalConfigFixture`), `JumboFramesRecipe`,
   `OutOfOrderRecipe`, `RepeatedFailureRecipe`, `SampleProtocolRecipe`, and `LargeRandomRecipe`.
-- **Plugin documentation** — [`docs/plugins/guide.md`](docs/plugins/guide.md) (project setup to distribution),
-  [`docs/plugins/protocols.md`](docs/plugins/protocols.md) (protocol, fields, port registration, heuristic parser,
-  post-parser), and [`docs/plugins/reference.md`](docs/plugins/reference.md) (one entry per contract type), checked by tests
-  against the contract; four design documents imported into [`docs/`](docs/) with import notes.
+- **Plugin documentation** — [`docs/plugins/guide.md`](docs/plugins/guide.md) (a quick start that builds and runs, project
+  setup, entry point rules, contributions, options and settings, lifecycle, build and distribution, registration with
+  `plugins.paths`, isolation, security, troubleshooting, and a walkthrough of the sample plugin),
+  [`docs/plugins/protocols.md`](docs/plugins/protocols.md) (protocol class, fields, dispatch tables, heuristic parsers,
+  post-parsers, stream reassembly, protocol settings, checklist), [`docs/plugins/reference.md`](docs/plugins/reference.md)
+  (one entry per contract type with a usage example), and package READMEs for `NetworkInspector.Plugins.Loader` and
+  `NetworkInspector.BuiltInPlugins`. The root README lists the two new packages and when you need them.
 - **Sessions: a restart is a generation change.** `ISessionReader.Generation` (0 for the constructor stack, plus one per swap;
   one volatile read) and `ISessionReader.CurrentStack`, the immutable `StackView(Stack, Generation)` pair with `IsCurrent`.
   The generation rides on the stack holder that every read already leases, so noticing a restart adds no operation to the
@@ -243,8 +330,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   receiver and restart only when the acknowledgement number moves, ACKs of lost, partially acknowledged or retransmitted data
   are flagged (`ack_lost_segment`, `partial_ack`, `ambiguous_ack`), `bytes_in_flight` is the sum of the unacknowledged bytes,
   and the window scale is applied from the SYNs (including the "scale unknown" and "scale off" cases). The per-direction ring
-  buffers are gone, so an idle connection no longer carries them. The result is compared field by field with `tshark` 4.6 in
-  twelve recorded scenarios.
+  buffers are gone, so an idle connection no longer carries them. The result is compared field by field with the reference
+  decoder in twelve recorded scenarios.
 - **TCP connection state, completeness and packet info.** `tcp.analysis.connection_state` is derived from recorded FIN and ACK
   facts and follows RFC 9293 for the side that closed first (TIME_WAIT only when both FINs are acknowledged; a retransmitted FIN
   no longer moves it; a reset is final; a connection without handshake reads `ESTABLISHED (handshake not captured)`). New
@@ -310,8 +397,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   counter; no lock and no allocation on the read path) instead of immediately under running reads. Packets handed out before
   a restart keep their materialised fields; unmaterialised lazy parts run on the retired protocols and may yield an error
   child. `Shutdown` now also throws the `OnShutdown` errors of session-owned stacks, which were lost before.
-- **Tests:** no test reads a Markdown file any more. The seven documentation tests of `Plugins.Tests/Docs` were removed;
-  the documents are checked by review.
 - **Sessions: one stack lease per read call.** `ReadPackets` (both overloads) and `TryReadPackets` (both modes, including the
   skip-parse pre-check) take one lease for the whole call instead of one per 64-packet chunk or per packet, so a call parses on
   one stack generation and never returns packets of two stacks in one buffer; a restart that starts during the call leaves the
@@ -414,11 +499,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   PCAPNG skips link types above 65535; compact JSON writes the next packet in full after a failed write; the DuckDB
   database path is no longer interpreted as connection-string syntax; `PooledBuffer` rejects oversized requests with a
   clear message.
-- **Plugin loader:** a plugin that throws its own `TimeoutException` is reported as a plugin failure and not as a timeout;
-  a failure of a start or stop call abandoned after a timeout is logged once; describing an exception no longer escapes
-  containment when its `Message` getter throws; a failing plugin log cannot abort the shutdown signal or the
-  settings-applied raise; the pre-scan cache stamps a file with the length and time from before the read; `LoadTime` no
-  longer counts the info read twice.
 - **CLI:** the overwrite refusal of a split run names the first split file; `convert` honours a stopping exporter; `--tolerant`
   drops a source that fails twice in a row without delivering a frame (it looped forever); `export` and `convert` exit with
   code 3 when the output format stops early; `ni profile` file-system failures exit with code 3; a source option pair

@@ -35,7 +35,10 @@ ni export capture.pcapng -o packets.duckdb      # every packet, every field, que
   value caches, and hot protocol-stack swaps.
 - **Verified against Wireshark.** More than 5,000 tests; dissectors, readers, writers, and the frame builder are
   cross-validated against `tshark` 4.6.
-- **Modular.** Take only what you need: values, parser, readers, writers, filters, sessions, or the CLI.
+- **Extensible with plugins.** Add protocols, capture sources, export formats, and settings as a plugin DLL that `ni`
+  loads from a folder; the built-in protocols, sources, and formats use the same contract
+  ([plugin guide](docs/plugins/guide.md)).
+- **Modular.** Take only what you need: values, parser, readers, writers, filters, sessions, plugins, or the CLI.
 
 ## Large Captures With Bounded Memory
 
@@ -74,6 +77,8 @@ ni convert capture.blf -o capture.pcapng                       # Vector BLF -> W
 ni export capture.pcapng -o packets.json                       # parsed packets as JSON
 ni export capture.pcapng -o dns.json --filter "udp.port == 53" # only DNS
 ni export capture.pcapng -o out -f parquet                     # Parquet dataset for pandas, Polars, Spark
+ni settings set plugins.paths /opt/ni-plugins --scope application  # load your plugins
+ni plugins list                                                # what each plugin contributes
 ```
 
 More: [CLI README](NetworkInspector.CLI/README.md).
@@ -148,6 +153,8 @@ listeners ([Sessions](NetworkInspector.Sessions/README.md)).
 | [NetworkInspector.FrameBuilder](NetworkInspector.FrameBuilder/README.md) | [![v][fb-v]][fb] | [![d][fb-d]][fb] | Build wire frames from typed layers |
 | [NetworkInspector.Values](NetworkInspector.Values/README.md) | [![v][val-v]][val] | [![d][val-d]][val] | MAC, IP, EUI-64, UUID, timestamp values |
 | [NetworkInspector.Plugins](NetworkInspector.Plugins/README.md) | [![v][plug-v]][plug] | [![d][plug-d]][plug] | Plugin contract for sources, exporters, protocols |
+| [NetworkInspector.Plugins.Loader](NetworkInspector.Plugins.Loader/README.md) | [![v][load-v]][load] | [![d][load-d]][load] | Find, load, start, and stop plugins |
+| [NetworkInspector.BuiltInPlugins](NetworkInspector.BuiltInPlugins/README.md) | [![v][bip-v]][bip] | [![d][bip-d]][bip] | Standard protocols, sources, and formats as plugins |
 | [NetworkInspector.CLI](NetworkInspector.CLI/README.md) | [![v][cli-v]][cli] | [![d][cli-d]][cli] | `ni` command-line tool |
 
 [core]: https://www.nuget.org/packages/NetworkInspector.Core
@@ -180,13 +187,20 @@ listeners ([Sessions](NetworkInspector.Sessions/README.md)).
 [plug]: https://www.nuget.org/packages/NetworkInspector.Plugins
 [plug-v]: https://img.shields.io/nuget/v/NetworkInspector.Plugins?label=
 [plug-d]: https://img.shields.io/nuget/dt/NetworkInspector.Plugins?label=
+[load]: https://www.nuget.org/packages/NetworkInspector.Plugins.Loader
+[load-v]: https://img.shields.io/nuget/v/NetworkInspector.Plugins.Loader?label=
+[load-d]: https://img.shields.io/nuget/dt/NetworkInspector.Plugins.Loader?label=
+[bip]: https://www.nuget.org/packages/NetworkInspector.BuiltInPlugins
+[bip-v]: https://img.shields.io/nuget/v/NetworkInspector.BuiltInPlugins?label=
+[bip-d]: https://img.shields.io/nuget/dt/NetworkInspector.BuiltInPlugins?label=
 [cli]: https://www.nuget.org/packages/NetworkInspector.CLI
 [cli-v]: https://img.shields.io/nuget/v/NetworkInspector.CLI?label=
 [cli-d]: https://img.shields.io/nuget/dt/NetworkInspector.CLI?label=
 
 The source generator ([NetworkInspector.Generators](NetworkInspector.Generators/README.md)) ships inside
 `NetworkInspector.Core`. Packages pull in their own dependencies: Sources, Exporters, and Filter bring Core;
-Core brings Values.
+Core brings Values; Plugins brings Core; Plugins.Loader brings Plugins; BuiltInPlugins brings Plugins, Protocols,
+Sources, Exporters, and Exporters.DuckDb.
 
 ### Which Packages Do I Need?
 
@@ -202,6 +216,7 @@ Core brings Values.
 | Typed addresses and timestamps only | Values |
 | Write your own dissector | Core + Protocols ([Protocol guide](NetworkInspector.Protocols/PROTOCOL_GUIDE.md)) |
 | Write a plugin (protocol, source, exporter, setting) | Plugins ([Plugin guide](docs/plugins/guide.md), [Sample plugin](samples/Sample.Protocol/README.md)) |
+| Load plugins in your own application | Plugins.Loader + BuiltInPlugins ([Loader README](NetworkInspector.Plugins.Loader/README.md)) |
 
 ## Capabilities
 

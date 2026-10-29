@@ -3,9 +3,9 @@
 namespace NetworkInspector.Plugins.Loader;
 
 /// <summary>
-/// Starts loaded plugins in load order and stops them in reverse order, identically for the CLI, the host, and the app: a
-/// plugin that throws or takes too long is marked failed (start) or logged (stop), and nothing else stops. There is one
-/// lifecycle so that the three applications cannot drift apart.
+/// Starts loaded plugins in load order and stops them in reverse order, identically for every application: a plugin that
+/// throws or takes too long is marked failed (start) or logged (stop), and nothing else stops. There is one lifecycle so that
+/// applications cannot drift apart.
 /// <para>
 /// Isolation: every call into a plugin runs on a thread-pool thread and is awaited with a timeout, so a plugin that blocks its
 /// thread, never completes, throws, or registers a throwing callback on a token it received fails only itself. The application

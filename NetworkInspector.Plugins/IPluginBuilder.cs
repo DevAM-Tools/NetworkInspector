@@ -29,7 +29,7 @@ public interface IPluginBuilder
     /// <param name="scope">Application or profile scope.</param>
     /// <param name="register">Registers groups and settings.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="scope"/> is <see cref="SettingScope.Session"/>
-    /// (session settings belong to the host) or not a defined value.</exception>
+    /// (session settings belong to the application) or not a defined value.</exception>
     void AddSettings(SettingScope scope, Action<SettingsRegistrar> register);
 
     /// <summary>Adds a source kind; the kind is unique among all plugins (ignoring case).</summary>

@@ -3,7 +3,7 @@
 namespace NetworkInspector.Plugins.Loader;
 
 /// <summary>
-/// The core-tier builder factory and the one store of all core-tier contributions of the CLI, the host, and the app: stack
+/// The core-tier builder factory and the one store of all core-tier contributions of an application: stack
 /// contributions, plugin settings, source kinds, and export formats. Builders stage a plugin's contributions; the commit of
 /// a plugin (after every configure call of every tier returned) checks them against what is published, probes stack
 /// contributions on one cumulative probe builder, settings on one probe manager per scope, and every option list on a fresh

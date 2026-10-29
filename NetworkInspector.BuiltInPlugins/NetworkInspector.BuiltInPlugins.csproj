@@ -1,7 +1,8 @@
 <!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <IsPackable>false</IsPackable>
+    <PackageTags>network;plugin;protocols;sources;exporters;networkinspector</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <Description>Built-in core-tier plugins: standard protocols, file and random sources, and the nine exporters on the plugin contract.</Description>
   </PropertyGroup>
   <ItemGroup>

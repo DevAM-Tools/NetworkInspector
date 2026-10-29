@@ -3,9 +3,9 @@
 namespace NetworkInspector.Plugins.Loader;
 
 /// <summary>
-/// Export target rules of the application side, shared by every export runner (the command line loops and the host export
-/// job). Overwrite is the caller's decision (<c>--overwrite</c> of the command line, the <c>overwrite</c> parameter of the
-/// host), not an exporter option, and the check happens before the exporter is created so that a refused export never
+/// Export target rules of the application side, shared by every export runner (for example the command line loops).
+/// Overwrite is the caller's decision (<c>--overwrite</c> of the command line), not an exporter option, and the check
+/// happens before the exporter is created so that a refused export never
 /// touches an existing output. Stateless; thread-safe (the file system arbitrates concurrent callers).
 /// </summary>
 public static class ExportTargets

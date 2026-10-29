@@ -5,8 +5,8 @@ namespace NetworkInspector.Plugins.Loader;
 /// <summary>
 /// The texts of the two plugin timeouts. Every limit that a user can hit says what happened, the value, the setting, and how
 /// to change it, in one fixed form: <c>&lt;event&gt;. Limit: &lt;value&gt; (setting &lt;key&gt;). Change it in Settings ▸
-/// &lt;group&gt; ▸ &lt;name&gt; or with ni settings set &lt;key&gt; &lt;value&gt;.</c> The CLI, the host, and the app use the same lifecycle
-/// and therefore the same texts. Stateless; thread-safe.
+/// &lt;group&gt; ▸ &lt;name&gt; or with ni settings set &lt;key&gt; &lt;value&gt;.</c> Every application uses the same lifecycle and
+/// therefore the same texts. Stateless; thread-safe.
 /// </summary>
 internal static class LimitMessages
 {

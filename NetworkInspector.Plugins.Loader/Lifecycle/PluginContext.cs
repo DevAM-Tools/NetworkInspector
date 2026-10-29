@@ -6,7 +6,7 @@ namespace NetworkInspector.Plugins.Loader;
 /// The core-tier context of one plugin (used by the CLI). It forwards the <c>SettingsApplied</c> events of the application
 /// and the profile settings manager; each handler runs in its own try block and a throwing handler becomes one error entry
 /// <c>SettingsApplied handler failed: …</c> in the plugin's log, never an exception for the caller that applied the settings.
-/// The host and the app implement their own contexts.
+/// An application of a higher tier implements its own context.
 /// <para>
 /// Thread safety: members are thread-safe. The event keeps an immutable handler array that is swapped with
 /// <see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/>, so subscribing, unsubscribing, and raising never block each other;

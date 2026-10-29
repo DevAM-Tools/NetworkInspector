@@ -3,8 +3,8 @@
 namespace NetworkInspector.Plugins.Loader;
 
 /// <summary>
-/// The option managers of source and exporter requests. Options are Core settings, so every application — the CLI, MCP, and
-/// the UI — uses the same names, types, bounds, and messages. Stateless; thread-safe.
+/// The option managers of source and exporter requests. Options are Core settings, so every application uses the same names,
+/// types, bounds, and messages. Stateless; thread-safe.
 /// </summary>
 public static class RegistrationOptions
 {
@@ -42,7 +42,7 @@ public static class RegistrationOptions
     }
 
     /// <summary>
-    /// Applies option texts with <see cref="SettingValueText"/>, the one text form of the command line, MCP, and the UI: all
+    /// Applies option texts with <see cref="SettingValueText"/>, the one text form of every application: all
     /// texts are parsed and validated first, then set and applied, so a refusal leaves <paramref name="options"/> unchanged.
     /// Refusals are <see cref="PluginErrorCode.InvalidOption"/> with <see cref="PluginError.Option"/> set to the key:
     /// an unknown key (<c>Unknown option 'cout'; did you mean: count?</c> or <c>Unknown option 'x'; options: a, b.</c>), a key

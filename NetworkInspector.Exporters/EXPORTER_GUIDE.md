@@ -530,8 +530,8 @@ Exporters are **not thread-safe**. `OnPacket` / `OnFrame` and `OnFinish` must be
 called **sequentially from a single thread**. The caller is responsible for
 synchronization if an exporter is ever driven from multiple threads.
 
-This contract matches every existing built-in call site (CLI, MCP scanner,
-Playground) — all of which call `OnPacket` / `OnFrame` sequentially — and avoids
+This contract matches every existing built-in call site (CLI, Playground) —
+all of which call `OnPacket` / `OnFrame` sequentially — and avoids
 unnecessary locking overhead in the common case.
 
 ### 10.2 Counter access

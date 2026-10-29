@@ -37,6 +37,15 @@ public static class TsharkVerifier
     /// </summary>
     public const string AllowMissingEnvVar = "NETWORKINSPECTOR_ALLOW_MISSING_TSHARK";
 
+    /// <summary>
+    /// Time the availability probe may take. The probe runs once per test process, usually while every test module of a
+    /// full solution run starts at the same moment, and its result is cached for the whole process: a probe that times
+    /// out under that load would fail every cross-validation test of the module as "tshark not found". The extraction calls
+    /// below allow 10 to 60 s, so the probe allows as much as the slowest common call; a missing tshark still fails at once
+    /// (the process cannot be started), so the longer wait costs nothing when tshark is absent.
+    /// </summary>
+    private const int _ProbeTimeoutMs = 30_000;
+
     /// <summary>Cached availability result (<see langword="null"/> = not yet probed).</summary>
     private static bool? _IsAvailable;
 
@@ -63,8 +72,8 @@ public static class TsharkVerifier
 
         try
         {
-            (int exit, _, _, _) = TsharkProcess.Run("--version", 5000);
-            _IsAvailable = exit == 0;
+            (int exit, _, _, bool timedOut) = TsharkProcess.Run("--version", _ProbeTimeoutMs);
+            _IsAvailable = exit == 0 && !timedOut;
         }
         catch
         {

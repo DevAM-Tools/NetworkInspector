@@ -24,7 +24,7 @@ public static class PluginPathsSetting
 
     /// <summary>
     /// Registers the group <c>plugins</c> and the setting (a string array, empty by default) on the application settings
-    /// manager. A second call does nothing, so the CLI, the host, and the app can all call it.
+    /// manager. A second call does nothing, so every part of an application that needs the setting can call it.
     /// </summary>
     /// <param name="applicationSettings">The application settings manager.</param>
     /// <exception cref="ArgumentNullException"><paramref name="applicationSettings"/> is <see langword="null"/>.</exception>

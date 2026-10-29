@@ -15,13 +15,13 @@ namespace NetworkInspector.Plugins;
 /// kind reads no files.
 /// </param>
 /// <param name="AllowsMultipleFiles">
-/// Dialogs, MCP, and the CLI may select several files at once; the application then creates one source per file, so every
-/// request carries exactly one path.
+/// An application may select several files at once; it then creates one source per file, so every request carries exactly
+/// one path.
 /// </param>
 /// <param name="RegisterOptions">
 /// Registers the option settings (group <c>""</c>, Core names, types, bounds, defaults) into a fresh
-/// <see cref="SettingsManager"/> per request. Core parses and validates every option text, so the CLI, MCP, and the UI
-/// accept the same forms and give the same messages.
+/// <see cref="SettingsManager"/> per request. Core parses and validates every option text, so every application accepts the
+/// same forms and gives the same messages.
 /// </param>
 /// <param name="Create">Creates the source from a request.</param>
 public sealed record SourceRegistration(string Kind, string UiName, string Description,

@@ -1,8 +1,9 @@
 <!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <IsPackable>false</IsPackable>
     <Description>Plugin pre-scan, scan cache, load contexts, registry, and lifecycle for NetworkInspector applications.</Description>
+    <PackageTags>network;plugin;loader;networkinspector</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="NetworkInspector.Plugins.Tests" />

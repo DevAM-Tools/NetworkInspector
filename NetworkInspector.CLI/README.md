@@ -250,7 +250,8 @@ ni export SampleGen:count=10 -o out.json
 ```
 
 Starting and stopping the plugins is bounded by the application settings `plugins.startTimeoutSeconds` and
-`plugins.stopTimeoutSeconds` (defaults 120 s and 60 s). Plugin log lines go to [`logs/ni.log`](#profiles-and-settings), not to the console.
+`plugins.stopTimeoutSeconds` (defaults 120 s and 60 s). Plugin log lines (`<level> <plugin>: <text>`) go to the error
+output and to [`logs/ni.log`](#profiles-and-settings). How to write a plugin: [plugin guide](../docs/plugins/guide.md).
 
 ## ni settings
 

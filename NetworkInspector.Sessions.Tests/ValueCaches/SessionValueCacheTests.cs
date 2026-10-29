@@ -258,17 +258,23 @@ internal sealed class SessionValueCacheTests
         bool added = session.TryAddValueCache(listener, _UdpPortRequest(), out ValueCacheInfo? info, out _);
         await Assert.That(added).IsTrue();
         await Assert.That(info).IsNotNull();
-        WaitHelper.WaitUntil(() => listener.RowsSeen >= session.PacketCount && listener.Windows.Length > 0);
 
-        int packetCount = session.PacketCount;
-        int lastTo = listener.Windows[^1].To;
-        int seriesCount = listener.SeriesCount;
-        int callbackThread = listener.CallbackThreadId;
-        await Assert.That(lastTo).IsEqualTo(packetCount);
-        await Assert.That(seriesCount).IsEqualTo(packetCount);
-        await Assert.That(callbackThread).IsNotEqualTo(Environment.CurrentManagedThreadId);
+        // The source drips one more frame every 50 ms, so the packet count only stops moving once the source is released and
+        // the session has completed; read before that, a frame that lands after the wait makes the count one ahead of the
+        // last window. Wait on the last window itself rather than RowsSeen: the listener appends the window after it raises
+        // RowsSeen, so RowsSeen can already match while the window list still ends one batch short.
         source.Release();
         session.WaitForCompletion();
+        int packetCount = session.PacketCount;
+        WaitHelper.WaitUntil(() => listener.Windows is [.., (_, int to)] && to >= packetCount);
+
+        (int From, int To)[] windows = listener.Windows;
+        int seriesCount = listener.SeriesCount;
+        int callbackThread = listener.CallbackThreadId;
+        await Assert.That(windows[0].From).IsEqualTo(0);
+        await Assert.That(windows[^1].To).IsEqualTo(packetCount);
+        await Assert.That(seriesCount).IsEqualTo(packetCount);
+        await Assert.That(callbackThread).IsNotEqualTo(Environment.CurrentManagedThreadId);
         session.Shutdown();
     }
 

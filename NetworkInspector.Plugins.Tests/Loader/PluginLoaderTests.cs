@@ -96,8 +96,10 @@ internal sealed class PluginLoaderTests
         using LoaderHarness harness = new("loader-info-time");
         string folder = harness.Folder.FilePath("plugins");
 
-        // The Info getter spins for at least 80 ms (a busy wait, so that no sleep and no clock fake is needed). The info is read
-        // once. A load time of twice that or more can only mean that the same span was added to the total twice.
+        // The Info getter spins for at least 300 ms (a busy wait, so that no sleep and no clock fake is needed). The info is read
+        // once. A load time of twice that or more can only mean that the same span was added to the total twice. The span is
+        // that long so the rest of the load (assembly load, JIT, configure, commit) has 300 ms of headroom: with 80 ms it
+        // exceeded the bound on a machine that ran every test module of the solution in parallel.
         TestAssemblyCompiler.Compile(Path.Combine(folder, "SlowInfo.dll"), "SlowInfo", """
             using System.Diagnostics;
             using NetworkInspector.Plugins;
@@ -108,7 +110,7 @@ internal sealed class PluginLoaderTests
                     get
                     {
                         long start = Stopwatch.GetTimestamp();
-                        while (Stopwatch.GetElapsedTime(start) < System.TimeSpan.FromMilliseconds(80))
+                        while (Stopwatch.GetElapsedTime(start) < System.TimeSpan.FromMilliseconds(300))
                         {
                         }
 
@@ -123,8 +125,8 @@ internal sealed class PluginLoaderTests
         PluginRecord record = harness.Load([folder]).Plugins.Single();
 
         await Assert.That(record.State).IsEqualTo(PluginLoadState.Loaded);
-        await Assert.That(record.LoadTime).IsGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(80));
-        await Assert.That(record.LoadTime).IsLessThan(TimeSpan.FromMilliseconds(160));
+        await Assert.That(record.LoadTime).IsGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(300));
+        await Assert.That(record.LoadTime).IsLessThan(TimeSpan.FromMilliseconds(600));
     }
 
     #endregion

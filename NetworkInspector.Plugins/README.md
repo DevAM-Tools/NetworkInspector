@@ -7,10 +7,11 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](../LICENSE)
 
 The core-tier plugin contract of NetworkInspector. A plugin is a class library with one entry class that implements
-`IPlugin`. It adds protocols, parsers, sources, exporters, and settings to every application that loads it: the `ni`
-command-line tool today, the MCP host and the Network Inspector app later. Sources and exporters are the Core types
-(`IFrameSource`, `IFrameListener`, `IPacketListener`), and options and settings are Core settings, so there is no second
-set of interfaces to learn.
+`IPlugin`. It adds protocols, heuristic parsers, post-parsers, sources, exporters, and settings to every application
+that loads it, such as the `ni` command-line tool or your own application with
+[`NetworkInspector.Plugins.Loader`](../NetworkInspector.Plugins.Loader/README.md). Sources and exporters are the Core
+types (`IFrameSource`, `IFrameListener`, `IPacketListener`), and options and settings are Core settings, so there is no
+second set of interfaces to learn.
 
 ## Install
 
@@ -31,20 +32,33 @@ public sealed class MyPlugin : IPlugin
 
     public void Configure(IPluginBuilder builder)
     {
+        // Runs for every stack the application builds: create fresh protocol objects in every call.
         builder.AddStackContribution(static stack =>
         {
-            ProtocolId id = stack.RegisterProtocol(new MyProtocol());
-            stack.RegisterParserInU64TableByName("udp.port", 40000, id);
+            MyProtocol protocol = new();
+            ProtocolId id = stack.RegisterProtocol(protocol);
+            protocol.RegisterFields(stack, id);
+            stack.WhenProtocolTableRegistered("udp.port", table => stack.RegisterParserInU64Table(table, 40000, id));
         });
         builder.AddSettings(SettingScope.Application, static registrar =>
-            registrar.RegisterStringSetting("my.greeting", "Greeting", "my", "Hello"));
+        {
+            registrar.RegisterGroup("my", "My plugin", "Settings of My.Plugin.");
+            registrar.RegisterStringSetting("my.greeting", "Greeting", "my", "Hello");
+        });
     }
 }
 ```
 
 The entry class must be public, non-abstract, non-generic, have a public parameterless constructor, and list `IPlugin`
-in its own interface list (a class that only inherits the interface from a base class is not found). Register the
-folder with `ni settings set plugins.paths <folder>` and check the result with `ni plugins list`.
+in its own interface list (a class that only inherits the interface from a base class is not found). Build the plugin
+against the same or an older NetworkInspector version than the application that loads it. Register the folder with
+`ni settings set plugins.paths <folder> --scope application` and check the result with `ni plugins list`:
+
+```text
+My.Plugin  1.0.0  core  Loaded  -  /opt/ni-plugins/my/My.Plugin.dll  MIT  load 6.0 ms  Protocol 1, Setting 1
+```
+
+From then on every `ni` command decodes the protocol, filters on its fields, and lists the setting in `ni settings`.
 
 ## What the contract contains
 

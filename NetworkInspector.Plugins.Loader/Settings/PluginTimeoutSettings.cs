@@ -7,7 +7,7 @@ namespace NetworkInspector.Plugins.Loader;
 /// take to start and to stop. The upper bound of both is the range of <see cref="CancellationTokenSource.CancelAfter(int)"/>
 /// in seconds, 2,147,483 s, kept from an earlier implementation that cancelled with that method (the lifecycle now cancels by
 /// hand and waits with <c>WaitAsync</c>, so the bound is a kept constant and not a limit of the current implementation);
-/// within it the user decides. The CLI, the host, and the app call the same helper. Stateless; <c>Read*</c> is thread-safe,
+/// within it the user decides. Every application calls the same helper. Stateless; <c>Read*</c> is thread-safe,
 /// <see cref="Register"/> checks and then registers, so call it from one thread per settings manager.
 /// </summary>
 /// <remarks>

@@ -55,13 +55,35 @@ internal sealed class SessionSkipFieldTreeTests
 
         public void OnNewRows(ISessionReader session, ReadOnlyValueCache cache, int fromIndex, int toIndexExclusive)
         {
-            Interlocked.Add(ref _RowsSeen, toIndexExclusive - fromIndex);
+            // The series count is published before the row count. Tests wait until RowsSeen reaches a value and then read
+            // SeriesCount; in the reverse order a waiting thread could see the new row count next to the old series count.
             if (cache.TryGetSeries<ulong>("udp.srcport", out ReadOnlyValueCacheSeries<ulong> series))
             {
-                Volatile.Write(ref _SeriesCount, series.Count);
+                _RaiseSeriesCount(series.Count);
             }
 
+            Interlocked.Add(ref _RowsSeen, toIndexExclusive - fromIndex);
             _ = session;
+        }
+
+        /// <summary>
+        /// Raises the recorded series count to <paramref name="count"/> and never lowers it: two notifications that overlap
+        /// may finish in either order, and a plain store of the older, smaller count would win the race.
+        /// </summary>
+        /// <param name="count">The series count one notification saw.</param>
+        private void _RaiseSeriesCount(int count)
+        {
+            int seen = Volatile.Read(ref _SeriesCount);
+            while (count > seen)
+            {
+                int prior = Interlocked.CompareExchange(ref _SeriesCount, count, seen);
+                if (prior == seen)
+                {
+                    return;
+                }
+
+                seen = prior;
+            }
         }
     }
 

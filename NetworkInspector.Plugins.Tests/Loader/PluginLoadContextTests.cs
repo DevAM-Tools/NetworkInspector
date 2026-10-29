@@ -70,4 +70,70 @@ internal sealed class PluginLoadContextTests
     }
 
     #endregion
+
+    #region Versions of shared assemblies
+
+    [Test]
+    public async Task APluginBuiltAgainstANewerSharedAssemblyFailsWithBothVersionsBeforeItsCodeRuns()
+    {
+        using LoaderHarness harness = new("newer-shared");
+        string available = Expect.NotNull(typeof(NetworkInspectorBuiltIns).Assembly.GetName().Version).ToString();
+
+        // NetworkInspector.Protocols is an assembly of the application (it comes from the default context); the plugin is
+        // compiled against a stand-in of version 99 that is not shipped, exactly like a plugin built for a newer release.
+        PluginRecord record = _LoadAgainstSharedVersion(harness, "99.0.0.0");
+
+        await Assert.That(record.State).IsEqualTo(PluginLoadState.Failed);
+        await Assert.That(Expect.NotNull(record.Reason)).Contains("NetworkInspector.Protocols 99.0.0.0");
+        await Assert.That(Expect.NotNull(record.Reason)).Contains("this application provides " + available);
+        await Assert.That(Expect.NotNull(record.Reason)).Contains("update the application");
+
+        // No plugin code ran: the instance was never created and the record still carries the entry type name, because the
+        // info (which would rename it) was never read.
+        await Assert.That(record.Instance).IsNull();
+        await Assert.That(record.Name).IsEqualTo("VersionedPlugin");
+    }
+
+    [Test]
+    public async Task APluginBuiltAgainstAnOlderSharedAssemblyLoadsWithTheApplicationsCopy()
+    {
+        using LoaderHarness harness = new("older-shared");
+
+        PluginRecord record = _LoadAgainstSharedVersion(harness, "0.0.1.0");
+
+        await Assert.That(record.State).IsEqualTo(PluginLoadState.Loaded);
+        await Assert.That(record.Name).IsEqualTo("Versioned.Plugin");
+    }
+
+    #endregion
+
+    #region Helpers
+
+    /// <summary>
+    /// Compiles a stand-in of <c>NetworkInspector.Protocols</c> with <paramref name="version"/> outside the plugin folder, then a
+    /// plugin that references it (from a method that never runs, so only the reference matters), and loads the plugin folder.
+    /// </summary>
+    /// <param name="harness">The loader harness of the test.</param>
+    /// <param name="version">The assembly version of the stand-in the plugin is built against.</param>
+    /// <returns>The record of the one plugin.</returns>
+    private static PluginRecord _LoadAgainstSharedVersion(LoaderHarness harness, string version)
+    {
+        string standIn = TestAssemblyCompiler.Compile(harness.Folder.FilePath(Path.Combine("build", "NetworkInspector.Protocols.dll")),
+            "NetworkInspector.Protocols", "[assembly: System.Reflection.AssemblyVersion(\"" + version + "\")]\n"
+            + "namespace VersionProbe { public static class Marker { public static string Text => \"stand-in\"; } }");
+        string folder = harness.Folder.FilePath("plugins");
+        TestAssemblyCompiler.Compile(Path.Combine(folder, "VersionedPlugin.dll"), "VersionedPlugin", """
+            using NetworkInspector.Plugins;
+            public sealed class VersionedPlugin : IPlugin
+            {
+                public PluginInfo Info => new("Versioned.Plugin", "1", "MIT", "Built against a stand-in.", []);
+                public void Configure(IPluginBuilder builder) { }
+                public static string NeverCalled() => VersionProbe.Marker.Text;
+            }
+            """, [standIn]);
+
+        return harness.Load([folder]).Plugins.Single();
+    }
+
+    #endregion
 }

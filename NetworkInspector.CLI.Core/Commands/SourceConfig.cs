@@ -6,7 +6,8 @@ namespace NetworkInspector.CLI.Commands;
 /// A parsed source spec: the registration that creates the source, the file (for file kinds), and the raw option texts. A spec
 /// is <c>file.ext</c> (the kind comes from the extension) or <c>kind:key=value,…</c> (the kind comes from its name), and kinds
 /// come from the plugin registry, so a plugin's source works exactly like a built-in one. The option texts go through the Core
-/// text codec when the source is created, so the command line accepts the same forms as MCP and the UI. Immutable.
+/// text codec when the source is created, so a source option accepts the same forms as <c>ni settings</c> and every other
+/// application that creates sources through the plugin registry. Immutable.
 /// </summary>
 internal sealed class SourceConfig
 {
@@ -136,22 +137,6 @@ internal sealed class SourceConfig
             ? []
             : [Path];
         return Registration.Create(new SourceRequest(paths, options.ReadOnly, sessionSettings), out source, out error);
-    }
-
-    /// <summary>
-    /// The option texts as a dictionary of JSON strings (the last text of a repeated key wins), the form of the MCP source
-    /// parameters; the Core codec parses each text.
-    /// </summary>
-    /// <returns>The dictionary, keys compared ordinally.</returns>
-    internal IReadOnlyDictionary<string, JsonElement> OptionsAsJson()
-    {
-        Dictionary<string, JsonElement> options = new(OptionTexts.Count, StringComparer.Ordinal);
-        foreach (KeyValuePair<string, string> pair in OptionTexts)
-        {
-            options[pair.Key] = JsonSerializer.SerializeToElement(pair.Value);
-        }
-
-        return options;
     }
 
     #endregion

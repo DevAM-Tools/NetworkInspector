@@ -250,7 +250,8 @@ public sealed class PluginLoader
     /// Pre-scans the paths, loads the plugins of tiers up to <paramref name="applicationTier"/>, configures them, and records
     /// their contributions. A plugin of a higher tier is recorded as skipped and its assembly is not loaded.
     /// </summary>
-    /// <param name="applicationTier">The tier of the application: Core for the CLI, Host for a host, App for the app.</param>
+    /// <param name="applicationTier">The tier of the application (<c>ni</c> is <see cref="PluginTier.Core"/>); plugins of a higher
+    /// tier are recorded as skipped.</param>
     /// <param name="pluginPaths">Configured folders and files.</param>
     /// <param name="builders">The application's builder factory; its tier steps must match <paramref name="applicationTier"/>.</param>
     /// <param name="cancellationToken">Cancels the load before anything is published.</param>
@@ -476,6 +477,22 @@ public sealed class PluginLoader
             {
                 Pending failed = new(entry.TypeName, version, entry.Tier, result.Path, builtIn: false);
                 failed.Fail("assembly could not be loaded: " + PluginActivator.Describe(ex));
+                group.Add(failed);
+            }
+
+            return;
+        }
+
+        // A plugin built against a newer contract, Core, or framework than this application cannot bind its references, and the
+        // runtime would only say later that the entry type was "not found". The check reads metadata only, before any plugin code
+        // runs, and fails every entry type of the assembly with one reason that names both versions.
+        if (PluginLoadContext.TryFindNewerSharedReference(assembly, out string? versionProblem))
+        {
+            context.Unload();
+            foreach (PrescanEntry entry in loadable)
+            {
+                Pending failed = new(entry.TypeName, version, entry.Tier, result.Path, builtIn: false);
+                failed.Fail(versionProblem);
                 group.Add(failed);
             }
 
