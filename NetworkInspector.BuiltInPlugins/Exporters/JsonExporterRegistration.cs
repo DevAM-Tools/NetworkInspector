@@ -19,6 +19,13 @@ internal static class JsonExporterRegistration
     /// <summary>Option name: flush after every packet.</summary>
     private const string _FlushOption = "flushPerPacket";
 
+    /// <summary>
+    /// The content members of the JSON options: the packet info, the frame bytes (the <c>frame_bytes</c> key), and the additional
+    /// buffers (the <c>buffers</c> key).
+    /// </summary>
+    private const ExportContentOptions.ContentMembers _Members =
+        ExportContentOptions.ContentMembers.Info | ExportContentOptions.ContentMembers.FrameBytes | ExportContentOptions.ContentMembers.Buffers;
+
     #endregion
 
     #region Internal API
@@ -43,6 +50,7 @@ internal static class JsonExporterRegistration
         options.RegisterEnumSetting(_StyleOption, "Style", "", 0,
             EnumSettingMetadata.FromPairs([("compact", 0), ("pretty", 1), ("array", 2)]),
             description: "compact: one object per line; pretty: indented objects; array: one JSON array.");
+        ExportContentOptions.RegisterContent(options, JsonExporter.DefaultContent, _Members);
         options.RegisterBoolSetting(_FlushOption, "Flush per packet", "", false,
             description: "Flush the file after every packet so that a reader can follow the export; slower.");
     }
@@ -62,10 +70,20 @@ internal static class JsonExporterRegistration
         };
 
         bool flush = OptionValues.GetBool(values, _FlushOption);
+
+        // The content names fields of the stack that parses the packets, so a typo is reported here, before a file is created.
+        if (!ExportContentOptions.TryReadContent(values, request.Stack, JsonExporter.DefaultContent,
+                _Members, out ExportContent? content, out error))
+        {
+            listener = null;
+            return false;
+        }
+
         return ExporterBuild.TryBuild<IPacketListener>(
             () => JsonExporter.CreateBuilder()
                 .ToFile(request.TargetPath)
                 .WithFormat(format)
+                .WithContent(content!) // Invariant: only the CSV "packets" shape has no content.
                 .WithFlushPerPacket(flush)
                 .WithCancellationToken(request.CancellationToken)
                 .Build(),

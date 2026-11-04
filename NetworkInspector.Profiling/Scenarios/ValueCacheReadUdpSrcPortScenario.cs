@@ -49,7 +49,7 @@ internal sealed class ValueCacheReadUdpSrcPortScenario : IProfilingScenario
 
         // Seed packet is not recorded. The loop below is the only writer into the cache.
         ParseOptions seedOptions = new();
-        PacketId seedId = new(0);
+        PacketId seedId = 0;
         if (!Packet.TryParse(seedId, _Stack, frames[0], in seedOptions, out Packet? seeded, out ParseFailure seedFailure))
         {
             throw new InvalidOperationException(seedFailure.ToString());
@@ -59,7 +59,7 @@ internal sealed class ValueCacheReadUdpSrcPortScenario : IProfilingScenario
         ParseOptions options = new(FieldTreeMode.Build, _Cache);
         for (int i = 0; i < _PacketCount; i++)
         {
-            PacketId id = new(i + 1);
+            PacketId id = i + 1;
             if (!Packet.TryParse(recycle, id, _Stack, frames[i], in options, out ParseFailure failure))
             {
                 throw new InvalidOperationException(failure.ToString());

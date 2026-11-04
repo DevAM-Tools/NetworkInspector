@@ -66,7 +66,7 @@ internal static class CachedFrameSourceConcurrency
                         spinner.SpinOnce();
                     }
 
-                    Frame? cached = source.FrameById(new FrameId(i));
+                    Frame? cached = source.FrameById(i);
                     if (cached is null)
                     {
                         throw new InvalidOperationException($"FrameById returned null for published id {i}.");

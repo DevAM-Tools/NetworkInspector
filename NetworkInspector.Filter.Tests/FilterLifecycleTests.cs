@@ -288,12 +288,12 @@ internal sealed class FilterLifecycleTests
     {
         using Stack stack = FilterTestHelper.BuildStack();
         Filter filter = FilterTestHelper.CompileOrThrow("udp.srcport == 53", stack);
-        bool knownBefore = filter.TryGetCachedVerdict(new PacketId(0), out _);
+        bool knownBefore = filter.TryGetCachedVerdict(0, out _);
 
-        filter.RecordVerdict(new PacketId(0), matched: false);
-        filter.RecordVerdict(new PacketId(1), matched: true);
-        bool knownZero = filter.TryGetCachedVerdict(new PacketId(0), out bool zero);
-        bool knownOne = filter.TryGetCachedVerdict(new PacketId(1), out bool one);
+        filter.RecordVerdict(0, matched: false);
+        filter.RecordVerdict(1, matched: true);
+        bool knownZero = filter.TryGetCachedVerdict(0, out bool zero);
+        bool knownOne = filter.TryGetCachedVerdict(1, out bool one);
 
         // A recorded non-match is authoritative for a later TryIsMatch of the same id, as a stored verdict is.
         Packet matching = FilterTestHelper.Parse(stack, FilterTestHelper.BuildUdpFrame(53, 1024), 0);
@@ -315,9 +315,9 @@ internal sealed class FilterLifecycleTests
         using Stack stack = FilterTestHelper.BuildStack();
         Filter filter = Filter.Compile("udp.srcport == 53", stack, new FilterCompileOptions { EnableMatchCache = false }).Value;
 
-        filter.RecordVerdict(new PacketId(0), matched: false);
+        filter.RecordVerdict(0, matched: false);
 
-        await Assert.That(filter.TryGetCachedVerdict(new PacketId(0), out _)).IsFalse();
+        await Assert.That(filter.TryGetCachedVerdict(0, out _)).IsFalse();
     }
 
     [Test]
@@ -326,8 +326,8 @@ internal sealed class FilterLifecycleTests
         using Stack stack = FilterTestHelper.BuildStack();
         Filter stateful = FilterTestHelper.CompileOrThrow("flank(ip.ttl, changed, within: 1s)", stack);
 
-        await Assert.That(() => stateful.RecordVerdict(new PacketId(0), matched: false)).Throws<InvalidOperationException>();
-        await Assert.That(() => Filter.AlwaysMatch.RecordVerdict(new PacketId(0), matched: false)).Throws<InvalidOperationException>();
+        await Assert.That(() => stateful.RecordVerdict(0, matched: false)).Throws<InvalidOperationException>();
+        await Assert.That(() => Filter.AlwaysMatch.RecordVerdict(0, matched: false)).Throws<InvalidOperationException>();
     }
 
     #endregion

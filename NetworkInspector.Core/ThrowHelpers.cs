@@ -43,6 +43,19 @@ internal static class ThrowHelpers
         => throw new InvalidOperationException("Cannot access Error on a successful ParseResult.");
 
     /// <summary>
+    /// Throws when the custom text of a field changes after the packet was sealed (see <c>Packet.SetFieldCustomText</c>).
+    /// This is a broken contract of the calling dissector, not an expected failure: custom text is final at append, and a
+    /// sealed packet is read by other threads. The message names the rule and the remedy.
+    /// </summary>
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static void ThrowCustomTextAfterSeal(FieldId fieldId)
+        => throw new InvalidOperationException(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"Custom text cannot change after the packet is sealed (field id {fieldId.Value}). Set the text when appending the field."));
+
+    /// <summary>
     /// Throws when a non-finite F64 setting value is encountered during JSON serialization. JSON has no NaN or infinity, and
     /// settings are validated to be finite, so reaching this is a broken invariant (a bug), not an expected failure.
     /// </summary>

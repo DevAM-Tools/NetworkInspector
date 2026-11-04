@@ -26,6 +26,16 @@ internal static class TestHarness
     private static Dictionary<LinkType, FrameInterfaceId>? _ThreadInterfaceIds;
 
     /// <summary>
+    /// Builds a stack and parses one frame before the first test runs, so the one-time cost of type initialization and JIT
+    /// compilation of the stack, the parser, and the exporters' shared code is not billed to whichever test happens to run first.
+    /// </summary>
+    [Before(Assembly)]
+    public static void WarmUp()
+    {
+        _ = PacketGenerators.CreateParsedPacket(0, FrameGenerators.BuildEthernetIpv4UdpFrame(4));
+    }
+
+    /// <summary>
     /// Returns this thread's <see cref="Stack"/> with all standard protocols registered.
     /// Safe for concurrent tests: each thread has its own instance.
     /// </summary>
@@ -43,6 +53,11 @@ internal static class TestHarness
             FrameInterfaceRegistry registry = new();
             StackBuilder builder = new(settingsManager, registry);
             builder.RegisterStandardProtocols();
+
+            // IPv4 is not registered at ip.proto 4 by default. The tunnel frame of the content tests (IPv4 in IPv4) needs the
+            // nested layer: it is the one packet in which a single field (ip.src) occurs twice, which the occurrence policy of
+            // the export content (first / last / all) is defined for.
+            builder.RegisterParserInU64TableByName(IPv4Protocol.IpProtoTableName, 4, builder.GetProtocolId("ip")!.Value);
             Stack stack = builder.Build();
             settingsManager = null; // ownership transferred to stack
             _ThreadStack = stack;
@@ -102,6 +117,29 @@ internal static class TestHarness
         ParseOptions options = new();
         if (!Packet.TryParse(NextPacketId(), GetStack(), frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        return packet;
+    }
+
+    /// <summary>
+    /// Parses a <see cref="Frame"/> with the given options and the next dense packet id, recycling <paramref name="recycle"/>
+    /// when the stack accepts it. Throws on a failed parse.
+    /// </summary>
+    /// <param name="frame">The frame to parse.</param>
+    /// <param name="options">Parse options (for example a tree-free parse with an observer).</param>
+    /// <param name="recycle">A sealed packet whose storage is reused, or <see langword="null"/>.</param>
+    internal static Packet ParseFrame(Frame frame, in ParseOptions options, Packet? recycle = null)
+    {
+        PacketId id = NextPacketId();
+        if (recycle is not null && Packet.TryParse(recycle, id, GetStack(), frame, in options, out _))
+        {
+            return recycle;
+        }
+
+        if (!Packet.TryParse(id, GetStack(), frame, in options, out Packet? packet, out ParseFailure failure) || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());
         }

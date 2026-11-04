@@ -109,7 +109,12 @@ missing_docs = "deny"
 missing_debug_implementations = "deny"
 unreachable_pub = "deny"
 
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+
 [workspace.lints.clippy]
+missing_docs_in_private_items = "deny" # every item documented (tech-docs.md)
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
@@ -143,10 +148,32 @@ allow-expect-in-tests = true
 
 ## Comments and docs
 
-- Comments and semantic blocks: Section 4.6; one blank line between blocks.
+- Content, tags, navigation, and the Sync check: `tech-docs.md`. Semantic blocks: Section 4.6; one blank line between blocks.
 - Put units in comments, not in names.
-- Write `///` on every public item and `//!` on crates and modules. Add `# Errors`, `# Panics`, `# Safety`, `# Thread Safety` where they apply; document omitted validation.
+- ❗ Write `///` on every item, private included (`missing_docs` plus `clippy::missing_docs_in_private_items`), and `//!` on crates and modules. Add `# Errors`, `# Panics`, `# Safety`, `# Thread Safety`, `# Examples` (public entry points) where they apply; document omitted validation.
+- Refer to items with intra-doc links (`` [`Port::try_from`] ``), not bare names. `rustdoc::broken_intra_doc_links` fails the doc build when a target moves.
+- Related (`tech-docs.md` § References): a `# Related` section in the doc comment, one intra-doc link per item with a short reason. `Sync:` couplings go in the same section.
 - Keep doc examples compiling; they run as tests.
+- Sections: `// region: {name}` … `// endregion: {name}` (rust-analyzer folds them). No file header besides the copyright line and the `//!` module doc; the module doc describes the file.
+
+```rust
+/// Streams one invoice CSV file into an [`InvoiceBatch`].
+///
+/// Reads forward-only; memory stays bounded by the longest row, not the file.
+///
+/// # Thread Safety
+/// Not `Sync`: create one reader per file.
+///
+/// # Related
+/// - [`InvoiceBatch`] — the model this reader fills.
+/// - [`crate::detect::InvoiceFileDetector`] — decides which files are invoice files.
+/// - Architecture: `docs/architecture.md` § Import.
+/// - Sync: `README.md` § Options (`--input`).
+#[derive(Debug)]
+pub(crate) struct InvoiceReader { /* … */ }
+
+// region: Row parsing
+```
 
 ## Integer arithmetic
 

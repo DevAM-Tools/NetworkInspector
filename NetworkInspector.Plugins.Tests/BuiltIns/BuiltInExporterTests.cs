@@ -255,13 +255,27 @@ internal sealed class BuiltInExporterTests
     }
 
     [Test]
+    public async Task AnOverlongPcapngCommentIsAnOptionError()
+    {
+        using TempFolder folder = new("exp-pcapng-comment");
+        (Stack stack, _, _) = _Traffic(1, 7);
+
+        (IFrameListener? listener, PluginError? error) = RegistrationRunner.Create(_Frame("PCAPNG"), folder.FilePath("c.pcapng"), stack,
+            ("comment", SettingValue.String(new string('c', 65_536))));
+        _Dispose(listener);
+
+        await Assert.That(listener).IsNull();
+        await Assert.That($"{error?.Code}:{error?.Option}").IsEqualTo("InvalidOption:comment");
+    }
+
+    [Test]
     public async Task CsvColumnsDelimiterHeaderAndBomFollowTheOptions()
     {
         using TempFolder folder = new("exp-csv");
         (Stack stack, List<Frame> frames, List<Packet> packets) = _Traffic(3, 7);
         (Stack, List<Frame>, List<Packet>) traffic = (stack, frames, packets);
 
-        string custom = _WritePackets(folder, "CSV", "custom.csv", traffic, ("columns", SettingValue.String("ip.src;udp.dstport")),
+        string custom = _WritePackets(folder, "CSV", "custom.csv", traffic, ("fields", SettingValue.String("ip.src;udp.dstport")), ("text", SettingValue.Bool(false)), ("repr", SettingValue.Bool(false)),
             ("header", SettingValue.Bool(true)), ("bom", SettingValue.Bool(false)), ("delimiter", SettingValue.String(";")));
         string defaults = _WritePackets(folder, "CSV", "defaults.csv", traffic, ("bom", SettingValue.Bool(false)));
         string headerless = _WritePackets(folder, "CSV", "headerless.csv", traffic, ("header", SettingValue.Bool(false)),
@@ -269,12 +283,12 @@ internal sealed class BuiltInExporterTests
 
         string[] lines = File.ReadAllLines(custom);
         await Assert.That(lines.Length).IsEqualTo(4);
-        await Assert.That(lines[0]).IsEqualTo("ip.src;udp.dstport");
+        await Assert.That(lines[0]).IsEqualTo("No.;Time;ip.src;udp.dstport");
         for (int i = 0; i < 3; i++)
         {
             string source = Expect.NotNull(SampleStack.Text(stack, packets[i], "ip.src"));
             ulong port = Expect.NotNull(SampleStack.U64(stack, packets[i], "udp.dstport"));
-            await Assert.That(lines[i + 1]).IsEqualTo($"{source};{port}");
+            await Assert.That(lines[i + 1]).IsEqualTo($"{packets[i].Id.Value};{packets[i].Timestamp.Format()};{source};{port}");
         }
 
         await Assert.That(File.ReadAllLines(defaults)[0]).IsEqualTo("No.,Time,Info,Length");
@@ -295,14 +309,14 @@ internal sealed class BuiltInExporterTests
 
         // The request line of the packet carries text that the sender of the traffic chose: here a formula.
         string uri = Expect.NotNull(SampleStack.Text(stack, packets[0], "http.request.uri"));
-        string safe = _WritePackets(folder, "CSV", "safe.csv", traffic, ("columns", SettingValue.String("http.request.uri")),
+        string safe = _WritePackets(folder, "CSV", "safe.csv", traffic, ("fields", SettingValue.String("http.request.uri")), ("text", SettingValue.Bool(false)), ("repr", SettingValue.Bool(false)),
             ("bom", SettingValue.Bool(false)));
-        string raw = _WritePackets(folder, "CSV", "raw.csv", traffic, ("columns", SettingValue.String("http.request.uri")),
+        string raw = _WritePackets(folder, "CSV", "raw.csv", traffic, ("fields", SettingValue.String("http.request.uri")), ("text", SettingValue.Bool(false)), ("repr", SettingValue.Bool(false)),
             ("bom", SettingValue.Bool(false)), ("neutralizeFormulas", SettingValue.Bool(false)));
 
         await Assert.That(uri).IsEqualTo("=1+1");
-        await Assert.That(File.ReadAllLines(safe)[1]).IsEqualTo("'=1+1");
-        await Assert.That(File.ReadAllLines(raw)[1]).IsEqualTo("=1+1");
+        await Assert.That(File.ReadAllLines(safe)[1]).EndsWith(",'=1+1");
+        await Assert.That(File.ReadAllLines(raw)[1]).EndsWith(",=1+1");
     }
 
     [Test]
@@ -357,7 +371,7 @@ internal sealed class BuiltInExporterTests
         using TempFolder folder = new("exp-csv-errors");
         (Stack stack, _, _) = _Traffic(1, 8);
 
-        foreach (string delimiter in new[] { "ab", "\"", "\n", "é", "" })
+        foreach (string delimiter in new[] { "ab", "\"", "\n", "é", "", ":", "7", "A", "-" })
         {
             (IPacketListener? listener, PluginError? error) = RegistrationRunner.Create(_Packet("CSV"), folder.FilePath("d.csv"), stack,
                 ("delimiter", SettingValue.String(delimiter)));
@@ -368,11 +382,11 @@ internal sealed class BuiltInExporterTests
         }
 
         (IPacketListener? unknown, PluginError? columnError) = RegistrationRunner.Create(_Packet("CSV"), folder.FilePath("c.csv"), stack,
-            ("columns", SettingValue.String("ip.src;nope.field")));
+            ("fields", SettingValue.String("ip.src;nope.field")));
         _Dispose(unknown);
 
         await Assert.That(unknown).IsNull();
-        await Assert.That(Expect.NotNull(columnError).Option).IsEqualTo("columns");
+        await Assert.That(Expect.NotNull(columnError).Option).IsEqualTo("fields");
         await Assert.That(Expect.NotNull(columnError).Message).Contains("nope.field");
     }
 

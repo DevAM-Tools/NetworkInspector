@@ -13,26 +13,26 @@ internal sealed class IngestGateTests
     // The scope is a ref struct, so it cannot live across an await: the scoped work sits in synchronous helpers.
     private static void _EnterAndLeave(IngestGate gate, int id)
     {
-        using IngestScope scope = gate.Enter(new PacketId(id));
+        using IngestScope scope = gate.Enter(id);
     }
 
     private static (bool DuringInner, bool AfterInner) _NestedReplayStates(IngestGate gate, int id)
     {
-        using IngestScope outer = gate.Enter(new PacketId(id));
+        using IngestScope outer = gate.Enter(id);
         bool duringInner;
         bool afterInner;
-        using (IngestScope inner = gate.Enter(new PacketId(id)))
+        using (IngestScope inner = gate.Enter(id))
         {
-            duringInner = gate.IsReplay(new PacketId(id));
+            duringInner = gate.IsReplay(id);
         }
 
-        afterInner = gate.IsReplay(new PacketId(id));
+        afterInner = gate.IsReplay(id);
         return (duringInner, afterInner);
     }
 
     private static void _EnterAndThrow(IngestGate gate, int id)
     {
-        using IngestScope scope = gate.Enter(new PacketId(id));
+        using IngestScope scope = gate.Enter(id);
         throw new InvalidOperationException("parse failed");
     }
 
@@ -42,20 +42,20 @@ internal sealed class IngestGateTests
         IngestGate gate = new();
 
         await Assert.That(gate.Watermark).IsEqualTo(-1);
-        await Assert.That(gate.IsReplay(new PacketId(0))).IsFalse();
+        await Assert.That(gate.IsReplay(0)).IsFalse();
     }
 
     [Test]
     public async Task APacketBecomesAReplayWhenItsScopeEnds()
     {
         IngestGate gate = new();
-        bool before = gate.IsReplay(new PacketId(0));
+        bool before = gate.IsReplay(0);
 
         _EnterAndLeave(gate, 0);
 
         await Assert.That(before).IsFalse();
-        await Assert.That(gate.IsReplay(new PacketId(0))).IsTrue();
-        await Assert.That(gate.IsReplay(new PacketId(1))).IsFalse();
+        await Assert.That(gate.IsReplay(0)).IsTrue();
+        await Assert.That(gate.IsReplay(1)).IsFalse();
         await Assert.That(gate.Watermark).IsEqualTo(0);
     }
 
@@ -69,7 +69,7 @@ internal sealed class IngestGateTests
         // An inner scope of the same packet must not turn the packet's remaining layers into replays.
         await Assert.That(duringInner).IsFalse();
         await Assert.That(afterInner).IsFalse();
-        await Assert.That(gate.IsReplay(new PacketId(0))).IsTrue();
+        await Assert.That(gate.IsReplay(0)).IsTrue();
     }
 
     [Test]
@@ -88,7 +88,7 @@ internal sealed class IngestGateTests
         }
 
         await Assert.That(thrown).IsNotNull();
-        await Assert.That(gate.IsReplay(new PacketId(0))).IsTrue();
+        await Assert.That(gate.IsReplay(0)).IsTrue();
     }
 
     [Test]
@@ -142,7 +142,7 @@ internal sealed class IngestGateTests
         {
             for (int id = 0; id < Count; id++)
             {
-                using IngestScope scope = gate.Enter(new PacketId(id));
+                using IngestScope scope = gate.Enter(id);
                 effects.Record(id, 0, new TestEffect(id));
             }
 
@@ -159,7 +159,7 @@ internal sealed class IngestGateTests
                 while (!Volatile.Read(ref writerDone))
                 {
                     int id = random.Next(Count);
-                    if (gate.IsReplay(new PacketId(id)))
+                    if (gate.IsReplay(id))
                     {
                         Interlocked.Increment(ref observedReplays);
                         if (!effects.TryGet(id, 0, out TestEffect effect) || effect.Value != id)

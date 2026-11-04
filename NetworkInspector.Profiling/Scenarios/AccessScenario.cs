@@ -128,7 +128,7 @@ internal sealed class AccessScenario : IProfilingScenario
         IRandomAccessFrameSource source = _Source!;
         _Sink += AccessOrders.RunOnThreads(_Threads, _Ids, id =>
         {
-            if (source.FrameById(new FrameId(id)) is not { } frame)
+            if (source.FrameById(id) is not { } frame)
             {
                 throw new InvalidOperationException(Invariant($"Scenario {Name}: FrameById({id}) returned null."));
             }

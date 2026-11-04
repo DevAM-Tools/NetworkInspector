@@ -16,6 +16,9 @@ internal static class BlfExporterRegistration
     /// <summary>Option name: compression of the log containers.</summary>
     private const string _CompressionOption = "compression";
 
+    /// <summary>Option name: uncompressed bytes per log container.</summary>
+    private const string _ContainerSizeOption = "containerSize";
+
     #endregion
 
     #region Internal API
@@ -40,6 +43,16 @@ internal static class BlfExporterRegistration
         options.RegisterEnumSetting(_CompressionOption, "Compression", "", 2,
             EnumSettingMetadata.FromPairs([("none", 0), ("fast", 1), ("default", 2), ("best", 3)]),
             description: "Compression of the log containers: none, fast, default (zlib level 6), or best (level 9).");
+        ExportContentOptions.RegisterWriteMode(options);
+        // Limit: container size 65 536 to 67 108 864 bytes, default 10 485 760 (10 MiB). Threat: memory exhaustion — a container is
+        // held uncompressed until it is compressed, twice with the writer thread, and a compressed-output buffer of the same size is
+        // rented (none without compression). Configurable by the CLI user and the library caller. Posture: secure by default (the
+        // default bounds memory on any host; raising it compresses slightly better).
+        options.RegisterI64Setting(_ContainerSizeOption, "Container size", "", 10L * 1024 * 1024, min: 64L * 1024, max: 64L * 1024 * 1024,
+            description: "Uncompressed size in bytes at which a log container is compressed and written (65536 to 67108864, default "
+                + "10485760 = 10 MiB). A container is held in memory until it is written, and with background writing two exist; unless "
+                + "compression is none, a buffer of the same size holds the compressed output. So this limits memory. Larger containers "
+                + "compress slightly better; lower it when memory is tight.");
         options.RegisterStringSetting(FileSourceOptions.TimeZoneOption, "Timestamp time zone", "", "UTC",
             description: "Time zone of the written absolute timestamps: UTC, Local, or a system time zone id.");
     }
@@ -74,6 +87,8 @@ internal static class BlfExporterRegistration
             () => BlfExporter.CreateBuilder()
                 .ToFile(request.TargetPath)
                 .WithCompressionLevel(level)
+                .WithWriteMode(ExportContentOptions.ReadWriteMode(values))
+                .WithMaxContainerSize(OptionValues.GetI64(values, _ContainerSizeOption))
                 .WithTimestampTimeZone(zone)
                 .WithCancellationToken(request.CancellationToken)
                 .Build(),

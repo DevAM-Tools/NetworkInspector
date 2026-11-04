@@ -20,7 +20,7 @@ internal sealed class CliExportFormatTests
         await Assert.That(bytes.Take(3).SequenceEqual(new byte[] { 0xEF, 0xBB, 0xBF })).IsTrue();
         string[] lines = File.ReadAllLines(output);
         await Assert.That(lines.Length).IsEqualTo(21);
-        await Assert.That(lines[0].TrimStart('﻿')).IsEqualTo("No.,Time,Info,Length");
+        await Assert.That(lines[0].TrimStart('\uFEFF')).IsEqualTo("No.,Time,Info,Length");
     }
 
     [Test]
@@ -31,7 +31,7 @@ internal sealed class CliExportFormatTests
         string columns = sandbox.Combine("columns.csv");
 
         CliResult withOptions = await sandbox.RunAsync("export", "random:count=20,seed=5,mode=udp4", "-o", plain, "-f", "csv:delimiter=;,header=false,bom=false");
-        CliResult withColumns = await sandbox.RunAsync("export", "random:count=20,seed=5,mode=udp4", "-o", columns, "-f", "csv:columns=ip.src;udp.dstport");
+        CliResult withColumns = await sandbox.RunAsync("export", "random:count=20,seed=5,mode=udp4", "-o", columns, "-f", "csv:fields=ip.src;udp.dstport,text=false,repr=false");
 
         await Assert.That(withOptions.Exit).IsEqualTo(0);
         string[] plainLines = File.ReadAllLines(plain);
@@ -39,7 +39,7 @@ internal sealed class CliExportFormatTests
         await Assert.That(plainLines.All(static line => line.Count(static c => c == ';') >= 3)).IsTrue();
         await Assert.That(File.ReadAllBytes(plain).Take(3).SequenceEqual(new byte[] { 0xEF, 0xBB, 0xBF })).IsFalse();
         await Assert.That(withColumns.Exit).IsEqualTo(0);
-        await Assert.That(File.ReadAllLines(columns)[0].TrimStart('﻿')).IsEqualTo("ip.src,udp.dstport");
+        await Assert.That(File.ReadAllLines(columns)[0].TrimStart('\uFEFF')).IsEqualTo("No.,Time,ip.src,udp.dstport");
     }
 
     [Test]
@@ -48,8 +48,9 @@ internal sealed class CliExportFormatTests
         using CliSandbox sandbox = new();
 
         CliResult delimiter = await sandbox.RunAsync("export", "random:count=2", "-o", sandbox.Combine("a.csv"), "-f", "csv:delimiter=ab");
-        CliResult column = await sandbox.RunAsync("export", "random:count=2", "-o", sandbox.Combine("b.csv"), "-f", "csv:columns=nope.field");
+        CliResult column = await sandbox.RunAsync("export", "random:count=2", "-o", sandbox.Combine("b.csv"), "-f", "csv:fields=nope.field");
         CliResult unknown = await sandbox.RunAsync("export", "random:count=2", "-o", sandbox.Combine("c.csv"), "-f", "csv:colour=red");
+        CliResult retired = await sandbox.RunAsync("export", "random:count=2", "-o", sandbox.Combine("d.csv"), "-f", "csv:columns=ip.src");
 
         await Assert.That(delimiter.Exit).IsEqualTo(1);
         await Assert.That(delimiter.ErrorMessages).IsEquivalentTo(["Error: The delimiter must be exactly one character."], CollectionOrdering.Matching);
@@ -58,6 +59,247 @@ internal sealed class CliExportFormatTests
         await Assert.That(unknown.Exit).IsEqualTo(1);
         await Assert.That(unknown.ErrorMessages[0]).StartsWith("Error: Unknown option 'colour'; options: ");
         await Assert.That(File.Exists(sandbox.Combine("a.csv"))).IsFalse();
+
+        // The former column list is gone; the message that lists the options names its replacement.
+        await Assert.That(retired.Exit).IsEqualTo(1);
+        await Assert.That(retired.ErrorMessages[0]).StartsWith("Error: Unknown option 'columns'; options: ");
+        await Assert.That(retired.ErrorMessages[0]).Contains("fields");
+    }
+
+    #endregion
+
+    #region Frame bytes
+
+    /// <summary>
+    /// Through the command line, JSON, Text, and CSV carry no frame bytes by default and one frame record per packet with
+    /// <c>frames=true</c>; the CSV frame column comes last after the default columns.
+    /// </summary>
+    [Test]
+    public async Task FrameBytesAreOffByDefaultAndOnWithTheFramesOptionInJsonTextAndCsv()
+    {
+        using CliSandbox sandbox = new();
+        string jsonOff = sandbox.Combine("off.json");
+        string jsonOn = sandbox.Combine("on.json");
+        string textOff = sandbox.Combine("off.txt");
+        string textOn = sandbox.Combine("on.txt");
+        string csvOn = sandbox.Combine("on.csv");
+
+        CliResult[] results =
+        [
+            await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", jsonOff),
+            await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", jsonOn, "-f", "json:frames=true"),
+            await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", textOff, "-f", "text"),
+            await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", textOn, "-f", "text:frames=true"),
+            await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", csvOn, "-f", "csv:frames=true"),
+        ];
+
+        await Assert.That(results.All(static result => result.Exit == 0)).IsTrue();
+        await Assert.That(File.ReadAllText(jsonOff).Contains("frame_bytes", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(File.ReadAllText(jsonOn).Split("frame_bytes").Length - 1).IsEqualTo(5);
+        await Assert.That(File.ReadAllText(textOff).Contains("Frame bytes", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(File.ReadAllText(textOn).Split("Frame bytes (").Length - 1).IsEqualTo(5);
+        await Assert.That(File.ReadAllLines(csvOn)[0].TrimStart('\uFEFF')).IsEqualTo("No.,Time,Info,Length,frame_bytes");
+    }
+
+    /// <summary>
+    /// A CSV long layout cannot hold the frame column, so <c>csv:shape=all,frames=true</c> exits with one usage error line and
+    /// creates no file.
+    /// </summary>
+    [Test]
+    public async Task TheFramesOptionOfCsvWithALongLayoutIsAUsageErrorWithOneLine()
+    {
+        using CliSandbox sandbox = new();
+        string output = sandbox.Combine("long.csv");
+
+        CliResult result = await sandbox.RunAsync("export", "random:count=2", "-o", output, "-f", "csv:shape=all,frames=true");
+
+        await Assert.That(result.Exit).IsEqualTo(1);
+        await Assert.That(result.ErrorMessages).IsEquivalentTo(
+            ["Error: The FrameBytes column is only valid in packet rows and the selected-fields layout, not with the shape AllFields."],
+            CollectionOrdering.Matching);
+        await Assert.That(File.Exists(output)).IsFalse();
+    }
+
+    #endregion
+
+    #region Additional buffers
+
+    /// <summary>
+    /// JSON, Text, and CSV accept <c>buffers=true</c> on a capture where no packet has an additional buffer: JSON and Text then
+    /// write no buffer record, and the CSV adds the <c>buffers</c> column with an empty cell in every row.
+    /// </summary>
+    [Test]
+    public async Task TheBuffersOptionIsAcceptedByTheJsonTextAndCsvFormatsAndAddsNothingWhenNoPacketHasABuffer()
+    {
+        using CliSandbox sandbox = new();
+        string json = sandbox.Combine("buffers.json");
+        string text = sandbox.Combine("buffers.txt");
+        string csv = sandbox.Combine("buffers.csv");
+
+        CliResult[] results =
+        [
+            await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", json, "-f", "json:buffers=true"),
+            await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", text, "-f", "text:buffers=true"),
+            await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", csv, "-f", "csv:buffers=true"),
+        ];
+
+        // Random UDP frames are neither fragmented nor reassembled, so no packet has an additional buffer: the option is valid and
+        // the JSON and the text have no buffer record, while the CSV has the column with an empty cell in every row.
+        await Assert.That(results.All(static result => result.Exit == 0)).IsTrue();
+        await Assert.That(File.ReadAllText(json).Contains("buffers", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(File.ReadAllText(text).Contains("Buffer 1", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(File.ReadAllLines(csv)[0].TrimStart('\uFEFF')).IsEqualTo("No.,Time,Info,Length,buffers");
+    }
+
+    /// <summary>
+    /// The requirement end to end through the command line: a capture whose IPv4 datagram arrives in two fragments exports a buffer
+    /// record with index 1 whose bytes are the reassembled datagram with `buffers=true`, and no buffer record without it.
+    /// </summary>
+    [Test]
+    public async Task TheBuffersOptionExportsTheReassembledDatagramOfAFragmentedCaptureAndNothingWithoutIt()
+    {
+        using CliSandbox sandbox = new();
+        string input = sandbox.Combine("fragments.pcapng");
+        byte[] datagram = CliTraceWriter.WriteFragmentedUdpPcapng(input);
+        string jsonOn = sandbox.Combine("on.json");
+        string jsonOff = sandbox.Combine("off.json");
+        string textOn = sandbox.Combine("on.txt");
+        string csvOn = sandbox.Combine("on.csv");
+
+        CliResult[] results =
+        [
+            await sandbox.RunAsync("export", input, "-o", jsonOn, "-f", "json:buffers=true,style=array"),
+            await sandbox.RunAsync("export", input, "-o", jsonOff, "-f", "json:style=array"),
+            await sandbox.RunAsync("export", input, "-o", textOn, "-f", "text:buffers=true"),
+            await sandbox.RunAsync("export", input, "-o", csvOn, "-f", "csv:buffers=true"),
+        ];
+
+        await Assert.That(results.All(static result => result.Exit == 0)).IsTrue();
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(jsonOn));
+        await Assert.That(document.RootElement.GetArrayLength()).IsEqualTo(2);
+        await Assert.That(document.RootElement[0].TryGetProperty("buffers", out _)).IsFalse();
+        JsonElement record = document.RootElement[1].GetProperty("buffers")[0];
+        await Assert.That(record.GetProperty("index").GetInt32()).IsEqualTo(1);
+        await Assert.That(record.GetProperty("bytes").GetString()).IsEqualTo(Convert.ToBase64String(datagram));
+        await Assert.That(File.ReadAllText(jsonOff).Contains("buffers", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(File.ReadAllText(textOn).Contains("Buffer 1 (32):", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(File.ReadAllLines(csvOn)[2].EndsWith(",1:" + Convert.ToHexString(datagram), StringComparison.Ordinal)).IsTrue();
+    }
+
+    /// <summary>
+    /// A CSV long layout cannot hold the buffers column, so <c>csv:shape=all,buffers=true</c> exits with one usage error line and
+    /// creates no file.
+    /// </summary>
+    [Test]
+    public async Task TheBuffersOptionOfCsvWithALongLayoutIsAUsageErrorWithOneLine()
+    {
+        using CliSandbox sandbox = new();
+        string output = sandbox.Combine("long_buffers.csv");
+
+        CliResult result = await sandbox.RunAsync("export", "random:count=2", "-o", output, "-f", "csv:shape=all,buffers=true");
+
+        await Assert.That(result.Exit).IsEqualTo(1);
+        await Assert.That(result.ErrorMessages).IsEquivalentTo(
+            ["Error: The Buffers column is only valid in packet rows and the selected-fields layout, not with the shape AllFields."],
+            CollectionOrdering.Matching);
+        await Assert.That(File.Exists(output)).IsFalse();
+    }
+
+    #endregion
+
+    #region DuckDB storage version
+
+    /// <summary>
+    /// The real command line: <c>storageVersion=v1.2.0</c> writes a file that DuckDB reports with that format, the default writes
+    /// <c>v1.5.0</c>, and <c>storageVersion=v9</c> is a usage error that lists the six values and leaves no file.
+    /// </summary>
+    [Test]
+    [Category("Slow")]
+    public async Task TheStorageVersionOptionSelectsTheFileFormatAndABadValueIsAUsageErrorWithNoFile()
+    {
+        using CliSandbox sandbox = new();
+        string older = sandbox.Combine("older.duckdb");
+        string plain = sandbox.Combine("plain.duckdb");
+        string bad = sandbox.Combine("bad.duckdb");
+
+        CliResult olderResult = await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", older, "-f", "duckdb:storageVersion=v1.2.0");
+        CliResult plainResult = await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", plain, "-f", "duckdb");
+        CliResult badResult = await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", bad, "-f", "duckdb:storageVersion=v9");
+
+        await Assert.That(olderResult.Exit).IsEqualTo(0);
+        await Assert.That(plainResult.Exit).IsEqualTo(0);
+        await Assert.That(_ReportedStorageVersion(older)).IsEqualTo("v1.2.0+");
+        await Assert.That(_ReportedStorageVersion(plain)).IsEqualTo("v1.5.0+");
+        await Assert.That(badResult.Exit).IsEqualTo(1);
+        await Assert.That(badResult.ErrorMessages).IsEquivalentTo(
+            ["Error: storageVersion: allowed: v1.0.0, v1.1.0, v1.2.0, v1.3.0, v1.4.0, v1.5.0"], CollectionOrdering.Matching);
+        await Assert.That(File.Exists(bad)).IsFalse();
+    }
+
+    /// <summary>Reads the storage version tag DuckDB reports for a finished file (the oldest version with the file's format, plus <c>+</c>).</summary>
+    /// <param name="path">The finished <c>.duckdb</c> file.</param>
+    /// <returns>The reported tag text.</returns>
+    /// <remarks>Sync: <c>ExportContentOptionsTests._ReportedStorageVersion</c> in NetworkInspector.Plugins.Tests (the same query).</remarks>
+    private static string _ReportedStorageVersion(string path)
+    {
+        using DuckDB.NET.Data.DuckDBConnection connection = new($"Data Source={path};access_mode=READ_ONLY");
+        connection.Open();
+        using DuckDB.NET.Data.DuckDBCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT tags['storage_version'] FROM duckdb_databases() WHERE NOT internal";
+        return Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture)!; // Invariant: the file is the only user database.
+    }
+
+    #endregion
+
+    #region Parquet compression
+
+    /// <summary>
+    /// The real command line: <c>compression=snappy</c> writes SNAPPY column chunks, the default writes ZSTD, and
+    /// <c>compression=lzma</c> is a usage error that lists the six codecs and creates no dataset.
+    /// </summary>
+    [Test]
+    [Category("Slow")]
+    public async Task TheCompressionOptionSelectsTheCodecAndABadValueIsAUsageErrorWithNoDataset()
+    {
+        using CliSandbox sandbox = new();
+        string snappy = sandbox.Combine("snappy_parquet");
+        string plain = sandbox.Combine("plain_parquet");
+        string bad = sandbox.Combine("bad_parquet");
+
+        CliResult snappyResult = await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", snappy, "-f", "parquet:compression=snappy");
+        CliResult plainResult = await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", plain, "-f", "parquet");
+        CliResult badResult = await sandbox.RunAsync("export", "random:count=5,seed=5,mode=udp4", "-o", bad, "-f", "parquet:compression=lzma");
+
+        await Assert.That(snappyResult.Exit).IsEqualTo(0);
+        await Assert.That(plainResult.Exit).IsEqualTo(0);
+        await Assert.That(_ReportedCodecs(snappy)).IsEquivalentTo(["SNAPPY"], CollectionOrdering.Matching);
+        await Assert.That(_ReportedCodecs(plain)).IsEquivalentTo(["ZSTD"], CollectionOrdering.Matching);
+        await Assert.That(badResult.Exit).IsEqualTo(1);
+        await Assert.That(badResult.ErrorMessages).IsEquivalentTo(
+            ["Error: compression: allowed: none, snappy, gzip, brotli, lz4, zstd"], CollectionOrdering.Matching);
+        await Assert.That(Directory.Exists(bad)).IsFalse();
+    }
+
+    /// <summary>Reads the distinct codecs DuckDB reports for every column chunk of every Parquet file of a dataset directory.</summary>
+    /// <param name="directory">The dataset directory.</param>
+    /// <returns>The codec names, sorted.</returns>
+    /// <remarks>Sync: <c>ExportContentOptionsTests._ReportedCodecs</c> in NetworkInspector.Plugins.Tests (the same query).</remarks>
+    private static string[] _ReportedCodecs(string directory)
+    {
+        string[] files = Directory.GetFiles(directory, "*.parquet", SearchOption.AllDirectories);
+        string list = string.Join(", ", files.Select(static file => "'" + file.Replace('\\', '/').Replace("'", "''", StringComparison.Ordinal) + "'"));
+        using DuckDB.NET.Data.DuckDBConnection connection = new("Data Source=:memory:");
+        connection.Open();
+        using DuckDB.NET.Data.DuckDBCommand command = connection.CreateCommand();
+        command.CommandText = $"SELECT DISTINCT compression FROM parquet_metadata([{list}]) ORDER BY 1";
+        using DuckDB.NET.Data.DuckDBDataReader reader = command.ExecuteReader();
+        List<string> codecs = [];
+        while (reader.Read())
+        {
+            codecs.Add(reader.GetString(0));
+        }
+
+        return [.. codecs];
     }
 
     #endregion
@@ -172,7 +414,7 @@ internal sealed class CliExportFormatTests
         File.WriteAllText(output, "my previous good export");
         File.WriteAllText(converted, "my previous good conversion");
 
-        CliResult export = await sandbox.RunAsync("export", "random:count=5,seed=1,mode=udp4", "-o", output, "-f", "csv:columns=nope.field",
+        CliResult export = await sandbox.RunAsync("export", "random:count=5,seed=1,mode=udp4", "-o", output, "-f", "csv:fields=nope.field",
             "--overwrite");
         CliResult convert = await sandbox.RunAsync("convert", "random:count=5,seed=1,mode=udp4", "-o", converted, "--output-format", "blf:compression=nope",
             "--overwrite");

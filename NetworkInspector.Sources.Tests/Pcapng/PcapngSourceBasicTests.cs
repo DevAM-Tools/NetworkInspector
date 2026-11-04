@@ -162,13 +162,13 @@ internal sealed class PcapngSourceBasicTests
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Access frame 5 directly
-        Frame? f5 = source.FrameById(new FrameId(5));
+        Frame? f5 = source.FrameById(5);
         await Assert.That(f5).IsNotNull();
         await Assert.That(f5!.Value.Id.Value).IsEqualTo(5);
         await Assert.That(f5.Value.Data.Span.SequenceEqual(expected[5])).IsTrue();
 
         // Access frame 0
-        Frame? f0 = source.FrameById(new FrameId(0));
+        Frame? f0 = source.FrameById(0);
         await Assert.That(f0).IsNotNull();
         await Assert.That(f0!.Value.Data.Span.SequenceEqual(expected[0])).IsTrue();
     }

@@ -55,7 +55,8 @@ static void WriteAsc(IEnumerable<Frame> frames)
 | FlexRay | hex cycle and byte count |
 | Ethernet | `ETH` line, hex length, no FCS, at most 1518 bytes |
 
-Other link types, and frames outside these limits, are skipped and reported through `ItemSkipped`.
+Other link types, and frames outside these limits, are skipped and reported through `ItemSkipped`. A write failure is
+reported as `IoError` when the output stream threw an `IOException` and as `SerializationError` for any other exception.
 
 ## Builder Options
 
@@ -72,9 +73,20 @@ Other link types, and frames outside these limits, are skipped and reported thro
 - Timestamps are rounded half up to the configured digits; a carry moves into the seconds.
 - Classic CAN: a bus DLC of 9–15 (SocketCAN `len8_dlc`, byte 7) is written as `9`–`F` with 8 data bytes.
   Remote frames write `r {dlc}` with the requested count from byte 4.
+- CAN payload count (SocketCAN byte 4): a count above what the frame type carries (CAN FD above 64, classic CAN above 8; a
+  bus DLC of 9–15 lives in `len8_dlc`, never in byte 4) is corrupt, so the frame is skipped (`ItemSkipped`, `MalformedData`)
+  with a message that names the declared count and the limit. A count within the limit that is larger than the bytes present
+  (a capture cut by a snap length) is written with the bytes present; the first such frame raises one advisory `ItemSkipped`
+  event (`MalformedData`) that names the declared and the present bytes. The advisory is not counted as skipped or as an
+  error, and later cut frames are written the same way without another event. Remote frames carry no data by design and are
+  never reported.
 - LIN: the 6-bit id (`PID & 0x3F`), the checksum, and `CSM = classic` or `CSM = enhanced` from DLT_LIN byte 4
-  bits 1–0 (enhanced when the bits do not state a model). At most 8 data bytes are written; a larger DLT_LIN length
-  field (4 bits, up to 15) is limited to 8, and to the bytes present in a truncated capture.
+  bits 1–0 (enhanced when the bits do not state a model). A LIN frame carries at most 8 data bytes, so a DLT_LIN length
+  field (4 bits, up to 15) above 8 is corrupt: the frame is skipped (`ItemSkipped`, `MalformedData`) with a message that names
+  the declared length and the limit. A length within the limit that is larger than the bytes present (a capture cut by a snap
+  length) is written with the bytes present; the first such frame raises one advisory `ItemSkipped` event (`MalformedData`) that
+  names the declared and the present bytes. The advisory is not counted as skipped or as an error, and later cut frames are
+  written the same way without another event. A well-formed frame is written unchanged.
 - The channel is resolved once per interface: `blf.channel`, else `asc.channel`, else a trailing number ≥ 1 in the
   interface name, else 1. An unusable channel property falls back to channel 1. A negative channel cannot be written:
   the frames of that interface are skipped (`ItemSkipped`, `SerializationError`).

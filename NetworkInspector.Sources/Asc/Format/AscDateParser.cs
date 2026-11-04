@@ -14,22 +14,22 @@ internal static class AscDateParser
     /// variants, and European numeric formats such as those produced on a German-locale
     /// Windows host where the tool writes "d.M.yyyy HH:mm:ss".
     /// </summary>
+    // The day token is "d", not "dd": when parsing, "d" accepts one or two digits and "dd" demands exactly two. A ctime-style
+    // date pads a single-digit day with a blank ("Sun Nov  1 …"), and the token normalization below collapses that blank run
+    // to one blank, so the day arrives as "1". With "dd" such a header did not parse, the start time became 0, and every
+    // frame of the file read back with timestamp 0 on the first nine days of a month. The same holds for "h" (one or two
+    // digits) against "hh" (exactly two).
     private static readonly string[] _DateFormats =
     [
         // US formats (CANalyzer/CANoe default)
-        "ddd MMM dd hh:mm:ss tt yyyy",
-        "ddd MMM dd h:mm:ss tt yyyy",
-        "ddd MMM  d hh:mm:ss tt yyyy",
-        "ddd MMM  d h:mm:ss tt yyyy",
+        "ddd MMM d hh:mm:ss tt yyyy",
+        "ddd MMM d h:mm:ss tt yyyy",
         // European formats
-        "ddd MMM dd HH:mm:ss yyyy",
-        "ddd MMM  d HH:mm:ss yyyy",
+        "ddd MMM d HH:mm:ss yyyy",
         // Variants with a millisecond fraction
-        "ddd MMM dd HH:mm:ss.fff yyyy",
-        "ddd MMM  d HH:mm:ss.fff yyyy",
-        "ddd MMM dd hh:mm:ss.fff tt yyyy",
+        "ddd MMM d HH:mm:ss.fff yyyy",
         "ddd MMM d hh:mm:ss.fff tt yyyy",
-        "ddd MMM dd h:mm:ss.fff tt yyyy",
+        "ddd MMM d h:mm:ss.fff tt yyyy",
         // ISO-ish formats
         "yyyy-MM-dd HH:mm:ss",
         "yyyy-MM-ddTHH:mm:ss",

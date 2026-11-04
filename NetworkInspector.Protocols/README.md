@@ -86,7 +86,8 @@ Settings are read from the stack's `SettingsManager`. Preload or persist them be
 | `icmpv6.verify_checksum` (default off) | Verifies the ICMPv6 checksum over the whole message and the IPv6 pseudo header and emits `icmpv6.checksum.status` (`[Good]`, `[Bad]`, or `[Unverified]` when no IPv6 layer encloses the message or the capture length cut it short) |
 | `tcp.max_tracked_streams` (default 10000), `tcp.stream_key_last_vlan`, `tcp.stream_key_frame` | TCP stream tracking |
 | `udp.max_tracked_streams` (default 10000) | UDP stream tracking: a new conversation beyond the cap gets no `udp.stream` and `udp.error.stream_limit` |
-| `http.max_decompressed_bytes`, `ws.max_decompressed_bytes` (default 64 MiB each, range 1 KiB to 128 GiB) | Largest decompressed HTTP body or WebSocket payload; a larger one stays undecoded and is flagged by `http.error.decompress_limit` or `websocket.payload.decompressed.limit` |
+| `http.max_decompressed_bytes`, `ws.max_decompressed_bytes` (default 64 MiB each, range 1 KiB to 128 GiB) | Largest decompressed HTTP body or WebSocket payload; a larger one stays undecoded and is flagged by `http.error.decompress_limit` or `websocket.payload.decompressed.limit`. The sum per packet is a separate setting of each protocol (next row) |
+| `http.max_derived_bytes_per_packet`, `ws.max_derived_bytes_per_packet` (default 256 MiB each, range 2 KiB to 128 GiB: the TCP PDU of a message counts too), `someip.tp_max_derived_bytes_per_packet` (default 64 MiB, range 2 KiB to 16 GiB) | Most bytes that HTTP (decoded bodies), WebSocket (unmasked and decompressed payloads), or SOME/IP-TP (reassembled messages) bind to ONE packet in total: the limit is applied to all bytes bound to the packet when the protocol binds, whichever protocol bound them (the TCP PDUs included). Relaxed by default (four times the per-item default; the SOME/IP-TP default equals `someip.tp_max_buffered_bytes`). The body, payload, or message that would pass it is not parsed and `packet.error` names the setting and says it is the total per packet; a value below the per-item limit also limits a single item |
 
 Example: dispatch UDP port 47290 to PDU Transport.
 
@@ -135,7 +136,7 @@ names (services, methods, clients) and payload decoding. The format is the JSON 
 - **Strict reading.** An unknown property or an unknown `kind` or `category` is refused with one warning that names its
   position in the file, because a silently ignored typo would look like an applied setting. Comments and trailing commas are
   allowed. A bare string in a parameter, member, or alternative position is the type reference; an object adds names
-  (`name`, `filter_name`, `ui_name`) and `pad_to`. A parameter list is an array (sequential encoding) or an object keyed by TLV
+  (`name`, `ui_name`) and `pad_to`. A parameter list is an array (sequential encoding) or an object keyed by TLV
   id (TLV encoding).
 - **Limits.** A file with more services than `someip.config_max_services` (default 10,000) or more type definitions than
   `someip.config_max_types` (default 1,000,000) is refused as a whole; the warning names the setting and its value, so you can
@@ -145,17 +146,27 @@ names (services, methods, clients) and payload decoding. The format is the JSON 
   the file: a service with a duplicate id is skipped, a dangling type reference marks only its own parameter, a cycle makes
   only the types on it unavailable. A repeated service (same id and major version), member id, field accessor id, or type
   name keeps the first definition and warns once with both positions.
-- **Names of decoded values.** Every value in a payload is its own filterable field. Its registered name is
-  `someip.payload.<service>.v<major>.<member>[.in|.out].<path>`: each part is the configured name with ASCII letters
-  lower-cased, letters, digits and underscores kept, every other character replaced by an underscore, and a leading digit
-  prefixed by an underscore (service "Climate Control", major 2, method "Set-Temp", parameter "Target °C" gives
-  `someip.payload.climate_control.v2.set_temp.in.target__c`). The direction `in`/`out` appears for methods and for the getter
-  and setter of a field (`<field>_get`, `<field>_set`); events and field notifiers (`<field>_notifier`) have none. The path
-  lists structure members, union alternatives and bitfield bits by name, a TLV member without a name as `member_<id>`, and
-  array elements as `item`. A usage site can set `filter_name` (the exact registered name) and `ui_name` (the display
-  text). Names are unique across the whole file: the later site of a collision is registered with a numeric suffix
-  (`_2`, `_3`) and one warning names both paths.
-- **Limits of the parser.** Ten bounds protect against hostile captures and files. Each is a changeable setting of the group `someip`:
+- **Names of services, methods and decoded values.** Every service, every method and every value in a payload is its own
+  filterable field, and its filter name is built from the names of the description, unchanged and with their exact case:
+  `[<prefix>.]<service>.v<major>.<member>[.req|.resp].<path>`. A name starts with an ASCII letter or an underscore and
+  continues with letters, digits and underscores (no dot, no space, no dash). Service `ClimateControl` at major version 2 is
+  `ClimateControl.v2`, its method `SetTemperature` is `ClimateControl.v2.SetTemperature`, and the member `zone` of the request
+  parameter `request` is `ClimateControl.v2.SetTemperature.req.request.zone`; the filter input completes all of them and
+  none needs quotes. The direction `req` (request) or `resp` (response) appears for methods and for the getter and setter of a
+  field (`<field>_get`, `<field>_set`); events and field notifiers (`<field>_notifier`) have none, and a getter request has no
+  values. The path lists structure members, union alternatives and bitfield bits by name, a parameter or member without a name
+  by the name of its type, a TLV member without a name as `member_<id>`, and array elements as `item`. `ui_name` (service,
+  member, parameter, member of a type, bit) is the display text and defaults to the name; one with a control character is
+  reported and the name is shown. The setting `someip.field_prefix` (default empty) puts a text such as `acme` or `acme.car` in
+  front of every filter name, for users who need the names to stay clear of protocols and plugins. A name is never rewritten
+  and never gets a numeric suffix. An entry whose name breaks the rule, or repeats the name of an earlier one, is reported
+  once and refused, and everything else loads: an invalid service is skipped; an invalid or repeated member is not registered
+  (its messages show the method as unknown); an invalid or repeated parameter, structure member, TLV member or union
+  alternative stops the decode of that payload at its position with a diagnostic that names it, and the bytes from there on are
+  `someip.payload.unparsed` (decoding past it would read the following values from the wrong bytes); an invalid or repeated bit
+  is left out. A name that another component already holds in the stack (a protocol, a field or an alias; the first
+  registration keeps a name) skips the service, or else the member, with one warning that names the name and its holder.
+- **Limits of the parser.** Eleven bounds protect against hostile captures and files. Each is a changeable setting of the group `someip`:
 
   | Setting | Default | Range | Protects against |
   | --- | --- | --- | --- |
@@ -165,6 +176,7 @@ names (services, methods, clients) and payload decoding. The format is the JSON 
   | `someip.tp_max_sessions` | 1,024 | 1–1,000,000 | segmented messages that never complete |
   | `someip.tp_max_message_size` | 10 MiB | 1 KiB–1 GiB | one forged segment position claiming gigabytes |
   | `someip.tp_max_buffered_bytes` | 64 MiB | 1 MiB–16 GiB | many parallel transfers multiplying the two limits above |
+  | `someip.tp_max_derived_bytes_per_packet` | 64 MiB | 2 KiB–16 GiB | one datagram completing many large segmented messages that the packet then keeps alive |
   | `someip.tcp_max_message_size` | 16 MiB | 1 KiB–1 GiB | a forged TCP length field |
   | `someip.config_max_services` | 10,000 | 1–1,000,000 | a huge configuration file |
   | `someip.config_max_types` | 1,000,000 | 1–100,000,000 | a huge configuration file |
@@ -175,12 +187,13 @@ names (services, methods, clients) and payload decoding. The format is the JSON 
 
 #### SOME/IP settings, ports, and TCP framing
 
-Besides the ten limits, the group `someip` holds eleven more settings (all registered by `SomeIpRegistration`; a value outside
+Besides the eleven limits, the group `someip` holds twelve more settings (all registered by `SomeIpRegistration`; a value outside
 its range is refused with a warning that names the range, and the default stays in force):
 
 | Setting | Default | What it does and the risk of changing it |
 | --- | --- | --- |
 | `someip.config_file` | empty | Path of the service description (JSON). Empty means no description: messages decode at header level. |
+| `someip.field_prefix` | empty | Text put in front of every filter name of the description (`acme` gives `acme.ClimateControl.v2…`); letters, digits, underscores, parts joined by dots. An invalid value is reported and not used. A naming choice, not a limit. |
 | `someip.decode_payload` | on | Decodes the payload of configured methods into typed fields. Off shows raw bytes. |
 | `someip.show_type_metadata` | off | Adds type, length, padding and tag fields to a decoded payload; many more fields per payload. |
 | `someip.verify_e2e_crc` | off | Computes and compares the end-to-end checksum; one pass over each protected payload. |
@@ -213,11 +226,16 @@ its range is refused with a warning that names the range, and the default stays 
   drop is reported as `tcp.error.reassembly_limit`.
 - **Message tree.** Every message is a `someip` container with `messageid`, `serviceid`, `methodid`, `length` (counts from
   the client id), `clientid`, `sessionid`, `version`, `ifversion`, `msgtype` (with children `base`, `ack`, `tp`) and
-  `returncode`; `service.name`, `method.name` and `client.name` appear when the description knows the id; diagnostics are
-  `someip.error.length_min`, `.truncated`, `.version`, `.unit_limit`, `.incomplete` and `.trailing`. The payload is shown as
-  `someip.payload`: raw bytes, or the lazy decoded container of a configured member (see Payload decoding).
+  `returncode`; `service.name`, `method.name` and `client.name` appear when the description knows the id (they show the
+  `ui_name`); diagnostics are `someip.error.length_min`, `.truncated`, `.version`, `.unit_limit`, `.incomplete` and `.trailing`.
+  A message whose service the description defines also holds the service node (`ClimateControl.v2`) and, below it, the method
+  node (`ClimateControl.v2.SetTemperature`), whatever the message type, the payload length, the decode setting, the
+  segmentation, or whether another parser took the payload, so `ClimateControl.v2.SetTemperature && someip.msgtype == 0x80`
+  selects the responses of a method. The method node holds the payload bytes and, below it, the lazily decoded values (see
+  Payload decoding). `someip.payload` is always the raw bytes of a payload that no other parser took, also for a decoded one, so
+  `len(someip.payload) > 100` selects by size with or without a description.
 - **Payload decoding.** With a service description, the payload of a message of a configured member is decoded into typed
-  fields, lazily: the parse records which member direction the packet holds and attaches a `someip.payload` container
+  fields, lazily: the parse records which member direction the packet holds and attaches the method node as a container
   that is filled when somebody reads it (a view, a filter on a parameter, an export). The request list decodes a request
   and a request without return, the response list a response and a notification; an error message and a member the
   description does not define show the bytes raw. Categories: the thirteen base types (unsigned and signed integers of
@@ -235,9 +253,11 @@ its range is refused with a warning that names the range, and the default stays 
   `someip.decode_payload` off keeps the raw bytes and adds `someip.payload.disabled`. `someip.show_type_metadata` on adds
   `someip.payload.type`, `.length` (every length field read), `.array.count`, `.padding`, `.tlv.tag` (with `.wire_type`,
   `.data_id`, `.reserved`) and `.union.type`; no value changes.
-  **Index.** Every member direction is one index group (`someip.payload.<service>.v<major>.<member>[.in|.out]`) shared by all
-  its parameters. A packet is in the group when it holds a message of that member in that direction, so a filter on any
-  parameter narrows the candidates without decoding payloads. The group is a superset by design: a TLV member that is absent,
+  **Index.** The service node and the method node each have a group that is exact: a packet is in it exactly when it holds a
+  message of that service version or member, so a filter on a service or a method is answered without decoding any payload.
+  Every member direction is one more index group (`someip.payload.<service>.v<major>.<member>[.req|.resp]`, never carrying the
+  field prefix) shared by all its parameters. A packet is in the group when it holds a message of that member in that
+  direction, so a filter on any parameter narrows the candidates without decoding payloads. The group is a superset by design: a TLV member that is absent,
   or a payload that was cut off before its parameters, leaves the packet in the group without the field, and the filter
   verifies each candidate on the tree. The generic payload fields (`someip.payload.*`) are one group, `someip.payload`.
 - **End-to-end protection.** A member with `e2e_profile` shows the protection header as `someip.e2e` (the container text names the
@@ -307,7 +327,7 @@ Step-by-step guide: [`PROTOCOL_GUIDE.md`](PROTOCOL_GUIDE.md). Generator referenc
 
 - Register protocols during stack construction only; the built stack is immutable.
 - Captures are untrusted input: dissectors bound lengths and counts, report malformed data as `packet.error`, and
-  cap tracked TCP and UDP streams (`tcp.max_tracked_streams`, `udp.max_tracked_streams`), decompressed HTTP bodies and WebSocket payloads (`http.max_decompressed_bytes`, `ws.max_decompressed_bytes`, secure by default at 64 MiB) and reassembly buffers.
+  cap tracked TCP and UDP streams (`tcp.max_tracked_streams`, `udp.max_tracked_streams`), decompressed HTTP bodies and WebSocket payloads (`http.max_decompressed_bytes`, `ws.max_decompressed_bytes`, secure by default at 64 MiB), the derived bytes one packet keeps (`http.max_derived_bytes_per_packet`, `ws.max_derived_bytes_per_packet`, `someip.tp_max_derived_bytes_per_packet`) and reassembly buffers.
 - Connection keys hash with a process-seeded hash, so crafted captures cannot force hash-table collisions.
 
 ## Learn More

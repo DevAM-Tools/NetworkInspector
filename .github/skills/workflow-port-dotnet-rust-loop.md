@@ -133,7 +133,7 @@ When every unit of an assembly is done or blocked:
 
 1. `cargo test -p <crate> --release` (full crate) and all fixtures of the assembly.
 2. Benchmarks of the MANIFEST scenarios that touch the crate; record in `BENCHMARKS.md`. Slower than target: book an optimization row in the owning unit (`open`) and port it as normal work. Do not trade behavior for speed without `PA-*` or `BL-*`.
-3. `/review-loop` on the crate with this skill loaded (file mode; skip Exam). Findings are fixed through Stages 5–7. A finding that reveals a missing behavior item adds the item and re-opens the unit.
+3. `/review-loop` on the crate with this skill loaded (file mode). Findings are fixed through Stages 5–7. A finding that reveals a missing behavior item adds the item and re-opens the unit.
 4. Update `STATUS.md` milestone line for the assembly.
 
 ## Final Report (on stop)
@@ -142,7 +142,7 @@ When every unit of an assembly is done or blocked:
 - **Waiting:** list every open `BL-*` with the question, options, and the rows it holds. The human answers in `BLOCKERS.md`; the next `/port-dotnet-rust-loop` run resumes.
 - **Stopped (error):** state the cause, the last consistent STATUS, and the command that reproduces it.
 
-Chat: status counts, file paths, the blocker list. Do not recap unit bodies.
+Chat: the run report (Section 4.16). **Outcome** carries the status counts and file paths; **Not done** lists the units not ported; **Needs you** lists every open `BL-*` with its question and options. Do not recap unit bodies.
 
 ## Loop rules
 

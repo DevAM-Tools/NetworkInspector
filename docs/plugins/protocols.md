@@ -102,7 +102,7 @@ FieldId counter = stack.RegisterField(id, "sample.counter", "Counter", FieldType
 
 - **Names are global.** Every field name is unique in the stack. Use the protocol name as the prefix
   (`sample.counter`), lower case, dots between levels, underscores inside a level.
-- **The name is the filter name.** `sample.counter > 100`, `sample` (presence), and CSV `columns=sample.counter` work
+- **The name is the filter name.** `sample.counter > 100`, `sample` (presence), and CSV `fields=sample.counter` work
   as soon as the field is registered.
 - **Append in tree order.** `parentField.Append` adds a child to the field the parent protocol handed you; append to the
   returned `MutField` to nest further.

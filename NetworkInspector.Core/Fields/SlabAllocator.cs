@@ -23,11 +23,15 @@ namespace NetworkInspector.Core.Fields;
 /// must not depend on other Core types.
 /// </para>
 /// <para>
-/// <b>Not an arena allocator.</b> Unlike a true arena (where all allocations share a single
+/// <b>Lifetime model — GC regions, not an arena.</b> Unlike an arena (where all allocations share a single
 /// lifetime and are freed together via <c>Reset()</c>), this allocator has no collective
 /// deallocation. Each consumer independently references its slice of the backing array.
 /// The slab stays alive as long as <em>any</em> consumer still holds a reference to the
-/// backing array — the GC manages individual lifetimes, not the allocator.
+/// backing array — the GC manages individual lifetimes, not the allocator. This is the model for field tables and
+/// lazy-populator tables (one per parse thread) and, through <c>FrameSlabAllocator</c> in Sources, for frame buffers that a
+/// session may keep indefinitely. The opposite model (one owner, reset and rollback, pooled chunks) is
+/// <c>BatchByteArena</c> in <c>NetworkInspector.Exporters</c>; the two are deliberately separate implementations because their
+/// release rules exclude each other, and this type's allocation path is measured hot code that must not carry arena branches.
 /// </para>
 /// <para>
 /// <b>Memory layout example</b> (capacity=256, 4 slots per consumer):

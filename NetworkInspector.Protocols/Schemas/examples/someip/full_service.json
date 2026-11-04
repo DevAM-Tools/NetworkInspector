@@ -13,11 +13,13 @@
       "service_id": 62002,
       "major_version": 2,
       "name": "ClimateControl",
+      "ui_name": "Climate Control",
       "methods": [
         {
           "kind": "method",
           "id": 1,
           "name": "SetTemperature",
+          "ui_name": "Set Temperature",
           "in": [
             { "name": "request", "type_reference": "temperature_request", "ui_name": "Requested Temperature" }
           ],
@@ -78,7 +80,7 @@
           "category": "structure",
           "name": "temperature_request",
           "members": [
-            { "name": "target_c", "filter_name": "climate.settemp.target_c", "ui_name": "Target Temperature (Celsius)", "type_reference": "temperature_celsius" },
+            { "name": "target_c", "ui_name": "Target Temperature (Celsius)", "type_reference": "temperature_celsius" },
             { "name": "zone", "type_reference": "zone_name" }
           ]
         },
@@ -96,7 +98,7 @@
           "category": "tlv_structure",
           "name": "status_tlv",
           "members": {
-            "1": { "name": "current_c", "filter_name": "climate.status.current_c", "ui_name": "Current Temperature (Celsius)", "type_reference": "temperature_celsius" },
+            "1": { "name": "current_c", "ui_name": "Current Temperature (Celsius)", "type_reference": "temperature_celsius" },
             "2": { "name": "active_zone", "type_reference": "zone_name" },
             "3": { "name": "fan_state", "type_reference": "fan_speed" }
           }
@@ -107,11 +109,13 @@
       "service_id": 62002,
       "major_version": 1,
       "name": "ClimateControl",
+      "ui_name": "Climate Control",
       "methods": [
         {
           "kind": "method",
           "id": 1,
           "name": "SetTemperature",
+          "ui_name": "Set Temperature",
           "in": ["legacy_temperature"],
           "out": []
         }

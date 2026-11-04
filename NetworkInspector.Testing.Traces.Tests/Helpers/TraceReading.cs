@@ -111,7 +111,7 @@ internal static class TraceReading
         ParseOptions options = new();
         foreach (Frame frame in ReadFrames(path, stack))
         {
-            if (!Packet.TryParse(new PacketId(result.Count), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            if (!Packet.TryParse(result.Count, stack, frame, in options, out Packet? packet, out ParseFailure failure)
                 || packet is null)
             {
                 throw new InvalidOperationException(failure.ToString());

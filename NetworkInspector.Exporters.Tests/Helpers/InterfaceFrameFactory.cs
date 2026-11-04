@@ -34,6 +34,6 @@ internal static class InterfaceFrameFactory
         }
 
         FrameInterfaceId interfaceId = registry.Register(new FrameSourceId(0), interfaceName, null, linkType, properties);
-        return Frame.Create(new FrameId(frameId), Timestamp.FromNanos(timestampNanos), data, linkType, interfaceId, registry).Value;
+        return Frame.Create(frameId, Timestamp.FromNanos(timestampNanos), data, linkType, interfaceId, registry).Value;
     }
 }

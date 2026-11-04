@@ -8,7 +8,7 @@ namespace NetworkInspector.Protocols.Tests;
 /// </summary>
 internal sealed class SomeIpConfigCompilerTests
 {
-    private static (SomeIpCompiledModel Model, List<SettingsLoadWarning> Warnings) _Compile(string json)
+    private static (SomeIpCompiledModel Model, List<SettingsLoadWarning> Warnings) _Compile(string json, string prefix = "")
     {
         List<SettingsLoadWarning> warnings = [];
         using MemoryStream stream = new(Encoding.UTF8.GetBytes(json));
@@ -18,7 +18,7 @@ internal sealed class SomeIpConfigCompilerTests
             return (SomeIpCompiledModel.Empty, warnings);
         }
 
-        return (SomeIpConfigCompiler.Compile(config, warnings), warnings);
+        return (SomeIpConfigCompiler.Compile(config, prefix, warnings), warnings);
     }
 
     /// <summary>One service with the given members and types (JSON fragments).</summary>
@@ -154,9 +154,9 @@ internal sealed class SomeIpConfigCompilerTests
         await Assert.That(model.Types.ToArray().Count(static t => t.Name == "point")).IsEqualTo(1);
         await Assert.That(xNames.Count).IsEqualTo(3);
         await Assert.That(xNames.Distinct(StringComparer.Ordinal).Count()).IsEqualTo(3);
-        await Assert.That(xNames.Contains("someip.payload.svc.v1.a.in.p.x")).IsTrue();
-        await Assert.That(xNames.Contains("someip.payload.svc.v1.b.in.p.x")).IsTrue();
-        await Assert.That(xNames.Contains("someip.payload.svc.v1.c.in.l.a.x")).IsTrue();
+        await Assert.That(xNames.Contains("Svc.v1.A.req.p.x")).IsTrue();
+        await Assert.That(xNames.Contains("Svc.v1.B.req.p.x")).IsTrue();
+        await Assert.That(xNames.Contains("Svc.v1.C.req.l.a.x")).IsTrue();
     }
 
     [Test]
@@ -182,93 +182,293 @@ internal sealed class SomeIpConfigCompilerTests
     #endregion
 
     #region Names
+    private const string _TemperatureTypes = """
+        { "category": "structure", "name": "temperature_request", "members": [
+            { "name": "target_c", "type_reference": "int16" }, { "name": "zone", "type_reference": "uint8" } ] }
+        """;
+
+    private static SomeIpUsageSite _SiteNamed(SomeIpCompiledModel model, string name) =>
+        model.Sites.ToArray().Single(site => site.RegisteredName == name);
 
     [Test]
-    public async Task TheNameRuleLowersSanitizesAndPrefixesDigits()
+    public async Task NamesAreUsedUnchangedAsSegmentsWithTheirExactCase()
+    {
+        string members = string.Join(
+            ", ",
+            _Method(1, "SetTemperature", "[ { \"name\": \"request\", \"type_reference\": \"temperature_request\" } ]"),
+            _Method(2, "_private1"));
+
+        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(_Service(members, _TemperatureTypes, name: "ClimateControl", major: 2)));
+
+        List<string> names = _Names(model);
+        await Assert.That(warnings.Count).IsEqualTo(0);
+        await Assert.That(names.Contains("ClimateControl.v2.SetTemperature.req.request")).IsTrue();
+        await Assert.That(names.Contains("ClimateControl.v2.SetTemperature.req.request.target_c")).IsTrue();
+        await Assert.That(names.Contains("ClimateControl.v2.SetTemperature.req.request.zone")).IsTrue();
+        await Assert.That(names.Any(static n => n.Contains("climatecontrol", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(model.Services.Span[0].Members.Span[1].Segment).IsEqualTo("_private1");
+        await Assert.That(model.Services.Span[0].Path).IsEqualTo("ClimateControl.v2");
+        await Assert.That(model.Services.Span[0].Members.Span[0].Path).IsEqualTo("ClimateControl.v2.SetTemperature");
+    }
+
+    [Test]
+    public async Task ThePathFollowsTheMemberKindWithDirectionSegmentsAndDefaults()
     {
         const string Types = """
+            { "category": "base_type", "name": "temperature", "type_reference": "int16" },
+            { "category": "base_type", "name": "fan_speed", "type_reference": "uint8" },
             { "category": "structure", "name": "cell", "members": [ { "name": "x", "type_reference": "uint8" } ] },
-            { "category": "array", "name": "rows", "type_reference": "cell" },
-            { "category": "tlv_structure", "name": "tagged", "members": { "7": { "type_reference": "uint8" } } }
+            { "category": "array", "name": "rows_t", "type_reference": "cell" },
+            { "category": "bitfield", "name": "flags_t", "bits": 8, "members": { "0": { "name": "ready" } } }
             """;
         string members = string.Join(
             ", ",
-            _Method(1, "Set-Temp", "[ { \"name\": \"Target °C\", \"type_reference\": \"uint8\" }, { \"name\": \"rows\", \"type_reference\": \"rows\" }, { \"name\": \"tagged\", \"type_reference\": \"tagged\" } ]"),
-            """{ "kind": "event", "id": 32769, "name": "Evt", "type_reference": "uint8" }""");
+            _Method(1, "M", "[ { \"name\": \"a\", \"type_reference\": \"uint8\" } ]", "[ { \"name\": \"b\", \"type_reference\": \"uint8\" } ]"),
+            """{ "kind": "event", "id": 32769, "name": "E", "type_reference": "temperature" }""",
+            """{ "kind": "field", "name": "F", "get_id": 2, "set_id": 3, "notifier_id": 32770, "type_reference": "fan_speed" }""",
+            _Method(4, "T", "[]", "{ \"7\": \"uint8\" }"),
+            _Method(5, "R", "[ { \"name\": \"rows\", \"type_reference\": \"rows_t\" } ]"),
+            _Method(6, "B", "[ { \"name\": \"flags\", \"type_reference\": \"flags_t\" } ]"));
 
-        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(
-            _Service(members, Types, name: "Climate Control", major: 2),
-            _Service(_Method(1, "Get", "[]", "[ \"uint8\" ]"), name: "9Lives")));
+        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(_Service(members, Types, name: "S")));
 
         List<string> names = _Names(model);
         await Assert.That(warnings.Count).IsEqualTo(0);
-        await Assert.That(names.Contains("someip.payload.climate_control.v2.set_temp.in.target__c")).IsTrue();
-        await Assert.That(names.Contains("someip.payload.climate_control.v2.set_temp.in.rows.item.x")).IsTrue();
-        await Assert.That(names.Contains("someip.payload.climate_control.v2.set_temp.in.tagged.member_7")).IsTrue();
-        await Assert.That(names.Contains("someip.payload.climate_control.v2.evt.uint8")).IsTrue();
-        await Assert.That(names.Contains("someip.payload._9lives.v1.get.out.uint8")).IsTrue();
+        foreach (string expected in new[]
+        {
+            "S.v1.M.req.a", "S.v1.M.resp.b", "S.v1.E.temperature", "S.v1.F_get.resp.fan_speed", "S.v1.F_set.req.fan_speed",
+            "S.v1.F_set.resp.fan_speed", "S.v1.F_notifier.fan_speed", "S.v1.T.resp.member_7", "S.v1.R.req.rows.item.x",
+            "S.v1.B.req.flags.ready",
+        })
+        {
+            await Assert.That(names.Contains(expected)).IsTrue().Because(expected);
+        }
+
+        // The getter request has no site: a getter asks for the value and carries none.
+        SomeIpMemberInfo getter = model.Services.Span[0].Members.ToArray().Single(static m => m.Kind == SomeIpMemberKind.FieldGetter);
+        await Assert.That(getter.In.SitesCount).IsEqualTo(0);
+        await Assert.That(getter.Segment).IsEqualTo("F_get");
     }
 
     [Test]
-    public async Task TokensFollowTheRuleForEveryCharacterClass()
+    public async Task AServiceWithAnInvalidNameIsSkippedAndTheOthersCompile()
     {
-        await Assert.That(SomeIpNameTokens.Token("Climate Control")).IsEqualTo("climate_control");
-        await Assert.That(SomeIpNameTokens.Token("Target °C")).IsEqualTo("target__c");
-        await Assert.That(SomeIpNameTokens.Token("9Lives")).IsEqualTo("_9lives");
-        await Assert.That(SomeIpNameTokens.Token("a-b.c")).IsEqualTo("a_b_c");
-        await Assert.That(SomeIpNameTokens.Token("")).IsEqualTo("_");
-        await Assert.That(SomeIpNameTokens.Token("Ünï")).IsEqualTo("_n_");
-        await Assert.That(SomeIpNameTokens.Token("already_ok_1")).IsEqualTo("already_ok_1");
+        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(
+            _Service(_Method(1, "Get"), id: 0x1001, name: "Climate-Control"),
+            _Service(_Method(1, "Get"), id: 0x1002, name: "Body")));
+
+        await Assert.That(warnings.Count).IsEqualTo(1);
+        await Assert.That(warnings[0].Message).Contains("Climate-Control").And.Contains("services[0]").And.Contains("not a valid name");
+        await Assert.That(model.TryGetService(0x1001, 1, out _)).IsFalse();
+        await Assert.That(model.TryGetService(0x1002, 1, out _)).IsTrue();
     }
 
     [Test]
-    public async Task OverridesNameAFieldExactlyAndOtherSitesKeepTheDerivedName()
+    [Arguments("")]
+    [Arguments("2Door")]
+    [Arguments("Door.Front")]
+    public async Task AServiceNameThatBreaksTheSegmentRuleIsRefused(string name)
     {
-        const string Types = """{ "category": "structure", "name": "temp", "members": [ { "name": "v", "type_reference": "uint8" } ] }""";
-        string members = string.Join(
-            ", ",
-            _Method(1, "A", "[ { \"name\": \"t\", \"filter_name\": \"climate.settemp.target_c\", \"ui_name\": \"Target Temperature (Celsius)\", \"type_reference\": \"uint8\" } ]"),
-            _Method(2, "B", "[ { \"name\": \"t\", \"type_reference\": \"uint8\" } ]"));
+        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(_Service(_Method(1, "Get"), name: name)));
 
-        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(_Service(members, Types)));
-
-        SomeIpUsageSite[] sites = model.Sites.ToArray();
-        SomeIpUsageSite overridden = sites.Single(static s => s.RegisteredName == "climate.settemp.target_c");
-        SomeIpUsageSite plain = sites.Single(static s => s.RegisteredName == "someip.payload.svc.v1.b.in.t");
-        await Assert.That(warnings.Count).IsEqualTo(0);
-        await Assert.That(overridden.UiName).IsEqualTo("Target Temperature (Celsius)");
-        await Assert.That(plain.UiName).IsEqualTo("t");
+        await Assert.That(warnings.Count).IsEqualTo(1);
+        await Assert.That(model.Services.Length).IsEqualTo(0);
     }
 
     [Test]
-    public async Task ACollisionIsOneWarningNamingBothPathsAndTheLaterSiteGetsASuffix()
+    public async Task AMemberWithAnInvalidNameIsNotRegisteredAndTheOthersAre()
     {
-        string members = string.Join(
-            ", ",
-            _Method(1, "A", "[ { \"name\": \"t\", \"filter_name\": \"shared.name\", \"type_reference\": \"uint8\" } ]"),
-            _Method(2, "B", "[ { \"name\": \"t\", \"filter_name\": \"shared.name\", \"type_reference\": \"uint8\" } ]"));
+        string members = string.Join(", ", _Method(1, "Set Temp"), _Method(2, "Get"));
 
         (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(_Service(members)));
 
-        List<string> names = _Names(model);
+        SomeIpServiceInfo service = model.Services.Span[0];
         await Assert.That(warnings.Count).IsEqualTo(1);
-        await Assert.That(warnings[0].Message.Contains("someip.payload.svc.v1.a.in.t", StringComparison.Ordinal)).IsTrue();
-        await Assert.That(warnings[0].Message.Contains("someip.payload.svc.v1.b.in.t", StringComparison.Ordinal)).IsTrue();
-        await Assert.That(names.Contains("shared.name")).IsTrue();
-        await Assert.That(names.Contains("shared.name_2")).IsTrue();
+        await Assert.That(warnings[0].Message).Contains("Set Temp");
+        await Assert.That(service.MemberById.ContainsKey(1)).IsFalse();
+        await Assert.That(service.MemberById.ContainsKey(2)).IsTrue();
     }
 
     [Test]
-    public async Task AnInvalidFilterNameFallsBackToTheDerivedNameWithOneWarning()
+    public async Task ADotInANameIsRefusedBecauseItWouldAddALevelTheDescriptionDoesNotHave()
     {
-        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(_Service(
-            _Method(1, "A", "[ { \"name\": \"t\", \"filter_name\": \"9bad name\", \"type_reference\": \"uint8\" } ]"))));
+        string members = string.Join(
+            ", ",
+            _Method(1, "Set.Temperature"),
+            _Method(2, "Fine", "[ { \"name\": \"a.b\", \"type_reference\": \"uint8\" } ]"));
 
-        await Assert.That(warnings.Count).IsEqualTo(1);
-        await Assert.That(warnings[0].Message.Contains("9bad name", StringComparison.Ordinal)).IsTrue();
-        await Assert.That(_Names(model).Contains("someip.payload.svc.v1.a.in.t")).IsTrue();
+        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(_Service(members)));
+
+        SomeIpServiceInfo service = model.Services.Span[0];
+        await Assert.That(warnings.Count).IsEqualTo(2);
+        await Assert.That(service.MemberById.ContainsKey(1)).IsFalse();
+        await Assert.That(model.Sites.Span[service.Members.Span[service.MemberById[2]].In.SitesStart].Defect).Contains("a.b");
     }
 
+    [Test]
+    public async Task ASiteWithAnInvalidNameIsADefectWithoutAFieldName()
+    {
+        const string Types = """{ "category": "structure", "name": "rec", "members": [ { "name": "a", "type_reference": "uint8" }, { "name": "zone-id", "type_reference": "uint8" } ] }""";
+
+        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(_Service(_Method(1, "Get", "[ { \"name\": \"p\", \"type_reference\": \"rec\" } ]"), Types)));
+
+        SomeIpUsageSite parameter = model.Sites.Span[model.Services.Span[0].Members.Span[0].In.SitesStart];
+        SomeIpUsageSite broken = model.Sites.Span[parameter.ChildrenStart + 1];
+        await Assert.That(warnings.Count).IsEqualTo(1);
+        await Assert.That(broken.Defect).Contains("zone-id");
+        await Assert.That(broken.RegisteredName).IsEqualTo("");
+        await Assert.That(model.Sites.Span[parameter.ChildrenStart].Defect).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task TwoServicesWithTheSameNameAndVersionKeepTheFirst()
+    {
+        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(
+            _Service(_Method(1, "Get"), id: 0xF232, name: "ClimateControl", major: 2),
+            _Service(_Method(1, "Get"), id: 0xF233, name: "ClimateControl", major: 2),
+            _Service(_Method(1, "Get"), id: 0xF234, name: "ClimateControl", major: 1)));
+
+        await Assert.That(warnings.Count).IsEqualTo(1);
+        await Assert.That(_Mentions(warnings, "services[1]", "services[0]")).IsTrue();
+        await Assert.That(model.TryGetService(0xF232, 2, out _)).IsTrue();
+        await Assert.That(model.TryGetService(0xF233, 2, out _)).IsFalse();
+        await Assert.That(model.TryGetService(0xF234, 1, out _)).IsTrue();
+    }
+
+    [Test]
+    public async Task TwoMembersWithTheSameNameKeepTheFirstAndAFieldAccessorCountsAsAMember()
+    {
+        (SomeIpCompiledModel methods, List<SettingsLoadWarning> methodWarnings) = _Compile(_File(_Service(
+            string.Join(", ", _Method(1, "SetTemperature"), _Method(2, "SetTemperature")))));
+
+        string withField = string.Join(
+            ", ",
+            """{ "kind": "field", "name": "Fan", "get_id": 3, "type_reference": "uint8" }""",
+            _Method(4, "Fan_get"));
+        (SomeIpCompiledModel accessor, List<SettingsLoadWarning> accessorWarnings) = _Compile(_File(_Service(withField)));
+
+        await Assert.That(methodWarnings.Count).IsEqualTo(1);
+        await Assert.That(_Mentions(methodWarnings, "methods[1]", "methods[0]")).IsTrue();
+        await Assert.That(methods.Services.Span[0].MemberById.ContainsKey(1)).IsTrue();
+        await Assert.That(methods.Services.Span[0].MemberById.ContainsKey(2)).IsFalse();
+        await Assert.That(accessorWarnings.Count).IsEqualTo(1);
+        await Assert.That(_Mentions(accessorWarnings, "Fan_get", "get_id")).IsTrue();
+        await Assert.That(accessor.Services.Span[0].MemberById.ContainsKey(3)).IsTrue();
+        await Assert.That(accessor.Services.Span[0].MemberById.ContainsKey(4)).IsFalse();
+    }
+
+    [Test]
+    public async Task SiblingsWithTheSameNameKeepTheFirstIncludingTheTlvDefault()
+    {
+        const string Types = """
+            { "category": "structure", "name": "twice", "members": [ { "name": "x", "type_reference": "uint8" }, { "name": "x", "type_reference": "uint8" } ] },
+            { "category": "tlv_structure", "name": "tagged", "members": { "3": { "name": "member_7", "type_reference": "uint8" }, "7": { "type_reference": "uint8" } } },
+            { "category": "base_type", "name": "zone_name", "type_reference": "uint8" },
+            { "category": "bitfield", "name": "flags_t", "bits": 8, "members": { "0": { "name": "ready" }, "1": { "name": "ready" } } }
+            """;
+        string members = string.Join(
+            ", ",
+            _Method(1, "A", "[ { \"name\": \"p\", \"type_reference\": \"twice\" } ]"),
+            _Method(2, "B", "[ { \"name\": \"t\", \"type_reference\": \"tagged\" } ]"),
+            _Method(3, "C", "[ \"zone_name\", \"zone_name\" ]"),
+            _Method(4, "D", "[ { \"name\": \"f\", \"type_reference\": \"flags_t\" } ]"));
+
+        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(_Service(members, Types)));
+
+        SomeIpServiceInfo service = model.Services.Span[0];
+        SomeIpUsageSite[] sites = model.Sites.ToArray();
+        SomeIpUsageSite twice = sites[sites[service.Members.Span[0].In.SitesStart].ChildrenStart + 1];
+        SomeIpUsageSite tagged = sites[sites[service.Members.Span[1].In.SitesStart].ChildrenStart];
+        SomeIpUsageSite taggedLater = sites[sites[service.Members.Span[1].In.SitesStart].ChildrenStart + 1];
+        SomeIpUsageSite secondZone = sites[service.Members.Span[2].In.SitesStart + 1];
+        await Assert.That(warnings.Count).IsEqualTo(4);
+        await Assert.That(twice.Defect).Contains("members[0]");
+        await Assert.That(tagged.Defect).IsEqualTo("");
+        await Assert.That(taggedLater.Defect).Contains("member_7");
+        await Assert.That(secondZone.Defect).Contains("zone_name");
+        await Assert.That(sites[service.Members.Span[3].In.SitesStart].ChildrenCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task NoNameIsEverInventedWithASuffix()
+    {
+        string members = string.Join(
+            ", ",
+            _Method(1, "A", "[ { \"name\": \"p\", \"type_reference\": \"rec\" }, { \"name\": \"p\", \"type_reference\": \"rec\" } ]"),
+            _Method(2, "A"),
+            _Method(3, "B", "[ \"rec\", \"rec\" ]"));
+        const string Types = """{ "category": "structure", "name": "rec", "members": [ { "name": "x", "type_reference": "uint8" }, { "name": "x", "type_reference": "uint8" } ] }""";
+
+        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(_File(
+            _Service(members, Types, id: 1, name: "S"),
+            _Service(members, Types, id: 2, name: "S")));
+
+        await Assert.That(warnings.Count).IsGreaterThan(0);
+        await Assert.That(_Names(model).Any(static n => System.Text.RegularExpressions.Regex.IsMatch(n, "_[0-9]+$"))).IsFalse();
+        List<string> registered = [.. _Names(model).Where(static n => n.Length > 0)];
+        await Assert.That(registered.Distinct(StringComparer.Ordinal).Count()).IsEqualTo(registered.Count);
+    }
+
+    [Test]
+    public async Task ADisplayNameIsTakenFromUiNameOrTheNameAndAnInvalidOneWarns()
+    {
+        const string Json = """
+            { "schema_version": "1.0", "services": [ { "service_id": 62002, "major_version": 2, "name": "ClimateControl", "ui_name": "Climate Control",
+              "methods": [ { "kind": "method", "id": 1, "name": "SetTemperature", "in": [ { "name": "request", "ui_name": "Requested\nTemperature", "type_reference": "uint8" } ], "out": [] } ],
+              "data_types": [] } ] }
+            """;
+
+        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(Json);
+
+        SomeIpServiceInfo service = model.Services.Span[0];
+        SomeIpMemberInfo method = service.Members.Span[0];
+        await Assert.That(service.UiName).IsEqualTo("Climate Control");
+        await Assert.That(method.UiName).IsEqualTo("SetTemperature");
+        await Assert.That(model.Sites.Span[method.In.SitesStart].UiName).IsEqualTo("request");
+        await Assert.That(warnings.Count).IsEqualTo(1);
+        await Assert.That(warnings[0].Message).Contains("ui_name").And.Contains("parameter 0");
+    }
+
+    [Test]
+    [Arguments("", "ClimateControl.v2.SetTemperature.req.request.zone")]
+    [Arguments("acme", "acme.ClimateControl.v2.SetTemperature.req.request.zone")]
+    [Arguments("acme.car", "acme.car.ClimateControl.v2.SetTemperature.req.request.zone")]
+    public async Task ThePrefixIsPutInFrontOfEveryFilterNameButNeverOfAGroupName(string prefix, string expected)
+    {
+        string members = _Method(1, "SetTemperature", "[ { \"name\": \"request\", \"type_reference\": \"temperature_request\" } ]");
+
+        (SomeIpCompiledModel model, List<SettingsLoadWarning> warnings) = _Compile(
+            _File(_Service(members, _TemperatureTypes, name: "ClimateControl", major: 2)),
+            prefix);
+
+        SomeIpServiceInfo service = model.Services.Span[0];
+        await Assert.That(warnings.Count).IsEqualTo(0);
+        await Assert.That(_Names(model).Contains(expected)).IsTrue();
+        await Assert.That(service.Path.EndsWith("ClimateControl.v2", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(service.Members.Span[0].Path).IsEqualTo(expected[..expected.IndexOf(".req.", StringComparison.Ordinal)]);
+        await Assert.That(service.GroupName).IsEqualTo("someip.payload.ClimateControl.v2");
+        await Assert.That(service.Members.Span[0].GroupName).IsEqualTo("someip.payload.ClimateControl.v2.SetTemperature");
+    }
+
+    [Test]
+    public async Task TheSchemaOfEveryShippedExampleDeclaresNoFilterNameAndTheFullExampleShowsUiNames()
+    {
+        string schema = File.ReadAllText(Path.Combine(ShippedConfigFixture.SchemasRoot, "someip-config.schema.json"));
+        using JsonDocument document = JsonDocument.Parse(schema);
+        JsonElement definitions = document.RootElement.GetProperty("$defs");
+        string full = File.ReadAllText(ShippedConfigFixture.ExamplePath("someip", "full_service.json"));
+        using JsonDocument example = JsonDocument.Parse(full);
+        JsonElement firstService = example.RootElement.GetProperty("services")[0];
+
+        await Assert.That(schema.Contains("filter_name", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(definitions.GetProperty("service").GetProperty("properties").TryGetProperty("ui_name", out _)).IsTrue();
+        await Assert.That(definitions.GetProperty("method_call").GetProperty("properties").TryGetProperty("ui_name", out _)).IsTrue();
+        await Assert.That(definitions.GetProperty("service").GetProperty("properties").GetProperty("name").GetProperty("pattern").GetString())
+            .IsEqualTo("^[A-Za-z_][A-Za-z0-9_]*$");
+        await Assert.That(full.Contains("filter_name", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(firstService.TryGetProperty("ui_name", out _)).IsTrue();
+        await Assert.That(firstService.GetProperty("methods")[0].TryGetProperty("ui_name", out _)).IsTrue();
+    }
     #endregion
 
     #region Duplicates, cycles, partial loading
@@ -421,7 +621,7 @@ internal sealed class SomeIpConfigCompilerTests
         using FileStream stream = ShippedConfigFixture.ReadNegative("someip", "unknown_primitive.json");
         _ = SomeIpConfigLoader.TryLoadFromStream(stream, out SomeIpConfig? config, warnings);
 
-        SomeIpCompiledModel model = SomeIpConfigCompiler.Compile(config!, warnings);
+        SomeIpCompiledModel model = SomeIpConfigCompiler.Compile(config!, "", warnings);
 
         await Assert.That(warnings.Count).IsEqualTo(1);
         await Assert.That(warnings[0].Message.Contains("uint24", StringComparison.Ordinal)).IsTrue();
@@ -508,7 +708,7 @@ internal sealed class SomeIpConfigCompilerTests
         using FileStream stream = ShippedConfigFixture.ReadExample("someip", fileName);
         _ = SomeIpConfigLoader.TryLoadFromStream(stream, out SomeIpConfig? config, warnings);
 
-        SomeIpCompiledModel model = SomeIpConfigCompiler.Compile(config!, warnings);
+        SomeIpCompiledModel model = SomeIpConfigCompiler.Compile(config!, "", warnings);
 
         await Assert.That(warnings.Count).IsEqualTo(0);
         await Assert.That(model.Services.Length).IsGreaterThanOrEqualTo(1);
@@ -522,13 +722,13 @@ internal sealed class SomeIpConfigCompilerTests
         using FileStream stream = ShippedConfigFixture.ReadExample("someip", "full_service.json");
         _ = SomeIpConfigLoader.TryLoadFromStream(stream, out SomeIpConfig? config, warnings);
 
-        SomeIpCompiledModel model = SomeIpConfigCompiler.Compile(config!, warnings);
+        SomeIpCompiledModel model = SomeIpConfigCompiler.Compile(config!, "", warnings);
 
         List<string> names = _Names(model);
         await Assert.That(model.Services.Length).IsEqualTo(2);
         await Assert.That(model.Services.ToArray().Sum(static s => s.Members.Length)).IsEqualTo(6);
-        await Assert.That(names.Contains("climate.settemp.target_c")).IsTrue();
-        await Assert.That(names.Any(static n => n.StartsWith("someip.payload.climatecontrol.v2.settemperature.in.", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(names.Contains("ClimateControl.v2.SetTemperature.req.request.target_c")).IsTrue();
+        await Assert.That(names.Any(static n => n.StartsWith("ClimateControl.v2.SetTemperature.req.", StringComparison.Ordinal))).IsTrue();
     }
 
     [Test]
@@ -567,7 +767,7 @@ internal sealed class SomeIpConfigCompilerTests
                         if (SomeIpConfigLoader.TryLoadFromStream(stream, out SomeIpConfig? config, warnings)
                             && SomeIpConfigLoader.TryAccept(config, 10_000, 1_000_000, warnings))
                         {
-                            _ = SomeIpConfigCompiler.Compile(config, warnings);
+                            _ = SomeIpConfigCompiler.Compile(config, "", warnings);
                         }
                     }
                     catch (Exception ex)

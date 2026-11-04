@@ -25,6 +25,10 @@ internal static class PbfExporterRegistration
     /// <summary>Option name: declares that the packets arrive in non-decreasing timestamp order (metadata only; nothing is sorted).</summary>
     private const string _SortedOption = "timestampSorted";
 
+    /// <summary>The content members of the blocks in both layouts: the packet info, the frame bytes, and the additional buffers.</summary>
+    private const ExportContentOptions.ContentMembers _Members =
+        ExportContentOptions.ContentMembers.Info | ExportContentOptions.ContentMembers.FrameBytes | ExportContentOptions.ContentMembers.Buffers;
+
     #endregion
 
     #region Internal API
@@ -49,6 +53,8 @@ internal static class PbfExporterRegistration
         options.RegisterEnumSetting(_FormatOption, "Layout", "", 0,
             EnumSettingMetadata.FromPairs([("standard", 0), ("columnar", 1)]),
             description: "standard: row-oriented blocks; columnar: column-oriented blocks.");
+        ExportContentOptions.RegisterContent(options, PbfExporter.DefaultContent, _Members);
+        ExportContentOptions.RegisterBatching(options);
         options.RegisterBoolSetting(_CompressedOption, "Compressed", "", true, description: "Compress the blocks with LZ4.");
         options.RegisterBoolSetting(_TrailerOption, "Trailer index", "", true,
             description: "Write the block index at the end of the file for random access.");
@@ -73,10 +79,25 @@ internal static class PbfExporterRegistration
         // The flag is passed through as the Core builder defines it: a declaration that the packets arrive in timestamp
         // order; the current PBF writer emits the same bytes either way. It does not sort the packets.
         bool sorted = OptionValues.GetBool(values, _SortedOption);
+
+        // The content names fields of the stack that parses the packets, so a typo is reported here, before a file is created.
+        // Both layouts take the same members and the same defaults: the standard layout writes the frame bytes as a packet field,
+        // the columnar layout as a column.
+        if (!ExportContentOptions.TryReadContent(values, request.Stack, PbfExporter.DefaultContent, _Members, out ExportContent? content, out error))
+        {
+            listener = null;
+            return false;
+        }
+
+        BatchingOptions batching = ExportContentOptions.ReadBatching(values);
         return ExporterBuild.TryBuild<IPacketListener>(
             () => PbfExporter.CreateBuilder()
                 .ToFile(request.TargetPath)
                 .WithFormat(format)
+                .WithContent(content!) // Invariant: only the CSV "packets" shape has no content.
+                .WithWriteMode(batching.WriteMode)
+                .WithMaxPacketsPerBlock(batching.MaxPacketsPerBatch)
+                .WithMaxBlockSize(batching.MaxBatchBytes)
                 .WithCompressed(compressed)
                 .WithTrailerIndex(trailer)
                 .WithTimestampSorted(sorted)

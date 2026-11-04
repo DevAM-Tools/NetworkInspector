@@ -77,7 +77,7 @@ internal sealed class CaptureFileGuardTests
         }
 
         // FrameById makes no system call, so before a sequential check it still serves the unchanged bytes.
-        Frame? byIdBeforeCheck = source.FrameById(new FrameId(0));
+        Frame? byIdBeforeCheck = source.FrameById(0);
 
         // The end-of-read check of the sequential path finds the change and stops reading; a preloaded source has no
         // check left and reads its copy to the end.
@@ -88,7 +88,7 @@ internal sealed class CaptureFileGuardTests
         }
 
         Frame? later = source.NextFrame();
-        Frame? byIdAfterCheck = source.FrameById(new FrameId(0));
+        Frame? byIdAfterCheck = source.FrameById(0);
 
         // Assert
         await Assert.That(byIdBeforeCheck).IsNotNull();
@@ -120,7 +120,7 @@ internal sealed class CaptureFileGuardTests
 
         // A lazy scan indexes frame 0 with the first read.
         _ = source.NextFrame();
-        Frame? byIdBeforeChange = source.FrameById(new FrameId(0));
+        Frame? byIdBeforeChange = source.FrameById(0);
 
         // Act: only the modification time moves; the end-of-read check compares it.
         File.SetLastWriteTimeUtc(file.Path, DateTime.UtcNow.AddHours(1));
@@ -128,7 +128,7 @@ internal sealed class CaptureFileGuardTests
         {
         }
 
-        Frame? byIdAfterCheck = source.FrameById(new FrameId(0));
+        Frame? byIdAfterCheck = source.FrameById(0);
 
         // Assert: a preloaded source serves its copy; a file-backed source fails closed.
         await Assert.That(byIdBeforeChange).IsNotNull();
@@ -157,7 +157,7 @@ internal sealed class CaptureFileGuardTests
         _ = SourceTestFixture.InitializeAndStartSource(source);
         _ = source.NextFrame();
         CaptureFileGuard guard = _GuardOf(source);
-        Frame? before = source.FrameById(new FrameId(0));
+        Frame? before = source.FrameById(0);
 
         // Act: another handle appends one byte. The monitor of a file-backed source (default interval) finds it without any
         // read call; a preloaded source runs no monitor and keeps serving its copy.
@@ -171,7 +171,7 @@ internal sealed class CaptureFileGuardTests
             await guard.ChangeSignal!.WaitAsync(TimeSpan.FromSeconds(30));
         }
 
-        Frame? after = source.FrameById(new FrameId(0));
+        Frame? after = source.FrameById(0);
         Frame? next = source.NextFrame();
 
         // Assert

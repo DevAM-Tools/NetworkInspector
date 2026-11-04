@@ -19,7 +19,7 @@ internal sealed class MutFieldTests
     private static Packet _ParseFrame(Stack stack, ProtocolId firstProtocolId)
     {
         Frame frame = Frame.Create(
-            new FrameId(1),
+            1,
             Timestamp.FromSecs(1000),
             new byte[14],
             LinkType.Ethernet,
@@ -29,7 +29,7 @@ internal sealed class MutFieldTests
         {
             ParseOptions options = new(firstProtocol: firstProtocolId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -389,13 +389,13 @@ internal sealed class MutFieldTests
         {
             byte[] data = [0x01];
             Frame frame = Frame.Create(
-                new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
+                1, Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
             Packet packet;
             {
                 ParseOptions options = new(firstProtocol: protoId);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -426,13 +426,13 @@ internal sealed class MutFieldTests
         {
             byte[] data = [0x01];
             Frame frame = Frame.Create(
-                new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
+                1, Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
             Packet packet;
             {
                 ParseOptions options = new(firstProtocol: protoId);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -492,13 +492,13 @@ internal sealed class MutFieldTests
         {
             byte[] data = [0x01];
             Frame frame = Frame.Create(
-                new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
+                1, Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
             Packet packet;
             {
                 ParseOptions options = new(firstProtocol: parentId);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -545,12 +545,12 @@ internal sealed class MutFieldTests
         {
             byte[] data = [0x01];
             Frame frame = Frame.Create(
-                new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
+                1, Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
             {
                 ParseOptions options = new(firstProtocol: parentId);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -590,12 +590,12 @@ internal sealed class MutFieldTests
         {
             byte[] data = [0xFE];
             Frame frame = Frame.Create(
-                new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
+                1, Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
             {
                 ParseOptions options = new(firstProtocol: parentId);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -955,13 +955,13 @@ internal sealed class MutFieldTests
         {
             byte[] data = [0x01];
             Frame frame = Frame.Create(
-                new FrameId(1), Timestamp.FromSecs(0), data, LinkType.Ethernet,
+                1, Timestamp.FromSecs(0), data, LinkType.Ethernet,
                 FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
             Packet packet;
             {
                 ParseOptions options = new(firstProtocol: parentId);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -1090,12 +1090,12 @@ internal sealed class MutFieldTests
     }
 
     private static Frame _InsertFrame(Stack stack, int id) => Frame.Create(
-        new FrameId(id), Timestamp.FromSecs(id), new byte[] { 0x01 }, LinkType.Ethernet,
+        id, Timestamp.FromSecs(id), new byte[] { 0x01 }, LinkType.Ethernet,
         FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
 
     private static Packet _ParseScript(Stack stack, ProtocolId id, int packetId, in ParseOptions options)
     {
-        if (!Packet.TryParse(new PacketId(packetId), stack, _InsertFrame(stack, packetId), in options, out Packet? packet, out ParseFailure failure))
+        if (!Packet.TryParse(packetId, stack, _InsertFrame(stack, packetId), in options, out Packet? packet, out ParseFailure failure))
         {
             throw new InvalidOperationException(failure.ToString());
         }
@@ -1215,8 +1215,8 @@ internal sealed class MutFieldTests
         (Stack stack, InsertScriptProtocol protocol, ProtocolId id) = _BuildInsertStack();
         using (stack)
         {
-            Packet build = new(new PacketId(0), stack, _InsertFrame(stack, 0), FieldTreeMode.Build);
-            Packet skip = new(new PacketId(1), stack, _InsertFrame(stack, 1), FieldTreeMode.Skip);
+            Packet build = new(0, stack, _InsertFrame(stack, 0), FieldTreeMode.Build);
+            Packet skip = new(1, stack, _InsertFrame(stack, 1), FieldTreeMode.Skip);
             string? buildRoot = null;
             string? skipRoot = null;
             ushort skipSibling;
@@ -1338,6 +1338,10 @@ internal sealed class MutFieldTests
             {
                 throw new InvalidOperationException("observer failed");
             }
+        }
+
+        public void EndPacket(PacketId id, bool complete)
+        {
         }
     }
 

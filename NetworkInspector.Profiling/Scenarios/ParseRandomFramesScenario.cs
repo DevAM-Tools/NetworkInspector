@@ -92,7 +92,7 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
         {
             for (int i = 0; i < _BatchSize; i++)
             {
-                PacketId id = new(counter + i);
+                PacketId id = counter + i;
                 if (!Packet.TryParse(id, stack, frames[i], in options, out Packet? packet, out ParseFailure failure))
                 {
                     throw new InvalidOperationException(failure.ToString());
@@ -106,7 +106,7 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
             for (int i = 0; i < _BatchSize; i++)
             {
                 // Hot path: parse only — the field tree is built but not walked.
-                PacketId id = new(counter + i);
+                PacketId id = counter + i;
                 if (!Packet.TryParse(id, stack, frames[i], in options, out _, out ParseFailure failure))
                 {
                     throw new InvalidOperationException(failure.ToString());

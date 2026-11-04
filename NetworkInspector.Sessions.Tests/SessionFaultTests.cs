@@ -70,7 +70,7 @@ internal sealed class SessionFaultTests
 
         (bool restarted, SessionFailure? failure) = _Fault(rig);
 
-        bool packet = rig.Session.TryGetPacket(new PacketId(0), out _, out SessionFailure? packetFailure);
+        bool packet = rig.Session.TryGetPacket(0, out _, out SessionFailure? packetFailure);
         bool listener = rig.Session.TryAddListener(new TestSessionListener(), out _, out SessionFailure? listenerFailure);
         bool cache = rig.Session.TryAddValueCache(
             cacheListener, new ValueCacheRequest { FieldNames = ["udp.dstport"] }, out _, out SessionFailure? cacheFailure);
@@ -122,7 +122,7 @@ internal sealed class SessionFaultTests
 
         // The parked source now ingests the frame it already handed out: the next id is exactly the old count.
         WaitHelper.WaitUntil(() => rig.Session.PacketCount == _Frames + 1);
-        bool read = rig.Session.TryGetPacket(new PacketId(_Frames), out Packet? last, out _);
+        bool read = rig.Session.TryGetPacket(_Frames, out Packet? last, out _);
 
         await Assert.That(recovered).IsTrue();
         await Assert.That(rig.Session.Phase).IsEqualTo(SessionPhase.Running);
@@ -155,7 +155,7 @@ internal sealed class SessionFaultTests
         }
 
         rig.SourceJob.Join();
-        bool read = rig.Session.TryGetPacket(new PacketId(0), out _, out SessionFailure? readFailure);
+        bool read = rig.Session.TryGetPacket(0, out _, out SessionFailure? readFailure);
 
         await Assert.That(thrown).IsNull();
         await Assert.That((rig.SourceJob.Status, rig.SourceJob.EndReason)).IsEqualTo((JobStatus.Cancelled, JobEndReason.SessionShutdown));

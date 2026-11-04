@@ -8,7 +8,7 @@ namespace NetworkInspector.Exporters.Tests.Pcapng;
 internal sealed class PcapngWriterTests
 {
     [Test]
-    public async Task ConvertTimestamp_Nanoseconds_PassesThrough()
+    public async Task ConvertTimestampNanosecondsPassesThrough()
     {
         Timestamp timestamp = new(1_234_567_890L);
 
@@ -18,7 +18,7 @@ internal sealed class PcapngWriterTests
     }
 
     [Test]
-    public async Task ConvertTimestamp_FinerResolution_SaturatesToUlongMax()
+    public async Task ConvertTimestampFinerResolutionSaturatesToUlongMax()
     {
         Timestamp timestamp = new(long.MaxValue);
 
@@ -28,7 +28,27 @@ internal sealed class PcapngWriterTests
     }
 
     [Test]
-    public async Task TryBlockLength_NearIntMax_ReturnsFalse()
+    public async Task ConvertTimestampAtTheBuilderMaximumResolutionUsesTheTable()
+    {
+        Timestamp timestamp = new(1L);
+
+        ulong converted = PcapngWriter.ConvertTimestamp(timestamp, 19);
+
+        await Assert.That(converted).IsEqualTo(10_000_000_000UL);
+    }
+
+    [Test]
+    public async Task ConvertTimestampBeyondTheTableIsAnInvariantViolation()
+    {
+        Timestamp timestamp = new(1L);
+
+        // Resolution 28 would need 10^19, which the table (and the builder range 0..19) never asks for.
+        await Assert.That(() => PcapngWriter.ConvertTimestamp(timestamp, 28)).Throws<System.Diagnostics.UnreachableException>();
+        await Assert.That(PcapngWriter.ConvertTimestamp(timestamp, 27)).IsEqualTo(1_000_000_000_000_000_000UL);
+    }
+
+    [Test]
+    public async Task TryBlockLengthNearIntMaxReturnsFalse()
     {
         bool ok = PcapngWriter.TryBlockLength(int.MaxValue - 1, out uint blockLength);
 
@@ -37,7 +57,7 @@ internal sealed class PcapngWriterTests
     }
 
     [Test]
-    public async Task TryBlockLength_FourBytePayload_Is36()
+    public async Task TryBlockLengthFourBytePayloadIs36()
     {
         bool ok = PcapngWriter.TryBlockLength(4, out uint blockLength);
 

@@ -4,7 +4,7 @@ namespace NetworkInspector.Protocols.SomeIp.Config;
 
 /// <summary>
 /// Compiles a deserialized SOME/IP service description into the immutable <see cref="SomeIpCompiledModel"/>: validation,
-/// duplicate handling, cycle detection, name derivation and the per-usage expansion of the type graph. It runs once at
+/// duplicate handling, cycle detection, the filter names and the per-usage expansion of the type graph. It runs once at
 /// registration; the parse path never checks configuration consistency again.
 /// <para>
 /// <b>Failure model.</b> The compiler never throws for configuration content. Every defect is exactly one
@@ -16,7 +16,8 @@ namespace NetworkInspector.Protocols.SomeIp.Config;
 /// <b>Passes per service version.</b> (1) register the type names, (2) validate every definition once and collect its
 /// references, (3) detect reference cycles with an iterative depth-first search (the graph may be large, so no recursion),
 /// (4) build the type infos, (5) compile the members and expand the type graph per usage so that every occurrence gets its
-/// own registered name. Global name uniqueness is resolved across the whole file (first wins, the later site gets a suffix).
+/// own registered name. Names are used exactly as configured (see <see cref="SomeIpNameTokens"/>); an entry whose name is
+/// invalid, or repeats the name of an earlier sibling, is refused with one warning and is never renamed: first in the file wins.
 /// </para>
 /// <para><b>Thread-safety:</b> stateless entry point; every call uses its own state.</para>
 /// </summary>
@@ -74,21 +75,29 @@ internal static class SomeIpConfigCompiler
     /// (<see cref="SomeIpConfigLoader.TryAccept"/>); call it first.
     /// </summary>
     /// <param name="config">The deserialized description.</param>
+    /// <param name="fieldPrefix">
+    /// The text put in front of every filter name; empty for none. It must already be a valid prefix
+    /// (<see cref="SomeIpNameTokens.IsValidPrefix"/>): the registration validates the setting and reports an invalid value.
+    /// </param>
     /// <param name="warnings">Receives one warning per defect, in file order.</param>
     /// <returns>The model; possibly with fewer services than the file.</returns>
-    internal static SomeIpCompiledModel Compile(SomeIpConfig config, ICollection<SettingsLoadWarning> warnings)
+    internal static SomeIpCompiledModel Compile(SomeIpConfig config, string fieldPrefix, ICollection<SettingsLoadWarning> warnings)
     {
         ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(fieldPrefix);
         ArgumentNullException.ThrowIfNull(warnings);
-        return new Compilation(config, warnings).Run();
+        return new Compilation(config, fieldPrefix, warnings).Run();
     }
 
     #endregion
 
     #region Compilation
 
-    /// <summary>A usage site before it is expanded: the names, the reference and the key of one occurrence.</summary>
-    private readonly record struct SiteSpec(string? Name, string? FilterName, string? UiName, string Reference, int PadTo, uint Key, string Describe);
+    /// <summary>
+    /// A usage site before it is expanded. Segment is the resolved name (the configured name or its default); Defect is the
+    /// diagnostic when the entry is broken (invalid or repeated name), and then the site is never expanded or registered.
+    /// </summary>
+    private readonly record struct SiteSpec(string Segment, string? UiName, string Reference, int PadTo, uint Key, string Describe, string? Defect);
 
     /// <summary>A type definition during compilation.</summary>
     private sealed class Def(SomeIpDataTypeConfig config, int position)
@@ -116,21 +125,24 @@ internal static class SomeIpConfigCompiler
     }
 
     /// <summary>One run of the compiler: owns every list that grows during compilation.</summary>
-    private sealed class Compilation(SomeIpConfig config, ICollection<SettingsLoadWarning> warnings)
+    private sealed class Compilation(SomeIpConfig config, string fieldPrefix, ICollection<SettingsLoadWarning> warnings)
     {
         private readonly List<SomeIpTypeInfo> _Types = [];
         private readonly List<SomeIpUsageSite?> _Sites = [];
         private readonly List<SomeIpServiceInfo> _Services = [];
         private readonly Dictionary<string, int> _PrimitiveTypes = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, string> _UsedNames = new(StringComparer.Ordinal);
         private int _UnavailableType = -1;
 
         // Per-service state, reset by _CompileService.
         private readonly List<Def> _Defs = [];
         private readonly Dictionary<string, Def> _DefByName = new(StringComparer.Ordinal);
         private readonly List<SomeIpMemberInfo> _Members = [];
+
+        // Member segment to the position text of the member that holds it: two members of one service cannot share a filter name.
+        private readonly Dictionary<string, string> _MemberSegments = new(StringComparer.Ordinal);
         private string _Where = "";
         private string _ServicePath = "";
+        private string _GroupBase = "";
         private int _SiteBase;
         private bool _SiteLimitHit;
         private bool _DepthWarned;
@@ -146,6 +158,10 @@ internal static class SomeIpConfigCompiler
             // First definition of a (service id, major version) wins: a later duplicate is skipped with one warning that names
             // both positions, so the result never depends on which of two definitions the reader happens to look at first.
             Dictionary<uint, int> firstByKey = [];
+
+            // The filter name of a service is its name and major version; two services with the same name and version would
+            // yield the same filter names, so the first in the file keeps them (nothing is renamed).
+            Dictionary<string, int> firstByPath = new(StringComparer.Ordinal);
             for (int i = 0; i < config.Services.Length; i++)
             {
                 SomeIpServiceConfig service = config.Services[i];
@@ -171,6 +187,14 @@ internal static class SomeIpConfigCompiler
                     continue;
                 }
 
+                if (!SomeIpNameTokens.IsValidSegment(service.Name))
+                {
+                    _Warn(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"services[{i}]: the name '{service.Name}' is not a valid name (a letter or underscore, then letters, digits and underscores, no dot); the service is not registered."));
+                    continue;
+                }
+
                 uint key = ((uint)service.ServiceId << 8) | (uint)service.MajorVersion;
                 if (firstByKey.TryGetValue(key, out int first))
                 {
@@ -180,8 +204,18 @@ internal static class SomeIpConfigCompiler
                     continue;
                 }
 
+                string path = SomeIpNameTokens.Service(service.Name, (byte)service.MajorVersion);
+                if (firstByPath.TryGetValue(path, out int firstPath))
+                {
+                    _Warn(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"services[{i}] has the name and version '{path}' of services[{firstPath}]; the first is used."));
+                    continue;
+                }
+
                 firstByKey[key] = i;
-                _CompileService(service);
+                firstByPath[path] = i;
+                _CompileService(service, path);
             }
 
             return new SomeIpCompiledModel(
@@ -261,19 +295,23 @@ internal static class SomeIpConfigCompiler
 
         #region Service
 
-        private void _CompileService(SomeIpServiceConfig service)
+        private void _CompileService(SomeIpServiceConfig service, string path)
         {
             _Where = string.Create(CultureInfo.InvariantCulture, $"Service 0x{service.ServiceId:X4} v{service.MajorVersion} ('{service.Name}')");
-            _ServicePath = string.Concat(SomeIpNameTokens.Prefix, ".", SomeIpNameTokens.Service(service.Name, (byte)service.MajorVersion));
+
+            // The filter name carries the optional prefix; the index group name never does, so groups cannot meet the groups
+            // of other components whatever the user configures.
+            _ServicePath = SomeIpNameTokens.Join(fieldPrefix, path);
+            _GroupBase = SomeIpNameTokens.Child(SomeIpNameTokens.GroupPrefix, path);
             _Defs.Clear();
             _DefByName.Clear();
             _Members.Clear();
+            _MemberSegments.Clear();
             _SiteBase = _Sites.Count;
             _SiteLimitHit = false;
             _DepthWarned = false;
 
-            // Names claimed by this service are released again when the service is refused, so a refused service does not
-            // block the names of the services after it.
+            // A refused service gives back its sites and types below.
             int typeBase = _Types.Count;
 
             _RegisterDefs(service);
@@ -302,18 +340,10 @@ internal static class SomeIpConfigCompiler
 
             if (_SiteLimitHit)
             {
-                // The service is refused as a whole: its sites are removed and the names they claimed are released.
+                // The service is refused as a whole: its sites are removed.
                 _Warn(string.Create(
                     CultureInfo.InvariantCulture,
                     $"{_Where}: more than {_MaxSitesPerService} usage sites after expansion; the service is not registered."));
-                for (int s = _SiteBase; s < _Sites.Count; s++)
-                {
-                    if (_Sites[s] is { } site)
-                    {
-                        _ = _UsedNames.Remove(site.RegisteredName);
-                    }
-                }
-
                 _Sites.RemoveRange(_SiteBase, _Sites.Count - _SiteBase);
                 _Types.RemoveRange(typeBase, _Types.Count - typeBase);
                 _PrimitiveTypes.Clear();
@@ -326,7 +356,9 @@ internal static class SomeIpConfigCompiler
                 ServiceId = (ushort)service.ServiceId,
                 MajorVersion = (byte)service.MajorVersion,
                 Name = service.Name,
-                Token = SomeIpNameTokens.Service(service.Name, (byte)service.MajorVersion),
+                UiName = _UiName(service.UiName, _Where) ?? service.Name,
+                Path = _ServicePath,
+                GroupName = _GroupBase,
                 Members = _Members.ToArray(),
                 MemberById = memberById.ToFrozenDictionary(),
                 EventGroupNames = eventGroups.ToFrozenDictionary(),
@@ -490,7 +522,11 @@ internal static class SomeIpConfigCompiler
             }
 
             _LinkReference(def, a.TypeReference, where, "element type");
-            def.Children.Add(new SiteSpec(SomeIpNameTokens.ArrayElement, null, null, a.TypeReference, 0, 0, "array element"));
+
+            // The element segment is a constant of the format, so it can never be a defect; it goes through the same helper
+            // so that every site is built one way.
+            def.Children.Add(_Spec(
+                SomeIpNameTokens.ArrayElement, null, SomeIpNameTokens.ArrayElement, a.TypeReference, 0, 0, "array element", []));
         }
 
         private void _ValidateStructure(Def def, SomeIpStructureTypeConfig s, string where)
@@ -503,6 +539,8 @@ internal static class SomeIpConfigCompiler
                     $"{where}: size_of_length {sizeOfLength} is not 0, 1, 2 or 4."));
             }
 
+            // The members of one structure share one level of the filter name, so their segments must differ.
+            Dictionary<string, string> siblings = new(StringComparer.Ordinal);
             for (int i = 0; i < s.Members.Length; i++)
             {
                 SomeIpUsageSiteConfig member = s.Members[i];
@@ -515,7 +553,8 @@ internal static class SomeIpConfigCompiler
                 string memberWhere = string.Create(CultureInfo.InvariantCulture, $"{where}, members[{i}]");
                 _CheckPad(member.PadTo, memberWhere);
                 _LinkReference(def, member.TypeReference, memberWhere, "type");
-                def.Children.Add(new SiteSpec(member.Name, member.FilterName, member.UiName, member.TypeReference, member.PadTo ?? 0, (uint)i, memberWhere));
+                def.Children.Add(_Spec(
+                    member.Name, member.UiName, member.TypeReference, member.TypeReference, member.PadTo ?? 0, (uint)i, memberWhere, siblings));
             }
         }
 
@@ -579,17 +618,32 @@ internal static class SomeIpConfigCompiler
                 bits.Add(new KeyValuePair<uint, SomeIpBitMemberConfig>(bit, member.Value));
             }
 
+            // A bit with an invalid or repeated name is left out of the bitfield: unlike a value, a bit takes no bytes, so
+            // leaving it out cannot move the position of anything that follows (and is not a decode-stopping defect).
             bits.Sort(static (x, y) => x.Key.CompareTo(y.Key));
+            Dictionary<string, string> siblings = new(StringComparer.Ordinal);
             foreach (KeyValuePair<uint, SomeIpBitMemberConfig> bit in bits)
             {
-                def.Children.Add(new SiteSpec(
-                    bit.Value.Name,
-                    bit.Value.FilterName,
-                    bit.Value.UiName,
-                    "bool",
-                    0,
-                    bit.Key,
-                    string.Create(CultureInfo.InvariantCulture, $"{where}, bit {bit.Key}")));
+                string bitWhere = string.Create(CultureInfo.InvariantCulture, $"{where}, bit {bit.Key}");
+                string bitName = bit.Value.Name;
+                if (!SomeIpNameTokens.IsValidSegment(bitName))
+                {
+                    _Warn(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"{bitWhere}: the name '{bitName}' is not a valid name (a letter or underscore, then letters, digits and underscores, no dot); the bit is left out."));
+                    continue;
+                }
+
+                if (siblings.TryGetValue(bitName, out string? firstBit))
+                {
+                    _Warn(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"{bitWhere}: the name '{bitName}' repeats {firstBit}; the bit is left out."));
+                    continue;
+                }
+
+                siblings[bitName] = bitWhere;
+                def.Children.Add(new SiteSpec(bitName, _UiName(bit.Value.UiName, bitWhere), "bool", 0, bit.Key, bitWhere, null));
             }
         }
 
@@ -616,22 +670,81 @@ internal static class SomeIpConfigCompiler
                 sorted.Add(new KeyValuePair<uint, SomeIpUsageSiteConfig>(key, member.Value));
             }
 
+            // Ascending key order makes "later" well defined: when a named member and a default name meet, the higher key is refused.
             sorted.Sort(static (x, y) => x.Key.CompareTo(y.Key));
+            Dictionary<string, string> siblings = new(StringComparer.Ordinal);
             foreach (KeyValuePair<uint, SomeIpUsageSiteConfig> member in sorted)
             {
                 string memberWhere = string.Create(CultureInfo.InvariantCulture, $"{where}, member {member.Key}");
                 _LinkReference(def, member.Value.TypeReference, memberWhere, "type");
                 _CheckTlvFixedString(member.Value.TypeReference, memberWhere, keyKind == "TLV id");
-                string? defaultName = null;
-                if (keyKind == "TLV id")
-                {
-                    defaultName = SomeIpNameTokens.TlvDefault(member.Key);
-                }
 
-                string? name = member.Value.Name
-                    ?? defaultName;
-                def.Children.Add(new SiteSpec(name, member.Value.FilterName, member.Value.UiName, member.Value.TypeReference, 0, member.Key, memberWhere));
+                // A TLV member without a name is member_<id>; a union alternative without a name is named after its type.
+                string defaultSegment = keyKind == "TLV id"
+                    ? SomeIpNameTokens.TlvDefault(member.Key)
+                    : member.Value.TypeReference;
+                def.Children.Add(_Spec(
+                    member.Value.Name, member.Value.UiName, defaultSegment, member.Value.TypeReference, 0, member.Key, memberWhere, siblings));
             }
+        }
+
+        /// <summary>
+        /// Resolves the segment of one entry (the configured name, else the default), checks it against the segment rule and the
+        /// segments of the earlier siblings, and validates the display name. A broken entry becomes a defect with one warning; a
+        /// valid one claims its segment in <paramref name="siblings"/>. Runs once per type definition or parameter list, so a
+        /// type that is used many times warns once.
+        /// </summary>
+        /// <param name="name">The configured name, or null.</param>
+        /// <param name="uiName">The configured display name, or null.</param>
+        /// <param name="defaultSegment">The name used when <paramref name="name"/> is null.</param>
+        /// <param name="reference">The referenced type.</param>
+        /// <param name="padTo">The alignment after the value.</param>
+        /// <param name="key">The key (position, TLV id, selector) of the site.</param>
+        /// <param name="where">The position text for warnings.</param>
+        /// <param name="siblings">The segments already taken in this container, with the position text of their holder.</param>
+        private SiteSpec _Spec(
+            string? name, string? uiName, string defaultSegment, string reference, int padTo, uint key, string where,
+            Dictionary<string, string> siblings)
+        {
+            string segment = name ?? defaultSegment;
+            string? defect = null;
+            if (!SomeIpNameTokens.IsValidSegment(segment))
+            {
+                defect = string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{where}: the name '{segment}' is not a valid name (a letter or underscore, then letters, digits and underscores, no dot); this value and everything behind it are not decoded.");
+            }
+            else if (siblings.TryGetValue(segment, out string? first))
+            {
+                defect = string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{where}: the name '{segment}' repeats {first}; this value and everything behind it are not decoded.");
+            }
+            else
+            {
+                siblings[segment] = where;
+            }
+
+            if (defect is not null)
+            {
+                _Warn(defect);
+            }
+
+            return new SiteSpec(segment, _UiName(uiName, where), reference, padTo, key, where, defect);
+        }
+
+        /// <summary>The configured display name when it is valid display text; otherwise null (the name is shown) and one warning.</summary>
+        private string? _UiName(string? uiName, string where)
+        {
+            if (uiName is null || NameValidation.IsValidUiName(uiName))
+            {
+                return uiName;
+            }
+
+            _Warn(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{where}: ui_name is empty or contains a control character; the name is shown instead."));
+            return null;
         }
 
         /// <summary>Records a reference edge when the reference names a definition, or warns when it names nothing.</summary>
@@ -1005,16 +1118,30 @@ internal static class SomeIpConfigCompiler
             Dictionary<ushort, int> groupPosition)
         {
             string where = string.Create(CultureInfo.InvariantCulture, $"{_Where}, methods[{position}] ('{member.Name}')");
+
+            // The name of a method, event or field is a filter segment; an eventgroup name is display text for service discovery
+            // only. A member with an invalid name is not registered at all: its messages show the member as not configured.
+            if (member is not SomeIpEventGroupConfig && !SomeIpNameTokens.IsValidSegment(member.Name))
+            {
+                _Warn(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{where}: the name '{member.Name}' is not a valid name (a letter or underscore, then letters, digits and underscores, no dot); the member is not registered."));
+                return;
+            }
+
+            // One display name per configured member (a field shares it between getter, setter and notifier), validated once.
+            string uiName = _UiName(member.UiName, where) ?? member.Name;
             switch (member)
             {
                 case SomeIpMethodConfig method:
-                    if (_ClaimId(method.Id, position, where, idPosition, out ushort methodId))
+                    if (_TryClaimMember(method.Name, method.Id, position, where, idPosition, out ushort methodId))
                     {
                         _AddMember(
                             methodId,
                             SomeIpMemberKind.Method,
                             method.Name,
-                            "",
+                            uiName,
+                            method.Name,
                             method.In,
                             method.Out,
                             method.E2eProfile,
@@ -1026,13 +1153,14 @@ internal static class SomeIpConfigCompiler
 
                     break;
                 case SomeIpEventConfig evt:
-                    if (_ClaimId(evt.Id, position, where, idPosition, out ushort eventId))
+                    if (_TryClaimMember(evt.Name, evt.Id, position, where, idPosition, out ushort eventId))
                     {
                         _AddMember(
                             eventId,
                             SomeIpMemberKind.Event,
                             evt.Name,
-                            "",
+                            uiName,
+                            evt.Name,
                             null,
                             _Single(evt.TypeReference),
                             evt.E2eProfile,
@@ -1044,7 +1172,7 @@ internal static class SomeIpConfigCompiler
 
                     break;
                 case SomeIpFieldConfig field:
-                    _CompileField(position, field, where, memberById, idPosition);
+                    _CompileField(position, field, where, uiName, memberById, idPosition);
                     break;
                 case SomeIpEventGroupConfig group:
                     if (group.Id is < 0 or > 65535)
@@ -1062,7 +1190,7 @@ internal static class SomeIpConfigCompiler
                     else
                     {
                         groupPosition[(ushort)group.Id] = position;
-                        eventGroups[(ushort)group.Id] = group.Name;
+                        eventGroups[(ushort)group.Id] = uiName;
                     }
 
                     break;
@@ -1071,7 +1199,8 @@ internal static class SomeIpConfigCompiler
             }
         }
 
-        private void _CompileField(int position, SomeIpFieldConfig field, string where, Dictionary<ushort, int> memberById, Dictionary<ushort, int> idPosition)
+        private void _CompileField(
+            int position, SomeIpFieldConfig field, string where, string uiName, Dictionary<ushort, int> memberById, Dictionary<ushort, int> idPosition)
         {
             if (field.GetId is null && field.SetId is null && field.NotifierId is null)
             {
@@ -1081,14 +1210,19 @@ internal static class SomeIpConfigCompiler
                 return;
             }
 
-            string token = SomeIpNameTokens.Token(field.Name);
-            if (field.GetId is { } getId && _ClaimId(getId, position, where + " get_id", idPosition, out ushort get))
+            // The three accessors of a field are members of their own: the field name plus _get, _set or _notifier. They are checked
+            // against the other members one by one, so a method named like an accessor refuses only that accessor.
+            string getSegment = field.Name + "_get";
+            string setSegment = field.Name + "_set";
+            string notifierSegment = field.Name + "_notifier";
+            if (field.GetId is { } getId && _TryClaimMember(getSegment, getId, position, where + " get_id", idPosition, out ushort get))
             {
                 _AddMember(
                     get,
                     SomeIpMemberKind.FieldGetter,
                     field.Name,
-                    token + "_get",
+                    uiName,
+                    getSegment,
                     null,
                     _Single(field.TypeReference),
                     field.E2eProfile,
@@ -1098,13 +1232,14 @@ internal static class SomeIpConfigCompiler
                     direction: true);
             }
 
-            if (field.SetId is { } setId && _ClaimId(setId, position, where + " set_id", idPosition, out ushort set))
+            if (field.SetId is { } setId && _TryClaimMember(setSegment, setId, position, where + " set_id", idPosition, out ushort set))
             {
                 _AddMember(
                     set,
                     SomeIpMemberKind.FieldSetter,
                     field.Name,
-                    token + "_set",
+                    uiName,
+                    setSegment,
                     _Single(field.TypeReference),
                     _Single(field.TypeReference),
                     field.E2eProfile,
@@ -1114,13 +1249,15 @@ internal static class SomeIpConfigCompiler
                     direction: true);
             }
 
-            if (field.NotifierId is { } notifierId && _ClaimId(notifierId, position, where + " notifier_id", idPosition, out ushort notifier))
+            if (field.NotifierId is { } notifierId
+                && _TryClaimMember(notifierSegment, notifierId, position, where + " notifier_id", idPosition, out ushort notifier))
             {
                 _AddMember(
                     notifier,
                     SomeIpMemberKind.FieldNotifier,
                     field.Name,
-                    token + "_notifier",
+                    uiName,
+                    notifierSegment,
                     null,
                     _Single(field.TypeReference),
                     field.E2eProfile,
@@ -1133,6 +1270,31 @@ internal static class SomeIpConfigCompiler
 
         private static SomeIpParameterListConfig _Single(string reference) =>
             new() { Sequential = [new SomeIpUsageSiteConfig { TypeReference = reference }] };
+
+        /// <summary>
+        /// Claims the filter segment and the wire id of one member. The segment is checked first and committed last, so a member
+        /// that fails either check holds neither: a repeated segment keeps the first member in the file and warns with both
+        /// positions, and the refused member's id stays unconfigured.
+        /// </summary>
+        private bool _TryClaimMember(string segment, int id, int position, string where, Dictionary<ushort, int> idPosition, out ushort claimed)
+        {
+            claimed = 0;
+            if (_MemberSegments.TryGetValue(segment, out string? first))
+            {
+                _Warn(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{where}: the name '{segment}' repeats {first}; the member is not registered."));
+                return false;
+            }
+
+            if (!_ClaimId(id, position, where, idPosition, out claimed))
+            {
+                return false;
+            }
+
+            _MemberSegments[segment] = where;
+            return true;
+        }
 
         /// <summary>Checks a wire id and claims it; a repeated id keeps the first definition and warns with both positions.</summary>
         private bool _ClaimId(int id, int position, string where, Dictionary<ushort, int> idPosition, out ushort claimed)
@@ -1163,7 +1325,8 @@ internal static class SomeIpConfigCompiler
             ushort id,
             SomeIpMemberKind kind,
             string name,
-            string tokenOverride,
+            string uiName,
+            string segment,
             SomeIpParameterListConfig? inConfig,
             SomeIpParameterListConfig outConfig,
             string? e2eText,
@@ -1172,19 +1335,19 @@ internal static class SomeIpConfigCompiler
             Dictionary<ushort, int> memberById,
             bool direction)
         {
-            string token = tokenOverride.Length > 0
-                ? tokenOverride
-                : SomeIpNameTokens.Token(name);
             int memberIndex = _Members.Count;
-            string memberPath = string.Concat(_ServicePath, ".", token);
+
+            // The member segment is the configured name; a field's accessors append _get, _set and _notifier to the field's name.
+            string memberPath = SomeIpNameTokens.Child(_ServicePath, segment);
 
             // The request direction first (empty for getters, events and notifiers), then the response direction. Their sites
-            // are expanded into separate ranges because the same type at the request and the response is two fields.
+            // are expanded into separate ranges because the same type at the request and the response is two fields; the direction
+            // segment keeps both filterable when they carry the same name with different types.
             string inPath = direction
-                ? string.Concat(memberPath, ".in")
+                ? SomeIpNameTokens.Child(memberPath, SomeIpNameTokens.Request)
                 : memberPath;
             string outPath = direction
-                ? string.Concat(memberPath, ".out")
+                ? SomeIpNameTokens.Child(memberPath, SomeIpNameTokens.Response)
                 : memberPath;
             SomeIpParameterList inList = inConfig is null
                 ? new SomeIpParameterList(false, _Sites.Count, 0, null)
@@ -1211,7 +1374,10 @@ internal static class SomeIpConfigCompiler
                 Id = id,
                 Kind = kind,
                 Name = name,
-                Token = token,
+                UiName = uiName,
+                Segment = segment,
+                Path = memberPath,
+                GroupName = SomeIpNameTokens.Child(_GroupBase, segment),
                 In = inList,
                 Out = outList,
                 E2e = profile,
@@ -1264,6 +1430,9 @@ internal static class SomeIpConfigCompiler
         private SomeIpParameterList _CompileList(SomeIpParameterListConfig list, string path, int memberIndex, bool isOut, string where)
         {
             List<SiteSpec> specs = [];
+
+            // The entries of one list share one level of the filter name, so their segments must differ.
+            Dictionary<string, string> siblings = new(StringComparer.Ordinal);
             bool tlv = list.Tlv is not null;
             if (list.Tlv is not null)
             {
@@ -1292,14 +1461,15 @@ internal static class SomeIpConfigCompiler
                 {
                     string memberWhere = string.Create(CultureInfo.InvariantCulture, $"{where} TLV member {member.Key}");
                     _CheckTlvFixedString(member.Value.TypeReference, memberWhere, isTlv: true);
-                    specs.Add(new SiteSpec(
-                        member.Value.Name ?? SomeIpNameTokens.TlvDefault(member.Key),
-                        member.Value.FilterName,
+                    specs.Add(_Spec(
+                        member.Value.Name,
                         member.Value.UiName,
+                        SomeIpNameTokens.TlvDefault(member.Key),
                         member.Value.TypeReference,
                         member.Value.PadTo ?? 0,
                         member.Key,
-                        memberWhere));
+                        memberWhere,
+                        siblings));
                 }
             }
             else
@@ -1314,14 +1484,15 @@ internal static class SomeIpConfigCompiler
                         continue;
                     }
 
-                    specs.Add(new SiteSpec(
+                    specs.Add(_Spec(
                         site.Name,
-                        site.FilterName,
                         site.UiName,
+                        site.TypeReference,
                         site.TypeReference,
                         site.PadTo ?? 0,
                         (uint)i,
-                        string.Create(CultureInfo.InvariantCulture, $"{where} parameter {i}")));
+                        string.Create(CultureInfo.InvariantCulture, $"{where} parameter {i}"),
+                        siblings));
                 }
             }
 
@@ -1385,7 +1556,29 @@ internal static class SomeIpConfigCompiler
             for (int i = 0; i < specs.Count; i++)
             {
                 SiteSpec spec = specs[i];
-                (int typeIndex, Def? concrete, string display) = _ResolveConcrete(spec.Reference);
+
+                // A defect is a site without a field and without children: the decoder stops at it (it cannot know where the
+                // value ends without trusting a broken entry), and the registration skips it.
+                if (spec.Defect is not null)
+                {
+                    _Sites[start + i] = new SomeIpUsageSite
+                    {
+                        TypeIndex = -1,
+                        ReferenceName = spec.Reference,
+                        RegisteredName = "",
+                        UiName = spec.UiName ?? spec.Segment,
+                        Key = spec.Key,
+                        MemberIndex = memberIndex,
+                        IsOut = isOut,
+                        ChildrenStart = _Sites.Count,
+                        ChildrenCount = 0,
+                        Defect = spec.Defect,
+                    };
+                    keyMap?[spec.Key] = start + i;
+                    continue;
+                }
+
+                (int typeIndex, Def? concrete) = _ResolveConcrete(spec.Reference);
                 if (typeIndex < 0 && topLevel)
                 {
                     _Warn(string.Create(
@@ -1393,10 +1586,8 @@ internal static class SomeIpConfigCompiler
                         $"{spec.Describe}: the type reference '{spec.Reference}' names no primitive and no type of this service."));
                 }
 
-                string token = SomeIpNameTokens.Token(spec.Name ?? display);
-                string path = SomeIpNameTokens.Child(parentPath, token);
-                string registered = _ClaimName(path, spec.FilterName, spec.Describe, out string childPath);
-                string ui = spec.UiName ?? spec.Name ?? display;
+                string path = SomeIpNameTokens.Child(parentPath, spec.Segment);
+                string ui = spec.UiName ?? spec.Segment;
 
                 int childrenStart = _Sites.Count;
                 int childrenCount = 0;
@@ -1405,7 +1596,7 @@ internal static class SomeIpConfigCompiler
                 {
                     _Expand(
                         concrete.Children,
-                        childPath,
+                        path,
                         memberIndex,
                         isOut,
                         depth + 1,
@@ -1420,7 +1611,7 @@ internal static class SomeIpConfigCompiler
                 {
                     TypeIndex = typeIndex,
                     ReferenceName = spec.Reference,
-                    RegisteredName = registered,
+                    RegisteredName = path,
                     UiName = ui,
                     PadTo = _Pad(spec.PadTo),
                     Key = spec.Key,
@@ -1437,27 +1628,27 @@ internal static class SomeIpConfigCompiler
         }
 
         /// <summary>
-        /// Follows an alias chain to the type that decodes. Returns -1 for a dangling reference. The display name is the name
-        /// that was referenced (an alias keeps its own name for display and for the default path token).
+        /// Follows an alias chain to the type that decodes. Returns -1 for a dangling reference. An alias keeps its own name for
+        /// display and as the default segment, which the caller takes from the reference, not from the target.
         /// </summary>
-        private (int TypeIndex, Def? Concrete, string Display) _ResolveConcrete(string reference)
+        private (int TypeIndex, Def? Concrete) _ResolveConcrete(string reference)
         {
             string current = reference;
             for (int hops = 0; hops <= _Defs.Count; hops++)
             {
                 if (_Primitives.ContainsKey(current))
                 {
-                    return (_PrimitiveType(current), null, reference);
+                    return (_PrimitiveType(current), null);
                 }
 
                 if (!_DefByName.TryGetValue(current, out Def? def))
                 {
-                    return (-1, null, reference);
+                    return (-1, null);
                 }
 
                 if (def.Unavailable)
                 {
-                    return (_UnavailableTypeIndex(), null, reference);
+                    return (_UnavailableTypeIndex(), null);
                 }
 
                 if (def.Config is SomeIpAliasTypeConfig alias)
@@ -1466,60 +1657,10 @@ internal static class SomeIpConfigCompiler
                     continue;
                 }
 
-                return (def.TypeIndex, def, reference);
+                return (def.TypeIndex, def);
             }
 
-            return (_UnavailableTypeIndex(), null, reference);
-        }
-
-        /// <summary>
-        /// Claims the registered name of a site. Uniqueness is global across the file: the first site keeps the name, a later
-        /// site that derives or declares the same name gets a numeric suffix and one warning that names both paths. The
-        /// children of a renamed site continue from the renamed path, so one collision costs one warning.
-        /// </summary>
-        private string _ClaimName(string derivedPath, string? filterName, string describe, out string childPath)
-        {
-            string candidate = derivedPath;
-            bool fromFilter = false;
-            if (filterName is not null)
-            {
-                if (NameValidation.IsValidName(filterName))
-                {
-                    candidate = filterName;
-                    fromFilter = true;
-                }
-                else
-                {
-                    _Warn(string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"{describe}: filter_name '{filterName}' is not a valid field name; the derived name is used."));
-                }
-            }
-
-            if (_UsedNames.TryAdd(candidate, derivedPath))
-            {
-                childPath = derivedPath;
-                return candidate;
-            }
-
-            string existing = _UsedNames[candidate];
-            string final = candidate;
-            for (int suffix = 2; ; suffix++)
-            {
-                final = string.Create(CultureInfo.InvariantCulture, $"{candidate}_{suffix}");
-                if (_UsedNames.TryAdd(final, derivedPath))
-                {
-                    break;
-                }
-            }
-
-            _Warn(string.Create(
-                CultureInfo.InvariantCulture,
-                $"{describe}: the registered name '{candidate}' of {derivedPath} is already used by {existing}; the later site is registered as '{final}'."));
-            childPath = fromFilter
-                ? derivedPath
-                : final;
-            return final;
+            return (_UnavailableTypeIndex(), null);
         }
 
         #endregion

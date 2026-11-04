@@ -46,7 +46,7 @@ internal sealed class PcapngFramesByIdTests
         using PcapngSource source = PcapngSource.FromData(_Capture(10), "before-start");
         Frame?[] frames = new Frame?[3];
 
-        int found = source.FramesById(new FrameId(0), frames);
+        int found = source.FramesById(0, frames);
 
         await Assert.That(found).IsEqualTo(0);
         await Assert.That(frames.All(static frame => frame is null)).IsTrue();
@@ -64,8 +64,8 @@ internal sealed class PcapngFramesByIdTests
         Frame?[] tail = new Frame?[5];
         Frame?[] beyond = new Frame?[3];
 
-        int tailFound = source.FramesById(new FrameId(8), tail);
-        int beyondFound = source.FramesById(new FrameId(ArrayIndexIdRange.MaxValue), beyond);
+        int tailFound = source.FramesById(8, tail);
+        int beyondFound = source.FramesById(ArrayIndexIdRange.MaxValue, beyond);
 
         await Assert.That(tailFound).IsEqualTo(2);
         await Assert.That(RandomAccessEquivalence.SameFrame(sequential[8], tail[0]!.Value)).IsTrue();
@@ -88,7 +88,7 @@ internal sealed class PcapngFramesByIdTests
         OperationCanceledException? thrown = null;
         try
         {
-            _ = source.FramesById(new FrameId(1), frames, cancellation.Token);
+            _ = source.FramesById(1, frames, cancellation.Token);
         }
         catch (OperationCanceledException exception)
         {
@@ -108,7 +108,7 @@ internal sealed class PcapngFramesByIdTests
         source.Dispose();
         Frame?[] frames = new Frame?[2];
 
-        await Assert.That(() => source.FramesById(new FrameId(1), frames)).Throws<ObjectDisposedException>();
+        await Assert.That(() => source.FramesById(1, frames)).Throws<ObjectDisposedException>();
     }
 
     #endregion
@@ -129,7 +129,7 @@ internal sealed class PcapngFramesByIdTests
         BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(blocks[42]), 0x0BAD_0BAD);
         BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(blocks[43] + 20), 4096);
         Frame?[] batch = new Frame?[100];
-        int found = source.FramesById(new FrameId(0), batch);
+        int found = source.FramesById(0, batch);
 
         // Assert
         await Assert.That(found).IsEqualTo(98);

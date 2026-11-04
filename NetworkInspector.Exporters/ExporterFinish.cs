@@ -31,7 +31,7 @@ internal readonly record struct ExporterReleaseStep(string What, Action? Release
 /// <remarks>Stateless; thread-safe. Exporters call it from <c>OnFinish</c> after setting their own finished latch.</remarks>
 internal static class ExporterFinish
 {
-    #region Public API
+    #region Finish sequence
 
     /// <summary>Runs the finish sequence described on the type.</summary>
     /// <param name="format">Format name for the messages (e.g. <c>"BLF"</c>).</param>
@@ -53,8 +53,10 @@ internal static class ExporterFinish
         catch (Exception ex)
         {
             report(
-                ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
-                $"{format} finalization failed: {ex.Message}");
+                ex is IOException
+                    ? ExportErrorKind.IoError
+                    : ExportErrorKind.SerializationError,
+                Invariant($"{format} finalization failed: {ex.Message}"));
         }
 
         // Release: every step runs; failures are collected and thrown together afterwards. The list is created lazily so the
@@ -74,13 +76,13 @@ internal static class ExporterFinish
             catch (Exception ex)
             {
                 (failures ??= []).Add(ex);
-                report(ExportErrorKind.IoError, $"{format} {step.What} failed: {ex.Message}");
+                report(ExportErrorKind.IoError, Invariant($"{format} {step.What} failed: {ex.Message}"));
             }
         }
 
         if (failures is not null)
         {
-            throw new AggregateException($"{format} exporter cleanup failed.", failures);
+            throw new AggregateException(Invariant($"{format} exporter cleanup failed."), failures);
         }
     }
 

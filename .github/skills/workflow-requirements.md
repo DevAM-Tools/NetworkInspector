@@ -200,12 +200,16 @@ constraints (legal, platform, offline, data that must not leave the machine).
 Do not Grill Me: API signatures, `TEST-<AREA>-<TOPIC>` content, Playwright journeys, file
 shape, types. Those are `/plan`.
 
+Each question follows the `copilot-instructions.md` Section 4.16 question form.
+
 ```markdown
 ## Q{n} — {topic}
 **Source:** Requirements
-**Context:** {1-3 sentences}
+**Context:** {task in one line; what the sources say, quoted or linked; what is missing or contradicts}
+**Why it matters:** {which requirement changes depending on the answer}
 **Question:** {single-part question}
-**Options:** 1) {option} · 2) {option} · 3) {option} · or free-text
+**Options:** 1) {option} — {consequence} · 2) {option} — {consequence} · or answer in your own words
+**Recommendation:** {option} — {why}
 ```
 
 Do not proceed while blocking ambiguities remain. Do not leave an open fork

@@ -470,7 +470,7 @@ internal sealed class ValueCacheSlot : IDisposable
         // or reordered. The frame is read straight from its source; no packet is built just to be thrown away.
         for (int id = fromId; id < toIdExclusive; id++)
         {
-            if (!_SessionReader.TryGetFrame(new PacketId(id), out Frame frame, out SessionFailure? failure))
+            if (!_SessionReader.TryGetFrame(id, out Frame frame, out SessionFailure? failure))
             {
                 // A paused session is not a missing frame: Restart resets the cursor and refills,
                 // Shutdown cancels the slot. Only a genuine miss fails the slot.
@@ -494,7 +494,7 @@ internal sealed class ValueCacheSlot : IDisposable
             // Skip-parse with this slot's writer. recordOnReplay is required: ingest already first-parsed every announced
             // id (without this slot's cache), so the parser sees a replay, which would not write a cache otherwise. Skip
             // mode because only the cache rows are needed, not a field tree.
-            PacketId packetId = new(id);
+            PacketId packetId = id;
 
             // The lease keeps the stack from being disposed under this parse when a Restart replaces it meanwhile, and it is
             // refused while queries are disabled: the same outcome as a refused TryGetFrame (the cursor stays, Restart refills).

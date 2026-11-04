@@ -110,7 +110,7 @@ internal sealed class SessionGuideSamplesTests
         session.TryStart(out _);
         session.WaitForCompletion();
         RecordingFieldObserver myObserver = new();
-        PacketId id = new(1);
+        PacketId id = 1;
 
         // The sample of the guide.
         StackView view = session.CurrentStack;

@@ -14,6 +14,8 @@ namespace NetworkInspector.Exporters.Pbf;
 /// </summary>
 internal static class Lz4Compressor
 {
+    #region Codec forwarding
+
     /// <summary>
     /// Returns the maximum possible compressed size for <paramref name="inputSize"/> bytes.
     /// </summary>
@@ -36,4 +38,6 @@ internal static class Lz4Compressor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static int Compress(ReadOnlySpan<byte> input, Span<byte> output) =>
         Lz4Codec.Compress(input, output);
+
+    #endregion
 }

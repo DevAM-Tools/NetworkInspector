@@ -25,5 +25,10 @@ internal sealed class RecordingFieldObserver : IFieldObserver
         Values.Add(visit.Value.Data.TryGetAsU64(out ulong number) ? number : 0);
     }
 
+    /// <inheritdoc/>
+    public void EndPacket(PacketId id, bool complete)
+    {
+    }
+
     #endregion
 }

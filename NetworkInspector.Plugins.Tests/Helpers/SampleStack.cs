@@ -38,7 +38,7 @@ internal static class SampleStack
     /// <param name="id">Frame id and second of the timestamp.</param>
     /// <returns>The frame.</returns>
     internal static Frame MakeFrame(Stack stack, byte[] bytes, int id = 0) =>
-        NetworkInspector.Core.Frame.Create(new FrameId(id), Timestamp.FromSecs(id), bytes, LinkType.Ethernet,
+        NetworkInspector.Core.Frame.Create(id, Timestamp.FromSecs(id), bytes, LinkType.Ethernet,
             FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
 
     /// <summary>Parses a frame completely (field tree built) and returns the packet.</summary>
@@ -48,7 +48,7 @@ internal static class SampleStack
     internal static Packet Parse(Stack stack, Frame frame)
     {
         ParseOptions options = new();
-        if (!Packet.TryParse(new PacketId(frame.Id.Value), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+        if (!Packet.TryParse(frame.Id.Value, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());

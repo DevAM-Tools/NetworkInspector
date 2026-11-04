@@ -15,7 +15,7 @@ internal sealed class ParquetExporterFlushFailureTests
     private static void _BlockFieldFiles(string outputPath, Packet[] packets)
     {
         string fieldsDirectory = Path.Combine(outputPath, "fields");
-        using ColumnarPacketBatch probe = new(ColumnarDetailFlags.All, 1000, 1024 * 1024, true);
+        using ColumnarPacketBatch probe = new(ExportContents.Full, 1000, 1024 * 1024, true);
         foreach (Packet packet in packets)
         {
             probe.AddPacket(packet);
@@ -43,8 +43,88 @@ internal sealed class ParquetExporterFlushFailureTests
         return ids.ToArray();
     }
 
+    /// <summary>Reads the <c>field_id</c> column of <c>catalog.parquet</c>; empty when the file does not exist.</summary>
+    /// <param name="path">Path of <c>catalog.parquet</c>.</param>
+    /// <returns>The catalog's field ids.</returns>
+    private static async Task<int[]> _ReadCatalogFieldIds(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return [];
+        }
+
+        await using ParquetReader reader = await ParquetReader.CreateAsync(path);
+        DataField fieldIdField = reader.Schema.FindDataField("field_id");
+        List<int> ids = [];
+        for (int index = 0; index < reader.RowGroupCount; index++)
+        {
+            using ParquetRowGroupReader rowGroup = reader.OpenRowGroupReader(index);
+            int[] buffer = new int[rowGroup.RowCount];
+            await rowGroup.ReadAsync<int>(fieldIdField, buffer, null, CancellationToken.None);
+            ids.AddRange(buffer);
+        }
+
+        return ids.ToArray();
+    }
+
+    /// <summary>
+    /// The field file of the last field of the batch cannot be created, so the files of the fields before it are written and
+    /// the batch is lost. Every field file that exists must still be named by the catalog.
+    /// </summary>
     [Test]
-    public async Task FailedFlushDoesNotWriteTheSamePacketsAgain()
+    [Arguments(ExportWriteMode.Background)]
+    [Arguments(ExportWriteMode.Synchronous)]
+    [Category("Slow")]
+    public async Task AFieldFileOfAFailedBatchHasACatalogRow(ExportWriteMode mode)
+    {
+        using TestDir dir = new("parquet_flush_catalog");
+        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        string fieldsDirectory = Path.Combine(outputPath, "fields");
+        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(2);
+        using (ColumnarPacketBatch probe = new(ExportContents.Full, 1000, 1024 * 1024, true))
+        {
+            foreach (Packet packet in packets)
+            {
+                probe.AddPacket(packet);
+            }
+
+            // The writer visits the bags in dictionary order, so the last key is the field whose file fails after the others.
+            int lastFieldId = probe.FieldBags.Keys.Last();
+            Directory.CreateDirectory(Path.Combine(fieldsDirectory, $"field_{lastFieldId}.parquet"));
+        }
+
+        using (ParquetExporter exporter = ParquetExporter.CreateBuilder()
+            .ToDirectory(outputPath)
+            .WithMaxPacketsPerBlock(2)
+            .WithWriteMode(mode)
+            .Build())
+        {
+            exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
+            foreach (Packet packet in packets)
+            {
+                _ = exporter.OnPacket(packet);
+            }
+
+            exporter.OnFinish();
+            await Assert.That(exporter.HasErrors).IsTrue();
+        }
+
+        int[] catalogIds = await _ReadCatalogFieldIds(Path.Combine(outputPath, "catalog.parquet"));
+        string[] fieldFiles = Directory.GetFiles(fieldsDirectory, "field_*.parquet");
+
+        await Assert.That(fieldFiles.Length).IsGreaterThan(0);
+        foreach (string file in fieldFiles)
+        {
+            int id = int.Parse(Path.GetFileNameWithoutExtension(file).AsSpan("field_".Length), CultureInfo.InvariantCulture);
+            await Assert.That(catalogIds).Contains(id);
+        }
+    }
+
+    [Test]
+    [Arguments(ExportWriteMode.Background)]
+    [Arguments(ExportWriteMode.Synchronous)]
+    [Category("Slow")]
+    public async Task FailedFlushDoesNotWriteTheSamePacketsAgain(ExportWriteMode mode)
     {
         using TestDir dir = new("parquet_flush_failure");
         string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
@@ -53,6 +133,7 @@ internal sealed class ParquetExporterFlushFailureTests
         using (ParquetExporter exporter = ParquetExporter.CreateBuilder()
             .ToDirectory(outputPath)
             .WithMaxPacketsPerBlock(2)
+            .WithWriteMode(mode)
             .Build())
         {
             exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
@@ -71,7 +152,10 @@ internal sealed class ParquetExporterFlushFailureTests
     }
 
     [Test]
-    public async Task FailedFlushCountsTheLostPacketsAsSkipped()
+    [Category("Slow")]
+    [Arguments(ExportWriteMode.Background)]
+    [Arguments(ExportWriteMode.Synchronous)]
+    public async Task FailedFlushCountsTheLostPacketsAsSkipped(ExportWriteMode mode)
     {
         using TestDir dir = new("parquet_flush_counts");
         string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
@@ -80,6 +164,7 @@ internal sealed class ParquetExporterFlushFailureTests
         using ParquetExporter exporter = ParquetExporter.CreateBuilder()
             .ToDirectory(outputPath)
             .WithMaxPacketsPerBlock(3)
+            .WithWriteMode(mode)
             .Build();
         exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
         List<ExportErrorEventArgs> events = [];
@@ -89,7 +174,10 @@ internal sealed class ParquetExporterFlushFailureTests
         exporter.OnPacket(packets[1]);
         bool third = exporter.OnPacket(packets[2]);
 
-        // The third packet filled the batch and the flush failed: all three packets are lost, none counts as written.
+        // The third packet filled the batch and the write failed: all three packets are lost, none counts as written. In
+        // background mode the failure is reported one batch later (at the latest by OnFinish), so the counters are read after
+        // the end of the export in both modes.
+        exporter.OnFinish();
         await Assert.That(third).IsTrue();
         await Assert.That(exporter.WrittenCount).IsEqualTo(0);
         await Assert.That(exporter.SkippedCount).IsEqualTo(3);
@@ -98,7 +186,10 @@ internal sealed class ParquetExporterFlushFailureTests
     }
 
     [Test]
-    public async Task FailedFlushStopsAStrictExportAndFinishDoesNotWriteTheBatchAgain()
+    [Category("Slow")]
+    [Arguments(ExportWriteMode.Background)]
+    [Arguments(ExportWriteMode.Synchronous)]
+    public async Task FailedFlushStopsAStrictExportAndFinishDoesNotWriteTheBatchAgain(ExportWriteMode mode)
     {
         using TestDir dir = new("parquet_flush_strict");
         string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
@@ -108,6 +199,7 @@ internal sealed class ParquetExporterFlushFailureTests
         using (ParquetExporter exporter = ParquetExporter.CreateBuilder()
             .ToDirectory(outputPath)
             .WithMaxPacketsPerBlock(2)
+            .WithWriteMode(mode)
             .Build())
         {
             exporter.ErrorTolerance = ErrorToleranceMode.Strict;
@@ -118,7 +210,14 @@ internal sealed class ParquetExporterFlushFailureTests
 
         int[] ids = await _ReadPacketIds(Path.Combine(outputPath, "packets.parquet"));
 
-        await Assert.That(second).IsFalse();
+        // Synchronous mode reports the failed batch in the call that completed it, so strict mode refuses that very packet. In
+        // background mode the writer has not necessarily failed yet when the call returns (uniform one-batch-later timing), so
+        // only the end state is asserted there: the error is latched and the batch was not written again.
+        if (mode == ExportWriteMode.Synchronous)
+        {
+            await Assert.That(second).IsFalse();
+        }
+
         await Assert.That(ids.Distinct().Count()).IsEqualTo(ids.Length);
     }
 }

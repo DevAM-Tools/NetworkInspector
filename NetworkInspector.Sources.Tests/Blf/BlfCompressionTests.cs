@@ -262,9 +262,9 @@ internal sealed class BlfCompressionTests
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(5);
-        await Assert.That(source.FrameById(new FrameId(0))).IsNotNull();
-        await Assert.That(source.FrameById(new FrameId(4))).IsNotNull();
-        await Assert.That(source.FrameById(new FrameId(0))!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
+        await Assert.That(source.FrameById(0)).IsNotNull();
+        await Assert.That(source.FrameById(4)).IsNotNull();
+        await Assert.That(source.FrameById(0)!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
     }
 
     /// <summary>
@@ -282,7 +282,7 @@ internal sealed class BlfCompressionTests
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(10);
-        Frame? first = source.FrameById(new FrameId(0));
+        Frame? first = source.FrameById(0);
         await Assert.That(first).IsNotNull();
         await Assert.That(first!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
         await Assert.That(first.Value.Data.Span.SequenceEqual(_CanFrame)).IsTrue();
@@ -303,7 +303,7 @@ internal sealed class BlfCompressionTests
         SourceTestFixture.InitializeAndStartSource(source);
 
         await Assert.That(source.EstimatedFrameCount).IsEqualTo(10);
-        Frame? first = source.FrameById(new FrameId(0));
+        Frame? first = source.FrameById(0);
         await Assert.That(first).IsNotNull();
         await Assert.That(first!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
         await Assert.That(first.Value.Data.Span.SequenceEqual(_CanFrame)).IsTrue();

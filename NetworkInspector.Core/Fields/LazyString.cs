@@ -8,15 +8,21 @@ namespace NetworkInspector.Core.Fields;
 /// <para><b>Why this exists:</b> protocol parsers create far more display text than anyone reads. A lazy text costs one
 /// small box at parse time and the string only when a field tree, an exporter, or a UI reads it.</para>
 /// <para>Wraps a single <c>object?</c>: <c>null</c> = absent, <see cref="string"/> = direct value (or the cached result),
-/// <see cref="Func{String}"/> = stateless deferred, <c>ILazyTextFormat</c> = stateful deferred (<see cref="FormatLazy{TState}"/>).</para>
+/// <c>ILazyTextFormat</c> = deferred text (<see cref="Lazy"/> wraps its delegate, <see cref="FormatLazy{TState}"/> its state).</para>
 /// <para><b>Thread safety:</b> concurrent first reads are safe. Every member reads the wrapped value exactly once per
 /// call and evaluates only the deferred object it observed; the result replaces that object through
 /// <see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/>. The first publisher wins and every concurrent reader returns
 /// that one string, so a loser discards its own result. A factory may therefore run more than once and must tolerate
 /// concurrent calls. Do not mutate captured factory state unsafely.</para>
-/// <para><b>Storage:</b> the cache lives in the storage location that was read. This is a readonly struct, so evaluating a
-/// copy caches into the copy and leaves the original deferred. Read through a <see langword="ref"/> (array element, field,
-/// or the box that <see cref="FieldValueData"/> keeps) when the cached result must be shared.</para>
+/// <para><b>Storage:</b> the evaluated string is cached in the storage location that was read, replacing the deferred
+/// object (which then releases its captured state). This is a readonly struct, so evaluating a copy caches into the copy and
+/// leaves the original holding the deferred object. Read through a <see langword="ref"/> (array element, field, or the box that
+/// <see cref="FieldValueData"/> keeps) to drop the deferred object where the text lives.</para>
+/// <para><b>Built once:</b> the deferred object itself remembers the string it built (see <c>ILazyTextFormat</c>), so copies
+/// share one build: the first copy that is read runs the formatter, every other copy (and the original) gets the same string
+/// instance without running it again. A copy therefore costs a compare-exchange on its own location at most, never a second
+/// build, and there is no need to pass a text by reference to avoid building it twice. Consequence: the first read freezes the
+/// text for every copy, so a text that a dissector completes later in the parse must not be read before the parse ended.</para>
 /// </summary>
 [StructLayout(LayoutKind.Auto)]
 public readonly struct LazyString : IEquatable<LazyString>, IComparable<LazyString>
@@ -29,8 +35,7 @@ public readonly struct LazyString : IEquatable<LazyString>, IComparable<LazyStri
     // The one wrapped reference:
     //   null            -> absent
     //   string          -> direct value, or the cached result of an evaluated deferred text
-    //   Func<string>    -> stateless deferred (Lazy)
-    //   ILazyTextFormat -> stateful deferred (FormatLazy)
+    //   ILazyTextFormat -> deferred text (LazyTextFunc from Lazy, LazyTextFormat<TState> from FormatLazy); it remembers its string
     // A single field keeps the struct the size of a pointer and lets the cache replace the deferred object atomically
     // without a second slot or a wrapper object.
     private readonly object? _Value;
@@ -54,11 +59,14 @@ public readonly struct LazyString : IEquatable<LazyString>, IComparable<LazyStri
     }
 
     /// <summary>
-    /// Creates a lazily evaluated text. One result is cached per storage location; the delegate (and its closure, if it
-    /// captures) is the per-call allocation. Prefer <see cref="FormatLazy{TState}"/> with a static lambda on hot paths.
+    /// Creates a lazily evaluated text. The string is built once per call of this method, however many copies of the result
+    /// are read (the wrapper remembers it) and is also cached per storage location. The delegate (and its closure, if it
+    /// captures) and the small wrapper are the per-call allocations. Prefer <see cref="FormatLazy{TState}"/> with a static
+    /// lambda on hot paths.
     /// </summary>
+    /// <param name="factory">Builds the text. May run more than once under concurrent first reads and must tolerate that.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static LazyString Lazy(Func<string> factory) => new(factory);
+    public static LazyString Lazy(Func<string> factory) => new(new LazyTextFunc(factory));
 
     /// <summary>
     /// Creates a lazily evaluated text over captured <paramref name="state"/>. Use a <c>static</c> lambda and a value tuple:
@@ -70,7 +78,8 @@ public readonly struct LazyString : IEquatable<LazyString>, IComparable<LazyStri
     /// string is allocated only when the text is first read.
     /// </summary>
     /// <remarks>
-    /// <b>Accepted cost (decision record):</b> this is one small object per call, also for packets whose info text is never
+    /// <b>Accepted cost (decision record):</b> this is one small object per call (state, formatter, and the 8-byte memo that
+    /// lets every copy share one build), also for packets whose info text is never
     /// read; the packet-info pattern of the protocol parsers (IPv4, UDP, TCP and others) pays it once per packet on ingest.
     /// It is accepted, not overlooked: the alternative is a struct payload that the field value storage holds inline, which
     /// needs a change to the shared value layout (a fixed state size and a cached formatter delegate per call site) and
@@ -82,10 +91,20 @@ public readonly struct LazyString : IEquatable<LazyString>, IComparable<LazyStri
     public static LazyString FormatLazy<TState>(TState state, Func<TState, string> formatter)
         => new(new LazyTextFormat<TState>(state, formatter));
 
-    /// <summary>Rebuilds a lazy text from <see cref="RawValue"/>; for union-style storage such as <see cref="FieldValueData"/>.</summary>
+    /// <summary>Rebuilds a lazy text from <see cref="RawValue"/>; for union-style storage that cannot hold the struct itself.</summary>
+    /// <param name="value">A value read from <see cref="RawValue"/>: <see langword="null"/>, a string, or a deferred text object.</param>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is not a value <see cref="RawValue"/> can return.</exception>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static LazyString FromRawValue(object? value) => new(value);
+    public static LazyString FromRawValue(object? value)
+    {
+        // Only what RawValue hands out round-trips; anything else would read as an empty text silently.
+        if (value is not (null or string or ILazyTextFormat))
+        {
+            throw new ArgumentException("A raw lazy text must be null, a string, or a value read from RawValue.", nameof(value));
+        }
+
+        return new(value);
+    }
 
     #endregion
 
@@ -114,7 +133,6 @@ public readonly struct LazyString : IEquatable<LazyString>, IComparable<LazyStri
             return observed switch
             {
                 string s => s,
-                Func<string> => _EvaluateAndCache(observed),
                 ILazyTextFormat => _EvaluateAndCache(observed),
                 _ => string.Empty,
             };
@@ -148,7 +166,6 @@ public readonly struct LazyString : IEquatable<LazyString>, IComparable<LazyStri
                 result = s;
                 error = default;
                 return true;
-            case Func<string>:
             case ILazyTextFormat:
                 return _TryEvaluateAndCache(observed, out result, out error);
             default:
@@ -181,10 +198,10 @@ public readonly struct LazyString : IEquatable<LazyString>, IComparable<LazyStri
     public int Length => AsString.Length;
 
     /// <summary>Whether this wraps a deferred text that has not been evaluated yet.</summary>
-    public bool IsLazy => _Value is Func<string> or ILazyTextFormat;
+    public bool IsLazy => _Value is ILazyTextFormat;
 
     /// <summary>Whether the value is a direct string, absent, or the cached result of an evaluated text.</summary>
-    public bool IsEvaluated => _Value is not (Func<string> or ILazyTextFormat);
+    public bool IsEvaluated => _Value is not ILazyTextFormat;
 
     /// <summary>The text as a character span. Evaluates a deferred text.</summary>
     public ReadOnlySpan<char> AsSpan => AsString.AsSpan();
@@ -329,15 +346,12 @@ public readonly struct LazyString : IEquatable<LazyString>, IComparable<LazyStri
     private object? _ReadValue() => Volatile.Read(ref Unsafe.AsRef(in _Value));
 
     /// <summary>
-    /// Runs the deferred object that the caller observed. Callers guarantee a <see cref="Func{String}"/> or an
-    /// <c>ILazyTextFormat</c>; anything else is a broken invariant.
+    /// Runs the deferred object that the caller observed. Callers guarantee an <c>ILazyTextFormat</c>; anything else is a
+    /// broken invariant.
     /// </summary>
-    private static string _Run(object deferred) => deferred switch
-    {
-        Func<string> factory => factory(),
-        ILazyTextFormat format => format.Evaluate(),
-        _ => throw new UnreachableException("LazyString evaluation requires a deferred object."),
-    };
+    private static string _Run(object deferred) => deferred is ILazyTextFormat format
+        ? format.Evaluate()
+        : throw new UnreachableException("LazyString evaluation requires a deferred object.");
 
     /// <summary>
     /// Publishes <paramref name="evaluated"/> in place of <paramref name="deferred"/> and returns the string that is cached

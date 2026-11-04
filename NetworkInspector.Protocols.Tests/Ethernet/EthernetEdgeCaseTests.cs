@@ -369,8 +369,9 @@ internal sealed class EthernetEdgeCaseTests
         foreach (FieldId memberId in members)
         {
             FieldLookupCookie cookie = FieldLookupCookie.Start;
-            while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value, materialize: true)) // materialize: true — need complete field tree for assertion
+            while (packet.TryGetNextField(memberId, ref cookie, out Field valueField, materialize: true)) // materialize: true — need complete field tree for assertion
             {
+                FieldValue value = valueField.Value;
                 bool ok = value.Data.TryGetAsMacAddress(out MacAddress addr);
                 await Assert.That(ok).IsTrue().Because("alias member values must be MAC addresses");
                 found.Add(addr.ToString());

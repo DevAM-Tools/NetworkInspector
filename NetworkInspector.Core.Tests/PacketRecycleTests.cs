@@ -85,7 +85,7 @@ internal sealed class PacketRecycleTests
     /// <summary>Wraps raw bytes into a <see cref="Frame"/> using the given stack's registry.</summary>
     private static Frame _MakeFrame(Stack stack, byte[] data, int frameId = 1) =>
         Frame.Create(
-            new FrameId(frameId),
+            frameId,
             Timestamp.FromSecs(frameId),
             data,
             LinkType.Ethernet,
@@ -107,7 +107,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -126,7 +126,7 @@ internal sealed class PacketRecycleTests
             ParseOptions options = new();
             if (!Packet.TryParse(
                 packet,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -139,7 +139,7 @@ internal sealed class PacketRecycleTests
         }
 
         await Assert.That(ReferenceEquals(packet, recycled)).IsTrue();
-        await Assert.That(recycled.Id).IsEqualTo(new PacketId(1));
+        await Assert.That(recycled.Id).IsEqualTo(1);
         await Assert.That(recycled.Timestamp).IsEqualTo(Timestamp.FromSecs(2));
         await Assert.That(recycled.IsFinalized).IsTrue();
     }
@@ -158,7 +158,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 freshFrame,
                 in options,
@@ -179,7 +179,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 _MakeFrame(stack, frameData, frameId: 2),
                 in options,
@@ -198,7 +198,7 @@ internal sealed class PacketRecycleTests
             ParseOptions options = new();
             if (!Packet.TryParse(
                 seed,
-                new PacketId(2),
+                2,
                 stack,
                 recycleFrame,
                 in options,
@@ -226,7 +226,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -248,7 +248,7 @@ internal sealed class PacketRecycleTests
             ParseOptions options = new();
             if (!Packet.TryParse(
                 packet,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -261,7 +261,7 @@ internal sealed class PacketRecycleTests
         }
 
         // Verify that _Id changed — old identity is gone
-        await Assert.That(recycled.Id).IsEqualTo(new PacketId(1));
+        await Assert.That(recycled.Id).IsEqualTo(1);
 
         // Verify field count is consistent (not accumulated from two parses)
         int recycledCount = recycled.FieldCount(materialize: true); // materialize: true — count after full materialization
@@ -281,7 +281,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -304,7 +304,7 @@ internal sealed class PacketRecycleTests
             ParseOptions options = new();
             if (!Packet.TryParse(
                 packet,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -333,7 +333,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, frameData),
                 in options,
@@ -352,7 +352,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 _MakeFrame(stack, frameData, 2),
                 in options,
@@ -370,7 +370,7 @@ internal sealed class PacketRecycleTests
             ParseOptions options = new();
             if (!Packet.TryParse(
                 seed,
-                new PacketId(2),
+                2,
                 stack,
                 recycleFrame,
                 in options,
@@ -399,7 +399,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, frameData, 0),
                 in options,
@@ -422,7 +422,7 @@ internal sealed class PacketRecycleTests
                 ParseOptions options = new();
                 if (!Packet.TryParse(
                     baseline,
-                    new PacketId(i),
+                    i,
                     stack,
                     frame,
                     in options,
@@ -434,7 +434,7 @@ internal sealed class PacketRecycleTests
                 recycled = baseline;
             }
 
-            await Assert.That(recycled.Id).IsEqualTo(new PacketId(i));
+            await Assert.That(recycled.Id).IsEqualTo(i);
             await Assert.That(recycled.IsFinalized).IsTrue();
             int count = recycled.FieldCount(materialize: true); // materialize: true — count after full materialization
             await Assert.That(count).IsEqualTo(expected);
@@ -453,7 +453,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, frameData, 1),
                 in options,
@@ -473,7 +473,7 @@ internal sealed class PacketRecycleTests
             ParseOptions options = new(firstProtocol: stack.FrameProtocolId);
             if (!Packet.TryParse(
                 seed,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -485,7 +485,7 @@ internal sealed class PacketRecycleTests
             recycled = seed;
         }
 
-        await Assert.That(recycled.Id).IsEqualTo(new PacketId(1));
+        await Assert.That(recycled.Id).IsEqualTo(1);
         await Assert.That(recycled.IsFinalized).IsTrue();
     }
 
@@ -504,7 +504,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -523,7 +523,7 @@ internal sealed class PacketRecycleTests
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
                 seed,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -536,7 +536,7 @@ internal sealed class PacketRecycleTests
         }
 
         await Assert.That(ReferenceEquals(seed, recycled)).IsTrue();
-        await Assert.That(recycled.Id).IsEqualTo(new PacketId(1));
+        await Assert.That(recycled.Id).IsEqualTo(1);
         await Assert.That(recycled.IsFinalized).IsTrue();
         // The index should have accepted both packets without throwing
     }
@@ -551,14 +551,14 @@ internal sealed class PacketRecycleTests
 
         // Create an unsealed packet directly via internal constructor
         Frame frame = _MakeFrame(stack, frameData, 1);
-        Packet unsealed = new(new PacketId(1), stack, frame);  // NOT Sealed
+        Packet unsealed = new(1, stack, frame);  // NOT Sealed
 
         Frame frame2 = _MakeFrame(stack, frameData, 2);
 
         ParseOptions options = new();
         bool parsed = Packet.TryParse(
             unsealed,
-            new PacketId(0),
+            0,
             stack,
             frame2,
             in options,
@@ -579,7 +579,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack1,
                 frame1,
                 in options,
@@ -600,7 +600,7 @@ internal sealed class PacketRecycleTests
             ParseOptions options = new();
             bool parsed = Packet.TryParse(
                 packet,
-                new PacketId(2),
+                2,
                 stack2,
                 frame2,
                 in options,
@@ -622,7 +622,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -642,7 +642,7 @@ internal sealed class PacketRecycleTests
             ParseOptions options = new();
             bool parsed = Packet.TryParse(
                 packet,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -666,7 +666,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 freshFrame,
                 in options,
@@ -685,7 +685,7 @@ internal sealed class PacketRecycleTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 _MakeFrame(stack, frameData, 2),
                 in options,
@@ -703,7 +703,7 @@ internal sealed class PacketRecycleTests
             ParseOptions options = new();
             if (!Packet.TryParse(
                 seed,
-                new PacketId(2),
+                2,
                 stack,
                 recycleFrame,
                 in options,

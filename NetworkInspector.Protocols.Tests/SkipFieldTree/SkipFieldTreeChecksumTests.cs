@@ -23,7 +23,7 @@ internal sealed class SkipFieldTreeChecksumTests
 
     private static Frame _Frame(Stack stack, byte[] data) =>
         Frame.Create(
-            new FrameId(1),
+            1,
             Timestamp.FromSecs(1),
             data,
             LinkType.Ethernet,
@@ -183,7 +183,7 @@ internal sealed class SkipFieldTreeChecksumTests
         ProtocolId? firstProtocol = null)
     {
         ParseOptions options = new(fieldTree, cache, firstProtocol: firstProtocol);
-        PacketId id = new(packetId);
+        PacketId id = packetId;
         if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {

@@ -16,7 +16,7 @@ internal sealed class PacketEffectLayerKeyTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack),
                 in options,
@@ -47,7 +47,7 @@ internal sealed class PacketEffectLayerKeyTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack),
                 in options,
@@ -78,7 +78,7 @@ internal sealed class PacketEffectLayerKeyTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack),
                 in options,
@@ -106,7 +106,7 @@ internal sealed class PacketEffectLayerKeyTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack),
                 in options,
@@ -129,7 +129,7 @@ internal sealed class PacketEffectLayerKeyTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack),
                 in options,
@@ -157,7 +157,7 @@ internal sealed class PacketEffectLayerKeyTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack),
                 in options,
@@ -189,7 +189,7 @@ internal sealed class PacketEffectLayerKeyTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack),
                 in options,
@@ -212,7 +212,7 @@ internal sealed class PacketEffectLayerKeyTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack),
                 in options,
@@ -243,7 +243,7 @@ internal sealed class PacketEffectLayerKeyTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack),
                 in options,
@@ -298,7 +298,7 @@ internal sealed class PacketEffectLayerKeyTests
         byte[] data = new byte[64];
         BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), 0x0800);
         return Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             data,
             LinkType.Ethernet,
@@ -338,13 +338,13 @@ internal sealed class PacketEffectLayerKeyTests
             if (_BindFrameSlice)
             {
                 ReadOnlyMemory<byte> slice = data.Slice(14, 8);
-                _ = parentField.BindParseBuffer(slice);
+                _ = parentField.TryBindBuffer(slice, out _, out _);
                 KeyOk = parentField.TryGetEffectLayerKey(slice, out int key);
                 Key = key;
                 return data.Length;
             }
 
-            ReadOnlyMemory<byte> bound = parentField.BindParseBuffer(_Extra);
+            _ = parentField.TryBindBuffer(_Extra, out ReadOnlyMemory<byte> bound, out _);
             KeyOk = parentField.TryGetEffectLayerKey(bound.Slice(_SliceStart, _SliceLength), out int extraKey);
             Key = extraKey;
             return data.Length;

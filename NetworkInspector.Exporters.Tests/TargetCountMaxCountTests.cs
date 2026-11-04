@@ -9,7 +9,7 @@ namespace NetworkInspector.Exporters.Tests;
 internal sealed class TargetCountMaxCountTests
 {
     [Test]
-    public async Task Asc_WithTargetFrameCount_AboveMaxCount_Throws()
+    public async Task AscWithTargetFrameCountAboveMaxCountThrows()
     {
         AscExporter.Builder builder = AscExporter.CreateBuilder();
         await Assert.That(() => builder.WithTargetFrameCount(ArrayIndexIdRange.MaxCount + 1))
@@ -17,7 +17,7 @@ internal sealed class TargetCountMaxCountTests
     }
 
     [Test]
-    public async Task Blf_WithTargetFrameCount_AboveMaxCount_Throws()
+    public async Task BlfWithTargetFrameCountAboveMaxCountThrows()
     {
         BlfExporter.Builder builder = BlfExporter.CreateBuilder();
         await Assert.That(() => builder.WithTargetFrameCount(ArrayIndexIdRange.MaxCount + 1))
@@ -25,7 +25,7 @@ internal sealed class TargetCountMaxCountTests
     }
 
     [Test]
-    public async Task Pcapng_WithTargetFrameCount_AboveMaxCount_Throws()
+    public async Task PcapngWithTargetFrameCountAboveMaxCountThrows()
     {
         PcapngExporter.Builder builder = PcapngExporter.CreateBuilder();
         await Assert.That(() => builder.WithTargetFrameCount(ArrayIndexIdRange.MaxCount + 1))
@@ -33,7 +33,7 @@ internal sealed class TargetCountMaxCountTests
     }
 
     [Test]
-    public async Task Json_WithTargetPacketCount_AboveMaxCount_Throws()
+    public async Task JsonWithTargetPacketCountAboveMaxCountThrows()
     {
         JsonExporter.Builder builder = JsonExporter.CreateBuilder();
         await Assert.That(() => builder.WithTargetPacketCount(ArrayIndexIdRange.MaxCount + 1))
@@ -41,7 +41,7 @@ internal sealed class TargetCountMaxCountTests
     }
 
     [Test]
-    public async Task Csv_WithTargetPacketCount_AboveMaxCount_Throws()
+    public async Task CsvWithTargetPacketCountAboveMaxCountThrows()
     {
         CsvExporter.Builder builder = CsvExporter.CreateBuilder();
         await Assert.That(() => builder.WithTargetPacketCount(ArrayIndexIdRange.MaxCount + 1))
@@ -49,7 +49,7 @@ internal sealed class TargetCountMaxCountTests
     }
 
     [Test]
-    public async Task Text_WithTargetPacketCount_AboveMaxCount_Throws()
+    public async Task TextWithTargetPacketCountAboveMaxCountThrows()
     {
         TextExporter.Builder builder = TextExporter.CreateBuilder();
         await Assert.That(() => builder.WithTargetPacketCount(ArrayIndexIdRange.MaxCount + 1))
@@ -57,7 +57,7 @@ internal sealed class TargetCountMaxCountTests
     }
 
     [Test]
-    public async Task Pbf_WithTargetPacketCount_AboveMaxCount_Throws()
+    public async Task PbfWithTargetPacketCountAboveMaxCountThrows()
     {
         PbfExporter.Builder builder = PbfExporter.CreateBuilder();
         await Assert.That(() => builder.WithTargetPacketCount(ArrayIndexIdRange.MaxCount + 1))
@@ -65,7 +65,7 @@ internal sealed class TargetCountMaxCountTests
     }
 
     [Test]
-    public async Task Parquet_WithTargetPacketCount_AboveMaxCount_Throws()
+    public async Task ParquetWithTargetPacketCountAboveMaxCountThrows()
     {
         ParquetExporter.Builder builder = ParquetExporter.CreateBuilder();
         await Assert.That(() => builder.WithTargetPacketCount(ArrayIndexIdRange.MaxCount + 1))
@@ -73,7 +73,7 @@ internal sealed class TargetCountMaxCountTests
     }
 
     [Test]
-    public async Task DuckDb_WithTargetPacketCount_AboveMaxCount_Throws()
+    public async Task DuckDbWithTargetPacketCountAboveMaxCountThrows()
     {
         DuckDbExporter.Builder builder = DuckDbExporter.CreateBuilder();
         await Assert.That(() => builder.WithTargetPacketCount(ArrayIndexIdRange.MaxCount + 1))

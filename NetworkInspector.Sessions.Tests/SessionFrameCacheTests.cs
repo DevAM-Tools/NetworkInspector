@@ -23,7 +23,7 @@ internal sealed class SessionFrameCacheTests
 
         for (int i = 0; i < frameCount; i++)
         {
-            bool got = session.TryGetPacket(new PacketId(i), out Packet? packet, out _);
+            bool got = session.TryGetPacket(i, out Packet? packet, out _);
             await Assert.That(got).IsTrue();
             await Assert.That(packet!.HasFieldTree).IsTrue();
         }
@@ -51,10 +51,10 @@ internal sealed class SessionFrameCacheTests
 
         for (int i = 0; i < frameCount; i++)
         {
-            Frame? inner = source.FrameById(new FrameId(i));
+            Frame? inner = source.FrameById(i);
             await Assert.That(inner.HasValue).IsTrue();
 
-            bool got = session.TryGetFrame(new PacketId(i), out Frame cached, out _);
+            bool got = session.TryGetFrame(i, out Frame cached, out _);
             await Assert.That(got).IsTrue();
             await Assert.That(cached.Id).IsEqualTo(inner!.Value.Id);
             await Assert.That(cached.Timestamp).IsEqualTo(inner.Value.Timestamp);

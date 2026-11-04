@@ -54,7 +54,7 @@ The smallest useful plugin: a protocol `hello` on UDP port 40100 with two fields
   </PropertyGroup>
   <ItemGroup>
     <!-- The application provides the contract and Core at run time. -->
-    <PackageReference Include="NetworkInspector.Plugins" Version="0.19.0" ExcludeAssets="runtime" />
+    <PackageReference Include="NetworkInspector.Plugins" Version="0.20.0" ExcludeAssets="runtime" />
   </ItemGroup>
 </Project>
 ```
@@ -145,7 +145,7 @@ ni plugins list
 
 ```text
 Pre-scan: 1 candidate files, 1 inspected, 0 from cache, 1 plugin assemblies, 21.4 ms
-NetworkInspector.StandardProtocols  0.19.0  core  Loaded  -  …  MIT  load 101.0 ms  Protocol 29, Heuristic 5, Reassembly 5, Setting 43
+NetworkInspector.StandardProtocols  0.20.0  core  Loaded  -  …  MIT  load 101.0 ms  Protocol 29, Heuristic 5, Reassembly 5, Setting 44
 …
 My.Hello  1.0.0  core  Loaded  -  /opt/ni-plugins/hello/My.Hello.dll  MIT  load 6.0 ms  Protocol 1, Setting 1
 ```
@@ -153,7 +153,7 @@ My.Hello  1.0.0  core  Loaded  -  /opt/ni-plugins/hello/My.Hello.dll  MIT  load 
 From now on every `ni` command decodes UDP port 40100 as `hello`:
 
 ```bash
-ni export capture.pcapng -o hello.csv -f "csv:columns=udp.dstport;hello.kind;hello.length" --filter "hello.kind == 78"
+ni export capture.pcapng -o hello.csv -f "csv:fields=udp.dstport;hello.kind;hello.length,text=false,repr=false" --filter "hello.kind == 78"
 ni settings set hello.greeting "Good morning"
 ```
 
@@ -164,7 +164,7 @@ ni settings set hello.greeting "Good morning"
 | Project type | Class library, `net10.0` | `ni` runs on .NET 10; the plugin runs in the same process |
 | Contract | `NetworkInspector.Plugins` (package or project reference) | Brings the contract and, through it, `NetworkInspector.Core` and `NetworkInspector.Values` |
 | Runtime assets | `ExcludeAssets="runtime"` on the package, `Private="false"` on a project reference | The application provides the contract and Core; your folder stays small |
-| Version | Build against the same or an older NetworkInspector version than the `ni` that loads it | See [12. Pitfalls](#12-pitfalls-and-troubleshooting) |
+| Version | Build against the same minor version as the `ni` that loads it (before 1.0 a minor release may change Core's binary contract); never against a newer one | See [12. Pitfalls](#12-pitfalls-and-troubleshooting) |
 | Private dependencies | Normal package references; publish them next to the plugin | Each plugin assembly has its own load context that resolves them from its folder |
 
 A project reference inside the NetworkInspector repository looks like this (the sample plugin uses it):
@@ -500,7 +500,7 @@ My.Hello  1.0.0  core  Loaded  -  /opt/ni-plugins/hello/My.Hello.dll  MIT  load 
 
 ```bash
 ni convert "SampleGen:count=200" -o sample.pcapng
-ni export sample.pcapng -o slow.csv -f "csv:columns=sample.counter;sample.speed" --filter "sample.speed == 254"
+ni export sample.pcapng -o slow.csv -f "csv:fields=sample.counter;sample.speed,text=false,repr=false" --filter "sample.speed == 254"
 ni export "SampleGen:count=5" -o sample.sampletxt -f SampleText
 ```
 
@@ -526,8 +526,10 @@ Every plugin assembly gets its own collectible load context. Assemblies that the
 framework, the contracts, Core, and every library `ni` ships) always come from the application, matched by name, so
 contract types have exactly one identity. Other dependencies resolve from the plugin folder, through its `deps.json`
 first. Two plugins may therefore ship different versions of the same private library. A plugin built against the same or
-an older version of an application assembly runs with the application's copy; one built against a newer version is
-refused at load with both versions in the reason, because a reference never binds to a lower version.
+an older version of an application assembly runs with the application's copy as long as that assembly kept its binary
+contract (before 1.0 a minor release may change it, which the loader does not detect, so rebuild per minor version); one
+built against a newer version is refused at load with both versions in the reason, because a reference never binds to a
+lower version.
 
 ## 11. Security
 
@@ -546,7 +548,7 @@ refused at load with both versions in the reason, because a reference never bind
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `The plugin was built against NetworkInspector.Plugins 0.20.0.0, but this application provides 0.19.0.0; …` | The plugin was built against a **newer** NetworkInspector (or .NET) version than the running `ni`; a reference cannot bind to a lower version, so the plugin is refused before any of its code runs | Build against the version of the `ni` you run or an older one, or update `ni` |
+| `The plugin was built against NetworkInspector.Plugins 0.21.0.0, but this application provides 0.20.0.0; …` | The plugin was built against a **newer** NetworkInspector (or .NET) version than the running `ni`; a reference cannot bind to a lower version, so the plugin is refused before any of its code runs | Build against the version of the `ni` you run or an older one, or update `ni` |
 | `Entry type '…' was not found in the plugin assembly.` | The pre-scan found the class, but the runtime cannot load it (for example a base type in a dependency that is missing) | Ship the plugin's private dependencies next to it; check `ni plugins list` for the full reason |
 | `… does not implement the loaded IPlugin; the plugin ships its own NetworkInspector.Plugins.` | The plugin loads its own copy of the contract | Remove the contract from the plugin folder; use `ExcludeAssets="runtime"` or `Private="false"` |
 | The plugin does not appear at all | The class lists `IPlugin` only through a base class, is not public, or the folder is not in `plugins.paths` | List `IPlugin` on the entry class itself; check `ni settings get plugins.paths` |
@@ -580,7 +582,7 @@ ni settings set plugins.paths samples/Sample.Protocol/bin/Release/net10.0 --scop
 ni plugins list
 ni export "SampleGen:count=5" -o sample.sampletxt -f SampleText
 ni convert "SampleGen:count=20,transport=tcp" -o tcp.pcapng
-ni export tcp.pcapng -o tcp.csv -f "csv:columns=tcp.dstport;sample.counter;sample.post.magic_offset"
+ni export tcp.pcapng -o tcp.csv -f "csv:fields=tcp.dstport;sample.counter;sample.post.magic_offset,text=false,repr=false"
 ```
 
 ## 14. Loading plugins in your own application

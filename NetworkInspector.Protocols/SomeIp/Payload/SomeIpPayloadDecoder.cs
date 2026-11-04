@@ -237,6 +237,15 @@ internal static class SomeIpPayloadDecoder
             return 0;
         }
 
+        // A site whose entry is broken (invalid or repeated name) has no field. The decode stops here: the length of the value is
+        // only known by trusting the broken entry, and a guessed length would decode the following values from the wrong bytes.
+        // What is left is shown as unparsed by DecodeList.
+        if (site.Defect.Length > 0)
+        {
+            _Stop(in parent, ref state, site.Defect);
+            return 0;
+        }
+
         // A dangling reference or a type the compiler could not build has no decoder. It consumes nothing, so the siblings behind
         // it are decoded as if it were absent; the marker names the missing type.
         if (site.TypeIndex < 0)
@@ -637,11 +646,28 @@ internal static class SomeIpPayloadDecoder
 
         state.Nodes++;
 
-        // A fixed array knows its text up front; a variable one learns its count only after the elements are decoded and gets its
-        // final text then. The placeholder is the plain word so a reader that sees the node before the decode ends sees nothing wrong.
-        MutField node = fixedCount
-            ? parent.AppendWithCustomText(site.FieldId, FieldValue.None, new ElementPrefix(element), "array (fixed ", type.FixedCount, ")")
-            : parent.AppendWithCustomText(site.FieldId, FieldValue.None, new ElementPrefix(element), "array");
+        // A fixed array knows its text up front. A variable one learns its count only after the elements are decoded, so it is
+        // appended with a deferred text over an ArrayText that the code below completes: the text is final at append (field
+        // observers and value caches see the node then and nothing replaces the text later), and nothing is formatted or
+        // allocated when nobody wants the text. Rejected alternative: appending the plain word "array" and calling
+        // SetCustomText after the loop — a tree-free consumer never sees that change, and this code runs in a lazy populator,
+        // usually after seal, where a text change would race with readers.
+        ArrayText? variableText = null;
+        MutField node;
+        if (fixedCount)
+        {
+            node = parent.AppendWithCustomText(site.FieldId, FieldValue.None, new ElementPrefix(element), "array (fixed ", type.FixedCount, ")");
+        }
+        else if (parent.WantsCustomText(site.FieldId))
+        {
+            variableText = new ArrayText(element);
+            node = parent.AppendWithCustomText(site.FieldId, FieldValue.None, variableText);
+        }
+        else
+        {
+            node = parent.Append(site.FieldId, FieldValue.None);
+        }
+
         int elementSite = site.ChildrenStart;
         if (state.Metadata)
         {
@@ -698,10 +724,11 @@ internal static class SomeIpPayloadDecoder
 
         state.Depth--;
         _CheckElementBounds(in node, ref state, site, type, count);
-        if (!fixedCount && node.WantsCustomText(site.FieldId))
-        {
-            node.SetCustomText(new LazyString(_ArrayText(element, count)));
-        }
+
+        // Completes the deferred text. The count is final here, on every path that leaves the element loop (a limit stops the
+        // loop, it does not return), and before the populator or the parse returns, so no reader can evaluate the text earlier
+        // than the sealed packet allows — and a reader that does see it earlier gets the placeholder "array", never a torn text.
+        variableText?.Count = count;
 
         if (state.Metadata)
         {
@@ -901,7 +928,21 @@ internal static class SomeIpPayloadDecoder
         }
 
         state.Nodes++;
-        MutField node = parent.AppendWithCustomText(site.FieldId, FieldValue.None, new ElementPrefix(element), "union ", type.Name);
+
+        // The selector is read before the node is appended, because the node's text depends on it ("(empty)" for selector 0) and
+        // custom text is final at append: a field observer or value cache sees the node when it is appended and never sees a
+        // later change. Reading first costs nothing extra; only the diagnostic for a too-short union moves below the append (it
+        // needs the node as its parent). Rejected alternative: appending "union X" and replacing the text afterwards — that is a
+        // text change a tree-free consumer never sees, and after seal (this code runs in a lazy populator) it would be a data race.
+        int selectorSize = type.UnionTypeSize;
+        bool selectorReadable = unionEnd - cursor >= selectorSize;
+        ulong selector = selectorReadable
+            ? _ReadUnsigned(state.Data.Span.Slice(cursor, selectorSize), little: false)
+            : 0;
+        bool empty = selectorReadable && selector == 0;
+        MutField node = empty
+            ? parent.AppendWithCustomText(site.FieldId, FieldValue.None, new ElementPrefix(element), "union ", type.Name, " (empty)")
+            : parent.AppendWithCustomText(site.FieldId, FieldValue.None, new ElementPrefix(element), "union ", type.Name);
         if (state.Metadata)
         {
             _AppendType(in node, ref state, string.Concat("union ", type.Name));
@@ -911,9 +952,8 @@ internal static class SomeIpPayloadDecoder
             }
         }
 
-        // The selector. A union shorter than its selector field cannot name an alternative; the bytes it has are shown.
-        int selectorSize = type.UnionTypeSize;
-        if (unionEnd - cursor < selectorSize)
+        // A union shorter than its selector field cannot name an alternative; the bytes it has are shown.
+        if (!selectorReadable)
         {
             _Error(in node, ref state, string.Create(
                 CultureInfo.InvariantCulture,
@@ -921,17 +961,15 @@ internal static class SomeIpPayloadDecoder
             return unionEnd - offset;
         }
 
-        ulong selector = _ReadUnsigned(state.Data.Span.Slice(cursor, selectorSize), little: false);
         cursor += selectorSize;
         if (state.Metadata)
         {
             _ = node.Append(state.Ids.UnionType, FieldValue.NewU64(selector));
         }
 
-        // Selector 0 is the empty union: no alternative is set, and nothing follows the selector.
-        if (selector == 0)
+        // Selector 0 is the empty union: no alternative is set, and nothing follows the selector. Its text was set at append.
+        if (empty)
         {
-            node.SetCustomText(new LazyString(string.Concat("union ", type.Name, " (empty)")));
             return unionEnd - offset;
         }
 
@@ -1044,6 +1082,15 @@ internal static class SomeIpPayloadDecoder
             int afterTag = position + 2;
             int siteIndex = -1;
             bool known = byId is not null && byId.TryGetValue(tag.DataId, out siteIndex);
+
+            // A member whose entry is broken (invalid or repeated name) ends the walk at its tag, for the reason given at
+            // _DecodeSite: its extent would be read through a type nobody can trust. The bytes from the tag on stay unparsed.
+            if (known && state.Model.Sites.Span[siteIndex].Defect.Length > 0)
+            {
+                _Stop(in parent, ref state, state.Model.Sites.Span[siteIndex].Defect);
+                return position - start;
+            }
+
             SomeIpTypeInfo? memberType = null;
             if (known)
             {
@@ -1196,6 +1243,29 @@ internal static class SomeIpPayloadDecoder
         public override string ToString() => index < 0
             ? ""
             : string.Create(CultureInfo.InvariantCulture, $"[{index}] ");
+    }
+
+    /// <summary>
+    /// The text of a variable-length array, completed after its elements are decoded. The array node is appended with a
+    /// deferred text over this object (the generic <c>AppendWithCustomText</c> formats its argument with <see cref="ToString"/>
+    /// on first read), because custom text must be final at append (observers and value caches see the node then) while the
+    /// element count is known only after the element loop. The decoder sets <see cref="Count"/> before the parse of the payload
+    /// returns; readers evaluate the text later (the tree on first read, an observer in its end-of-packet call).
+    /// <para>
+    /// Allocated only when somebody wants the text (<see cref="MutField.WantsCustomText"/>): one small object per array node,
+    /// plus the box that the deferred text allocates. Not thread-safe by itself: written once by the decoding thread before the
+    /// packet is sealed (or before a lazy populator hands the subtree to readers), read afterwards.
+    /// </para>
+    /// </summary>
+    private sealed class ArrayText(int element)
+    {
+        /// <summary>Element count; -1 until the element loop finished.</summary>
+        internal int Count { get; set; } = -1;
+
+        /// <summary>The final text like the former late text; a read before completion shows the placeholder "array".</summary>
+        public override string ToString() => Count < 0
+            ? "array"
+            : _ArrayText(element, Count);
     }
 
     /// <summary>An integer with the name its lookup table gives it: "Active (2)", or just the number.</summary>

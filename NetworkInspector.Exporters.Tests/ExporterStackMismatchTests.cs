@@ -35,9 +35,9 @@ internal sealed class ExporterStackMismatchTests
             settingsManager?.Dispose();
         }
 
-        Frame frame = TestHarness.CreateFrame(new FrameId(2), 2_000_000, FrameGenerators.BuildEthernetIpv4UdpFrame(32));
+        Frame frame = TestHarness.CreateFrame(2, 2_000_000, FrameGenerators.BuildEthernetIpv4UdpFrame(32));
         ParseOptions options = new();
-        if (!Packet.TryParse(new PacketId(0), second, frame, in options, out Packet? other, out ParseFailure failure) || other is null)
+        if (!Packet.TryParse(0, second, frame, in options, out Packet? other, out ParseFailure failure) || other is null)
         {
             throw new InvalidOperationException(failure.ToString());
         }
@@ -57,6 +57,7 @@ internal sealed class ExporterStackMismatchTests
     #region Parquet
 
     [Test]
+    [Category("Slow")]
     public async Task ParquetRefusesAPacketOfAnotherStackAndKeepsTheEarlierRowsValid()
     {
         using TestDir dir = new("parquet_stack_mismatch");
@@ -93,6 +94,7 @@ internal sealed class ExporterStackMismatchTests
     #region DuckDB
 
     [Test]
+    [Category("Slow")]
     public async Task DuckDbRefusesAPacketOfAnotherStackAndKeepsTheEarlierRowsValid()
     {
         using TestDir dir = new("duckdb_stack_mismatch");
@@ -120,6 +122,51 @@ internal sealed class ExporterStackMismatchTests
         await Assert.That(exporter.ErrorCount).IsEqualTo(1);
         await Assert.That(exporter.PacketCount).IsEqualTo(2);
         await Assert.That(rows).IsEqualTo(2);
+    }
+
+    #endregion
+
+    #region Row formats with a field selection
+
+    [Test]
+    public async Task CsvJsonAndTextRefuseAPacketOfAnotherStackThanTheirFieldSelection()
+    {
+        // A selection holds the field ids of one stack; the same ids name other fields on another stack, so a packet of another
+        // stack must be refused instead of written with the wrong fields.
+        ExportContent selected = ExportContents.Selected(new FieldRequest("udp.dstport"));
+        FieldSelection? fields = selected.Fields;
+        ExportContent csvContent = CsvExporter.ContentTemplate with
+        {
+            Shape = ExportShape.SelectedFields,
+            Fields = fields,
+            CustomText = false,
+            CustomRepresentation = false,
+        };
+        ExportContent jsonContent = JsonExporter.DefaultContent with { Shape = ExportShape.SelectedFields, Fields = fields };
+        ExportContent textContent = TextExporter.DefaultContent with { Shape = ExportShape.SelectedFields, Fields = fields };
+        (Packet[] first, Packet other) = _TwoStacks();
+        foreach (string format in new[] { "csv", "json", "text" })
+        {
+            using MemoryStream stream = new();
+            IPacketListener exporter = format switch
+            {
+                "csv" => CsvExporter.CreateBuilder().ToStream(stream).WithContent(csvContent).Build(),
+                "json" => JsonExporter.CreateBuilder().ToStream(stream).WithContent(jsonContent).Build(),
+                _ => TextExporter.CreateBuilder().ToStream(stream).WithContent(textContent).Build(),
+            };
+            List<ExportErrorEventArgs> events = _Collect((IErrorTolerantExporter)exporter);
+
+            bool ownStack = exporter.OnPacket(first[0]);
+            bool refused = exporter.OnPacket(other);
+            exporter.OnFinish();
+            ((IDisposable)exporter).Dispose();
+
+            await Assert.That(ownStack).IsTrue();
+            await Assert.That(refused).IsFalse();
+            await Assert.That(events.Count).IsEqualTo(1);
+            await Assert.That(events[0].Kind).IsEqualTo(ExportErrorKind.StackMismatch);
+            await Assert.That(((IExporterStatistics)exporter).WrittenCount).IsEqualTo(1);
+        }
     }
 
     #endregion

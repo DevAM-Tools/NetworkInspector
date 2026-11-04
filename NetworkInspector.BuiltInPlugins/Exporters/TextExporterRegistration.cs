@@ -19,6 +19,13 @@ internal static class TextExporterRegistration
     /// <summary>Option name: maximum characters of string and byte values.</summary>
     private const string _TruncateOption = "truncate";
 
+    /// <summary>
+    /// The content members of the Text options: the frame bytes and the additional buffers (a hex dump of each after the packet). The
+    /// text format shows the packet info as a field line, so it has no <c>info</c> option.
+    /// </summary>
+    private const ExportContentOptions.ContentMembers _Members =
+        ExportContentOptions.ContentMembers.FrameBytes | ExportContentOptions.ContentMembers.Buffers;
+
     #endregion
 
     #region Internal API
@@ -40,6 +47,7 @@ internal static class TextExporterRegistration
     /// <summary>Registers the options with the defaults of the command line (standard detail, 256 characters).</summary>
     private static void _RegisterOptions(SettingsRegistrar options)
     {
+        ExportContentOptions.RegisterContent(options, TextExporter.DefaultContent, _Members);
         options.RegisterEnumSetting(_LevelOption, "Detail level", "", 1,
             EnumSettingMetadata.FromPairs([("summary", 0), ("standard", 1), ("full", 2)]),
             description: "summary: protocol containers only; standard: all fields except raw bytes; full: all fields including raw bytes.");
@@ -66,9 +74,19 @@ internal static class TextExporterRegistration
         };
 
         int truncate = (int)OptionValues.GetI64(values, _TruncateOption);
+
+        // The content names fields of the stack that parses the packets, so a typo is reported here, before a file is created.
+        if (!ExportContentOptions.TryReadContent(values, request.Stack, TextExporter.DefaultContent,
+                _Members, out ExportContent? content, out error))
+        {
+            listener = null;
+            return false;
+        }
+
         return ExporterBuild.TryBuild<IPacketListener>(
             () => TextExporter.CreateBuilder()
                 .ToFile(request.TargetPath)
+                .WithContent(content!) // Invariant: only the CSV "packets" shape has no content.
                 .WithDetailLevel(level)
                 .WithMaxTextLength(truncate)
                 .WithCancellationToken(request.CancellationToken)

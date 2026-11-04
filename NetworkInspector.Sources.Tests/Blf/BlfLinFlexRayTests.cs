@@ -63,7 +63,7 @@ internal sealed class BlfLinFlexRayTests
         using (stack)
         {
             Frame frame = Frame.Create(
-                new FrameId(0),
+                0,
                 rawFrame.Value.Timestamp,
                 rawFrame.Value.Data,
                 LinkType.Lin,
@@ -71,7 +71,7 @@ internal sealed class BlfLinFlexRayTests
                 stack.FrameInterfaceRegistry).Value;
 
             ParseOptions options = new();
-            if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            if (!Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure)
                 || packet is null)
             {
                 throw new InvalidOperationException(failure.ToString());
@@ -202,7 +202,7 @@ internal sealed class BlfLinFlexRayTests
         using (stack)
         {
             Frame frame = Frame.Create(
-                new FrameId(0),
+                0,
                 rawFrame.Value.Timestamp,
                 rawFrame.Value.Data,
                 LinkType.Flexray,
@@ -210,7 +210,7 @@ internal sealed class BlfLinFlexRayTests
                 stack.FrameInterfaceRegistry).Value;
 
             ParseOptions options = new();
-            if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            if (!Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure)
                 || packet is null)
             {
                 throw new InvalidOperationException(failure.ToString());

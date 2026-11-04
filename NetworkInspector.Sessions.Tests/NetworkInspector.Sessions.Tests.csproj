@@ -3,5 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Sessions\NetworkInspector.Sessions.csproj" />
     <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Exporters\NetworkInspector.Exporters.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Exporters.DuckDb\NetworkInspector.Exporters.DuckDb.csproj" />
   </ItemGroup>
 </Project>

@@ -37,7 +37,13 @@ internal enum PlaintextTransport : byte
 /// lists in that table and, when the table is absent at its own registration, reports that the list has no effect. The decrypting
 /// protocol looks the server port up in its table, publishes the marker, calls the protocol it found and clears the marker. The
 /// table is what makes the absence of a decrypting protocol visible at build time; the marker is what makes a unit accepted at
-/// parse time. The TLS and DTLS parsers of this version do not decrypt and register no table.
+/// parse time. The plaintext is derived bytes, not a slice of the frame: the decrypting protocol binds it with
+/// <c>MutField.TryBindBuffer</c> before the nested parse, so the application protocol can locate it and a buffer export
+/// sees it (one bound buffer per plaintext unit). The bind counts the plaintext against a total that the decrypting protocol
+/// declares for itself, like HTTP, WebSocket, and SOME/IP-TP do for their derived bytes (<see cref="DerivedBytesLimit"/>): the
+/// plaintext stays alive as long as the packet, and one packet can hold many records. A full table of 255 additional buffers
+/// and a passed total are each reported by name, not dropped. The TLS and DTLS parsers of this version do not decrypt and
+/// register no table.
 /// </para>
 /// </summary>
 internal static class PlaintextHandoff
@@ -48,12 +54,21 @@ internal static class PlaintextHandoff
     /// <summary>Dispatch table of the plaintext of a DTLS flow, keyed by the server port; owned by the protocol that decrypts DTLS.</summary>
     internal const string DtlsPortTableName = "dtls.port";
 
+    /// <summary>
+    /// Packet id of the parse that published the marker on this thread; a reader that is parsing another packet ignores the marker.
+    /// Thread-static: every thread sees only its own value. Valid only while <c>_Published</c> is set.
+    /// </summary>
     [ThreadStatic]
     private static int _PacketId;
 
+    /// <summary>Kind of record (TLS or DTLS) that the plaintext unit came from, as published on this thread.</summary>
     [ThreadStatic]
     private static PlaintextTransport _Transport;
 
+    /// <summary>
+    /// Server port of the connection or datagram flow that carried the encrypted records, as published on this thread; the key
+    /// of the TLS or DTLS dispatch table.
+    /// </summary>
     [ThreadStatic]
     private static ushort _Port;
 

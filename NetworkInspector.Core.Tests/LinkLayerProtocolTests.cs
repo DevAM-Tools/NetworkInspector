@@ -20,7 +20,7 @@ internal sealed class LinkLayerProtocolTests
         Stack stack = builder.Build();
 
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             frameData,
             linkType,
@@ -31,7 +31,7 @@ internal sealed class LinkLayerProtocolTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -129,7 +129,7 @@ internal sealed class LinkLayerProtocolTests
         using (stack)
         {
             Frame frame = Frame.Create(
-                new FrameId(0),
+                0,
                 Timestamp.FromSecs(0),
                 frameData,
                 LinkType.LinuxSll,
@@ -140,7 +140,7 @@ internal sealed class LinkLayerProtocolTests
             {
                 ParseOptions options = new(index: index);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -299,7 +299,7 @@ internal sealed class LinkLayerProtocolTests
         using (stack)
         {
             Frame frame = Frame.Create(
-                new FrameId(0),
+                0,
                 Timestamp.FromSecs(0),
                 frameData,
                 LinkType.Ethernet,
@@ -310,7 +310,7 @@ internal sealed class LinkLayerProtocolTests
             {
                 ParseOptions options = new(index: index);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,

@@ -267,6 +267,39 @@ internal static class SomeIpLimits
             _OffEffect));
 
     /// <summary>
+    /// Bytes bound to one packet in total when a reassembled SOME/IP-TP message is bound, all messages of the packet together and
+    /// the bytes of other protocols included (the packet keeps one sum); the message size limit bounds one message only. Threat: the bound payloads stay referenced until the packet is recycled, and one
+    /// datagram can hold many segments that each complete a message (up to the messages-per-unit limit, 100 by default), so the
+    /// sum is bounded by nothing else per packet (100 messages of 10 MiB are 1 GiB). Setting, every front end, validated by the
+    /// settings layer (2 KiB to 16 GiB; the value is rejected outside the range and the default stays). Posture: secure by
+    /// default but relaxed on purpose (owner decision): the default equals the buffered-bytes default, because a packet can only
+    /// complete messages whose segments the open sessions already hold (plus the bytes of the datagram itself), and those are
+    /// bounded by that setting; so the default refuses nothing that the reassembler with its default limits could deliver, and
+    /// the limit takes effect when an operator raises the buffered bytes or lowers this value. Exceeding it is an expected
+    /// failure: the message that would pass the total is not bound or parsed (its TP fields stay), and the packet reports a
+    /// parse error that names this setting, like the 255-buffer limit.
+    /// Rejected: reusing the buffered-bytes setting (it bounds memory held across packets, a different quantity), no total.
+    /// Residual risk: the message that fails the check was already reassembled (at most the message size limit, held by the
+    /// session until it is delivered or evicted); a value near the maximum lets one packet pin that much memory.
+    /// </summary>
+    public static SomeIpLimitDefinition TpMaxDerivedBytesPerPacket { get; } = new(
+        "someip.tp_max_derived_bytes_per_packet",
+        SomeIpLimitUnit.Bytes,
+        64 * _MiB,
+        2 * _KiB,
+        16 * _GiB,
+        new SomeIpLimitTexts(
+            "SOME/IP-TP reassembled bytes per packet",
+            "The most bytes bound to one packet when a reassembled segmented message is bound, all bytes of the packet together (the bytes of other protocols count too).",
+            "A packet that completes many large segmented messages keeps all of them in memory until it is recycled; "
+            + "the message size limit alone does not bound that sum.",
+            "A packet cannot pin more than this many reassembled bytes; the message that would pass it is not parsed further "
+            + "and the packet reports an error that names this setting.",
+            "Fewer bytes per packet; for example 1 MiB refuses a message that completes beyond 1 MiB together with the earlier messages of its packet.",
+            "More bytes per packet; for example 4 GiB lets one packet that completes many huge messages keep all of them, using that much memory.",
+            _OffEffect));
+
+    /// <summary>
     /// Size of one SOME/IP message in a TCP stream. Threat: a hostile 32-bit length makes the stream buffer wait for and grow
     /// towards a size that never arrives. Setting, every front end. Secure by default: above real messages; the stream buffer
     /// takes the same value.
@@ -352,6 +385,7 @@ internal static class SomeIpLimits
         TpMaxSessions,
         TpMaxMessageSize,
         TpMaxBufferedBytes,
+        TpMaxDerivedBytesPerPacket,
         TcpMaxMessageSize,
         ConfigMaxServices,
         ConfigMaxTypes,

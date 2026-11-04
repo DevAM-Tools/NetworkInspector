@@ -100,7 +100,7 @@ internal sealed class SessionAccessScenario : IProfilingScenario
         Session session = _Session!;
         _Sink += AccessOrders.RunOnThreads(_Threads, _Ids, id =>
         {
-            if (!session.TryGetFrame(new PacketId(id), out Frame frame, out SessionFailure? failure))
+            if (!session.TryGetFrame(id, out Frame frame, out SessionFailure? failure))
             {
                 throw new InvalidOperationException(Invariant($"Scenario {Name}: TryGetFrame({id}) failed: {failure.Value.Message}"));
             }

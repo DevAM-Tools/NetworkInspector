@@ -12,6 +12,14 @@ behavior, and the single source of truth for it. It was promoted here from the d
 
 `Filter.Compile(expression, stack, in FilterObserverOptions)` compiles the same expression into a `FilterObserver`. That object is not a `Filter`. It latches values during a skip parse and does not share reset or match state with a field-tree filter of the same text. A subtree scope (`$udp { ... }`) fails that compile with `FilterErrorKind.NeedsFieldTree`; use `Filter.Compile` and `FieldTreeMode.Build` for it. Protocol presence without a container field also fails observer compile with `NeedsFieldTree` (skip parse cannot scan owners). At most one `flank(...)` per observer — a second flank is a compile error. After `Packet.TryParse` returns, read `IsMatch` for non-flank observers. When `HasFlank` is true, `IsMatch` throws; call `TryReadMatch` instead. The flank is one leaf of the observer's boolean tree, decided when the frame is committed (the first `TryReadMatch`, or the next `BeginPacket`), so terms around it count exactly as in a `Filter`: `udp.srcport == 53 && flank(ip.ttl, changed, within: 1s)` matches only on port 53, `!flank(…)` is the negation. `BeginPacket` clears the per-frame bits and keeps the flank sample. `ResetState` clears the sample too.
 
+**Parse demand of an observer filter.** A tree-free parse must also open the lazy containers that the field-tree filter would
+materialize, otherwise a matching field in a container outside its index group stays hidden and the verdict differs. A
+`FilterObserver` therefore exposes two members: `ExtractionWatch` (`FieldWatch.ForExtraction` over the observed fields: the fields
+plus every field of their owning protocols; `FieldWatch.None` for an always-match filter) and `ParseDemand` (a parse without field
+tree that delivers exactly that watch, or `ParseDemand.FramesOnly` for an always-match filter, so it adds no parse work). Use
+`observer.ParseDemand` in a `ParsePlan` (see the Core README) instead of building the watch by hand, and list it **before** the
+exporter's demand so its verdict exists when the exporter's packet is committed.
+
 ---
 
 ## 1. Mental model
@@ -215,6 +223,7 @@ Aliases are **metadata on the stack**, not nodes in the parse tree. Example: `et
 | Compare `alias == X` | **Any-member, any-occurrence**: match if any member field’s any tree occurrence equals `X` |
 | Presence `eth.addr` | True if any member is present (index: union of members’ groups when prunable) |
 | Unknown alias | Compile error (same as unknown field) |
+| Name uniqueness | An alias name is never also a protocol or field name: the stack builder refuses the second registration of a name, whichever kind comes first |
 | Compiled evaluation | Closed over `FieldAliasGroupId` + member `FieldId[]` from the stack at compile time |
 
 ```text
@@ -970,12 +979,17 @@ $someip {
   && $someip_sd { someip_sd.entries_length > 0 }
 }
 
-# SOME/IP payload parameters decoded from a service description: the derived name is
-# someip.payload.<service>.v<major>.<member>[.in|.out].<path>, or the filter_name of the parameter
+# SOME/IP names from a service description are the names of the description, unchanged:
+# [prefix.]<service>.v<major>.<member>[.req|.resp].<path>
 $someip {
-  someip.payload.climatecontrol.v2.settemperature.in.request.zone == 7
+  ClimateControl.v2.SetTemperature.req.request.zone == 7
   && someip.timing.delay > 0.01
 }
+
+# A service, a method, and a method narrowed to its responses (no quotes, completed by the filter input)
+ClimateControl.v2
+ClimateControl.v2.SetTemperature
+ClimateControl.v2.SetTemperature && someip.msgtype == 0x80
 
 # Combine with classic outside
 tcp && $udp { udp.port == 53 }

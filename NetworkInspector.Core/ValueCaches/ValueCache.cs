@@ -773,7 +773,7 @@ public sealed class ValueCache : IReadOnlyValueCache
         {
             foreach (Field field in packet.IterFieldsFlat(materialize: false))
             {
-                Record(packet.Id.Value, packet.Timestamp.AsNanos, field.FieldId, field.Value, field.CustomText);
+                Record(packet.Id.Value, packet.Timestamp.AsNanos, field.FieldId, in field.Value, in field.CustomText);
             }
 
             return;
@@ -807,7 +807,7 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// Called only from <c>Packet</c>'s NoInlining stub so the probe cannot inflate <c>AppendChild</c>.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    internal void Record(int packetId, long timestampNanos, FieldId fieldId, in FieldValue value, LazyString customText)
+    internal void Record(int packetId, long timestampNanos, FieldId fieldId, in FieldValue value, in LazyString customText)
     {
         // Called once per appended field of a parse that has this cache attached, so the miss path (field not recorded)
         // is the common one and must stay cheap: no allocation, no dictionary, and the hit logic lives in a separate
@@ -819,7 +819,7 @@ public sealed class ValueCache : IReadOnlyValueCache
             return;
         }
 
-        _RecordHitCold(fieldId, packetId, timestampNanos, in value, customText, ref _Probe[slotIndex]);
+        _RecordHitCold(fieldId, packetId, timestampNanos, in value, in customText, ref _Probe[slotIndex]);
     }
 
     /// <summary>
@@ -827,7 +827,7 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// Null text is a no-op.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    internal void RecordCustomText(int packetId, long timestampNanos, FieldId fieldId, LazyString customText)
+    internal void RecordCustomText(int packetId, long timestampNanos, FieldId fieldId, in LazyString customText)
     {
         _ThrowIfAbandoned();
         if (customText.IsNull)
@@ -1180,13 +1180,24 @@ public sealed class ValueCache : IReadOnlyValueCache
             FieldLookupCookie cookie = FieldLookupCookie.Start;
             while (packet.TryGetNextField(fieldId, ref cookie, out Field field, materialize: false))
             {
-                LazyString text = customText ? field.CustomText : field.Value.CustomRepresentation;
-                if (text.IsNull)
+                // The custom text is read through its reference so that evaluating it caches the string in the field, where the
+                // tree and the exporters read it later; the representation is read through the reference to the stored value for the same reason.
+                if (customText)
                 {
+                    ref readonly LazyString text = ref field.CustomText;
+                    if (!text.IsNull)
+                    {
+                        column.Record(packetId, timestampNanos, text.AsString);
+                    }
+
                     continue;
                 }
 
-                column.Record(packetId, timestampNanos, text.AsString);
+                ref readonly LazyString representation = ref field.Value.CustomRepresentation;
+                if (!representation.IsNull)
+                {
+                    column.Record(packetId, timestampNanos, representation.AsString);
+                }
             }
         }
     }
@@ -1395,7 +1406,7 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// part is optional: a slot may hold only a custom-text series, for example. Inlined only into <c>_RecordHitCold</c>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _RecordHit(FieldId fieldId, int packetId, long timestampNanos, in FieldValue value, LazyString customText, ref ValueCacheProbeSlot slot)
+    private void _RecordHit(FieldId fieldId, int packetId, long timestampNanos, in FieldValue value, in LazyString customText, ref ValueCacheProbeSlot slot)
     {
         if (slot.Payload is null && RecordAllFields && !slot.PayloadGrowResolved)
         {
@@ -1423,8 +1434,8 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// inlined into <c>Record</c>, so the frequent miss path in <c>Record</c> stays small.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void _RecordHitCold(FieldId fieldId, int packetId, long timestampNanos, in FieldValue value, LazyString customText, ref ValueCacheProbeSlot slot)
-        => _RecordHit(fieldId, packetId, timestampNanos, in value, customText, ref slot);
+    private void _RecordHitCold(FieldId fieldId, int packetId, long timestampNanos, in FieldValue value, in LazyString customText, ref ValueCacheProbeSlot slot)
+        => _RecordHit(fieldId, packetId, timestampNanos, in value, in customText, ref slot);
 
     /// <summary>
     /// First-seen <see cref="RecordAllFields"/> payload. Writer thread only. Declines

@@ -8,7 +8,7 @@ namespace NetworkInspector.Exporters.Tests.Blf;
 internal sealed class BlfObjectPayloadsTests
 {
     [Test]
-    public async Task TryBuildCanMessagePayload_EffId_WritesBit31AndFlagsZero()
+    public async Task TryBuildCanMessagePayloadEffIdWritesBit31AndFlagsZero()
     {
         byte[] socketCan = SocketCanGenerators.BuildCanClassic(0x123, [0xAA, 0xBB], extended: true);
         PooledBuffer buffer = new(32);
@@ -33,7 +33,7 @@ internal sealed class BlfObjectPayloadsTests
     }
 
     [Test]
-    public async Task TryBuildCanMessagePayload_Rtr_WritesFlags80()
+    public async Task TryBuildCanMessagePayloadRtrWritesFlags80()
     {
         byte[] socketCan = SocketCanGenerators.BuildCanClassic(0x123, [], rtr: true);
         PooledBuffer buffer = new(32);
@@ -54,7 +54,7 @@ internal sealed class BlfObjectPayloadsTests
     }
 
     [Test]
-    public async Task TryBuildCanMessagePayload_TooShort_ReturnsFalse()
+    public async Task TryBuildCanMessagePayloadTooShortReturnsFalse()
     {
         PooledBuffer buffer = new(16);
         try
@@ -70,7 +70,7 @@ internal sealed class BlfObjectPayloadsTests
     }
 
     [Test]
-    public async Task TryBuildCanXlChannelFramePayload_Writes104HeaderAndPayload()
+    public async Task TryBuildCanXlChannelFramePayloadWrites104HeaderAndPayload()
     {
         byte[] xl = SocketCanGenerators.BuildCanXl(
             0x7AB, [0xAA, 0xBB, 0xCC, 0xDD], vcid: 0x1A, sdt: 0x42, acceptanceField: 0xDEAD_BEEF, sec: true, rrs: true);
@@ -107,7 +107,7 @@ internal sealed class BlfObjectPayloadsTests
     }
 
     [Test]
-    public async Task TryBuildCanXlChannelFramePayload_EmptyData_DlcZero()
+    public async Task TryBuildCanXlChannelFramePayloadEmptyDataDlcZero()
     {
         byte[] xl = SocketCanGenerators.BuildCanXl(0x01, []);
         PooledBuffer buffer = new(128);
@@ -130,7 +130,7 @@ internal sealed class BlfObjectPayloadsTests
     }
 
     [Test]
-    public async Task TryBuildCanXlChannelFramePayload_XlfClear_ReturnsFalse()
+    public async Task TryBuildCanXlChannelFramePayloadXlfClearReturnsFalse()
     {
         byte[] xl = SocketCanGenerators.BuildCanXl(0x01, [0xAA]);
         xl[4] = 0;
@@ -148,7 +148,7 @@ internal sealed class BlfObjectPayloadsTests
     }
 
     [Test]
-    public async Task TryBuildCanXlChannelFramePayload_DeclaredLengthExceedsBuffer_ReturnsFalse()
+    public async Task TryBuildCanXlChannelFramePayloadDeclaredLengthExceedsBufferReturnsFalse()
     {
         byte[] xl = SocketCanGenerators.BuildCanXl(0x01, [0xAA]);
         BinaryPrimitives.WriteUInt16LittleEndian(xl.AsSpan(6), 8);
@@ -166,32 +166,7 @@ internal sealed class BlfObjectPayloadsTests
     }
 
     [Test]
-    public async Task TryBuildCanFdMessagePayload_Writes20ByteHeader()
-    {
-        byte[] socketCan = SocketCanGenerators.BuildCanFd(0x200, [0xAA, 0xBB, 0xCC, 0xDD], extended: true, brs: true);
-        PooledBuffer buffer = new(128);
-        try
-        {
-            bool built = BlfObjectPayloads.TryBuildCanFdMessagePayload(socketCan, 2, buffer);
-            byte[] payload = buffer.WrittenSpan.ToArray();
-            uint blfId = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(4));
-
-            await Assert.That(built).IsTrue();
-            await Assert.That(payload.Length).IsEqualTo(24);
-            await Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(payload)).IsEqualTo((ushort)2);
-            await Assert.That(payload[3]).IsEqualTo((byte)4);
-            await Assert.That(blfId).IsEqualTo(0x8000_0200u);
-            await Assert.That((payload[13] & BlfConstants.BlfCanFdEdl) != 0).IsTrue();
-            await Assert.That(payload[20]).IsEqualTo((byte)0xAA);
-        }
-        finally
-        {
-            buffer.Return();
-        }
-    }
-
-    [Test]
-    public async Task TryBuildCanFdMessage64Payload_Writes40ByteHeader()
+    public async Task TryBuildCanFdMessage64PayloadWrites40ByteHeader()
     {
         byte[] socketCan = SocketCanGenerators.BuildCanFd(0x456, [0x01, 0x02, 0x03, 0x04], brs: true);
         PooledBuffer buffer = new(128);
@@ -219,68 +194,7 @@ internal sealed class BlfObjectPayloadsTests
     }
 
     [Test]
-    public async Task TryBuildEthernetFramePayload_WritesEthertypeLittleEndian()
-    {
-        byte[] ethernet = new byte[18];
-        ethernet.AsSpan(0, 6).Fill(0xFF);
-        ethernet.AsSpan(6, 6).Fill(0x11);
-        ethernet[12] = 0x08;
-        ethernet[13] = 0x00;
-        ethernet[14] = 0xDE;
-        ethernet[15] = 0xAD;
-        ethernet[16] = 0xBE;
-        ethernet[17] = 0xEF;
-        PooledBuffer buffer = new(64);
-        try
-        {
-            bool built = BlfObjectPayloads.TryBuildEthernetFramePayload(ethernet, 1, 0, buffer);
-            byte[] payload = buffer.WrittenSpan.ToArray();
-
-            await Assert.That(built).IsTrue();
-            await Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(16))).IsEqualTo((ushort)0x0800);
-            await Assert.That(payload[16]).IsEqualTo((byte)0x00);
-            await Assert.That(payload[17]).IsEqualTo((byte)0x08);
-        }
-        finally
-        {
-            buffer.Return();
-        }
-    }
-
-    [Test]
-    [Arguments((ushort)0x8100)]
-    [Arguments((ushort)0x9100)]
-    [Arguments((ushort)0x88A8)]
-    public async Task TryBuildEthernetFramePayload_VlanTpid_WritesTpidTciAndInnerType(ushort tpid)
-    {
-        byte[] ethernet = new byte[20];
-        ethernet.AsSpan(0, 6).Fill(0xFF);
-        ethernet.AsSpan(6, 6).Fill(0x11);
-        BinaryPrimitives.WriteUInt16BigEndian(ethernet.AsSpan(12), tpid);
-        BinaryPrimitives.WriteUInt16BigEndian(ethernet.AsSpan(14), 0x00AB);
-        BinaryPrimitives.WriteUInt16BigEndian(ethernet.AsSpan(16), 0x0800);
-        ethernet[18] = 0xDE;
-        ethernet[19] = 0xAD;
-        PooledBuffer buffer = new(64);
-        try
-        {
-            bool built = BlfObjectPayloads.TryBuildEthernetFramePayload(ethernet, 1, 0, buffer);
-            byte[] payload = buffer.WrittenSpan.ToArray();
-
-            await Assert.That(built).IsTrue();
-            await Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(16))).IsEqualTo((ushort)0x0800);
-            await Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(18))).IsEqualTo(tpid);
-            await Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(20))).IsEqualTo((ushort)0x00AB);
-            await Assert.That(payload.AsSpan(32, 2).ToArray()).IsEquivalentTo(new byte[] { 0xDE, 0xAD });
-        }
-        finally
-        {
-            buffer.Return();
-        }
-    }
-
-    [Test]
-    public async Task TryBuildFlexRayRcvMessagePayload_WritesFrameFlags()
+    public async Task TryBuildFlexRayRcvMessagePayloadWritesFrameFlags()
     {
         byte[] fr = FlexRayGenerators.BuildFlexRayFrame(0, 10, 3, 0xABCD, [0xDE, 0xAD], sync: true);
         PooledBuffer buffer = new(128);
@@ -301,7 +215,7 @@ internal sealed class BlfObjectPayloadsTests
     }
 
     [Test]
-    public async Task TryBuildLinMessage2Payload_ReadsDltLinHeader()
+    public async Task TryBuildLinMessage2PayloadReadsDltLinHeader()
     {
         byte[] lin = LinGenerators.BuildLinFrame(0x15, [0xDE, 0xAD, 0xBE, 0xEF], checksum: 0xAB);
         PooledBuffer buffer = new(160);

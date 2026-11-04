@@ -111,7 +111,7 @@ internal sealed class Http2ProtocolTests
         Stack stack = builder.Build();
 
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             frameData,
             LinkType.Ethernet,
@@ -122,7 +122,7 @@ internal sealed class Http2ProtocolTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -261,7 +261,7 @@ internal sealed class Http2ProtocolTests
             NetworkInspector.Core.Index.PacketIndex index = new(stack);
 
             Frame frame = Frame.Create(
-                new FrameId(0),
+                0,
                 Timestamp.FromSecs(0),
                 frameData,
                 LinkType.Ethernet,
@@ -271,7 +271,7 @@ internal sealed class Http2ProtocolTests
             {
                 ParseOptions options = new(index: index);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,

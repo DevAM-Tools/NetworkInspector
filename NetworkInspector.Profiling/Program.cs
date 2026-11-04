@@ -38,6 +38,10 @@ namespace NetworkInspector.Profiling;
 ///                                         — filter verdict oracle over the captures in &lt;dir&gt;
 ///   profiling.exe --write-session-digest &lt;dir&gt; --out &lt;file&gt;
 ///                                         — session result oracle over the captures in &lt;dir&gt;
+///   profiling.exe --write-export-sizes &lt;dir&gt; --out &lt;csv&gt; [--frames &lt;n&gt;]
+///                                         — export the size sample in every configuration, record bytes per configuration
+///   profiling.exe --compare-export-sizes &lt;beforeCsv&gt; &lt;afterCsv&gt; --out &lt;md&gt;
+///                                         — exit 1 when a configuration grew or is missing
 /// </code>
 ///
 /// <para><b>Profiling with dotnet-trace:</b></para>
@@ -93,6 +97,31 @@ internal static class Program
         if (parsed.GoldenDirectory is not null)
         {
             return GoldenInputWriter.Run(parsed.GoldenDirectory);
+        }
+
+        // Export size gate: the sample is written in every configuration and measured, or two such measurements are compared.
+        if (parsed.SizesDirectory is not null)
+        {
+            if (!ExportSizeReport.TryWriteSizes(
+                parsed.SizesDirectory,
+                parsed.OutPath!, // Invariant: ProfilingArguments.TryParse rejects the size modes without --out.
+                parsed.SizesFrames ?? ExportSizeReport.SampleFrameCount,
+                out string? sizesError))
+            {
+                Console.Error.WriteLine(sizesError);
+                return 1;
+            }
+
+            return 0;
+        }
+
+        if (parsed.CompareBefore is not null)
+        {
+            return ExportSizeReport.Compare(
+                parsed.CompareBefore,
+                parsed.CompareAfter!, // Invariant: TryParse sets CompareAfter together with CompareBefore.
+                parsed.OutPath!, // Invariant: TryParse rejects the size modes without --out.
+                Console.Out);
         }
 
         if (parsed.VerdictInputs is not null)

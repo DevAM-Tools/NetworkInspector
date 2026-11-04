@@ -33,7 +33,7 @@ internal sealed class IpAddressCacheTests
         using Stack stack = ProtocolTestHelper.BuildStack();
         _ = ProtocolTestHelper.ParseFrame(stack, frame, 0, Timestamp.FromMillis(0));
 
-        await Assert.That(IPv4Protocol.TryGetCachedAddresses(new PacketId(0), out _, out _)).IsFalse();
+        await Assert.That(IPv4Protocol.TryGetCachedAddresses(0, out _, out _)).IsFalse();
     }
 
     [Test]
@@ -44,7 +44,7 @@ internal sealed class IpAddressCacheTests
         using Stack stack = ProtocolTestHelper.BuildStack();
         _ = ProtocolTestHelper.ParseFrame(stack, frame, 0, Timestamp.FromMillis(0));
 
-        await Assert.That(IPv6Protocol.TryGetCachedAddresses(new PacketId(0), out _, out _)).IsFalse();
+        await Assert.That(IPv6Protocol.TryGetCachedAddresses(0, out _, out _)).IsFalse();
     }
 
     [Test]

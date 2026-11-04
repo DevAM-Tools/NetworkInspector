@@ -12,6 +12,7 @@ namespace NetworkInspector.Exporters.Tests.Roundtrip;
 ///      original.
 /// <para>tshark is required — tests fail when it is missing.</para>
 /// </summary>
+[Category("Slow")]
 internal sealed class PcapngRoundtripTests
 {
     /// <summary>Reference Unix epoch base for all generated timestamps (April 2026).</summary>
@@ -22,7 +23,7 @@ internal sealed class PcapngRoundtripTests
     //    reimport returns no frames.
     // ========================================================================
     [Test]
-    public async Task Empty_File_Roundtrip()
+    public async Task EmptyFileRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_empty");
@@ -49,7 +50,7 @@ internal sealed class PcapngRoundtripTests
     // 2. Snap length truncation keeps EPB original length and tshark frame.len.
     // ========================================================================
     [Test]
-    public async Task SnapLength_Truncation_PreservesOriginalLength()
+    public async Task SnapLengthTruncationPreservesOriginalLength()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_snaplen");
@@ -94,7 +95,7 @@ internal sealed class PcapngRoundtripTests
     // 3. Single Ethernet/IPv4/UDP frame — canonical smoke test.
     // ========================================================================
     [Test]
-    public async Task SingleEthernetIpv4Udp_Roundtrip()
+    public async Task SingleEthernetIpv4UdpRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_single");
@@ -119,7 +120,7 @@ internal sealed class PcapngRoundtripTests
     // 3. Bulk 10 000 Ethernet frames — exercises buffer reuse & lazy scan path.
     // ========================================================================
     [Test]
-    public async Task EthernetBulk_10kFrames_Roundtrip()
+    public async Task EthernetBulk10kFramesRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_bulk");
@@ -149,7 +150,7 @@ internal sealed class PcapngRoundtripTests
     // 4. FlexRay roundtrip.
     // ========================================================================
     [Test]
-    public async Task FlexRay_Roundtrip()
+    public async Task FlexRayRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_fr");
@@ -176,7 +177,7 @@ internal sealed class PcapngRoundtripTests
     // 5. LIN roundtrip.
     // ========================================================================
     [Test]
-    public async Task Lin_Roundtrip()
+    public async Task LinRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_lin");
@@ -203,7 +204,7 @@ internal sealed class PcapngRoundtripTests
     // 6. CAN classic + CAN FD via SocketCAN encapsulation.
     // ========================================================================
     [Test]
-    public async Task CanSocketCan_ClassicAndFd_Roundtrip()
+    public async Task CanSocketCanClassicAndFdRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_can");
@@ -234,7 +235,7 @@ internal sealed class PcapngRoundtripTests
     // 7. Mixed link types in one capture — produces multiple IDBs.
     // ========================================================================
     [Test]
-    public async Task MixedLinkTypes_MultipleInterfaces_Roundtrip()
+    public async Task MixedLinkTypesMultipleInterfacesRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_mixed");
@@ -276,7 +277,7 @@ internal sealed class PcapngRoundtripTests
     // 8. Min (0-byte UDP payload) and jumbo (9000-byte) frames.
     // ========================================================================
     [Test]
-    public async Task EmptyPayloadAndJumbo_Roundtrip()
+    public async Task EmptyPayloadAndJumboRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_minmax");
@@ -306,7 +307,7 @@ internal sealed class PcapngRoundtripTests
     //    and the reimport must surface them unchanged.
     // ========================================================================
     [Test]
-    public async Task IdenticalAndNonMonotonicTimestamps_Roundtrip()
+    public async Task IdenticalAndNonMonotonicTimestampsRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_ts");
@@ -335,7 +336,7 @@ internal sealed class PcapngRoundtripTests
     // 10. Stream output (MemoryStream) roundtrip.
     // ========================================================================
     [Test]
-    public async Task StreamOutput_Roundtrip()
+    public async Task StreamOutputRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_stream");
@@ -381,7 +382,7 @@ internal sealed class PcapngRoundtripTests
     // 11. Reimport in Full vs Lazy scan mode — both must yield identical frames.
     // ========================================================================
     [Test]
-    public async Task Reimport_FullScan_VsLazyScan()
+    public async Task ReimportFullScanVsLazyScan()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_scan");
@@ -422,7 +423,7 @@ internal sealed class PcapngRoundtripTests
     // 12. Random access via FrameById matches sequential NextFrame for every frame.
     // ========================================================================
     [Test]
-    public async Task Reimport_RandomAccess_FrameById()
+    public async Task ReimportRandomAccessFrameById()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_pcapng_rand");
@@ -454,7 +455,7 @@ internal sealed class PcapngRoundtripTests
 
         foreach (int idx in order)
         {
-            Frame? got = source.FrameById(new FrameId(idx));
+            Frame? got = source.FrameById(idx);
             await Assert.That(got).IsNotNull();
             await Assert.That(got!.Value.Data.Span.SequenceEqual(originals[idx].Data.Span)).IsTrue();
             await Assert.That(got.Value.Timestamp.AsNanos).IsEqualTo(originals[idx].Timestamp.AsNanos);
@@ -462,11 +463,11 @@ internal sealed class PcapngRoundtripTests
         }
 
         // Out of bounds returns null.
-        await Assert.That(source.FrameById(new FrameId(count))).IsNull();
+        await Assert.That(source.FrameById(count)).IsNull();
     }
 
     [Test]
-    public async Task InterfaceName_Roundtrip_PreservesIfName()
+    public async Task InterfaceNameRoundtripPreservesIfName()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
@@ -514,7 +515,10 @@ internal sealed class PcapngRoundtripTests
             65535,
             PcapngWriter.TsResolNanoseconds,
             "eth0",
-            (byte)4);
+            (byte)4,
+            null,
+            null,
+            []);
         writer.WriteEnhancedPacket(
             0,
             Timestamp.FromNanos(_EpochBaseNs),

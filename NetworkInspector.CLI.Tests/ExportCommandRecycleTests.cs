@@ -351,13 +351,13 @@ internal sealed class ExportCommandRecycleTests
         PacketFilter filter = _Compile(stack, "flank(ip.ttl, changed, within: 1s)");
         Frame frame = poisonSource.NextFrame()!.Value;
         ParseOptions options = new();
-        PacketId firstId = new(0);
+        PacketId firstId = 0;
         if (!Packet.TryParse(firstId, stack, frame, in options, out _, out ParseFailure firstFailure))
         {
             throw new InvalidOperationException(firstFailure.ToString());
         }
 
-        PacketId secondId = new(1);
+        PacketId secondId = 1;
         if (!Packet.TryParse(secondId, stack, frame, in options, out Packet? second, out ParseFailure secondFailure)
             || second is null)
         {

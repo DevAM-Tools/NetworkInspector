@@ -102,7 +102,7 @@ internal sealed class BlfRandomAccessEquivalenceTests
         data[signature] = (byte)'X';
 
         // Assert
-        await Assert.That(source.FrameById(new FrameId(7))).IsNull();
+        await Assert.That(source.FrameById(7)).IsNull();
         for (int id = 0; id < frames.Count; id++)
         {
             if (id == 7)
@@ -110,7 +110,7 @@ internal sealed class BlfRandomAccessEquivalenceTests
                 continue;
             }
 
-            Frame? frame = source.FrameById(new FrameId(id));
+            Frame? frame = source.FrameById(id);
             await Assert.That(frame is not null && frame.Value.Data.Span.SequenceEqual(originals[id])).IsTrue();
         }
     }
@@ -154,7 +154,7 @@ internal sealed class BlfRandomAccessEquivalenceTests
                     }
 
                     int id = random.Next(limit);
-                    Frame? frame = source.FrameById(new FrameId(id));
+                    Frame? frame = source.FrameById(id);
                     if (frame is null || !RandomAccessEquivalence.SameFrame(expected[id], frame.Value))
                     {
                         Interlocked.Increment(ref failures);

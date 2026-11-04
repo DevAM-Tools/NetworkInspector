@@ -48,11 +48,11 @@ internal sealed class SomeIpE2eTests : SomeIpPayloadKit
 
     private static string _Config() => Json(
         Join(
-            Method(1, "Prot04", Sites(Site("a", "uint8"), Site("b", "uint16")), Sites(Site("r", "uint8")), ",\"e2e_profile\":\"04\""),
-            Method(2, "Prot44", Sites(Site("a", "uint8"), Site("b", "uint16")), "[]", ",\"e2e_profile\":\"44\""),
-            Method(3, "Prot08", Sites(Site("a", "uint8"), Site("b", "uint16")), "[]", ",\"e2e_profile\":\"08\""),
-            Method(4, "Plain", Sites(Site("a", "uint8"), Site("b", "uint16")), "[]"),
-            Method(5, "Bad", Sites(Site("a", "uint8")), "[]", ",\"e2e_profile\":\"99\"")));
+            Method(1, "prot04", Sites(Site("a", "uint8"), Site("b", "uint16")), Sites(Site("r", "uint8")), ",\"e2e_profile\":\"04\""),
+            Method(2, "prot44", Sites(Site("a", "uint8"), Site("b", "uint16")), "[]", ",\"e2e_profile\":\"44\""),
+            Method(3, "prot08", Sites(Site("a", "uint8"), Site("b", "uint16")), "[]", ",\"e2e_profile\":\"08\""),
+            Method(4, "plain", Sites(Site("a", "uint8"), Site("b", "uint16")), "[]"),
+            Method(5, "bad", Sites(Site("a", "uint8")), "[]", ",\"e2e_profile\":\"99\"")));
 
     private static SomeIpTestStack _Stack(bool verify = false) =>
         SomeIpTestStack.Create(_Config(), ("someip.verify_e2e_crc", SettingValue.Bool(verify)));

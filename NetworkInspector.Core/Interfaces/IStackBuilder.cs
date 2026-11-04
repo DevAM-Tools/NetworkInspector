@@ -18,11 +18,21 @@ public interface IStackBuilder : IStack
 {
     #region Protocol Registration
 
-    /// <summary>Registers a protocol parser. Returns its unique <see cref="ProtocolId"/>.</summary>
+    /// <summary>
+    /// Registers a protocol parser. Returns its unique <see cref="ProtocolId"/>.
+    /// <para>
+    /// Protocol, field and field alias group names share one namespace for conflicts: the first registration keeps a name
+    /// and a later registration of any of the three kinds is refused. The only exception is the container field of a
+    /// protocol, which may carry the name of the protocol that owns it.
+    /// </para>
+    /// </summary>
     /// <param name="protocol">The protocol implementation to register.</param>
     /// <exception cref="InvalidNameRegistrationException">Thrown when the protocol name is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when the protocol UI name is empty or contains control characters.</exception>
-    /// <exception cref="DuplicateNameRegistrationException">Thrown when the protocol name is already registered.</exception>
+    /// <exception cref="DuplicateNameRegistrationException">
+    /// Thrown when the protocol name is already held by a protocol, a field or a field alias group; the exception names the kind
+    /// of the holder.
+    /// </exception>
     ProtocolId RegisterProtocol(IProtocol protocol);
 
     /// <summary>
@@ -37,7 +47,9 @@ public interface IStackBuilder : IStack
     /// </param>
     /// <exception cref="InvalidNameRegistrationException">Thrown when the protocol name is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when the protocol UI name is empty or contains control characters.</exception>
-    /// <exception cref="DuplicateNameRegistrationException">Thrown when the protocol name is already registered.</exception>
+    /// <exception cref="DuplicateNameRegistrationException">
+    /// Thrown when the protocol name is already held by a protocol, a field or a field alias group.
+    /// </exception>
     ProtocolId RegisterProtocol<TProtocol>(TProtocol protocol, Action<IStackBuilder, ProtocolId, TProtocol> callback)
         where TProtocol : IProtocol;
 
@@ -45,7 +57,11 @@ public interface IStackBuilder : IStack
 
     #region Field Registration
 
-    /// <summary>Registers a field definition without an index group.</summary>
+    /// <summary>
+    /// Registers a field definition without an index group. The name shares the conflict namespace of protocols and field
+    /// alias groups (see <see cref="RegisterProtocol(IProtocol)"/>); the owning protocol's own container field may carry the
+    /// protocol's name.
+    /// </summary>
     /// <param name="protocolId">
     /// The owning protocol (use <see cref="ProtocolId.Invalid"/> for built-in fields). Any other ID must have been returned by
     /// this builder's protocol registration.
@@ -56,7 +72,9 @@ public interface IStackBuilder : IStack
     /// <param name="description">Optional description text.</param>
     /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
-    /// <exception cref="DuplicateNameRegistrationException">Thrown when the field name is already registered.</exception>
+    /// <exception cref="DuplicateNameRegistrationException">
+    /// Thrown when the field name is already held by a field, a field alias group, or a protocol other than the owner.
+    /// </exception>
     /// <exception cref="NotFoundRegistrationException">Thrown when <paramref name="protocolId"/> is neither <see cref="ProtocolId.Invalid"/> nor a registered protocol.</exception>
     FieldId RegisterField(
         ProtocolId protocolId,
@@ -86,7 +104,9 @@ public interface IStackBuilder : IStack
     /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="indexGroup"/>
     /// is not a valid dot-separated C-style identifier.</exception>
     /// <exception cref="InvalidUiNameRegistrationException">Thrown when <paramref name="uiName"/> is empty or contains control characters.</exception>
-    /// <exception cref="DuplicateNameRegistrationException">Thrown when the field name is already registered.</exception>
+    /// <exception cref="DuplicateNameRegistrationException">
+    /// Thrown when the field name is already held by a field, a field alias group, or a protocol other than the owner.
+    /// </exception>
     FieldId RegisterFieldInGroup(
         ProtocolId protocolId,
         string name,
@@ -104,9 +124,10 @@ public interface IStackBuilder : IStack
     /// member fields. Returns the assigned <see cref="FieldAliasGroupId"/>.
     /// <para>
     /// Alias groups are metadata-only: the parsing hot path does not consult them, and the
-    /// alias name remains invisible to <see cref="IStack.GetFieldId(string)"/>. Alias names
-    /// occupy a namespace independent from field names and protocol-table names; an alias name
-    /// can therefore coexist with a protocol-table name of the same string (e.g., <c>"udp.port"</c>)
+    /// alias name remains invisible to <see cref="IStack.GetFieldId(string)"/>. An alias name shares the conflict namespace
+    /// of protocol names and field names: it is refused when a protocol or a field holds the name, and a protocol or field
+    /// registered later under an alias name is refused (the first registration keeps the name). Protocol-table names are a
+    /// separate namespace; an alias name can coexist with a protocol-table name of the same string (e.g., <c>"udp.port"</c>)
     /// without collision.
     /// </para>
     /// <para>
@@ -117,14 +138,16 @@ public interface IStackBuilder : IStack
     /// </para>
     /// </summary>
     /// <param name="protocolId">The protocol that owns this alias group.</param>
-    /// <param name="name">Machine-readable alias name (e.g., "eth.addr"). Must be unique inside the alias namespace.</param>
+    /// <param name="name">Machine-readable alias name (e.g., "eth.addr"). Must not be held by a protocol, a field or another alias.</param>
     /// <param name="description">Optional description text.</param>
     /// <param name="fieldIds">
     /// The canonical member field IDs the alias resolves to. Must be non-empty and free of duplicates.
     /// Every ID must refer to a field already registered on this builder.
     /// </param>
     /// <exception cref="InvalidNameRegistrationException">Thrown when <paramref name="name"/> is not a valid dot-separated C-style identifier.</exception>
-    /// <exception cref="DuplicateNameRegistrationException">Thrown when an alias group with the same name is already registered.</exception>
+    /// <exception cref="DuplicateNameRegistrationException">
+    /// Thrown when the name is already held by an alias group, a protocol or a field; the exception names the kind of the holder.
+    /// </exception>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="fieldIds"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">Thrown when <paramref name="fieldIds"/> is empty or contains duplicate field IDs.</exception>
     /// <exception cref="NotFoundRegistrationException">Thrown when any element of <paramref name="fieldIds"/> references a field ID not registered on this builder.</exception>

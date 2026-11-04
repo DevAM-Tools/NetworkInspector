@@ -24,10 +24,12 @@ Plans are for **human acceptance** and for a **weaker executing agent**. Before/
 
 ## Stage 1 — Gather Context
 
+- Run Tech Load Protocol per `copilot-instructions.md` Section 3 (`tech-docs.md` always).
+- Read before acting (Section 4.6, `tech-docs.md` § Reading tiers). Record what was read and which docs are missing in the Context Anchor.
 - Read relevant code, tests, docs, interfaces, build config.
 - Read every user-attached architecture, guide, requirement, or brief **in full**.
-- Enumerate all affected files before planning.
-- Run Tech Load Protocol per `copilot-instructions.md` Section 3.
+- Run the Impact search (`tech-docs.md` § Impact search). Enumerate all affected files from it, docs included, before planning.
+- A design that breaks a documented boundary, dependency direction, flow, or invariant is a Grill Me question (Section 4.16 form), never a silent choice.
 - Identify interface candidates, hot paths, and (for web UI) Playwright journeys.
 - Build test **content** (Stage 6 Test cases). Apply `tech-test.md`.
 - Identify public API surface when this is a library or other public contract.
@@ -66,20 +68,25 @@ Cover every topic before finalizing scope:
 - agentic debug path (smallest command, filterable tests, traces)
 - API misuse / abuse vectors
 - automation when the same edit hits more than ten call sites (approved script or codemod)
+- docs: which docs and comment sets change; doc–code mismatches found in Stage 1 (which side is right); doc gaps in touched files beyond the touched members (Out with `/docs-repair`, or in scope)
+
+Each question follows the Section 4.16 question form. The user may see only the question.
 
 ```markdown
 ## Q{n} — {topic}
 **Source:** Sweep | Council | Plan | Requirements
-**Context:** {1-3 sentences}
+**Context:** {task and plan stage in one line; what was found, quoted or linked; what was already checked}
+**Why it matters:** {what changes in the plan depending on the answer}
 **Question:** {single-part question}
-**Options:** 1) {option} · 2) {option} · 3) {option} · or free-text
+**Options:** 1) {option} — {consequence} · 2) {option} — {consequence} · or answer in your own words
+**Recommendation:** {option} — {why}
 ```
 
 Do not proceed while ambiguities remain. New blocking fork → Stage 5 before Write Plan.
 
 ## Stage 4 — Reconcile
 
-- Cross-check request, requirements artifact, Grill-Me answers, Sweep, council verdicts, code, docs, ADRs, and Section 4.
+- Cross-check request, requirements artifact, Grill-Me answers, Sweep, council verdicts, code, docs, decision records, and Section 4.
 - Record a **preference** when both sides cannot hold (`C{n}`).
 - Apply Rule Priority (§4.13), then explicit user choice, then scope split.
 - Align docs ↔ code ↔ tests when source-of-truth is unclear; ask.
@@ -152,9 +159,9 @@ Not yet: deleting an export.
 
 ### Shared Block (plan steps)
 
-Field order: `What` → `Why` → `How` → `Experience` → `Acceptance` → `Tests` → `[Public API]` → `[Size]` → `[Context]` → `[Where]` → `Verify` → `Debug` → `[If it fails]`.
+Field order: `What` → `Why` → `How` → `Experience` → `Acceptance` → `Tests` → `[Public API]` → `[Size]` → `[Context]` → `[Where]` → `Docs` → `Verify` → `Debug` → `[If it fails]`.
 
-Always require `What`, `Why`, `How`, `Experience`, `Acceptance`, `Verify`.
+Always require `What`, `Why`, `How`, `Experience`, `Acceptance`, `Docs`, `Verify`.
 Require `Tests` when the step ships behavior (cite the test ID this step adds or runs; **Content** lives on the card).
 Require `Public API` when the step ships or changes a public surface. That field matches **API and interfaces**. It does not introduce a second signature.
 Require `Size` when the step may exceed the soft budget (see Step Rules).
@@ -171,6 +178,7 @@ Prefer those fences over a paragraph that restates the same shape. Extra snippet
 Test code in `How` or on a `TEST-<AREA>-<TOPIC>` card is allowed and welcome. It does not replace Test case **Content**.
 
 `Where`: clickable relative Markdown link (Section 4.6), approximate lines, symbol. Mark `primary` (create/rewrite) or `call-site` or `additive` (append-only).
+`Docs`: every doc this step updates, from the Impact search — clickable link plus section (code-map row, architecture section, domain entry, README section, guide, decision record) — and the comment work in code (contract doc comments with Related links for new and changed members, block comments, tags, sections, `Sync:` pairs). Or `none — {why no doc states what this step changes}`. The step `After` shows the doc comments of new members.
 `Verify`: exact command in optimized/Release per loaded tech skill, plus expected result.
 `Experience`: what a person can try after this step, what they should see, how to try it, and what is **not yet** true. Expected Experience aggregates these per phase.
 
@@ -195,6 +203,9 @@ Not yet: …
 Prod files: {n} · ~LOC: {n} (tests excluded) · over budget because: {or n/a}
 ### Context
 ### Where
+### Docs
+- [docs/architecture.md](../docs/architecture.md) § {component} — {flow, invariant, or Easy to miss line changed}
+- Code: doc comments on {members}; `Sync:` pair {file ↔ file}
 ### Verify
 ### Debug
 Reproduce: …
@@ -305,6 +316,7 @@ fast. An applicable class with no test ID and no Out = gap.
 - Map every requirement ID that has Done-when to a design element here (completeness). Do not paste Done-when from the requirements file. Steps then apply this shape.
 - SSOT for final file layout, data flow, invariants, and algorithms. **API and interfaces** is the SSOT for public signatures and contract types; do not paste a second shape here, link to it. A primary-file `After` that differs from either section is an incomplete plan.
 - Trust-boundary limits (Section 4.2): one table row per limit. A limit without threat or posture is incomplete. Each limit gets the limit cases in `tech-test.md` as test cards.
+- **Doc delta:** the architecture Overview rows and sections, concept and domain entries, README sections, guides, and decision records the end state changes, with one line each on the new truth. A new decision with rejected options, and every agreed change to the architecture, gets a decision record (`tech-docs-templates.md`). Domain facts from Grill Me answers land in `docs/domain.md`.
 
 ```markdown
 | Limit | Default · range | Kind · who | Posture · why |
@@ -403,10 +415,11 @@ Run after the plan file is written. **Walk the plan twice.** Patch until both wa
 1. **Requirements walk** — Re-read the **linked** requirements file **in full**. Do not treat anything in the plan as a copy of that list. Every requirement ID that has Done-when lands in Target Solution **and** in a step `Acceptance`. Every test ID lands in a step `Tests` field **and** has a card with **Content**. IDs never land in a step `How`. A test ID without **Content** = gap. An applicable `tech-test.md` class with no test ID and no Out = gap. Unmapped = gap. Cite each test ID as written. Do not renumber a supplied plan.
 2. **Conversation walk** — Re-read the conversation, Grill Me Q/A, Sweep, council, and attached docs **in full**, then the **entire** written plan. Every relevant user ask, constraint, non-goal, named type/path/command, accepted proposal, rejected option with leftover constraint, and named edge / constellation / contradiction / gap must land somewhere (a requirement ID, a test ID **Content**, Out, `C{n}`, or out of scope). Unmapped = gap. “Implied” without a citation = gap.
 
-Then run two cheap checks:
+Then run three cheap checks:
 
 - **Link check:** every `#` link (Step Overview, Task Checklist, Test cases index, Expected Experience) matches a heading slug in the plan. Patch the link or the heading.
 - **Experience check:** every Expected Experience claim traces to a step `Experience`. Every `Not yet` is covered by a later block or Out.
+- **Doc check:** every Impact-search hit and every Doc delta line lands in a step `Docs` field, or in Out with a reason.
 
 Include every requirement ID with Done-when, every test ID, and every Grill Me answer as a row. Record dropped items with reason. Write both tables into Context Anchor. Re-run this stage after any patch.
 

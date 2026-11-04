@@ -325,6 +325,80 @@ internal sealed class IdTypeTests
         await Assert.That(PacketId.Invalid.IsValid).IsFalse();
     }
 
+    // === Implicit int conversion of FrameId and PacketId ===
+
+    [Test]
+    public async Task PacketIdConvertsImplicitlyFromInt()
+    {
+        PacketId id = 500;
+        PacketId sentinel = -1;
+        PacketId? nullable = 7;
+        await Assert.That(id.Value).IsEqualTo(500);
+        await Assert.That(sentinel).IsEqualTo(PacketId.Invalid);
+        await Assert.That(nullable!.Value.Value).IsEqualTo(7); // assigned from a literal one line above
+        await Assert.That(_PacketIdOf(12).Value).IsEqualTo(12);
+    }
+
+    [Test]
+    public async Task FrameIdConvertsImplicitlyFromInt()
+    {
+        FrameId id = 1000;
+        FrameId sentinel = -1;
+        FrameId? nullable = 7;
+        await Assert.That(id.Value).IsEqualTo(1000);
+        await Assert.That(sentinel).IsEqualTo(FrameId.Invalid);
+        await Assert.That(nullable!.Value.Value).IsEqualTo(7); // assigned from a literal one line above
+        await Assert.That(_FrameIdOf(12).Value).IsEqualTo(12);
+    }
+
+    [Test]
+    public async Task ImplicitPacketIdConversionKeepsTheRangeCheck()
+    {
+        await Assert.That(() => _PacketIdOf(Ids.ArrayIndexIdRange.MaxValue + 1)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => _PacketIdOf(-2)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(_PacketIdOf(Ids.ArrayIndexIdRange.MaxValue).Value).IsEqualTo(Ids.ArrayIndexIdRange.MaxValue);
+    }
+
+    [Test]
+    public async Task ImplicitFrameIdConversionKeepsTheRangeCheck()
+    {
+        await Assert.That(() => _FrameIdOf(Ids.ArrayIndexIdRange.MaxValue + 1)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => _FrameIdOf(-2)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(_FrameIdOf(Ids.ArrayIndexIdRange.MaxValue).Value).IsEqualTo(Ids.ArrayIndexIdRange.MaxValue);
+    }
+
+    [Test]
+    public async Task AnIdComparedWithAnIntUsesTheIdOperators()
+    {
+        // The documented consequence of the implicit conversion: the int side is converted to an id and range-checked, so the
+        // comparison is an id comparison and an out-of-range literal fails loudly instead of comparing as a plain number.
+        PacketId packet = 100;
+        FrameId frame = 100;
+        await Assert.That(packet == 100).IsTrue();
+        await Assert.That(packet < 200).IsTrue();
+        await Assert.That(packet != PacketId.Invalid).IsTrue();
+        await Assert.That(frame == 100).IsTrue();
+        await Assert.That(frame >= 50).IsTrue();
+        await Assert.That(() => packet == Ids.ArrayIndexIdRange.MaxValue + 1).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => frame == Ids.ArrayIndexIdRange.MaxValue + 1).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task AnIdStillConvertsToIntAndTakesPartInArithmetic()
+    {
+        PacketId packet = 40;
+        FrameId frame = 2;
+        int sum = packet + frame;
+        await Assert.That(sum).IsEqualTo(42);
+        int[] table = new int[64];
+        table[packet] = 5;
+        await Assert.That(table[40]).IsEqualTo(5);
+    }
+
+    private static PacketId _PacketIdOf(int value) => value;
+
+    private static FrameId _FrameIdOf(int value) => value;
+
     // === FrameSourceId (int) ===
 
     [Test]

@@ -13,6 +13,7 @@ global using System.Text;
 global using System.Text.Json;
 global using System.Threading;
 global using System.Threading.Tasks;
+global using static System.FormattableString;
 #endregion
 
 #region NetworkInspector.Core
@@ -56,8 +57,17 @@ global using NetworkInspector.Sources.Pcapng;
 global using NetworkInspector.Sources.Pcapng.Format;
 #endregion
 
+#region NetworkInspector.Filter
+global using NetworkInspector.Filter;
+
+// The concrete filter shares its name with its namespace; the alias is the same one the sessions use.
+global using PacketFilter = NetworkInspector.Filter.Filter;
+#endregion
+
 #region NetworkInspector.Exporters (internal)
 global using NetworkInspector.Exporters.Columnar;
+global using NetworkInspector.Exporters.Content;
+global using NetworkInspector.Exporters.Writing;
 global using NetworkInspector.Exporters.DuckDb;
 global using NetworkInspector.Exporters.Parquet;
 global using NetworkInspector.Exporters.Pbf.Columnar;
@@ -71,6 +81,7 @@ global using Parquet.Schema;
 
 #region Test Framework
 global using TUnit.Assertions;
+global using TUnit.Assertions.Enums;
 global using TUnit.Assertions.Extensions;
 global using TUnit.Core;
 #endregion

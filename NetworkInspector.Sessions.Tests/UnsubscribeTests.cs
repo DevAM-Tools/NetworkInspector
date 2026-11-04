@@ -60,7 +60,7 @@ internal sealed class UnsubscribeTests
 
         // Source finished normally. Now verify random access still works
         // (source is NOT disposed until Shutdown).
-        bool found = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
+        bool found = session.TryGetPacket(0, out Packet? packet, out _);
 
         await Assert.That(found).IsTrue();
         await Assert.That(packet).IsNotNull();

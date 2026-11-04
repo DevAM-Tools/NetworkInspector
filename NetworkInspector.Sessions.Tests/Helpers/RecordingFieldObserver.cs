@@ -20,4 +20,9 @@ internal sealed class RecordingFieldObserver : IFieldObserver
 
     /// <inheritdoc/>
     public void OnField(in FieldVisit visit) => Fields.Add(visit.FieldId);
+
+    /// <inheritdoc/>
+    public void EndPacket(PacketId id, bool complete)
+    {
+    }
 }

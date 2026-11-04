@@ -3,8 +3,7 @@
 namespace NetworkInspector.Exporters.Pbf;
 
 /// <summary>
-/// Dynamic bitmap for tracking field presence per block.
-/// Replaces <see cref="HashSet{T}"/> with a dense bit array for
+/// Bitmap for tracking field presence per block. A dense bit array (rather than a <see cref="HashSet{T}"/>) gives
 /// cache-friendly field ID lookups: one bit per field ID, no hashing, no per-entry allocation, and a block-to-block
 /// <see cref="Clear"/> that only touches the bytes that were set.
 /// <para>
@@ -13,15 +12,24 @@ namespace NetworkInspector.Exporters.Pbf;
 /// plain byte-wise OR.
 /// </para>
 /// <para>
-/// Thread safety: not thread-safe; owned by one block builder and used from the exporter's single caller thread.
+/// <b>Thread safety:</b> Not thread-safe; owned by one block builder and so by one thread at a time. The caller's thread marks
+/// fields while it fills the block; in <see cref="ExportWriteMode.Background"/> the writer thread then reads it through
+/// <see cref="AsBytes"/> or <see cref="MergeInto"/> and clears it. The hand-off of <see cref="BatchWriterPipeline{TBatch}"/> is the
+/// memory barrier between the two (see <see cref="IExportBatch"/>); no member may keep state that belongs to one specific thread.
 /// </para>
 /// </summary>
 internal sealed class FieldPresence
 {
+    #region Presence bitmap
+
+    /// <summary>The bitmap: bit <c>id % 8</c> of byte <c>id / 8</c> is set when the field id was marked.</summary>
     private readonly byte[] _Bitmap;
 
-    // Number of leading bytes of _Bitmap that may contain a set bit. Lets Clear and AsBytes work on a short prefix
-    // instead of the whole array (4 KiB for the 32 768 IDs the PBF exporter tracks) when only low field IDs occur.
+    /// <summary>
+    /// Number of leading bytes of <see cref="_Bitmap"/> that may contain a set bit. Lets <see cref="Clear"/> and
+    /// <see cref="AsBytes"/> work on a short prefix instead of the whole array (4 KiB for the 32 768 IDs the PBF exporter tracks)
+    /// when only low field IDs occur.
+    /// </summary>
     private int _UsedBytes;
 
     /// <summary>
@@ -29,10 +37,18 @@ internal sealed class FieldPresence
     /// </summary>
     /// <param name="maxFieldId">
     /// Exclusive upper bound of the tracked field IDs, rounded up to a multiple of 8: IDs <c>0</c> to
-    /// <c>maxFieldId - 1</c> are tracked. Must not be negative.
+    /// <c>maxFieldId - 1</c> are tracked. From <c>0</c> (tracks nothing) to <c>int.MaxValue - 7</c>.
     /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="maxFieldId"/> is negative or so large that the size rounded up to whole bytes overflows.
+    /// </exception>
     internal FieldPresence(int maxFieldId)
     {
+        // Limit: the bitmap is sized once from a trusted constant of the exporter (32 768 ids), never from capture data; a negative
+        // or overflowing size is a bug in the caller. Constant check, not configurable. Posture: secure by default. A wrapped
+        // size would otherwise surface as an unrelated OverflowException or a negative array length.
+        ArgumentOutOfRangeException.ThrowIfNegative(maxFieldId);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maxFieldId, int.MaxValue - 7);
         _Bitmap = new byte[(maxFieldId + 7) / 8];
     }
 
@@ -135,4 +151,6 @@ internal sealed class FieldPresence
             target[i] |= source[i];
         }
     }
+
+    #endregion
 }

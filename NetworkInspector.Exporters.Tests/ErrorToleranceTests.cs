@@ -17,7 +17,7 @@ internal sealed class ErrorToleranceTests
     #region CSV
 
     [Test]
-    public async Task Csv_TolerantMode_RaisesItemSkippedAndContinues()
+    public async Task CsvTolerantModeRaisesItemSkippedAndContinues()
     {
         using FailingStream stream = new()
         {
@@ -44,7 +44,7 @@ internal sealed class ErrorToleranceTests
     }
 
     [Test]
-    public async Task Csv_StrictMode_AbortsOnFailure()
+    public async Task CsvStrictModeAbortsOnFailure()
     {
         using FailingStream stream = new()
         {
@@ -71,7 +71,7 @@ internal sealed class ErrorToleranceTests
     #region JSON
 
     [Test]
-    public async Task Json_TolerantMode_RaisesItemSkippedAndContinues()
+    public async Task JsonTolerantModeRaisesItemSkippedAndContinues()
     {
         // Allow the opening "[\n" through (2 bytes) so that Start succeeds and the
         // failure happens on the actual packet write.
@@ -98,7 +98,7 @@ internal sealed class ErrorToleranceTests
     }
 
     [Test]
-    public async Task Json_StrictMode_AbortsOnFailure()
+    public async Task JsonStrictModeAbortsOnFailure()
     {
         using FailingStream stream = new()
         {
@@ -124,7 +124,7 @@ internal sealed class ErrorToleranceTests
     #region Text
 
     [Test]
-    public async Task Text_TolerantMode_RaisesItemSkippedAndContinues()
+    public async Task TextTolerantModeRaisesItemSkippedAndContinues()
     {
         using FailingStream stream = new()
         {
@@ -148,7 +148,7 @@ internal sealed class ErrorToleranceTests
     }
 
     [Test]
-    public async Task Text_StrictMode_AbortsOnFailure()
+    public async Task TextStrictModeAbortsOnFailure()
     {
         using FailingStream stream = new()
         {
@@ -173,7 +173,7 @@ internal sealed class ErrorToleranceTests
     #region PCAPNG
 
     [Test]
-    public async Task Pcapng_TolerantMode_RaisesItemSkippedAndContinues()
+    public async Task PcapngTolerantModeRaisesItemSkippedAndContinues()
     {
         // Allow the SHB through but fail on subsequent IDB/EPB writes.
         using FailingStream stream = new()
@@ -200,7 +200,7 @@ internal sealed class ErrorToleranceTests
     }
 
     [Test]
-    public async Task Pcapng_StrictMode_AbortsOnFailure()
+    public async Task PcapngStrictModeAbortsOnFailure()
     {
         using FailingStream stream = new()
         {
@@ -238,7 +238,7 @@ internal sealed class ErrorToleranceTests
     #region BLF
 
     [Test]
-    public async Task Blf_TolerantMode_RaisesItemSkippedAndContinues()
+    public async Task BlfTolerantModeRaisesItemSkippedAndContinues()
     {
         // Allow the BLF header through (~144 bytes) but fail on object writes.
         using FailingStream stream = new()
@@ -265,7 +265,7 @@ internal sealed class ErrorToleranceTests
     }
 
     [Test]
-    public async Task Blf_StrictMode_AbortsOnFailure()
+    public async Task BlfStrictModeAbortsOnFailure()
     {
         using FailingStream stream = new()
         {
@@ -296,7 +296,7 @@ internal sealed class ErrorToleranceTests
     #region PBF
 
     [Test]
-    public async Task Pbf_TolerantMode_RaisesItemSkippedAndContinues()
+    public async Task PbfTolerantModeRaisesItemSkippedAndContinues()
     {
         // PBF only writes to the underlying stream when a block is flushed; force
         // a flush by limiting block size aggressively.
@@ -328,7 +328,7 @@ internal sealed class ErrorToleranceTests
     }
 
     [Test]
-    public async Task Pbf_StrictMode_AbortsOnFailure()
+    public async Task PbfStrictModeAbortsOnFailure()
     {
         using FailingStream stream = new()
         {
@@ -355,6 +355,57 @@ internal sealed class ErrorToleranceTests
         await Assert.That(sawFailure).IsTrue();
         await Assert.That(exporter.HasErrors).IsTrue();
         await Assert.That(exporter.IsFinished).IsTrue();
+    }
+
+    #endregion
+
+    #region Builder names
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments(" ")]
+    public async Task WithUiNameRefusesNullAndWhiteSpace(string? name)
+    {
+        Action[] calls =
+        [
+            () => AscExporter.CreateBuilder().WithUiName(name!),
+            () => BlfExporter.CreateBuilder().WithUiName(name!),
+            () => CsvExporter.CreateBuilder().WithUiName(name!),
+            () => NetworkInspector.Exporters.DuckDb.DuckDbExporter.CreateBuilder().WithUiName(name!),
+            () => JsonExporter.CreateBuilder().WithUiName(name!),
+            () => NetworkInspector.Exporters.Parquet.ParquetExporter.CreateBuilder().WithUiName(name!),
+            () => PbfExporter.CreateBuilder().WithUiName(name!),
+            () => PcapngExporter.CreateBuilder().WithUiName(name!),
+            () => TextExporter.CreateBuilder().WithUiName(name!),
+        ];
+
+        foreach (Action call in calls)
+        {
+            await Assert.That(call).Throws<ArgumentException>();
+        }
+    }
+
+    [Test]
+    public async Task WithDescriptionAcceptsNullToClearTheDescription()
+    {
+        Action[] calls =
+        [
+            () => AscExporter.CreateBuilder().WithDescription("text").WithDescription(null),
+            () => BlfExporter.CreateBuilder().WithDescription("text").WithDescription(null),
+            () => CsvExporter.CreateBuilder().WithDescription("text").WithDescription(null),
+            () => NetworkInspector.Exporters.DuckDb.DuckDbExporter.CreateBuilder().WithDescription("text").WithDescription(null),
+            () => JsonExporter.CreateBuilder().WithDescription("text").WithDescription(null),
+            () => NetworkInspector.Exporters.Parquet.ParquetExporter.CreateBuilder().WithDescription("text").WithDescription(null),
+            () => PbfExporter.CreateBuilder().WithDescription("text").WithDescription(null),
+            () => PcapngExporter.CreateBuilder().WithDescription("text").WithDescription(null),
+            () => TextExporter.CreateBuilder().WithDescription("text").WithDescription(null),
+        ];
+
+        foreach (Action call in calls)
+        {
+            await Assert.That(call).ThrowsNothing();
+        }
     }
 
     #endregion

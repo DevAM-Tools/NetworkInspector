@@ -12,7 +12,7 @@ namespace NetworkInspector.Exporters.Tests.Pcapng;
 internal sealed class PcapPaddingExitTests
 {
     [Test]
-    public async Task TryRoundBlockLength_RoundsUpToMultipleOfFour()
+    public async Task TryRoundBlockLengthRoundsUpToMultipleOfFour()
     {
         bool rounded = PcapPadding.TryRoundBlockLength(33, out uint length);
 
@@ -21,7 +21,7 @@ internal sealed class PcapPaddingExitTests
     }
 
     [Test]
-    public async Task TryRoundBlockLength_RejectsLengthNearUInt32Max()
+    public async Task TryRoundBlockLengthRejectsLengthNearUInt32Max()
     {
         bool rounded = PcapPadding.TryRoundBlockLength(uint.MaxValue - 2, out uint length);
 

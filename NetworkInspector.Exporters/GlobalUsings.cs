@@ -5,6 +5,7 @@ global using System;
 global using System.Buffers;
 global using System.Buffers.Binary;
 global using System.Buffers.Text;
+global using System.Collections.Concurrent;
 global using System.Collections.Generic;
 global using System.Diagnostics.CodeAnalysis;
 global using System.Globalization;
@@ -16,6 +17,7 @@ global using System.Runtime.InteropServices;
 global using System.Runtime.Intrinsics;
 global using System.Text;
 global using System.Threading;
+global using static System.FormattableString;
 #endregion
 
 #region NetworkInspector.Core
@@ -34,6 +36,8 @@ global using NetworkInspector.Protocols;
 
 #region NetworkInspector.Exporters
 global using NetworkInspector.Exporters.Columnar;
+global using NetworkInspector.Exporters.Content;
+global using NetworkInspector.Exporters.Writing;
 global using NetworkInspector.Exporters.Pbf.Columnar;
 #endregion
 

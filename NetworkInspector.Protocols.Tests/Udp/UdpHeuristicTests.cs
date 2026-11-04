@@ -83,13 +83,13 @@ internal sealed class UdpHeuristicTests
 
     private static (bool Before, bool OtherId, bool AfterClear) _CacheRoundTrip()
     {
-        UdpPortCache.Publish(new PacketId(5), 1111, 2222);
-        bool before = UdpPortCache.TryGet(new PacketId(5), out ushort source, out ushort destination)
+        UdpPortCache.Publish(5, 1111, 2222);
+        bool before = UdpPortCache.TryGet(5, out ushort source, out ushort destination)
             && source == 1111
             && destination == 2222;
-        bool other = UdpPortCache.TryGet(new PacketId(6), out _, out _);
+        bool other = UdpPortCache.TryGet(6, out _, out _);
         UdpPortCache.Clear();
-        bool after = UdpPortCache.TryGet(new PacketId(5), out _, out _);
+        bool after = UdpPortCache.TryGet(5, out _, out _);
         return (before, other, after);
     }
 
@@ -167,7 +167,7 @@ internal sealed class UdpHeuristicTests
         _ = ProtocolTestHelper.ParseFrame(stack, _UdpFrame(12345, 40000, new byte[] { 1, 2, 3, 4 }), 0, Timestamp.FromSecs(0));
 
         // After the parse the thread holds no ports: a parser reached later without UDP must not find them.
-        await Assert.That(UdpPortCache.TryGet(new PacketId(0), out _, out _)).IsFalse();
+        await Assert.That(UdpPortCache.TryGet(0, out _, out _)).IsFalse();
     }
 
     [Test]

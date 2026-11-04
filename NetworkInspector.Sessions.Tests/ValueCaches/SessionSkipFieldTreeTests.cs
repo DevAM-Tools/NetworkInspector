@@ -24,7 +24,7 @@ internal sealed class SessionSkipFieldTreeTests
     private static Packet _ParseSkip(Stack stack, int packetId = 0)
     {
         Frame frame = Frame.Create(
-            new FrameId(packetId),
+            packetId,
             Timestamp.FromNanos(0),
             TestHarness.GenerateUdpFrame(),
             LinkType.Ethernet,
@@ -32,7 +32,7 @@ internal sealed class SessionSkipFieldTreeTests
             stack.FrameInterfaceRegistry).Value;
 
         ParseOptions options = new(FieldTreeMode.Skip);
-        PacketId id = new(packetId);
+        PacketId id = packetId;
         if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
@@ -123,7 +123,7 @@ internal sealed class SessionSkipFieldTreeTests
             int idx = _Next;
             _Next++;
             return Frame.Create(
-                new FrameId(idx),
+                idx,
                 Timestamp.FromNanos(idx),
                 TestHarness.GenerateUdpFrame(),
                 LinkType.Ethernet,
@@ -157,7 +157,7 @@ internal sealed class SessionSkipFieldTreeTests
         int rows = ingest!.Value.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value).Count;
         await Assert.That(rows).IsEqualTo(frameCount);
 
-        bool got = session.TryGetPacket(new PacketId(1), out Packet? packet, out _);
+        bool got = session.TryGetPacket(1, out Packet? packet, out _);
         await Assert.That(got).IsTrue();
         await Assert.That(packet!.HasFieldTree).IsTrue();
 
@@ -199,7 +199,7 @@ internal sealed class SessionSkipFieldTreeTests
         session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool got = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
+        bool got = session.TryGetPacket(0, out Packet? packet, out _);
         await Assert.That(got).IsTrue();
         await Assert.That(packet!.HasFieldTree).IsTrue();
 
@@ -233,7 +233,7 @@ internal sealed class SessionSkipFieldTreeTests
         await Assert.That(added).IsTrue();
         int pullRows = info!.Cache.GetSeries<ulong>(stack.GetFieldId("udp.srcport")!.Value).Count;
         await Assert.That(pullRows).IsEqualTo(ingestRows);
-        bool stored = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
+        bool stored = session.TryGetPacket(0, out Packet? packet, out _);
         await Assert.That(stored).IsTrue();
         await Assert.That(packet!.HasFieldTree).IsTrue();
 
@@ -306,8 +306,8 @@ internal sealed class SessionSkipFieldTreeTests
         session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool gotPacket = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
-        bool gotFrame = session.TryGetFrame(new PacketId(0), out Frame frame, out _);
+        bool gotPacket = session.TryGetPacket(0, out Packet? packet, out _);
+        bool gotFrame = session.TryGetFrame(0, out Frame frame, out _);
 
         await Assert.That(gotPacket).IsTrue();
         await Assert.That(gotFrame).IsTrue();
@@ -327,8 +327,8 @@ internal sealed class SessionSkipFieldTreeTests
         session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool gotPacket = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
-        bool gotFrame = session.TryGetFrame(new PacketId(0), out Frame frame, out _);
+        bool gotPacket = session.TryGetPacket(0, out Packet? packet, out _);
+        bool gotFrame = session.TryGetFrame(0, out Frame frame, out _);
 
         await Assert.That(gotPacket).IsTrue();
         await Assert.That(gotFrame).IsTrue();

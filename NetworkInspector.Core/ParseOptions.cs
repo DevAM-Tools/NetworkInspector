@@ -23,6 +23,17 @@ public readonly struct ParseObserver
     /// <summary>Which fields <see cref="Observer"/> receives. Default is <see cref="FieldWatch.None"/>.</summary>
     public FieldWatch Watch { get; init; }
 
+    /// <summary>
+    /// Fields whose custom text and gated custom representation the dissectors build in a parse without field tree. Default
+    /// <see cref="FieldWatch.None"/>: nothing is built for this observer. A tree parse builds texts anyway.
+    /// <para>
+    /// <b>Why separate from <see cref="Watch"/>:</b> building text costs formatting work, and many observers (filters) need
+    /// values only. An exporter that writes display texts sets this to exactly the fields it exports, so a tree-free parse
+    /// formats the texts of those fields and of nothing else.
+    /// </para>
+    /// </summary>
+    public FieldWatch DisplayText { get; init; }
+
     #endregion
 }
 

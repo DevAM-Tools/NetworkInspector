@@ -69,7 +69,7 @@ internal sealed class SessionRestartStressTests
                             _ = Interlocked.Increment(ref successfulReads);
                         }
 
-                        _ = rig.Session.TryGetPacket(new PacketId(i % frames), out _, out _);
+                        _ = rig.Session.TryGetPacket(i % frames, out _, out _);
                     }
                 }
                 catch (Exception)

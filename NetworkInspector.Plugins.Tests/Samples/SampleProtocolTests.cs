@@ -84,7 +84,7 @@ internal sealed class SampleProtocolTests
         ParseObserver[] observers = [new() { Observer = observer, Watch = FieldWatch.Only(stack, speed) }];
         ParseOptions options = new(FieldTreeMode.Skip, observers: observers);
 
-        bool parsed = Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure);
+        bool parsed = Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure);
 
         await Assert.That(parsed).IsTrue();
         await Assert.That(packet).IsNotNull();

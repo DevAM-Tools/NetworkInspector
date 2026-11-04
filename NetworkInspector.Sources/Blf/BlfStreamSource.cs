@@ -777,7 +777,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         int frameId = _FrameIndex++;
         ParseResult<Frame> createResult = Frame.Create(
-            new FrameId(frameId),
+            frameId,
             new Timestamp(timestampNanos),
             frameResult.FrameData,
             linkType,

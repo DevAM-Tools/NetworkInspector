@@ -150,7 +150,7 @@ internal sealed class SessionRestartEventTests
         throwingJob.Join();
         _ = rig.RestartOntoStandard();
         bool healthyGotBoth = secondSeen.Wait(_Timeout);
-        bool reads = rig.Session.TryGetPacket(new PacketId(0), out _, out _);
+        bool reads = rig.Session.TryGetPacket(0, out _, out _);
 
         Exception? shutdownFailure = null;
         try

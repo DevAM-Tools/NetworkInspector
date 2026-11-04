@@ -145,6 +145,55 @@ public interface ISessionReader
         [NotNullWhen(false)] out SessionFailure? failure);
 
     /// <summary>
+    /// Parses the packets <paramref name="fromId"/> … <paramref name="toIdExclusive"/> − 1 with the caller's
+    /// <see cref="ParseOptions"/> and hands each to <paramref name="visitor"/> on the calling thread, in id order. This is the
+    /// pull read for consumers that parse with observers (an export of selected fields, a statistic over a few fields): the frames
+    /// are read in batches of 64 per source, the parse uses exactly the options given (a tree-free parse stays tree-free), and the
+    /// session never pushes.
+    ///
+    /// <para>
+    /// <b>Options and generation:</b> the same rules as
+    /// <see cref="TryGetPacket(PacketId, in ParseOptions, StackView, Packet?, out Packet?, out SessionFailure?)"/>: the options are
+    /// built on <paramref name="builtFor"/>; another generation gives <see cref="SessionErrorCode.OptionsStackMismatch"/> before the
+    /// first parse; <see cref="ParseOptions.Index"/> left <see langword="null"/> is replaced by the session's index of the leased
+    /// stack.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>One call, one generation:</b> the call holds one stack lease for its whole range (as
+    /// <see cref="ReadPackets(int, Span{Packet?})"/>), so a caller reads a large range in windows (an export job uses 4 096 ids per
+    /// call) to release a retired stack soon after a restart. A restart that starts during the call ends it after the packet in
+    /// progress with <see cref="SessionErrorCode.QueriesDisabled"/>; <paramref name="visitedCount"/> says how far it got.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Refusals:</b> <see cref="SessionErrorCode.QueriesDisabled"/>, <see cref="SessionErrorCode.SessionFaulted"/>,
+    /// <see cref="SessionErrorCode.OptionsStackMismatch"/>, <see cref="SessionErrorCode.PacketNotFound"/> when
+    /// <paramref name="toIdExclusive"/> exceeds the published packet count (the message names the range and the count),
+    /// <see cref="SessionErrorCode.FrameUnavailable"/> when a frame cannot be re-read (the message names the id; the packets before
+    /// it were visited). A visitor that returns <see langword="false"/> ends the call successfully.
+    /// </para>
+    /// </summary>
+    /// <param name="fromId">First packet id (inclusive), ≥ 0.</param>
+    /// <param name="toIdExclusive">End of the range (exclusive), ≥ <paramref name="fromId"/>. Equal values visit nothing.</param>
+    /// <param name="options">The parse choices, built for <paramref name="builtFor"/>.</param>
+    /// <param name="builtFor">The view the options were built on.</param>
+    /// <param name="visitor">Receives each parsed packet.</param>
+    /// <param name="visitedCount">Packets handed to <paramref name="visitor"/> (also on failure).</param>
+    /// <param name="failure">Why the call ended early; <see langword="null"/> on success.</param>
+    /// <returns><see langword="true"/> when the whole range was visited or the visitor stopped; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="visitor"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="fromId"/> is negative or <paramref name="toIdExclusive"/> is below it.</exception>
+    bool TryVisitPackets(
+        int fromId,
+        int toIdExclusive,
+        in ParseOptions options,
+        StackView builtFor,
+        IPacketVisitor visitor,
+        out int visitedCount,
+        [NotNullWhen(false)] out SessionFailure? failure);
+
+    /// <summary>
     /// Attempts to retrieve the captured frame for <paramref name="id"/> without parsing a packet.
     /// Returns <see langword="true"/> when the frame can be re-read from a cached stream source
     /// or a random-access source. Returns <see langword="false"/> when the id is invalid, the frame is

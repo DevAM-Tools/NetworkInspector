@@ -5,7 +5,7 @@ namespace NetworkInspector.Core.Ids;
 /// <summary>
 /// Opaque continuation token for iterating over multiple occurrences of a field
 /// in a <see cref="Packet"/>'s flat field array via
-/// <see cref="Packet.TryGetNextFieldValue"/>.
+/// <see cref="Packet.TryGetNextField"/>.
 /// <para>
 /// Callers must not inspect or modify the internal state. Use <see cref="Start"/>
 /// to obtain an initial cookie, then pass it by reference to successive calls.

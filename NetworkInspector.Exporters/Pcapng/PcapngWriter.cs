@@ -8,7 +8,7 @@ namespace NetworkInspector.Exporters.Pcapng;
 /// </summary>
 internal sealed record ShbOptions
 {
-    #region Public API
+    #region Section header options
 
     /// <summary>Hardware description string.</summary>
     internal string? Hardware { get; init; }
@@ -32,6 +32,7 @@ internal sealed record ShbOptions
     /// <see cref="PcapngWriter.WriteSectionHeader"/> writes them. The writer checks the serialized size against this
     /// value, so both must be changed together.
     /// </summary>
+    /// <returns>The size in bytes; 0 when no option is set (no end-of-options marker is written then).</returns>
     internal int TotalOptionsSize()
     {
         if (!HasOptions)
@@ -83,7 +84,7 @@ internal sealed record ShbOptions
 /// </summary>
 internal sealed class PcapngWriter
 {
-    #region Fields
+    #region Block layout
 
     /// <summary>Zero padding buffer (4 bytes max needed for 32-bit alignment).</summary>
     private static readonly byte[] _ZeroPadding = [0, 0, 0, 0];
@@ -115,6 +116,7 @@ internal sealed class PcapngWriter
     /// <summary>Timestamp resolution for microseconds: the <c>if_tsresol</c> exponent (10^-6 s per tick).</summary>
     internal const byte TsResolMicroseconds = 6;
 
+    /// <summary>The output stream every finished block is written to; owned by the caller, never closed by the writer.</summary>
     private readonly Stream _Stream;
 
     /// <summary>
@@ -129,12 +131,8 @@ internal sealed class PcapngWriter
     /// <summary>Bytes written to <see cref="_Stream"/> (committed output).</summary>
     private long _BytesWritten;
 
-    #endregion
-
-    #region Public API
-
     /// <summary>Creates a new PCAPNG writer wrapping the given stream.</summary>
-    /// <param name="stream">The output stream.</param>
+    /// <param name="stream">The output stream; the writer never closes it.</param>
     internal PcapngWriter(Stream stream)
     {
         _Stream = stream;
@@ -149,6 +147,23 @@ internal sealed class PcapngWriter
     /// still holds the most recently written block and the value can exceed the true size by that block.
     /// </summary>
     internal long EstimatedOutputBytes => _BytesWritten + _BlockBuffer.Length;
+
+    /// <summary>Flushes the underlying stream.</summary>
+    /// <exception cref="IOException">The stream could not be flushed.</exception>
+    internal void Flush() => _Stream.Flush();
+
+    /// <summary>Writes bytes to the stream and updates <see cref="_BytesWritten"/>.</summary>
+    /// <param name="data">The finished block; written with one stream write.</param>
+    /// <exception cref="IOException">The stream could not be written.</exception>
+    private void _WriteToStream(ReadOnlySpan<byte> data)
+    {
+        _Stream.Write(data);
+        _BytesWritten += data.Length;
+    }
+
+    #endregion
+
+    #region Section header block
 
     /// <summary>
     /// Writes the Section Header Block (SHB).
@@ -235,39 +250,62 @@ internal sealed class PcapngWriter
         }
     }
 
+    #endregion
+
+    #region Interface description block
+
+    /// <summary>Name under which a left-out interface name is reported in the omitted list.</summary>
+    private const string _IfNameLabel = "if_name";
+
+    /// <summary>Name under which a left-out interface description is reported in the omitted list.</summary>
+    private const string _IfDescriptionLabel = "if_description";
+
     /// <summary>
     /// Writes an Interface Description Block (IDB).
     /// Must appear before any EPBs that reference the interface.
+    /// Metadata that a PCAPNG option cannot hold (longer than 65 535 UTF-8 bytes, wrong type, negative) is left out and
+    /// named in <paramref name="omitted"/>, so the interface's frames are still written and the caller can report the loss
+    /// once.
     /// </summary>
     /// <param name="linkType">The link-layer type (DLT value).</param>
     /// <param name="snapLength">Maximum captured packet length.</param>
     /// <param name="tsResolution">Timestamp resolution (power-of-10 exponent, e.g. 9 = nanosecond).</param>
-    /// <param name="name">Optional interface name.</param>
+    /// <param name="name">Optional interface name (<c>if_name</c>); left out when longer than 65 535 UTF-8 bytes.</param>
     /// <param name="fcsLength">
     /// Optional interface FCS length in bytes (<c>if_fcslen</c>). Omitted when null.
     /// Per-packet EPB flags are not written: <see cref="Frame"/> does not store them.
     /// </param>
     /// <param name="description">
-    /// Optional interface description (<c>if_description</c>). Omitted when null, empty, or longer than 65 535 UTF-8
-    /// bytes (the 16-bit option length limit); an over-long description is dropped, not truncated.
+    /// Optional interface description (<c>if_description</c>). Omitted when null or empty; left out and reported when
+    /// longer than 65 535 UTF-8 bytes (the 16-bit option length limit), never truncated.
     /// </param>
     /// <param name="properties">
     /// Interface properties of the source. Every key of the shared PCAPNG option table
     /// (<c>PcapInterfacePropertyKeys.InterfaceOptions</c>) is written back as its IDB option; other keys are ignored.
     /// </param>
+    /// <param name="omitted">
+    /// Receives the name of every option that was left out (<c>if_name</c>, <c>if_description</c>, or the property key of a
+    /// table option); the writer only appends, so the caller clears the list before the call. Nothing is appended when
+    /// everything fit.
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="omitted"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="linkType"/> does not fit the 16-bit link type field of the block.
     /// </exception>
     /// <exception cref="InvalidOperationException">The serialized block does not match its pre-calculated length.</exception>
+    /// <exception cref="IOException">The stream could not be written.</exception>
     internal void WriteInterfaceDescription(
         LinkType linkType,
         uint snapLength,
         byte tsResolution,
         string? name,
-        byte? fcsLength = null,
-        string? description = null,
-        IReadOnlyDictionary<string, object>? properties = null)
+        byte? fcsLength,
+        string? description,
+        IReadOnlyDictionary<string, object>? properties,
+        List<string> omitted)
     {
+        ArgumentNullException.ThrowIfNull(omitted);
+
         // The IDB stores the link type in 16 bits. A larger value (a pcap file can carry a 32-bit value) would be cut
         // to its low 16 bits and name a different link type, so the frame is rejected before anything is written.
         if ((uint)linkType > ushort.MaxValue)
@@ -278,13 +316,39 @@ internal sealed class PcapngWriter
                 "The link type does not fit the 16-bit link type field of a PCAPNG interface description block.");
         }
 
+        // Security: interface metadata comes from the source capture file or the registry, so its size is not under our
+        // control, and an option longer than its 16-bit length field cannot be represented. A throw here would fail the
+        // IDB again for every frame of the interface. The option is therefore left out and named in the omitted list (the
+        // exporter reports it once). Rejected: truncating the value, because a cut name or filter still looks valid but
+        // says something else. Residual risk: the interface appears in the file without that metadata; the report names it.
+        int nameByteCount = 0;
+        if (name is not null)
+        {
+            nameByteCount = Encoding.UTF8.GetByteCount(name);
+            if (nameByteCount > ushort.MaxValue)
+            {
+                omitted.Add(_IfNameLabel);
+                name = null;
+            }
+        }
+
+        byte[]? descriptionBytes = null;
+        if (description is { Length: > 0 })
+        {
+            if (Encoding.UTF8.GetByteCount(description) > ushort.MaxValue)
+            {
+                omitted.Add(_IfDescriptionLabel);
+            }
+            else
+            {
+                descriptionBytes = Encoding.UTF8.GetBytes(description);
+            }
+        }
+
         // Interface metadata the reader stored as properties goes back into the same IDB options (one shared table),
         // so a PCAPNG -> PCAPNG copy keeps speed, filter, OS, hardware, and TX / RX speed. Encoded up front: the block
         // length must be known before the header is written. IDBs are written once per interface, not per frame.
-        List<(ushort Code, byte[] Value)> tableOptions = _EncodeInterfaceOptions(properties);
-        byte[]? descriptionBytes = description is { Length: > 0 } && Encoding.UTF8.GetByteCount(description) <= ushort.MaxValue
-            ? Encoding.UTF8.GetBytes(description)
-            : null;
+        List<(ushort Code, byte[] Value)> tableOptions = _EncodeInterfaceOptions(properties, omitted);
 
         // if_tsresol is always present, so readers know the unit of the EPB timestamps (which must match the
         // resolution later passed to WriteEnhancedPacket). if_name, if_description, if_fcslen, and the table options
@@ -293,7 +357,7 @@ internal sealed class PcapngWriter
         int optionsSize = PcapPadding.OptionSize(1);
         if (name is not null)
         {
-            optionsSize += PcapPadding.OptionSize(Encoding.UTF8.GetByteCount(name));
+            optionsSize += PcapPadding.OptionSize(nameByteCount);
         }
 
         if (descriptionBytes is not null)
@@ -364,6 +428,10 @@ internal sealed class PcapngWriter
         _WriteToStream(_BlockBuffer.WrittenSpan);
     }
 
+    #endregion
+
+    #region Enhanced packet block
+
     /// <summary>
     /// Writes an Enhanced Packet Block (EPB).
     /// </summary>
@@ -378,6 +446,7 @@ internal sealed class PcapngWriter
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="data"/> is so long that padding or the 32-bit block length would overflow.
     /// </exception>
+    /// <exception cref="IOException">The stream could not be written.</exception>
     internal void WriteEnhancedPacket(
         uint interfaceId,
         Timestamp timestamp,
@@ -437,14 +506,13 @@ internal sealed class PcapngWriter
         _WriteToStream(_BlockBuffer.WrittenSpan);
     }
 
-    /// <summary>Flushes the underlying stream.</summary>
-    internal void Flush() => _Stream.Flush();
-
     /// <summary>
     /// Computes the enhanced-packet block length for <paramref name="payloadLength"/> captured bytes.
-    /// Returns false when padding or the 32-bit block length would wrap.
     /// Does not write to the stream.
     /// </summary>
+    /// <param name="payloadLength">Captured payload length in bytes, before padding.</param>
+    /// <param name="blockLength">The block length including header, padding, and trailer; 0 when the method returns false.</param>
+    /// <returns>False when <paramref name="payloadLength"/> is negative or the padding or the 32-bit block length would wrap.</returns>
     internal static bool TryBlockLength(int payloadLength, out uint blockLength)
     {
         blockLength = 0;
@@ -465,14 +533,20 @@ internal sealed class PcapngWriter
 
     #endregion
 
-    #region Private helpers
+    #region Option encoding
 
     /// <summary>
     /// Encodes the interface properties listed in <see cref="PcapInterfacePropertyKeys.InterfaceOptions"/> as IDB option
     /// values, in table order: 64-bit values little-endian, text as UTF-8, a filter as kind byte 0 plus the text. A value
-    /// of the wrong type, a negative number, or text longer than an option can hold (65 535 bytes) is left out.
+    /// of the wrong type, a negative number, or text longer than an option can hold (65 535 bytes) is left out and its
+    /// property key is added to <paramref name="omitted"/>; an empty text has nothing to store and is skipped unreported.
     /// </summary>
-    private static List<(ushort Code, byte[] Value)> _EncodeInterfaceOptions(IReadOnlyDictionary<string, object>? properties)
+    /// <param name="properties">The interface properties of the source; null or empty yields no options.</param>
+    /// <param name="omitted">Receives the property key of every value that was left out.</param>
+    /// <returns>The option code and encoded value of every property that could be stored, in table order.</returns>
+    private static List<(ushort Code, byte[] Value)> _EncodeInterfaceOptions(
+        IReadOnlyDictionary<string, object>? properties,
+        List<string> omitted)
     {
         List<(ushort Code, byte[] Value)> options = [];
         if (properties is null || properties.Count == 0)
@@ -487,6 +561,12 @@ internal sealed class PcapngWriter
                 continue;
             }
 
+            // An empty text option carries no information, so it is skipped without a report (it is not a lost value).
+            if (entry.Kind != PcapOptionValueKind.UInt64 && value is string { Length: 0 })
+            {
+                continue;
+            }
+
             byte[]? encoded = entry.Kind switch
             {
                 PcapOptionValueKind.UInt64 => _EncodeUInt64(value),
@@ -495,16 +575,21 @@ internal sealed class PcapngWriter
                 _ => null,
             };
 
-            if (encoded is not null)
+            if (encoded is null)
             {
-                options.Add((entry.Code, encoded));
+                omitted.Add(entry.Key);
+                continue;
             }
+
+            options.Add((entry.Code, encoded));
         }
 
         return options;
     }
 
     /// <summary>Little-endian 64-bit option value from an unsigned or non-negative integer property.</summary>
+    /// <param name="value">The property value.</param>
+    /// <returns>The 8 encoded bytes; null when <paramref name="value"/> is not an unsigned or non-negative integer.</returns>
     private static byte[]? _EncodeUInt64(object value)
     {
         ulong? number = value switch
@@ -526,14 +611,19 @@ internal sealed class PcapngWriter
     }
 
     /// <summary>UTF-8 option value, optionally behind a filter-kind byte 0 (<c>if_filter</c>: libpcap filter string).</summary>
+    /// <param name="value">The property value.</param>
+    /// <param name="kindPrefix">True to put the filter-kind byte 0 in front of the text.</param>
+    /// <returns>The encoded bytes; null when <paramref name="value"/> is not a string or the result exceeds 65 535 bytes.</returns>
     private static byte[]? _EncodeText(object value, bool kindPrefix)
     {
-        if (value is not string text || text.Length == 0)
+        if (value is not string text)
         {
             return null;
         }
 
-        int prefix = kindPrefix ? 1 : 0;
+        int prefix = kindPrefix
+            ? 1
+            : 0;
         int length = prefix + Encoding.UTF8.GetByteCount(text);
         if (length > ushort.MaxValue)
         {
@@ -545,12 +635,62 @@ internal sealed class PcapngWriter
         return bytes;
     }
 
-    /// <summary>Writes bytes to the stream and updates <see cref="_BytesWritten"/>.</summary>
-    private void _WriteToStream(ReadOnlySpan<byte> data)
+    /// <summary>Writes a PCAPNG option with a UTF-8 string value into a <see cref="PooledBuffer"/>.</summary>
+    /// <param name="buffer">The block under assembly.</param>
+    /// <param name="code">The option code.</param>
+    /// <param name="value">The option text.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The UTF-8 form of <paramref name="value"/> is longer than 65 535 bytes.</exception>
+    private static void _WriteOptionToBuffer(PooledBuffer buffer, ushort code, string value)
     {
-        _Stream.Write(data);
-        _BytesWritten += data.Length;
+        // Short values are encoded on the stack, longer ones into a heap array. Options are written once per file or
+        // per interface (never per frame), so the rare heap allocation is acceptable here; the 256-byte cap keeps the
+        // stack use small. Lone surrogates are replaced with U+FFFD by the UTF-8 encoder.
+        int maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
+        Span<byte> utf8 = maxBytes <= 256
+            ? stackalloc byte[maxBytes]
+            : new byte[maxBytes];
+        int written = Encoding.UTF8.GetBytes(value, utf8);
+        _WriteOptionRawToBuffer(buffer, code, utf8[..written]);
     }
+
+    /// <summary>Writes a PCAPNG option with raw byte value into a <see cref="PooledBuffer"/>.</summary>
+    /// <param name="buffer">The block under assembly.</param>
+    /// <param name="code">The option code.</param>
+    /// <param name="value">The option bytes; padded to a 4-byte boundary after the length field counts them.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="value"/> is longer than 65 535 bytes.</exception>
+    private static void _WriteOptionRawToBuffer(PooledBuffer buffer, ushort code, ReadOnlySpan<byte> value)
+    {
+        // Option layout: 16-bit code, 16-bit value length (excluding padding), value, zero padding to 4 bytes.
+        // The length field is 16-bit, so a longer value cannot be represented and is rejected instead of truncated.
+        if (value.Length > ushort.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value),
+                $"PCAPNG option value length {value.Length} exceeds the 16-bit limit ({ushort.MaxValue}).");
+        }
+
+        Span<byte> header = buffer.Reserve(_OptionHeaderSize);
+        BinaryPrimitives.WriteUInt16LittleEndian(header, code);
+        BinaryPrimitives.WriteUInt16LittleEndian(header[2..], (ushort)value.Length);
+        buffer.Write(value);
+        int padding = PcapPadding.PaddingFor(value.Length);
+        if (padding > 0)
+        {
+            buffer.Write(_ZeroPadding.AsSpan(0, padding));
+        }
+    }
+
+    /// <summary>Writes the end-of-options marker into a <see cref="PooledBuffer"/>.</summary>
+    /// <param name="buffer">The block under assembly.</param>
+    private static void _WriteEndOfOptionsToBuffer(PooledBuffer buffer)
+    {
+        Span<byte> eoo = buffer.Reserve(_OptionHeaderSize);
+        BinaryPrimitives.WriteUInt16LittleEndian(eoo, PcapConstants.OptEndOfOpt);
+        BinaryPrimitives.WriteUInt16LittleEndian(eoo[2..], 0);
+    }
+
+    #endregion
+
+    #region Timestamps
 
     /// <summary>
     /// Converts a nanosecond timestamp to the target resolution.
@@ -560,8 +700,14 @@ internal sealed class PcapngWriter
     /// resolution 10, so finer exponents saturate for realistic timestamps.
     /// </summary>
     /// <param name="timestamp">The timestamp in nanoseconds since the Unix epoch.</param>
-    /// <param name="tsResolution">Decimal power-of-ten exponent of the tick length (6 = microseconds, 9 = nanoseconds).</param>
+    /// <param name="tsResolution">
+    /// Decimal power-of-ten exponent of the tick length (6 = microseconds, 9 = nanoseconds); 0 to 19, as the exporter
+    /// builder guarantees.
+    /// </param>
     /// <returns>The tick count in the requested resolution.</returns>
+    /// <exception cref="System.Diagnostics.UnreachableException">
+    /// <paramref name="tsResolution"/> is above 27, so the power of ten is outside the table (the builder allows 0 to 19).
+    /// </exception>
     internal static ulong ConvertTimestamp(Timestamp timestamp, byte tsResolution)
     {
         long nanos = timestamp.AsNanos;
@@ -594,13 +740,15 @@ internal sealed class PcapngWriter
         return nanosUnsigned * multiplier;
     }
 
-    /// <summary>Computes 10^exponent for small exponents via lookup (exponents 0–18 cover PCAPNG resol range).</summary>
+    /// <summary>Computes 10^exponent by table lookup for the exponents 0 to 18.</summary>
+    /// <param name="exponent">The power of ten, 0 to 18.</param>
+    /// <returns>10 raised to <paramref name="exponent"/>.</returns>
+    /// <exception cref="System.Diagnostics.UnreachableException"><paramref name="exponent"/> is above 18.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ulong _Pow10(uint exponent)
     {
         // A constant collection expression of a ReadOnlySpan is served from static data, so the table costs no
-        // allocation per call. The table covers 10^0 to 10^18; larger exponents fall back to the unchecked
-        // multiplication below.
+        // allocation per call. The table covers 10^0 to 10^18.
         ReadOnlySpan<ulong> powers =
         [
             1UL,
@@ -623,63 +771,15 @@ internal sealed class PcapngWriter
             100_000_000_000_000_000UL,
             1_000_000_000_000_000_000UL,
         ];
-        if (exponent < (uint)powers.Length)
+
+        // Invariant: the builder limits the resolution to 0..19, so ConvertTimestamp asks for at most 10^10; the table
+        // covers 10^18.
+        if (exponent >= (uint)powers.Length)
         {
-            return powers[(int)exponent];
+            throw new System.Diagnostics.UnreachableException("The timestamp resolution exponent is limited to 0..19 by the builder.");
         }
 
-        // Rare out-of-range resol: match prior unchecked iterative overflow behavior.
-        ulong result = powers[^1];
-        unchecked
-        {
-            for (uint i = (uint)(powers.Length - 1); i < exponent; i++)
-            {
-                result *= 10UL;
-            }
-        }
-        return result;
-    }
-
-    /// <summary>Writes a PCAPNG option with a UTF-8 string value into a <see cref="PooledBuffer"/>.</summary>
-    private static void _WriteOptionToBuffer(PooledBuffer buffer, ushort code, string value)
-    {
-        // Short values are encoded on the stack, longer ones into a heap array. Options are written once per file or
-        // per interface (never per frame), so the rare heap allocation is acceptable here; the 256-byte cap keeps the
-        // stack use small. Lone surrogates are replaced with U+FFFD by the UTF-8 encoder.
-        int maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
-        Span<byte> utf8 = maxBytes <= 256 ? stackalloc byte[maxBytes] : new byte[maxBytes];
-        int written = Encoding.UTF8.GetBytes(value, utf8);
-        _WriteOptionRawToBuffer(buffer, code, utf8[..written]);
-    }
-
-    /// <summary>Writes a PCAPNG option with raw byte value into a <see cref="PooledBuffer"/>.</summary>
-    private static void _WriteOptionRawToBuffer(PooledBuffer buffer, ushort code, ReadOnlySpan<byte> value)
-    {
-        // Option layout: 16-bit code, 16-bit value length (excluding padding), value, zero padding to 4 bytes.
-        // The length field is 16-bit, so a longer value cannot be represented and is rejected instead of truncated.
-        if (value.Length > ushort.MaxValue)
-        {
-            throw new ArgumentOutOfRangeException(nameof(value),
-                $"PCAPNG option value length {value.Length} exceeds the 16-bit limit ({ushort.MaxValue}).");
-        }
-
-        Span<byte> header = buffer.Reserve(_OptionHeaderSize);
-        BinaryPrimitives.WriteUInt16LittleEndian(header, code);
-        BinaryPrimitives.WriteUInt16LittleEndian(header[2..], (ushort)value.Length);
-        buffer.Write(value);
-        int padding = PcapPadding.PaddingFor(value.Length);
-        if (padding > 0)
-        {
-            buffer.Write(_ZeroPadding.AsSpan(0, padding));
-        }
-    }
-
-    /// <summary>Writes the end-of-options marker into a <see cref="PooledBuffer"/>.</summary>
-    private static void _WriteEndOfOptionsToBuffer(PooledBuffer buffer)
-    {
-        Span<byte> eoo = buffer.Reserve(_OptionHeaderSize);
-        BinaryPrimitives.WriteUInt16LittleEndian(eoo, PcapConstants.OptEndOfOpt);
-        BinaryPrimitives.WriteUInt16LittleEndian(eoo[2..], 0);
+        return powers[(int)exponent];
     }
 
     #endregion

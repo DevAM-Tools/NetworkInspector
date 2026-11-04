@@ -365,14 +365,14 @@ internal sealed class PduTransportRegistrationTests
     {
         ProtocolId pduId = stack.GetProtocolId(PduTransportProtocol.ProtocolName)!.Value;
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             datagram,
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
         ParseOptions options = new(firstProtocol: pduId);
-        if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+        if (!Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());

@@ -42,8 +42,7 @@ public sealed record RestartOptions
     /// <summary>What happens to the running stack-bound jobs. Default <see cref="RestartJobPolicy.CancelNow"/>.</summary>
     public RestartJobPolicy JobPolicy { get; init; } = RestartJobPolicy.CancelNow;
 
-    // Limit (Section 4.2; class LIVE, posture OPEN, changeability L per the limits audit reviews/limits-audit_1.md
-    // sections 2–3): bounds how long TryRestart may block waiting for StackBound jobs. Threat: a job that never ends holds
+    // Limit (Section 4.2): bounds how long TryRestart may block waiting for StackBound jobs. Threat: a job that never ends holds
     // the restart and the caller's thread (a host command queue, a UI worker). Configurable by the caller per call; the host
     // exposes it to the end user as the session setting session.restartWaitSeconds ("wait up to", unit, range, default) and
     // caps what an MCP peer may request with the operator setting session.restartWaitMaxSeconds (X2 exposure, SEC). Range

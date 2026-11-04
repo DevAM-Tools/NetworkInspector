@@ -14,19 +14,40 @@ namespace NetworkInspector.Exporters.Blf;
 /// Lazy initialization defers file creation until the first frame.
 /// The channel comes from <see cref="BlfInterfacePropertyKeys.Channel"/> (kept, including 0), else from the ASC
 /// reader's <c>asc.channel</c>, else from a trailing number in the interface name; it defaults to 1.
+/// CAN FD and CAN XL objects store the channel in one byte: a frame of those types on a channel above 255 is skipped as
+/// <see cref="ExportErrorKind.MalformedData"/>, and so is a CAN FD frame that declares more than 64 data bytes.
 /// A <see cref="BlfInterfacePropertyKeys.HardwareChannel"/> value is written into Type 120.
 /// An interface whose name is not the default <c>"{bus} {channel}"</c> gets one AppText channel-name object
 /// (Type 65) before its first frame, so a BLF → BLF copy keeps the channel names.
 /// The header dates are written in <see cref="Builder.WithTimestampTimeZone"/> (default UTC).
 /// </para>
 /// <para>
+/// <b>Write mode and streams:</b> in <see cref="ExportWriteMode.Background"/> (default) a writer thread named
+/// "BLF export writer" compresses (zlib) and writes each full container while the next one fills. zlib on a container of several
+/// MiB is the most expensive single operation of any exporter; on the caller's thread the reader would stall for every
+/// container, with the writer thread both run at the same time. This also holds for <see cref="Builder.ToStream"/> and
+/// <see cref="Builder.ToStdout"/>: the caller must not read, write, seek or dispose that stream until <see cref="OnFinish"/>
+/// returned; <see cref="OnFinish"/> waits for every container before it patches the header, so the complete file is in the stream
+/// then. Use <see cref="ExportWriteMode.Synchronous"/> to keep all writes on the calling thread. Memory: two containers
+/// (<see cref="Builder.WithMaxContainerSize"/> each) in background mode, one in synchronous mode, plus the buffer for the
+/// compressed output of one container (sized like a container, absent without compression).
+/// </para>
+/// <para>
+/// <b>Error timing:</b> in background mode a container is written after <see cref="OnFrame"/> returned for its last frame, so a
+/// failing container is reported by the next <see cref="OnFrame"/> call that finds it (at the latest by <see cref="OnFinish"/>); in
+/// synchronous mode by that very call. Its frames leave <see cref="WrittenCount"/> and count as skipped when it is reported.
+/// </para>
+/// <para>
 /// <b>Thread safety:</b> Not thread-safe. <see cref="OnFrame"/> and <see cref="OnFinish"/>
 /// must be called sequentially from a single thread. The caller is responsible for
-/// synchronization when driving this exporter from multiple threads.
+/// synchronization when driving this exporter from multiple threads. Internally the writer thread never touches the counters or
+/// raises <see cref="ItemSkipped"/>, which stay on the caller's thread.
 /// </para>
 /// </summary>
-public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDisposable
+public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IBatchWriter<BlfContainer>, IDisposable
 {
+    #region Configuration and state
+
     /// <summary>SocketCAN FD flag: FDF (FD Format indicator) at byte offset 5.</summary>
     private const byte _SocketCanFdFlagFdf = 0x04;
 
@@ -40,6 +61,9 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
     /// <summary>zlib level of the log containers, mapped once from <see cref="BlfCompressionLevel"/> by the builder.</summary>
     private readonly CompressionLevel _Compression;
+
+    /// <summary>Uncompressed container size in bytes; also sizes the compressed-output buffer of the <see cref="BlfWriter"/>.</summary>
+    private readonly int _MaxContainerSize;
 
     /// <summary>Maximum number of frames to write; 0 means unlimited.</summary>
     private readonly int _TargetFrameCount;
@@ -67,6 +91,20 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
 
     /// <summary>Active writer. Created on lazy init; <c>null</c> before the first frame.</summary>
     private BlfWriter? _Writer;
+
+    /// <summary>
+    /// The writer pipeline owns both open containers, the writer thread (or writes inline in synchronous mode), and the queue of
+    /// lost containers (see <see cref="BatchWriterPipeline{TBatch}"/>). Created in the constructor without I/O, containers, or a
+    /// thread; the exporter is its writer (explicit <see cref="IBatchWriter{TBatch}"/> implementation) and forwards to the
+    /// <see cref="BlfWriter"/> that <see cref="_Start"/> creates.
+    /// </summary>
+    private readonly BatchWriterPipeline<BlfContainer> _Pipeline;
+
+    /// <summary>
+    /// Objects appended to containers so far (frame objects and channel-name objects). The caller's thread counts them, so the
+    /// realign test and the early-timestamp advisory never read state that the writer thread changes.
+    /// </summary>
+    private int _ObjectsAppended;
 
     /// <summary>
     /// Reusable payload buffer: every frame's object payload is built here and copied into the writer's container, so the
@@ -106,6 +144,8 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         CompressionLevel compression,
         int targetFrameCount,
         TimeZoneInfo timestampTimeZone,
+        ExportWriteMode writeMode,
+        int maxContainerSize,
         CancellationToken cancellationToken)
     {
         _Output = output;
@@ -113,8 +153,10 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         Description = description;
         _CancellationToken = cancellationToken;
         _Compression = compression;
+        _MaxContainerSize = maxContainerSize;
         _TargetFrameCount = targetFrameCount;
         _TimestampTimeZone = timestampTimeZone;
+        _Pipeline = new BatchWriterPipeline<BlfContainer>("BLF", writeMode, () => new BlfContainer(maxContainerSize), this);
     }
 
     /// <summary>Creates a new builder for configuring the exporter.</summary>
@@ -132,6 +174,10 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         get;
     }
 
+    #endregion
+
+    #region Statistics
+
     /// <summary>Number of frames written so far.</summary>
     public int FrameCount
     {
@@ -146,13 +192,15 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
     {
         get
         {
+            // Header + containers already written + the uncompressed content of the open container: an estimate that ignores
+            // compression of the pending container. Computed from in-memory counters, no file-system probe.
             BlfWriter? writer = _Writer;
             if (writer is null)
             {
                 return 0L;
             }
 
-            return writer.EstimatedOutputBytes;
+            return BlfWriter.FileHeaderSize + writer.BytesWritten + _Pipeline.CurrentEstimatedSizeBytes;
         }
     }
 
@@ -182,6 +230,10 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// <inheritdoc/>
     public event EventHandler<ExportErrorEventArgs>? ItemSkipped;
 
+    #endregion
+
+    #region Frame intake
+
     /// <inheritdoc/>
     public bool OnFrame(Frame frame)
     {
@@ -194,6 +246,17 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         if (_HasError || _Finished)
         {
             return false;
+        }
+
+        // A container the writer failed to write since the last frame is accounted first, so the counters see what is really in the
+        // file. In strict mode that failure ends the export here.
+        if (_Pipeline.HasLost)
+        {
+            _DrainLostBatches(reportAlways: false);
+            if (_HasError)
+            {
+                return false;
+            }
         }
 
         // Track the earliest timestamp seen. Object timestamps are stored relative to the LOGG start_date anchor as an
@@ -223,153 +286,10 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
             // Cheap per frame: the writer returns immediately unless this frame lowered the minimum below the anchor and
             // no object has been written yet (then it rewrites the 144-byte header in place on a seekable stream).
             // Its result is ignored on purpose: failing to realign only means the early frame is clamped and reported.
-            _Writer?.TryRealignStartEarlier(_MinTimestampNs);
+            _ = _Writer?.TryRealignStartEarlier(_MinTimestampNs, _ObjectsAppended > 0);
         }
 
         return _HandleFrame(frame);
-    }
-
-    /// <inheritdoc/>
-    public void OnFinish()
-    {
-        if (_Finished)
-        {
-            return;
-        }
-        _Finished = true;
-
-        // Shared finish sequence: finalize, then release every resource even when a step fails. Pooled buffers are returned
-        // first and the output last (the output close flushes and may throw); ExporterFinish runs every step regardless.
-        ExporterFinish.Run(
-            "BLF",
-            _FinalizeFile,
-            _ReportFinishError,
-            new ExporterReleaseStep("payload buffer return", _PayloadBuffer.Return),
-            new ExporterReleaseStep("AppText buffer return", () => _AppTextBuffer?.Return()),
-            new ExporterReleaseStep("output disposal", _DisposeOutput));
-    }
-
-    /// <summary>
-    /// Writes the remaining container and patches the file header (object count, sizes, end_date). Starts the writer
-    /// first when no frame ever arrived, so an empty export is still a valid BLF file (header with zero containers).
-    /// </summary>
-    private void _FinalizeFile()
-    {
-        // Empty export: no frame fixed the anchor, so the header carries zero dates (BlfWriter writes an all-zero
-        // SYSTEMTIME for a timestamp <= 0).
-        if (!_Started && !_HasError && _Output is not null)
-        {
-            _FirstTimestampNs = 0;
-            _MinTimestampNs = 0;
-            _MaxTimestampNs = 0;
-            _Start();
-        }
-
-        if (_Writer is not null)
-        {
-            // Finish the writer (flushes the last container) and update the header (end_date from max timestamp).
-            // The header is only rewritten when the stream is seekable; otherwise the placeholder header stays, which
-            // readers tolerate because they count objects themselves (see BlfWriter). TryGetExistingStream is used so
-            // finishing never creates a file as a side effect.
-            long endNs = _MinTimestampNs == long.MaxValue ? 0 : _MaxTimestampNs;
-            BlfWriterFinishResult result = _Writer.Finish(endNs);
-            Stream? stream = _Output?.TryGetExistingStream();
-            if (stream is not null)
-            {
-                result.UpdateHeader(stream);
-            }
-        }
-    }
-
-    /// <summary>Disposes the output once (closes the stream unless the caller owns it).</summary>
-    private void _DisposeOutput()
-    {
-        ExportOutput? output = _Output;
-        _Output = null;
-        output?.Dispose();
-    }
-
-    /// <summary>Error channel of the finish sequence: marks the error, counts it, and raises <see cref="ItemSkipped"/>.</summary>
-    private void _ReportFinishError(ExportErrorKind kind, string message)
-    {
-        _HasError = true;
-        if (ErrorCount < int.MaxValue)
-        {
-            ErrorCount++;
-        }
-
-        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-        {
-            ItemIndex = FrameCount,
-            Kind = kind,
-            Message = message,
-        });
-    }
-
-    /// <inheritdoc/>
-    public void Dispose() => OnFinish();
-
-    // ========================================================================
-    // Private implementation
-    // ========================================================================
-
-    /// <summary>
-    /// Lazily initializes the output and writes the 144-byte file header (the <see cref="BlfWriter"/> constructor writes it
-    /// to the stream immediately, with placeholder statistics that <see cref="OnFinish"/> patches later). Runs at most once:
-    /// <see cref="_Started"/> is set before any failure can happen, so a failed start is never retried.
-    /// </summary>
-    /// <returns>True if initialization succeeded. False when the output is gone (a disposed exporter: latched without an
-    /// error count, so no error loop starts), the output could not be opened, or the header write failed; the last two are
-    /// counted and reported through <see cref="ItemSkipped"/>.</returns>
-    private bool _Start()
-    {
-        if (_Output is null)
-        {
-            _HasError = true;
-            return false;
-        }
-
-        _Started = true;
-
-        // Opening the file is where a bad path, a missing directory, or a permission problem shows up. It is reported
-        // through the normal error path instead of escaping from OnFrame (a driver would see an unexpected exception for an
-        // ordinary I/O failure).
-        if (!_Output.TryGetOrCreateUnderlyingStream(out Stream? underlyingStream, out string openFailure))
-        {
-            _ReportStartFailure($"BLF output could not be opened: {openFailure}");
-            return false;
-        }
-
-        try
-        {
-            // Writer ctor writes the file header — failures here must be reported
-            // through the standard error pipeline rather than escaping to the caller.
-            _Writer = new BlfWriter(underlyingStream, _FirstTimestampNs, _Compression, _TimestampTimeZone);
-        }
-        catch (Exception ex)
-        {
-            _ReportStartFailure($"BLF header write failed: {ex.Message}");
-            return false;
-        }
-
-        return true;
-    }
-
-    /// <summary>Latches the fatal state for a failed start, counts it, and raises <see cref="ItemSkipped"/> as item 0.</summary>
-    private void _ReportStartFailure(string message)
-    {
-        _HasError = true;
-        if (ErrorCount < int.MaxValue)
-        {
-            ErrorCount++;
-        }
-
-        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
-        {
-            ItemIndex = 0,
-            Kind = ExportErrorKind.IoError,
-            Message = message,
-        });
     }
 
     /// <summary>
@@ -377,6 +297,12 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// builds the payload, and writes the object. Looks up the channel from the
     /// frame's interface info to preserve channel assignment during round-trip export.
     /// </summary>
+    /// <param name="frame">The frame to export.</param>
+    /// <returns>
+    /// <see langword="true"/> when the exporter accepts further frames: the frame was written, or it was skipped in tolerant
+    /// mode. <see langword="false"/> when the driver must stop: the target count is reached, a skipped frame in strict mode, or
+    /// a strict-mode write failure that surfaced during this call.
+    /// </returns>
     private bool _HandleFrame(Frame frame)
     {
         // Target reached: refuse the frame so the driver stops. IsFinished reports the same condition to polling callers.
@@ -522,7 +448,9 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 else if (linMsgType == 3 && data.Length >= 12 && (data[11] == 0x01 || data[11] == 0x02))
                 {
                     objectType = BlfConstants.ObjTypeLinSleep;
-                    byte reason = data[11] == 0x01 ? (byte)1 : (byte)2;
+                    byte reason = data[11] == 0x01
+                        ? (byte)1
+                        : (byte)2;
                     payloadBuilt = BlfObjectPayloads.TryBuildLinSleepPayload(data, channel, reason, _PayloadBuffer);
                 }
                 else
@@ -555,22 +483,21 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
             {
                 ItemIndex = currentIndex,
                 Kind = ExportErrorKind.MalformedData,
-                Message = $"Failed to build {frame.LinkType} payload ({data.Length} bytes)",
+                Message = _DescribeBuildFailure(frame.LinkType, objectType, channel, data),
             });
         }
 
         // _Writer is guaranteed non-null after _Start() succeeds.
-        // Wrap the actual write so I/O exceptions degrade gracefully to a
-        // skipped frame in Tolerant mode rather than tearing down the pipeline.
+        // Wrap the actual write so a failure degrades gracefully to a skipped frame in Tolerant mode rather than tearing down
+        // the pipeline.
         try
         {
             // The early-timestamp clamp notification fires at most once per export
             // (contract: consumers see a single advisory event, not one per affected frame).
             // A clamped frame is still written (relative time 0), so it is counted in FrameCount, not SkippedCount.
             // The _EarlyTsClampNotified flag suppresses the repeated event deliberately
-            // to avoid flooding consumers with identical messages. The writer keeps the exact number of clamped
-            // objects in NonMonotonicTimestampCount, which this exporter does not currently surface.
-            if (timestampNs < _Writer!.AnchorStartNanos && _Writer.ObjectCount > 0 && !_EarlyTsClampNotified)
+            // to avoid flooding consumers with identical messages.
+            if (timestampNs < _Writer!.AnchorStartNanos && _ObjectsAppended > 0 && !_EarlyTsClampNotified)
             {
                 _EarlyTsClampNotified = true;
                 ItemSkipped?.Invoke(this, new ExportErrorEventArgs
@@ -593,18 +520,24 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
             ushort objectVersion = objectType == BlfConstants.ObjTypeLinMessage2
                 ? (ushort)1
                 : (ushort)0;
-            _Writer.WriteRawObject(objectType, objectVersion, timestampNs, _PayloadBuffer.WrittenSpan);
+            _AppendObject(objectType, objectVersion, timestampNs, _PayloadBuffer.WrittenSpan);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            // Only an I/O failure is an I/O error: a caller that retries on another disk for IoError must not retry a
+            // serialization problem (a buffer limit, a builder argument).
             return _HandleSkip(new ExportErrorEventArgs
             {
                 ItemIndex = currentIndex,
-                Kind = ExportErrorKind.IoError,
+                Kind = ex is IOException
+                    ? ExportErrorKind.IoError
+                    : ExportErrorKind.SerializationError,
                 Message = $"BLF write failed: {ex.Message}",
             });
         }
 
+        // The frame is part of the open container from here on (the pipeline counts frames for the lost-container accounting).
+        _Pipeline.Current.CountFrame();
         FrameCount++;
         // Update _MaxTimestampNs here — after the write — so the BLF end_date only
         // covers frames that were actually exported.
@@ -612,7 +545,40 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         _MaxTimestampNs = _MaxTimestampNs == long.MinValue
             ? writtenTs
             : Math.Max(_MaxTimestampNs, writtenTs);
-        return true;
+
+        // A synchronous write that failed inside _AppendObject latched the strict stop: report it in this very call, like the
+        // other batching exporters, so a driver does not feed one more frame to an exporter that has stopped.
+        return !_HasError;
+    }
+
+    /// <summary>
+    /// Names why a payload builder refused a frame. The builders return only <see langword="false"/>, so the two refusals that
+    /// are limits of the BLF format (a channel above 255 for the one-byte channel of Types 101 and 139, and more than 64 CAN FD
+    /// data bytes) are recognized here again to name the limit in the error; every other refusal is "too short or malformed".
+    /// Runs only for a refused frame (cold path).
+    /// </summary>
+    /// <param name="linkType">Link type of the refused frame.</param>
+    /// <param name="objectType">BLF object type chosen for the frame.</param>
+    /// <param name="channel">BLF channel resolved for the frame's interface.</param>
+    /// <param name="data">The frame bytes.</param>
+    /// <returns>The error message for <see cref="ExportErrorKind.MalformedData"/>.</returns>
+    private static string _DescribeBuildFailure(LinkType linkType, uint objectType, ushort channel, ReadOnlySpan<byte> data)
+    {
+        if (channel > byte.MaxValue
+            && objectType is BlfConstants.ObjTypeCanFdMessage64 or BlfConstants.ObjTypeCanXlChannelFrame)
+        {
+            return Invariant($"BLF object type {objectType} stores the channel in one byte; channel {channel} is above 255.");
+        }
+
+        if (objectType == BlfConstants.ObjTypeCanFdMessage64
+            && data.Length >= 8
+            && data[4] > BlfObjectPayloads.MaxCanFdDataLength)
+        {
+            return Invariant(
+                $"BLF CAN FD frame declares {data[4]} data bytes; a CAN FD frame carries at most {BlfObjectPayloads.MaxCanFdDataLength}.");
+        }
+
+        return Invariant($"Failed to build {linkType} payload ({data.Length} bytes)");
     }
 
     /// <summary>
@@ -620,6 +586,8 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
     /// and returns false to abort in Strict mode (no event is raised then; the false return and
     /// <see cref="HasErrors"/> are the signal).
     /// </summary>
+    /// <param name="error">The reason the frame was skipped; raised through <see cref="ItemSkipped"/> in tolerant mode.</param>
+    /// <returns><see langword="true"/> in tolerant mode (go on with the next frame); <see langword="false"/> in strict mode.</returns>
     private bool _HandleSkip(ExportErrorEventArgs error)
     {
         // Saturating counters: a multi-billion-frame export must not wrap into negative counts.
@@ -644,10 +612,16 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         return true;
     }
 
+    #endregion
+
+    #region Interface resolution
+
     /// <summary>
     /// Resolves (once per interface) the BLF channel, the hardware channel, and the custom name of the frame's interface.
     /// Frames without an interface use channel 1 and no name.
     /// </summary>
+    /// <param name="frame">The frame whose interface is resolved.</param>
+    /// <returns>The channel facts of the frame's interface; cached, so later frames of the interface cost one lookup.</returns>
     private InterfaceTarget _ResolveInterface(Frame frame)
     {
         if (!frame.HasInterface)
@@ -716,7 +690,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         _AppTextBuffer ??= new PooledBuffer(256);
         if (BlfObjectPayloads.TryBuildAppTextChannelNamePayload(busType, channel, defaultName, name, _AppTextBuffer))
         {
-            _Writer!.WriteRawObject(BlfConstants.ObjTypeAppText, 0, timestampNs, _AppTextBuffer.WrittenSpan);
+            _AppendObject(BlfConstants.ObjTypeAppText, 0, timestampNs, _AppTextBuffer.WrittenSpan);
         }
     }
 
@@ -732,34 +706,289 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         internal static InterfaceTarget Default => new(1, null, null, null);
     }
 
+    #endregion
+
+    #region Container hand-off
+
+    /// <summary>
+    /// Appends one object to the open container, handing the container to the writer first when the object does not fit. The
+    /// timestamp is converted on the caller's thread.
+    /// </summary>
+    private void _AppendObject(uint objectType, ushort objectVersion, long timestampNs, ReadOnlySpan<byte> payload)
+    {
+        ulong relative = _Writer!.ToRelative(timestampNs); // Invariant: a started export has a writer.
+        if (!_Pipeline.Current.TryAppendObject(objectType, objectVersion, relative, payload))
+        {
+            _Pipeline.Submit(firstItemIndex: FrameCount - _Pipeline.Current.PacketCount);
+
+            // An empty container always takes the object (an oversized object gets a container of its own).
+            _ = _Pipeline.Current.TryAppendObject(objectType, objectVersion, relative, payload);
+
+            // A synchronous write has already failed inside Submit: report it in this very call (uniform timing). In background
+            // mode the flag is rarely set yet; the per-frame check in OnFrame reports it later.
+            if (_Pipeline.HasLost)
+            {
+                _DrainLostBatches(reportAlways: false);
+            }
+        }
+
+        _ObjectsAppended++;
+    }
+
+    /// <summary>
+    /// Accounts the containers the writer reported as lost: their frames leave <see cref="WrittenCount"/>, count as skipped, and
+    /// each container raises one error. Runs on the caller's thread only.
+    /// </summary>
+    /// <param name="reportAlways">
+    /// <see langword="true"/> at the end of the export: the error is raised and latched whatever the tolerance mode.
+    /// <see langword="false"/> during the export: strict mode latches the error without an event, tolerant mode raises
+    /// <see cref="ItemSkipped"/> and goes on.
+    /// </param>
+    private void _DrainLostBatches(bool reportAlways)
+    {
+        while (_Pipeline.TryTakeLost(out LostBatch lost))
+        {
+            // The frames were counted as written when they were accepted; take them back so WrittenCount and SkippedCount
+            // describe what is in the file.
+            FrameCount = Math.Max(0, FrameCount - lost.PacketCount);
+            SkippedCount = SkippedCount > int.MaxValue - lost.PacketCount
+                ? int.MaxValue
+                : SkippedCount + lost.PacketCount;
+            if (ErrorCount < int.MaxValue)
+            {
+                ErrorCount++;
+            }
+
+            if (!reportAlways && ErrorTolerance == ErrorToleranceMode.Strict)
+            {
+                _HasError = true;
+                continue;
+            }
+
+            if (reportAlways)
+            {
+                _HasError = true;
+            }
+
+            ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+            {
+                ItemIndex = lost.FirstItemIndex,
+                Kind = lost.Kind,
+                Message = lost.Message,
+            });
+        }
+    }
+
+    /// <summary>
+    /// Writer-thread entry (or caller entry in synchronous mode): forwards to the writer that <see cref="_Start"/> created. The
+    /// writer is non-null here because a container is only handed over after a started export.
+    /// </summary>
+    void IBatchWriter<BlfContainer>.Write(BlfContainer batch) => _Writer!.Write(batch);
+
+    #endregion
+
+    #region Start and finish
+
+    /// <summary>
+    /// Lazily initializes the output and writes the 144-byte file header (the <see cref="BlfWriter"/> constructor writes it
+    /// to the stream immediately, with placeholder statistics that <see cref="OnFinish"/> patches later). Runs at most once:
+    /// <see cref="_Started"/> is set before any failure can happen, so a failed start is never retried.
+    /// </summary>
+    /// <returns>True if initialization succeeded. False when the output is gone (a disposed exporter: latched without an
+    /// error count, so no error loop starts), the output could not be opened, or the header write failed; the last two are
+    /// counted and reported through <see cref="ItemSkipped"/>.</returns>
+    private bool _Start()
+    {
+        if (_Output is null)
+        {
+            _HasError = true;
+            return false;
+        }
+
+        _Started = true;
+
+        // Opening the file is where a bad path, a missing directory, or a permission problem shows up. It is reported
+        // through the normal error path instead of escaping from OnFrame (a driver would see an unexpected exception for an
+        // ordinary I/O failure).
+        if (!_Output.TryGetOrCreateUnderlyingStream(out Stream? underlyingStream, out string openFailure))
+        {
+            _ReportStartFailure($"BLF output could not be opened: {openFailure}");
+            return false;
+        }
+
+        try
+        {
+            // Writer ctor writes the file header — failures here must be reported
+            // through the standard error pipeline rather than escaping to the caller.
+            _Writer = new BlfWriter(underlyingStream, _FirstTimestampNs, _MaxContainerSize, _Compression, _TimestampTimeZone);
+        }
+        catch (Exception ex)
+        {
+            _ReportStartFailure($"BLF header write failed: {ex.Message}");
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>Latches the fatal state for a failed start, counts it, and raises <see cref="ItemSkipped"/> as item 0.</summary>
+    private void _ReportStartFailure(string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = 0,
+            Kind = ExportErrorKind.IoError,
+            Message = message,
+        });
+    }
+
+    /// <inheritdoc/>
+    public void OnFinish()
+    {
+        if (_Finished)
+        {
+            return;
+        }
+        _Finished = true;
+
+        // Shared finish sequence: finalize, then release every resource even when a step fails. Pooled buffers are returned
+        // first and the output last (the output close flushes and may throw); ExporterFinish runs every step regardless.
+        ExporterFinish.Run(
+            "BLF",
+            _FinalizeFile,
+            _ReportFinishError,
+            new ExporterReleaseStep("writer pipeline disposal", _Pipeline.Dispose),
+            new ExporterReleaseStep("payload buffer return", _PayloadBuffer.Return),
+            new ExporterReleaseStep("AppText buffer return", () => _AppTextBuffer?.Return()),
+            new ExporterReleaseStep("output disposal", _DisposeOutput));
+    }
+
+    /// <summary>
+    /// Writes the remaining container, waits for the writer, accounts lost containers, and patches the file header (object count,
+    /// sizes, end_date). Starts the writer first when no frame ever arrived, so an empty export is still a valid BLF file
+    /// (header with zero containers).
+    /// </summary>
+    private void _FinalizeFile()
+    {
+        // Empty export: no frame fixed the anchor, so the header carries zero dates (BlfWriter writes an all-zero
+        // SYSTEMTIME for a timestamp <= 0).
+        if (!_Started && !_HasError && _Output is not null)
+        {
+            _FirstTimestampNs = 0;
+            _MinTimestampNs = 0;
+            _MaxTimestampNs = 0;
+            _Start();
+        }
+
+        // Last (possibly partial) container; Complete joins the writer thread, which makes everything it wrote visible here.
+        if (!_Pipeline.IsCompleted)
+        {
+            _Pipeline.Complete(firstItemIndex: FrameCount - _Pipeline.CurrentPacketCount);
+        }
+
+        // Lost containers first, so the counters describe what is really in the file.
+        _DrainLostBatches(reportAlways: true);
+
+        if (_Writer is not null)
+        {
+            // Finish the writer and update the header (end_date from max timestamp). The header patch seeks, so it runs here,
+            // after the join, when no container write can be in flight. The header is only rewritten when the stream is
+            // seekable; otherwise the placeholder header stays, which readers tolerate because they count objects themselves
+            // (see BlfWriter). TryGetExistingStream is used so finishing never creates a file as a side effect.
+            long endNs = _MinTimestampNs == long.MaxValue
+                ? 0
+                : _MaxTimestampNs;
+            BlfWriterFinishResult result = _Writer.Finish(endNs);
+            Stream? stream = _Output?.TryGetExistingStream();
+            if (stream is not null)
+            {
+                result.UpdateHeader(stream);
+            }
+        }
+    }
+
+    /// <summary>Disposes the output once (closes the stream unless the caller owns it).</summary>
+    private void _DisposeOutput()
+    {
+        ExportOutput? output = _Output;
+        _Output = null;
+        output?.Dispose();
+    }
+
+    /// <summary>Error channel of the finish sequence: marks the error, counts it, and raises <see cref="ItemSkipped"/>.</summary>
+    private void _ReportFinishError(ExportErrorKind kind, string message)
+    {
+        _HasError = true;
+        if (ErrorCount < int.MaxValue)
+        {
+            ErrorCount++;
+        }
+
+        ItemSkipped?.Invoke(this, new ExportErrorEventArgs
+        {
+            ItemIndex = FrameCount,
+            Kind = kind,
+            Message = message,
+        });
+    }
+
+    /// <inheritdoc/>
+    public void Dispose() => OnFinish();
+
+    #endregion
+
+    #region Builder
+
     /// <summary>
     /// Maps <see cref="BlfCompressionLevel"/> to <see cref="CompressionLevel"/> (zlib levels 0, 1, 6, 9; BlfWriter records
-    /// the corresponding level byte in the file header). An undefined enum value falls back to the default level instead
-    /// of throwing.
+    /// the corresponding level byte in the file header).
     /// </summary>
+    /// <param name="level">A defined level; <see cref="Builder.WithCompressionLevel"/> refuses every other value.</param>
+    /// <returns>The matching .NET compression level.</returns>
     private static CompressionLevel _MapCompression(BlfCompressionLevel level) => level switch
     {
         BlfCompressionLevel.None => CompressionLevel.NoCompression,
         BlfCompressionLevel.Fast => CompressionLevel.Fastest,
         BlfCompressionLevel.Default => CompressionLevel.Optimal,
         BlfCompressionLevel.Best => CompressionLevel.SmallestSize,
-        _ => CompressionLevel.Optimal,
+        _ => throw new System.Diagnostics.UnreachableException("BlfCompressionLevel is validated by WithCompressionLevel."),
     };
-
-    // ========================================================================
-    // Builder
-    // ========================================================================
 
     /// <summary>Fluent builder for constructing a <see cref="BlfExporter"/>.</summary>
     public sealed class Builder
     {
+        /// <summary>Output target; required before <see cref="Build"/>.</summary>
         private ExportOutput? _Output;
+
+        /// <summary>User-friendly display name.</summary>
         private string _UiName = "BLF Exporter";
+
+        /// <summary>Optional description of the exporter.</summary>
         private string? _Description;
+
+        /// <summary>Cooperative cancellation token; <c>default</c> never cancels.</summary>
         private CancellationToken _CancellationToken;
+
+        /// <summary>Compression preset of the log containers; always a defined value.</summary>
         private BlfCompressionLevel _Compression = BlfCompressionLevel.Default;
+
+        /// <summary>Maximum number of frames to write; 0 means unlimited.</summary>
         private int _TargetFrameCount;
+
+        /// <summary>Zone of the header SYSTEMTIME fields.</summary>
         private TimeZoneInfo _TimestampTimeZone = TimeZoneInfo.Utc;
+
+        /// <summary>Whether containers are written on a writer thread or on the calling thread.</summary>
+        private ExportWriteMode _WriteMode = ExportWriteMode.Background;
+
+        /// <summary>Uncompressed container size in bytes.</summary>
+        private int _MaxContainerSize = BlfConstants.MaxContainerBufferSize;
 
         /// <summary>
         /// Sets the zone in which the header <c>start_date</c> / <c>end_date</c> SYSTEMTIME fields are written.
@@ -767,6 +996,8 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         /// this product writes and reads round-trip on any host. Use <see cref="TimeZoneInfo.Local"/> for tools that read
         /// the dates as local civil time.
         /// </summary>
+        /// <param name="zone">The zone of the header dates.</param>
+        /// <returns>This builder.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="zone"/> is null.</exception>
         public Builder WithTimestampTimeZone(TimeZoneInfo zone)
         {
@@ -779,6 +1010,8 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         /// Sets the output to a file path with a 4 MiB buffer. The file is created lazily on the first write.
         /// Calling an output method again replaces the previous target.
         /// </summary>
+        /// <param name="path">Path of the BLF file to create; an existing file is overwritten.</param>
+        /// <returns>This builder.</returns>
         /// <exception cref="ArgumentException"><paramref name="path"/> is null, empty, or contains invalid path characters.</exception>
         public Builder ToFile(string path)
         {
@@ -790,6 +1023,8 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         /// Sets the output to an existing stream; the caller keeps ownership and the exporter does not dispose it.
         /// A seekable stream positioned at its start allows the header to be patched with the final statistics on finish.
         /// </summary>
+        /// <param name="stream">The writable stream that receives the file; not disposed by the exporter.</param>
+        /// <returns>This builder.</returns>
         public Builder ToStream(Stream stream)
         {
             _Output = ExportOutput.FromStream(stream);
@@ -800,6 +1035,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         /// Sets the output to stdout, which the exporter owns and closes on finish. stdout is normally not seekable, so
         /// the header keeps its placeholder statistics.
         /// </summary>
+        /// <returns>This builder.</returns>
         public Builder ToStdout()
         {
             _Output = ExportOutput.Stdout();
@@ -807,29 +1043,96 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         }
 
         /// <summary>Sets the user-friendly display name.</summary>
+        /// <param name="name">Display name; not empty or white space.</param>
+        /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentException"><paramref name="name"/> is null, empty, or white space.</exception>
         public Builder WithUiName(string name)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(name);
             _UiName = name;
             return this;
         }
 
         /// <summary>Sets an optional description.</summary>
-        public Builder WithDescription(string description)
+        /// <param name="description">The description; <see langword="null"/> clears it.</param>
+        /// <returns>This builder.</returns>
+        public Builder WithDescription(string? description)
         {
             _Description = description;
             return this;
         }
 
-        /// <summary>Sets the cancellation token.</summary>
+        /// <summary>Sets the token that stops the export: <see cref="OnFrame"/> returns <see langword="false"/> once it is cancelled.</summary>
+        /// <param name="token">The cancellation token.</param>
+        /// <returns>This builder.</returns>
         public Builder WithCancellationToken(CancellationToken token)
         {
             _CancellationToken = token;
             return this;
         }
 
-        /// <summary>Sets the compression level for BLF container output.</summary>
+        /// <summary>
+        /// Chooses how full containers are written: <see cref="ExportWriteMode.Background"/> (default) compresses and writes on a
+        /// writer thread named "BLF export writer" while the next container fills; <see cref="ExportWriteMode.Synchronous"/> does
+        /// it inside the <see cref="OnFrame"/> call that completed the container. Background holds two containers in memory,
+        /// synchronous one. With a caller-owned stream (<see cref="ToStream"/>, <see cref="ToStdout"/>) the caller must not use
+        /// the stream until <see cref="OnFinish"/> returned in background mode.
+        /// </summary>
+        /// <param name="mode">The write mode.</param>
+        /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is not defined.</exception>
+        public Builder WithWriteMode(ExportWriteMode mode)
+        {
+            if (!Enum.IsDefined(mode))
+            {
+                throw new ArgumentOutOfRangeException(nameof(mode), mode, "Write mode must be Background or Synchronous.");
+            }
+
+            _WriteMode = mode;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the uncompressed size at which a log container is compressed and written. Larger containers compress slightly
+        /// better and hold more memory (two containers in background mode, plus the compressed-output buffer of the same size).
+        /// </summary>
+        /// <param name="bytes">Container size in bytes, 64 KiB to 64 MiB; default 10 MiB.</param>
+        /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bytes"/> is outside the range; the message names it.</exception>
+        public Builder WithMaxContainerSize(long bytes)
+        {
+            // Limit: container size 65 536 to 67 108 864 bytes, default 10 MiB (BlfConstants.MaxContainerBufferSize). Threat: memory
+            // exhaustion — a container is held uncompressed until it is compressed, twice in background mode, and the writer
+            // rents a compressed-output buffer of the same size. Configurable by the library caller and the CLI user (option
+            // containerSize). Posture: secure by default — the default bounds memory on any host; the upper bound keeps one zlib
+            // call and one PooledBuffer below sizes where a mistyped value would stall the export. Lower bound: below 64 KiB the
+            // per-container headers and zlib setup dominate. Agreed by the owner.
+            const long minimum = 64L * 1024;
+            const long maximum = 64L * 1024 * 1024;
+            if (bytes < minimum || bytes > maximum)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(bytes),
+                    bytes,
+                    Invariant($"BLF container size must be between {minimum} and {maximum} bytes."));
+            }
+
+            // Bounded above by 64 MiB, so the narrowing is exact.
+            _MaxContainerSize = checked((int)bytes);
+            return this;
+        }
+
+        /// <summary>Sets the zlib level of the log containers.</summary>
+        /// <param name="level">A defined <see cref="BlfCompressionLevel"/>.</param>
+        /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="level"/> is not defined.</exception>
         public Builder WithCompressionLevel(BlfCompressionLevel level)
         {
+            if (!Enum.IsDefined(level))
+            {
+                throw new ArgumentOutOfRangeException(nameof(level), level, "Compression level must be None, Fast, Default, or Best.");
+            }
+
             _Compression = level;
             return this;
         }
@@ -839,6 +1142,8 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         /// When the target is reached, <see cref="OnFrame"/> returns <c>false</c> and
         /// <see cref="IsFinished"/> becomes <c>true</c>.
         /// </summary>
+        /// <param name="count">Number of frames after which the export stops; 0 for no limit.</param>
+        /// <returns>This builder.</returns>
         /// <exception cref="ArgumentOutOfRangeException">
         /// <paramref name="count"/> is negative or exceeds <see cref="ArrayIndexIdRange.MaxCount"/>.
         /// </exception>
@@ -864,6 +1169,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
         /// <summary>
         /// Builds the exporter. No file I/O occurs until the first frame is written.
         /// </summary>
+        /// <returns>A new exporter that writes to the configured output.</returns>
         /// <exception cref="InvalidOperationException">No output destination was set.</exception>
         public BlfExporter Build()
         {
@@ -880,7 +1186,11 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 _MapCompression(_Compression),
                 _TargetFrameCount,
                 _TimestampTimeZone,
+                _WriteMode,
+                _MaxContainerSize,
                 _CancellationToken);
         }
     }
+
+    #endregion
 }

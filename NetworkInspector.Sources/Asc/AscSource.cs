@@ -1186,7 +1186,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
         FrameInterfaceId interfaceId = _RegisterInterface(registry, busType, channel, linkType);
 
         ParseResult<Frame> result = Frame.Create(
-            new FrameId(frameIndex),
+            frameIndex,
             new Timestamp(absoluteNanos),
             frameData,
             linkType,

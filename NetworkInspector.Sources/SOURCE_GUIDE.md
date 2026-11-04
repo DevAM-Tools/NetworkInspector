@@ -431,7 +431,7 @@ All sources create frames through `Frame.Create()`:
 ```csharp
 ReadOnlyMemory<byte> data = /* extracted from backend */;
 Timestamp timestamp = new(timestampNanos);
-FrameId frameId = new(sequentialIndex);
+FrameId frameId = sequentialIndex;
 LinkType linkType = /* resolved from format metadata */;
 FrameInterfaceId interfaceId = _InterfaceMap[key];
 

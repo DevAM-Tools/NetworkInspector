@@ -190,7 +190,7 @@ public sealed partial class BlfSource
             indexed.ObjectType, indexed.Channel, registry, indexed.HardwareChannel);
 
         ParseResult<Frame> result = Frame.Create(
-            new FrameId(frameIndex),
+            frameIndex,
             new Timestamp(indexed.TimestampNanos),
             frameData.Value,
             linkType,
@@ -353,7 +353,7 @@ public sealed partial class BlfSource
         }
 
         ParseResult<Frame> result = Frame.Create(
-            new FrameId(frameIndex),
+            frameIndex,
             new Timestamp(indexed.TimestampNanos),
             frameData.Value,
             linkType,

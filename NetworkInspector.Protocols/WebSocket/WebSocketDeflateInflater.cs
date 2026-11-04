@@ -20,8 +20,35 @@ public sealed partial class WebSocketProtocol
     [U64Setting("ws.max_decompressed_bytes", "Maximum decompressed WebSocket payload size (bytes)", "ws",
         Default = 67108864, HasMin = true, Min = 1024, HasMax = true, Max = 137438953472,
         Description = "Upper bound for a decompressed WebSocket frame payload in bytes (1 KiB to 128 GiB). A larger payload is left "
-            + "undecoded and flagged. Raising the value lets a small hostile frame use more memory.")]
+            + "undecoded and flagged. Raising the value lets a small hostile frame use more memory. All payloads of one packet "
+            + "together are bounded by ws.max_derived_bytes_per_packet.")]
     private ulong _MaxDecompressedBytes;
+
+    // Limit: most bytes bound to ONE packet in total when WebSocket binds an unmasked or inflated payload, all frames of the packet
+    // together (they stay referenced until the packet is recycled, see _DispatchFramePayload); the per-payload limit above bounds
+    // one inflated payload only. The packet keeps one sum for all protocols, so the bytes that another protocol or the TCP
+    // transport bound count too (accepted: the total bounds the memory the packet pins).
+    // Value: default 268435456 (256 MiB, four times the per-payload default), allowed 2048 (2 KiB) to 137438953472 (128 GiB), the
+    // range of DerivedBytesLimit; a value outside the range is rejected by the settings layer and the default stays. Threat:
+    // memory exhaustion by many inflated frames in one packet (up to 255 buffers of the per-payload limit each, deflate expands
+    // about 1000 to 1, so about 1 MiB of small frames pins about 1 GiB).
+    // Configurable (setting, changed by the operator or user), not a constant, because the right size depends on the host and
+    // the traffic. Posture: secure by default, because the payloads come from untrusted peers, but relaxed on purpose (owner
+    // decision): the same four-times rule as http.max_derived_bytes_per_packet. Raising it is opt-in. Rejected alternatives: the
+    // per-payload setting doubling as the total (one knob cannot be both a per-item cap and a relaxed total: a cap
+    // that suits one inflated payload refuses the second ordinary large frame of a packet), no total (the exposure above).
+    // Exceeding it is an expected failure, not a truncation: the payload that would pass the total is not bound or parsed, the
+    // packet reports a parse error that names this setting and says it is the total per packet, the caller ends the dispatch of
+    // the later frames and still records their index groups. Unmasked, uncompressed payloads bind nothing and do not count.
+    // Residual risk: the payload that fails the check was already inflated (at most the per-payload limit, freed at once); a
+    // value near the maximum lets one packet pin that much memory.
+    [U64Setting("ws.max_derived_bytes_per_packet", "Maximum unmasked and decompressed WebSocket bytes per packet (bytes)", "ws",
+        Default = 268435456, HasMin = true, Min = 2048, HasMax = true, Max = 137438953472,
+        Description = "Upper bound for all bytes bound to one packet when WebSocket binds an unmasked or decompressed payload, in bytes "
+            + "(2 KiB to 128 GiB); the bytes of other protocols and the TCP PDUs of the packet count too. The payload that would pass it is not parsed further and the packet reports an error that names this "
+            + "setting. A value below ws.max_decompressed_bytes also limits a single payload. Raising the value lets one packet "
+            + "with many frames use more memory.")]
+    private ulong _MaxDerivedBytesPerPacket;
 
     /// <summary>
     /// Decompresses a WebSocket per-message DEFLATE payload (RFC 7692 §7.2.2).

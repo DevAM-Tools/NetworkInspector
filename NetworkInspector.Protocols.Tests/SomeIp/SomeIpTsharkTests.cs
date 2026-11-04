@@ -251,7 +251,7 @@ internal sealed class SomeIpTsharkTests : SomeIpPayloadKit
         Join(
             Method(
                 1,
-                "Seq",
+                "seq",
                 Sites(
                     Site("a", "uint8"),
                     Site("b", "i16le"),
@@ -266,11 +266,11 @@ internal sealed class SomeIpTsharkTests : SomeIpPayloadKit
                 "[]"),
             Method(
                 2,
-                "Tlv",
+                "tlv",
                 "[]",
                 "{\"1\":{\"name\":\"t1\",\"type_reference\":\"uint8\"},\"2\":{\"name\":\"t2\",\"type_reference\":\"uint16\"},"
                 + "\"3\":{\"name\":\"t3\",\"type_reference\":\"string\"}}"),
-            Method(3, "Uni", "[]", Sites(Site("u", "union_t"))),
+            Method(3, "uni", "[]", Sites(Site("u", "union_t"))),
             "{\"kind\":\"event\",\"id\":4,\"name\":\"Ev\",\"type_reference\":\"wide_flags_t\"}"),
         Join(
             "{\"category\":\"base_type\",\"name\":\"i16le\",\"type_reference\":\"int16\",\"byte_order\":\"little_endian\"}",
@@ -311,10 +311,10 @@ internal sealed class SomeIpTsharkTests : SomeIpPayloadKit
             SomeIpBytes union = new SomeIpBytes().U32(4 + 2).U32(1).U16(0x1234);
             byte[] eventBits = new SomeIpBytes().U16(0x8001).ToArray();
 
-            await _AssertLeaves(s, profile, profileDirectory, UdpFrame(sequential.ToArray(), 1, 0x00), "seq.in").ConfigureAwait(false);
-            await _AssertLeaves(s, profile, profileDirectory, UdpFrame(tlv.ToArray(), 2, 0x80), "tlv.out").ConfigureAwait(false);
-            await _AssertLeaves(s, profile, profileDirectory, UdpFrame(union.ToArray(), 3, 0x80), "uni.out").ConfigureAwait(false);
-            await _AssertLeaves(s, profile, profileDirectory, UdpFrame(eventBits, 4, 0x02), "ev").ConfigureAwait(false);
+            await _AssertLeaves(s, profile, profileDirectory, UdpFrame(sequential.ToArray(), 1, 0x00), "seq.req").ConfigureAwait(false);
+            await _AssertLeaves(s, profile, profileDirectory, UdpFrame(tlv.ToArray(), 2, 0x80), "tlv.resp").ConfigureAwait(false);
+            await _AssertLeaves(s, profile, profileDirectory, UdpFrame(union.ToArray(), 3, 0x80), "uni.resp").ConfigureAwait(false);
+            await _AssertLeaves(s, profile, profileDirectory, UdpFrame(eventBits, 4, 0x02), ".Ev.").ConfigureAwait(false);
         }
         finally
         {
@@ -326,7 +326,7 @@ internal sealed class SomeIpTsharkTests : SomeIpPayloadKit
     {
         using MemoryStream stream = new(Encoding.UTF8.GetBytes(json));
         _ = SomeIpRegistration.TryLoadConfig(stream, out SomeIpConfig? config, out _);
-        return SomeIpConfigCompiler.Compile(config!, new List<SettingsLoadWarning>());
+        return SomeIpConfigCompiler.Compile(config!, "", new List<SettingsLoadWarning>());
     }
 
     /// <summary>Compares every leaf the parser decoded under <paramref name="prefix"/> with the value the tool reports for its filter.</summary>

@@ -11,11 +11,11 @@ namespace NetworkInspector.Protocols;
 /// <para>
 /// Design: two passes read each message. <c>Parse</c> runs eagerly for every packet and does only what the packet
 /// index and sub-protocol dispatch need: the first line (packet summary), a header scan that records the index groups
-/// and collects the values that drive dispatch, body decoding (dechunk, decompress) and the dispatch to the
-/// content-type, JSON/Text, or Upgrade protocol. The field tree itself is built later by the lazy populator, only when
-/// somebody expands the container. The populator cannot record index state (it gets no <see cref="ParseContext"/>), so
-/// the eager scan has to mirror the populator's emission conditions exactly; the cost is that headers and the body
-/// decode are processed twice for a message that is expanded.
+/// and collects the values that drive dispatch, body decoding (dechunk, decompress), binding of a decoded body as an
+/// additional packet buffer, and the dispatch to the content-type, JSON/Text, or Upgrade protocol. The field tree itself is
+/// built later by the lazy populator, only when somebody expands the container. The populator cannot record index state
+/// (it gets no <see cref="ParseContext"/>), so the eager scan has to mirror the populator's emission conditions exactly;
+/// the cost is that headers and the body decode are processed twice for a message that is expanded.
 /// </para>
 /// <para>Field tree structure:</para>
 /// <code>
@@ -94,10 +94,24 @@ public sealed partial class HttpProtocol : IProtocol
     /// <summary>Status code for 101 Switching Protocols.</summary>
     private const ushort _SwitchingProtocolsCode = 101;
 
+    /// <summary>
+    /// Error text for a decoded body that cannot be handed on because the packet's table of bound buffers is full.
+    /// Limit: 255 additional buffers per packet (a constant of the packet's effect keys, not configurable); secure by
+    /// default. Exceeding it is an expected failure that is named, not a silent drop.
+    /// </summary>
+    /// <seealso cref="IPv4Protocol"/>
+    /// <remarks>
+    /// The IPv4, IPv6, TCP, and SOME/IP-TP binders report their reassembled bytes with the same wording pattern.
+    /// Sync: <c>WebSocketProtocol._BoundBufferLimitMessage</c> (the WebSocket text of the same limit).
+    /// </remarks>
+    private const string _BoundBufferLimitMessage =
+        "Decoded HTTP body cannot be parsed further: a packet can hold at most 255 additional buffers";
+
     #endregion
 
     #region Protocol container
 
+    /// <summary>Id of the <c>http</c> field ("Hypertext Transfer Protocol", bytes); set by the generated registration.</summary>
     [BytesField("http", "Hypertext Transfer Protocol", IndexGroup = _HttpIndexGroup)]
     private FieldId _ProtocolFieldId;
 
@@ -105,6 +119,10 @@ public sealed partial class HttpProtocol : IProtocol
 
     #region Dispatch table — dispatches by Content-Type to sub-protocols (JSON, Text, etc.)
 
+    /// <summary>
+    /// Id of the string-keyed table <c>http.content_type</c> ("HTTP Content-Type"): the body is dispatched to the protocol
+    /// registered for its media type.
+    /// </summary>
     [ProtocolTableString(ContentTypeTableName, "HTTP Content-Type")]
     private ProtocolTableId _ContentTypeTableId;
 
@@ -112,6 +130,10 @@ public sealed partial class HttpProtocol : IProtocol
 
     #region Dispatch table — dispatches by Upgrade header value (e.g., "websocket")
 
+    /// <summary>
+    /// Id of the string-keyed table <c>http.upgrade</c> ("HTTP Upgrade"): the data behind a 101 response is dispatched to the
+    /// protocol registered for the Upgrade value.
+    /// </summary>
     [ProtocolTableString(UpgradeTableName, "HTTP Upgrade")]
     private ProtocolTableId _UpgradeTableId;
 
@@ -119,15 +141,19 @@ public sealed partial class HttpProtocol : IProtocol
 
     #region Request fields
 
+    /// <summary>Id of the <c>http.request</c> field ("Request", a boolean); set by the generated registration.</summary>
     [BoolField("http.request", "Request", IndexGroup = "http.request")]
     private FieldId _RequestFieldId;
 
+    /// <summary>Id of the <c>http.request.method</c> field ("Method", a string); set by the generated registration.</summary>
     [StringField("http.request.method", "Method", IndexGroup = "http.request")]
     private FieldId _RequestMethodFieldId;
 
+    /// <summary>Id of the <c>http.request.uri</c> field ("URI", a string); set by the generated registration.</summary>
     [StringField("http.request.uri", "URI", IndexGroup = "http.request")]
     private FieldId _RequestUriFieldId;
 
+    /// <summary>Id of the <c>http.request.version</c> field ("Version", a string); set by the generated registration.</summary>
     [StringField("http.request.version", "Version", IndexGroup = "http.request")]
     private FieldId _RequestVersionFieldId;
 
@@ -135,15 +161,19 @@ public sealed partial class HttpProtocol : IProtocol
 
     #region Response fields
 
+    /// <summary>Id of the <c>http.response</c> field ("Response", a boolean); set by the generated registration.</summary>
     [BoolField("http.response", "Response", IndexGroup = "http.response")]
     private FieldId _ResponseFieldId;
 
+    /// <summary>Id of the <c>http.response.code</c> field ("Status Code", an unsigned integer); set by the generated registration.</summary>
     [U64Field("http.response.code", "Status Code", IndexGroup = "http.response")]
     private FieldId _ResponseCodeFieldId;
 
+    /// <summary>Id of the <c>http.response.phrase</c> field ("Reason Phrase", a string); set by the generated registration.</summary>
     [StringField("http.response.phrase", "Reason Phrase", IndexGroup = "http.response")]
     private FieldId _ResponsePhraseFieldId;
 
+    /// <summary>Id of the <c>http.response.version</c> field ("Version", a string); set by the generated registration.</summary>
     [StringField("http.response.version", "Version", IndexGroup = "http.response")]
     private FieldId _ResponseVersionFieldId;
 
@@ -151,12 +181,15 @@ public sealed partial class HttpProtocol : IProtocol
 
     #region Header fields
 
+    /// <summary>Id of the <c>http.header</c> field ("Header", a container without a value); set by the generated registration.</summary>
     [NoneField("http.header", "Header", IndexGroup = _HttpIndexGroup)]
     private FieldId _HeaderFieldId;
 
+    /// <summary>Id of the <c>http.header.name</c> field ("Name", a string); set by the generated registration.</summary>
     [StringField("http.header.name", "Name", IndexGroup = _HttpIndexGroup)]
     private FieldId _HeaderNameFieldId;
 
+    /// <summary>Id of the <c>http.header.value</c> field ("Value", a string); set by the generated registration.</summary>
     [StringField("http.header.value", "Value", IndexGroup = _HttpIndexGroup)]
     private FieldId _HeaderValueFieldId;
 
@@ -164,27 +197,35 @@ public sealed partial class HttpProtocol : IProtocol
 
     #region Well-known header value fields
 
+    /// <summary>Id of the <c>http.content_type_value</c> field ("Content-Type", a string); set by the generated registration.</summary>
     [StringField("http.content_type_value", "Content-Type", IndexGroup = "http.content_type")]
     private FieldId _ContentTypeFieldId;
 
+    /// <summary>Id of the <c>http.content_length</c> field ("Content-Length", an unsigned integer); set by the generated registration.</summary>
     [U64Field("http.content_length", "Content-Length", IndexGroup = "http.content_length")]
     private FieldId _ContentLengthFieldId;
 
+    /// <summary>Id of the <c>http.host</c> field ("Host", a string); set by the generated registration.</summary>
     [StringField("http.host", "Host", IndexGroup = "http.host")]
     private FieldId _HostFieldId;
 
+    /// <summary>Id of the <c>http.user_agent</c> field ("User-Agent", a string); set by the generated registration.</summary>
     [StringField("http.user_agent", "User-Agent", IndexGroup = "http.user_agent")]
     private FieldId _UserAgentFieldId;
 
+    /// <summary>Id of the <c>http.transfer_encoding</c> field ("Transfer-Encoding", a string); set by the generated registration.</summary>
     [StringField("http.transfer_encoding", "Transfer-Encoding", IndexGroup = "http.transfer_encoding")]
     private FieldId _TransferEncodingFieldId;
 
+    /// <summary>Id of the <c>http.content_encoding</c> field ("Content-Encoding", a string); set by the generated registration.</summary>
     [StringField("http.content_encoding", "Content-Encoding", IndexGroup = "http.content_encoding")]
     private FieldId _ContentEncodingFieldId;
 
+    /// <summary>Id of the <c>http.upgrade</c> field ("Upgrade", a string); set by the generated registration.</summary>
     [StringField("http.upgrade", "Upgrade", IndexGroup = "http.upgrade")]
     private FieldId _UpgradeFieldId;
 
+    /// <summary>Id of the <c>http.connection</c> field ("Connection", a string); set by the generated registration.</summary>
     [StringField("http.connection", "Connection", IndexGroup = "http.connection")]
     private FieldId _ConnectionFieldId;
 
@@ -192,12 +233,15 @@ public sealed partial class HttpProtocol : IProtocol
 
     #region Payload
 
+    /// <summary>Id of the <c>http.payload</c> field ("Payload", bytes); set by the generated registration.</summary>
     [BytesField("http.payload", "Payload", IndexGroup = "http.payload")]
     private FieldId _PayloadFieldId;
 
+    /// <summary>Id of the <c>http.payload.decoded</c> field ("Decoded Payload", bytes); set by the generated registration.</summary>
     [BytesField("http.payload.decoded", "Decoded Payload", IndexGroup = "http.payload.decoded")]
     private FieldId _DecodedPayloadFieldId;
 
+    /// <summary>Id of the <c>http.error.not_http</c> field ("Not HTTP", a string); set by the generated registration.</summary>
     [StringField("http.error.not_http", "Not HTTP", IndexGroup = "http.error")]
     private FieldId _NotHttpFieldId;
 
@@ -227,6 +271,34 @@ public sealed partial class HttpProtocol : IProtocol
         Description = "Upper bound for a decompressed HTTP body in bytes (1 KiB to 128 GiB). A larger body is left undecoded and flagged. "
             + "Raising the value lets a small hostile body use more memory.")]
     private ulong _MaxDecompressedBytes;
+
+    // Limit: most bytes bound to ONE packet in total when HTTP binds a decoded (dechunked and/or inflated) body, all messages of
+    // the packet together; the per-body limit above bounds one body only. The packet keeps one sum for all protocols, so the bytes
+    // that another protocol or the TCP transport bound count too (accepted: the total bounds the memory the packet pins).
+    // Value: default 268435456 (256 MiB, four times the per-body default), allowed 2048 (2 KiB) to 137438953472 (128 GiB), the range
+    // of DerivedBytesLimit; a value outside the range is rejected by the settings layer and the default stays. Threat: the bound
+    // bodies stay referenced until the packet is recycled, and one TCP segment can complete many messages (a burst of reordered
+    // gzip responses released by one packet), so without a total one packet pins up to 255 bodies of the per-body limit (16 GiB
+    // at the defaults, deflate expands about 1000 to 1).
+    // Configurable (setting, changed by the operator or user), not a constant, because the right size depends on the host and
+    // the traffic. Posture: secure by default, because the bodies come from untrusted peers, but relaxed on purpose (owner
+    // decision): four per-body maxima fit in one packet, far above what real traffic completes in one segment, and the worst
+    // case is 4 times the per-body limit instead of 255 times. Raising it is opt-in. Rejected alternatives: a total equal to the
+    // per-body limit (refuses the second of two ordinary large bodies in one segment), a fixed constant (cripples hosts that
+    // inspect large downloads), no total (the exposure above).
+    // Exceeding it is an expected failure, not a truncation: the body that would pass the total is not bound or parsed, the
+    // packet reports a parse error that names this setting and the total (like the 255-buffer limit), and the bodies bound before
+    // it stay parsed. The HTTP fields of the message are still shown. Residual risk: the body that fails the check was already
+    // inflated (at most the per-body limit, freed at once), so the peak is the total plus one body; a value near the maximum lets
+    // one packet pin that much memory.
+    [U64Setting("http.max_derived_bytes_per_packet", "Maximum decoded HTTP bytes per packet (bytes)", "http",
+        Default = 268435456, HasMin = true, Min = 2048, HasMax = true, Max = 137438953472,
+        Description = "Upper bound for all bytes bound to one packet when HTTP binds a decoded (dechunked or decompressed) body, in bytes "
+            + "(2 KiB to 128 GiB); the bytes of other protocols and the TCP PDUs of the packet count too. "
+            + "A body that would pass it is not parsed further and the packet reports an error that names this setting. "
+            + "A value below http.max_decompressed_bytes also limits a single body. Raising the value lets one packet "
+            + "that completes many messages use more memory.")]
+    private ulong _MaxDerivedBytesPerPacket;
 
     #endregion
 
@@ -267,7 +339,9 @@ public sealed partial class HttpProtocol : IProtocol
     /// <param name="context">The parse context used to record presence and to dispatch sub-protocols.</param>
     /// <returns>
     /// The number of bytes consumed (all of <paramref name="data"/>); an insufficient-data error when the buffer
-    /// has no complete first line but could still become an HTTP start line; or a dispatch error from a sub-protocol.
+    /// has no complete first line but could still become an HTTP start line; a dispatch error from a sub-protocol; or a
+    /// parse error that names the limit (255 buffers, or <c>http.max_derived_bytes_per_packet</c> in total) when a decoded body
+    /// cannot be bound to the packet (nothing is dispatched then).
     /// A payload that is not HTTP is consumed whole and flagged with the <c>http.error.not_http</c> field.
     /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
@@ -355,7 +429,17 @@ public sealed partial class HttpProtocol : IProtocol
     /// <param name="httpData">The whole HTTP message (start line, headers, body).</param>
     /// <param name="isResponse"><see langword="true"/> for a status line, <see langword="false"/> for a request line.</param>
     /// <param name="context">The parse context used to record index groups and to dispatch.</param>
-    /// <returns>0 when nothing failed (whether or not a sub-protocol took the body), or the sub-protocol's error.</returns>
+    /// <returns>
+    /// 0 when nothing failed (whether or not a sub-protocol took the body), the sub-protocol's error, or a parse error that
+    /// names the limit (255 buffers, or <c>http.max_derived_bytes_per_packet</c> in total) when a decoded body cannot be bound to the
+    /// packet (nothing is dispatched then).
+    /// </returns>
+    /// <remarks>
+    /// A decoded body (dechunked and/or inflated) is bound once as an additional packet buffer before the dispatches; an
+    /// undecoded body is already a slice of the packet and is dispatched as it is and counts for no limit. The decoded bodies of
+    /// one packet (one segment can complete several messages) are counted against
+    /// <c>http.max_derived_bytes_per_packet</c>. See the invariant at the bind site.
+    /// </remarks>
     private ParseResult _DispatchHttpBody(
         in MutField container, ReadOnlyMemory<byte> httpData, bool isResponse, in ParseContext context)
     {
@@ -479,7 +563,49 @@ public sealed partial class HttpProtocol : IProtocol
 
         // Dispatch order: the content-type table first, then the built-in JSON/Text fallback, and for a 101 response
         // the Upgrade table. A sub-protocol "took" the body only if it consumed at least one byte.
-        ReadOnlyMemory<byte> dispatchBody = decoded ? effectiveBody : body;
+        //
+        // Invariant: the slice handed to a nested protocol is either a slice of the bytes this protocol was given (an
+        // undecoded body, already a packet slice) or a slice that is bound to the packet below. A nested protocol that
+        // keys state on the bytes (Parse data must be a slice of the packet's buffers, see MutField.TryGetEffectLayerKey)
+        // and a buffer export rely on that.
+        //
+        // Decoded bytes (dechunked and/or inflated) are fresh arrays, not a slice of a packet buffer. They are bound once,
+        // so the nested protocol can locate them and a buffer export sees them; all three dispatches below reuse the one
+        // bound slice. Binding once (and not per dispatch) keeps one buffer per message: a gzip body inside a chunked body
+        // is decoded twice but only the final bytes are bound. An empty decoded body (only the terminal chunk, or an
+        // inflated empty body) has nothing to parse and is not bound; it is not dispatched either, which also skips the
+        // upgrade table: a 101 response with an empty decoded body has no remaining data for the upgraded protocol.
+        ReadOnlyMemory<byte> dispatchBody = body;
+        if (decoded)
+        {
+            if (effectiveBody.IsEmpty)
+            {
+                return 0;
+            }
+
+            // Security: two limits stop the bind, and each is named. (1) The table of additional buffers holds at most 255
+            // entries (the effect-key format); a hostile or merely busy packet can fill it before this body. (2) The bodies
+            // bound to the packet, with this body, may not pass http.max_derived_bytes_per_packet in total: the bound bodies stay
+            // referenced until the packet is recycled, and one segment can complete many messages, so the per-body limit alone
+            // does not bound the sum (see the setting). The packet keeps one sum for all protocols, and DerivedBytesLimit.TryBind
+            // checks this protocol's total against it before binding, so a refused body leaves the packet unchanged. In both
+            // cases the body is not parsed further and the cause is named. Rejected alternative: dispatching the unbound bytes (a stateful nested protocol would fail with a generic
+            // "not a slice of this packet's buffers" and a buffer export would miss the bytes). Residual risk: a packet can still
+            // keep bodies up to the total alive (the setting names the value and the operator may raise it), and the body that
+            // fails the check was already inflated (at most the per-body limit, freed at once); the HTTP fields themselves are
+            // still shown by the populator.
+            bool isBound = DerivedBytesLimit.TryBind(
+                in container, effectiveBody, _MaxDerivedBytesPerPacket, out dispatchBody, out DerivedBytesFailure failure);
+            if (!isBound)
+            {
+                return ParseError.Custom(
+                    ProtocolName,
+                    failure == DerivedBytesFailure.TotalExceeded
+                        ? DerivedBytesLimit.Text("Decoded HTTP bodies", _MaxDerivedBytesPerPacket, "http.max_derived_bytes_per_packet")
+                        : _BoundBufferLimitMessage);
+            }
+        }
+
         bool dispatched = false;
         if (scan.ContentType is not null)
         {
@@ -494,10 +620,16 @@ public sealed partial class HttpProtocol : IProtocol
             }
             dispatched = dispatchResult.TryGetConsumed(out int consumed) && consumed > 0;
 
-            // Fallback: dispatch known content types to built-in protocols
+            // Fallback: dispatch known content types to built-in protocols. An error of the built-in protocol leaves like the
+            // error of the content-type table above, so it reaches packet.error and the upgrade branch below never runs on a
+            // body that failed.
             if (!dispatched)
             {
-                dispatched = _TryDispatchByContentType(in container, baseType, dispatchBody, in context);
+                ParseResult fallbackResult = _TryDispatchByContentType(in container, baseType, dispatchBody, in context, out dispatched);
+                if (fallbackResult.TryPropagateError(out ParseResult fallbackError))
+                {
+                    return fallbackError;
+                }
             }
         }
 
@@ -645,14 +777,34 @@ public sealed partial class HttpProtocol : IProtocol
     /// </summary>
     private struct HttpDispatchScan
     {
+        /// <summary>Value of the last <c>Content-Type</c> header (parameters included); <see langword="null"/> when none was seen.</summary>
         public string? ContentType;
+
+        /// <summary>Whether a <c>Content-Length</c> header with a valid non-negative number was seen (the field is emitted only then).</summary>
         public bool HasContentLength;
+
+        /// <summary>Whether a <c>Host</c> header was seen.</summary>
         public bool HasHost;
+
+        /// <summary>Whether a <c>User-Agent</c> header was seen.</summary>
         public bool HasUserAgent;
+
+        /// <summary>Whether a <c>Transfer-Encoding</c> header was seen.</summary>
         public bool HasTransferEncoding;
+
+        /// <summary>Whether the <c>Transfer-Encoding</c> value contains <c>chunked</c> (case-insensitive); the body is then dechunked.</summary>
         public bool IsChunked;
+
+        /// <summary>Value of the last <c>Content-Encoding</c> header; <see langword="null"/> when none was seen.</summary>
         public string? ContentEncoding;
+
+        /// <summary>Value of the last <c>Upgrade</c> header, the key of the upgrade dispatch table; <see langword="null"/> when none was seen.</summary>
         public string? Upgrade;
+
+        /// <summary>
+        /// Value of the last <c>Connection</c> header; an upgrade needs it to contain <c>Upgrade</c>; <see langword="null"/> when
+        /// none was seen.
+        /// </summary>
         public string? Connection;
     }
 
@@ -960,26 +1112,44 @@ public sealed partial class HttpProtocol : IProtocol
     /// <param name="baseType">The content type without parameters.</param>
     /// <param name="body">The decoded body, or the raw body when nothing was decoded.</param>
     /// <param name="context">The parse context used to dispatch.</param>
-    /// <returns><see langword="true"/> when the sub-protocol consumed at least one byte.</returns>
-    private bool _TryDispatchByContentType(in MutField container, string baseType, ReadOnlyMemory<byte> body, in ParseContext context)
+    /// <param name="dispatched">
+    /// <see langword="true"/> when the sub-protocol consumed at least one byte; <see langword="false"/> when none matched, the
+    /// sub-protocol consumed nothing, or it returned an error.
+    /// </param>
+    /// <returns>0, or the error the built-in sub-protocol returned (the caller leaves with it).</returns>
+    private ParseResult _TryDispatchByContentType(
+        in MutField container, string baseType, ReadOnlyMemory<byte> body, in ParseContext context, out bool dispatched)
     {
-        // JSON content types
-        if (baseType.Equals("application/json", StringComparison.OrdinalIgnoreCase) &&
-            _JsonProtocolId.IsValid)
+        dispatched = false;
+
+        // Pick the built-in protocol: JSON for application/json, Text for text/* (text/plain, text/html, text/xml, etc.).
+        ProtocolId target = default;
+        if (baseType.Equals("application/json", StringComparison.OrdinalIgnoreCase)
+            && _JsonProtocolId.IsValid)
         {
-            ParseResult result = container.CallProtocol(_JsonProtocolId, body, in context);
-            return result.TryGetConsumed(out int jsonConsumed) && jsonConsumed > 0;
+            target = _JsonProtocolId;
+        }
+        else if (baseType.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
+            && _TextProtocolId.IsValid)
+        {
+            target = _TextProtocolId;
         }
 
-        // Text content types (text/plain, text/html, text/xml, etc.)
-        if (baseType.StartsWith("text/", StringComparison.OrdinalIgnoreCase) &&
-            _TextProtocolId.IsValid)
+        if (!target.IsValid)
         {
-            ParseResult result = container.CallProtocol(_TextProtocolId, body, in context);
-            return result.TryGetConsumed(out int textConsumed) && textConsumed > 0;
+            return 0;
         }
 
-        return false;
+        // An error is returned, never dropped: today neither built-in protocol fails, but a limit or a corrupt state in one of
+        // them must reach packet.error like the error of the content-type table does.
+        ParseResult result = container.CallProtocol(target, body, in context);
+        if (result.TryPropagateError(out ParseResult error))
+        {
+            return error;
+        }
+
+        dispatched = result.TryGetConsumed(out int consumed) && consumed > 0;
+        return 0;
     }
 
     /// <summary>

@@ -57,7 +57,7 @@ internal sealed class SessionRestartAllocationTests
         for (int i = 0; i < calls; i++)
         {
             long before = GC.GetAllocatedBytesForCurrentThread();
-            _ = session.TryGetPacket(new PacketId(i % frameCount), throughSession, out throughSession, out _);
+            _ = session.TryGetPacket(i % frameCount, throughSession, out throughSession, out _);
             sessionBytes += GC.GetAllocatedBytesForCurrentThread() - before;
 
             before = GC.GetAllocatedBytesForCurrentThread();
@@ -73,7 +73,7 @@ internal sealed class SessionRestartAllocationTests
         bool all = true;
         for (int i = 0; i < frameCount; i++)
         {
-            all &= session.TryGetPacket(new PacketId(i), recycle, out recycle, out _);
+            all &= session.TryGetPacket(i, recycle, out recycle, out _);
         }
 
         return all;
@@ -92,18 +92,18 @@ internal sealed class SessionRestartAllocationTests
 
     private static bool _ReadBareOne(TestFrameSource source, Stack stack, in ParseOptions options, ref Packet? recycle, int index)
     {
-        Frame? frame = source.FrameById(new FrameId(index));
+        Frame? frame = source.FrameById(index);
         if (frame is null)
         {
             return false;
         }
 
-        if (recycle is not null && Packet.TryParse(recycle, new PacketId(index), stack, frame.Value, in options, out _))
+        if (recycle is not null && Packet.TryParse(recycle, index, stack, frame.Value, in options, out _))
         {
             return true;
         }
 
-        bool parsed = Packet.TryParse(new PacketId(index), stack, frame.Value, in options, out Packet? created, out _);
+        bool parsed = Packet.TryParse(index, stack, frame.Value, in options, out Packet? created, out _);
         recycle = created;
         return parsed;
     }

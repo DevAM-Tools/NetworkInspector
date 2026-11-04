@@ -95,7 +95,7 @@ public interface IRandomAccessFrameSource : IFrameSource
             // Ids past the valid range have no frame; the sum is formed in long so it cannot wrap.
             long id = (long)first.Value + i;
             Frame? frame = id >= 0 && id <= ArrayIndexIdRange.MaxValue
-                ? FrameById(new FrameId((int)id), cancellationToken)
+                ? FrameById((int)id, cancellationToken)
                 : null;
             frames[i] = frame;
             if (frame is not null)

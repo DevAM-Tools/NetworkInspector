@@ -26,22 +26,23 @@ For each iteration starting at `1`:
 1. **Review** — Execute `workflow-review.md` Stages 2–5 on current scope.
    - Persist output to `reviews/review_<slug>_<iteration>.md` (file mode).
    - In chat: bucket counts, release verdict, artifact path, prioritized action list only.
-2. **Assess** — Count open findings (`⬜` or `⚠️`) per bucket from the Summary
+2. **Assess** — Count open findings (`⬜`, `🚧`, or `⚠️`) per bucket from the Summary
    **Findings** Status column in the latest review artifact. The finding
    `Status` line must show the same mark.
 3. **Remediate** — If any finding is still open, execute `workflow-implement.md` for every
    open finding in Priority Action List order. Do not skip Cosmetic, Refactoring, or
    Performance unless the user explicitly defers them in this session. That skill ticks
-   each finding on both status surfaces (`⚠️` before the first edit, `✅` only after
-   Verify pass and alignment). A deferred finding stays `⬜`. Skip implement Stage 5
-   Exam. Run Stage 4 (extensive **briefing**). If nothing is open, skip remediations.
+   each finding on both status surfaces (`🚧` before the first edit, `⚠️` when a blocker stops it, `✅` only after
+   Verify pass, the Sync check, and alignment). A deferred finding stays `⬜`. Skip
+   implement Stage 5 (the next iteration is the closing review). Run Stage 4 (extensive
+   **briefing**). If nothing is open, skip remediations.
 4. **Stop** — When Stage 3 success is met on the **latest review** (zero open findings in
    all buckets, or every leftover finding explicitly deferred), exit the loop. Do not treat
    zero Errors alone as enough while other buckets are still open. Else go to Increment.
 5. **Increment** — `iteration += 1`; return to step 1 (re-review after remediations).
 
 Do not exit between Review and Remediate while Cosmetic, Refactoring, or Performance
-findings are still `⬜` or `⚠️` unless they are deferred.
+findings are still `⬜`, `🚧`, or `⚠️` unless they are deferred.
 
 ## Stage 3 — Stop Conditions
 
@@ -71,7 +72,7 @@ findings are still `⬜` or `⚠️` unless they are deferred.
 - Run full build and all tests in optimized/Release. Commands from the loaded tech skill.
 - State release verdict from the latest review Summary.
 - List deferred findings with deferral reason when user approved deferral.
-- Chat: artifact paths plus the Open-Items Report (`workflow-implement.md` Stage 6). Run it on every exit, including block and cap. Do not recap finding bodies.
+- Chat: the run report (Section 4.16; item mapping in `workflow-implement.md` Stage 6) on every exit, including block and cap. **Not done** lists every open and every deferred finding. Do not recap finding bodies.
 
 ### Review Iteration Table
 

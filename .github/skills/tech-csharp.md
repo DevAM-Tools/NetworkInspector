@@ -20,7 +20,8 @@ Load when `*.cs` is in scope. C# mechanisms for Section 4. Section order matches
 - File-scoped namespaces.
 - ❗ Global usings only in `GlobalUsings.cs`, grouped under comment headers. File-local aliases are allowed.
 - Sort `System.*` → `Microsoft.*` → third-party → internal.
-- ❗ Structure each file with `#region` blocks: fields, lifecycle, public API, private helpers.
+- ❗ Structure each file with `#region` blocks grouped by content: one region per responsibility or flow stage, holding the fields, members, and private helpers that serve it. Order regions in call order.
+- ❗ Name each region for what its members do together (`Row parsing`, `Duplicate check`), never for a member kind (`Fields`, `Properties`, `Public API`, `Private helpers`). State and construction that every region shares go in a first region named for their role (for example `Configuration and state`).
 
 ## Style
 
@@ -28,7 +29,7 @@ Load when `*.cs` is in scope. C# mechanisms for Section 4. Section order matches
 - Interpolate with `Invariant($"…")` (`global using static System.FormattableString;`). On hot paths use `string.Create(CultureInfo.InvariantCulture, $"…")` or `StringBuilder.Append(CultureInfo.InvariantCulture, $"…")`.
 
 ```csharp
-string message = Invariant($"Gap rate: {rate:P1}, count={count}");
+string message = Invariant($"Rejection rate: {rate:P1}, count={count}");
 string text = value.ToString(CultureInfo.InvariantCulture);
 if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed))
 {
@@ -60,10 +61,10 @@ return TryRead(out Item item)
 - Take `ReadOnlySpan<T>` for data the callee must not store.
 
 ```csharp
-public readonly record struct GapCount(int Value);
-public record ProjectReport(string Path, IReadOnlyList<string> Gaps);
+public readonly record struct InvoiceCount(int Value);
+public record ImportReport(string Path, IReadOnlyList<string> Rejected);
 private volatile int _Generation;
-public int CountGaps(ReadOnlySpan<char> path) { /* do not store `path` */ }
+public int CountInvoices(ReadOnlySpan<char> path) { /* do not store `path` */ }
 ```
 
 - ❗ Keep read-only interface properties read-only in every implementation:
@@ -162,24 +163,48 @@ ExportLog.ExportRejected(_Logger, name, reason);
 
 ## Comments and docs
 
-- Comments and semantic blocks: Section 4.6.
+- Content, tags, navigation, and the Sync check: `tech-docs.md`. Semantic blocks: Section 4.6.
 - Put units in comments, not in names.
-- Write XML docs on all members. Add `<exception cref="…">` for thrown exceptions and document omitted validation.
+- ❗ Write XML docs on every type and member, private included: `<summary>`, `<param>`, `<returns>`, one `<exception cref="…">` per thrown exception, `<remarks>` for design reason, cost, and omitted validation, `<example>` on public entry points.
 - State thread safety in `<summary>` except for immutable records, readonly structs, DTOs, and enums.
+- Related (`tech-docs.md` § References): `<seealso cref="…"/>` in the doc comment, one per related item, each followed by a short reason in `<remarks>` when the link alone does not say why. Refer to members in prose with `<see cref="…"/>` and `<paramref name="…"/>`, never a bare name. With `GenerateDocumentationFile` and warnings as errors (`tech-solution.md`), a broken `cref` fails the build (CS1574, CS1584).
+- `Sync:` couplings go in `<remarks>`: `Sync: README.md § Options (--input).`
+- Sections: the `#region` blocks above. No file header besides the copyright line; the type’s `<summary>` describes the file.
 
 ```csharp
-public int Pair(string productionPath)
+/// <summary>Streams one invoice CSV file into an <see cref="InvoiceBatch"/>.</summary>
+/// <remarks>
+/// Reads forward-only; memory stays bounded by the longest row, not the file.
+/// Not thread-safe: create one reader per file.
+/// Architecture: docs/architecture.md § Import.
+/// Sync: README.md § Options (--input).
+/// </remarks>
+/// <seealso cref="InvoiceBatch"/>
+/// <seealso cref="InvoiceFileDetector"/>
+internal sealed class InvoiceReader
 {
-    // Immutable after Build. Ordinal-ignore-case keys match MSBuild paths.
-    TestProjectIndex index = TestProjectIndex.Build(_Root);
+    /// <summary>Reads the invoice file at <paramref name="path"/>.</summary>
+    /// <param name="path">Invoice file path; absolute or relative to the working directory.</param>
+    /// <param name="batch">The parsed invoices when the method returns <see langword="true"/>.</param>
+    /// <param name="error">The reason when the method returns <see langword="false"/>.</param>
+    /// <returns><see langword="true"/> when the file is a readable invoice CSV file.</returns>
+    /// <seealso cref="InvoiceReadError"/>
+    public bool TryRead(string path, [NotNullWhen(true)] out InvoiceBatch? batch, out InvoiceReadError error)
+```
 
-    // --test-project wins. Do not consult the index on that branch.
-    if (_OverridePath is not null)
+```csharp
+public int Route(string invoicePath)
+{
+    // Immutable after Build. Ordinal-ignore-case keys match case-insensitive file systems.
+    SupplierIndex index = SupplierIndex.Build(_Root);
+
+    // --supplier wins. Do not consult the index on that branch.
+    if (_OverrideSupplier is not null)
     {
-        return RunOne(_OverridePath);
+        return ImportOne(_OverrideSupplier);
     }
 
-    return index.TryGet(productionPath);
+    return index.TryGet(invoicePath);
 }
 ```
 

@@ -32,7 +32,7 @@ internal sealed class SomeIpPayloadFilterTests
                 {
                   "category": "structure", "name": "temperature_request",
                   "members": [
-                    { "name": "target_c", "filter_name": "climate.settemp.target_c", "type_reference": "int16" },
+                    { "name": "target_c", "type_reference": "int16" },
                     { "name": "zone", "type_reference": "uint8" }
                   ]
                 }
@@ -69,7 +69,7 @@ internal sealed class SomeIpPayloadFilterTests
     }
 
     [Test]
-    public async Task ADerivedNameAndAConfiguredFilterNameSelectTheRequestAndOtherValuesDoNot()
+    public async Task TheNamesOfTheDescriptionSelectTheRequestAndOtherValuesDoNot()
     {
         string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N"));
         using Stack stack = _Build(directory);
@@ -79,14 +79,107 @@ internal sealed class SomeIpPayloadFilterTests
             byte[] frame = _Message(1, 0x00, [0, 0, 0, 3, 0, 21, 7]);
             Packet packet = FilterTestHelper.Parse(stack, frame);
 
-            Filter byFilterName = FilterTestHelper.CompileOrThrow("climate.settemp.target_c == 21", stack);
-            Filter byDerivedName = FilterTestHelper.CompileOrThrow(
-                "someip.payload.climatecontrol.v2.settemperature.in.request.zone == 7", stack);
-            Filter wrongValue = FilterTestHelper.CompileOrThrow("climate.settemp.target_c == 22", stack);
+            Filter target = FilterTestHelper.CompileOrThrow("ClimateControl.v2.SetTemperature.req.request.target_c == 21", stack);
+            Filter zone = FilterTestHelper.CompileOrThrow("ClimateControl.v2.SetTemperature.req.request.zone == 7", stack);
+            Filter wrongValue = FilterTestHelper.CompileOrThrow("ClimateControl.v2.SetTemperature.req.request.target_c == 22", stack);
+            FilterResult<Filter> lowerCase = Filter.Compile("climatecontrol.v2.settemperature.req.request.zone == 7", stack);
 
-            await Assert.That(FilterTestHelper.MatchOrThrow(byFilterName, packet)).IsTrue();
-            await Assert.That(FilterTestHelper.MatchOrThrow(byDerivedName, packet)).IsTrue();
+            await Assert.That(FilterTestHelper.MatchOrThrow(target, packet)).IsTrue();
+            await Assert.That(FilterTestHelper.MatchOrThrow(zone, packet)).IsTrue();
             await Assert.That(FilterTestHelper.MatchOrThrow(wrongValue, packet)).IsFalse();
+
+            // The name is the name of the description: a lower-cased variant is an unknown field.
+            await Assert.That(lowerCase.TryGetValue(out Filter? _)).IsFalse();
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task AServiceAndAMethodNameSelectTheirMessagesAndCombineWithTheMessageType()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N"));
+        using Stack stack = _Build(directory);
+        try
+        {
+            Packet request = FilterTestHelper.Parse(stack, _Message(1, 0x00, [0, 0, 0, 3, 0, 21, 7]), packetId: 0);
+            Packet response = FilterTestHelper.Parse(stack, _Message(1, 0x80, [0x00, 0x03, 2]), packetId: 1);
+            Packet error = FilterTestHelper.Parse(stack, _Message(1, 0x81, [1]), packetId: 2);
+            Packet noReturn = FilterTestHelper.Parse(stack, _Message(1, 0x01, []), packetId: 3);
+            Packet otherMethod = FilterTestHelper.Parse(stack, _Message(99, 0x00, [1]), packetId: 4);
+
+            Filter service = FilterTestHelper.CompileOrThrow("ClimateControl.v2", stack);
+            Filter method = FilterTestHelper.CompileOrThrow("ClimateControl.v2.SetTemperature", stack);
+            Filter responses = FilterTestHelper.CompileOrThrow("ClimateControl.v2.SetTemperature && someip.msgtype == 0x80", stack);
+            Filter missing = FilterTestHelper.CompileOrThrow("len(ClimateControl.v2.SetTemperature) == 0", stack);
+
+            // The service filter selects every message of the service version, also the method the description does not define.
+            await Assert.That(new[] { request, response, error, noReturn, otherMethod }.Count(p => FilterTestHelper.MatchOrThrow(service, p))).IsEqualTo(5);
+            await Assert.That(new[] { request, response, error, noReturn }.All(p => FilterTestHelper.MatchOrThrow(method, p))).IsTrue();
+            await Assert.That(FilterTestHelper.MatchOrThrow(method, otherMethod)).IsFalse();
+            await Assert.That(FilterTestHelper.MatchOrThrow(responses, response)).IsTrue();
+            await Assert.That(FilterTestHelper.MatchOrThrow(responses, request)).IsFalse();
+            await Assert.That(FilterTestHelper.MatchOrThrow(missing, noReturn)).IsTrue();
+            await Assert.That(FilterTestHelper.MatchOrThrow(missing, request)).IsFalse();
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task AFilterOnServiceOrMethodLeavesThePayloadUnmaterializedAndAValueFilterOpensIt()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N"));
+        using Stack stack = _Build(directory);
+        try
+        {
+            Packet packet = FilterTestHelper.Parse(stack, _Message(1, 0x00, [0, 0, 0, 3, 0, 21, 7]));
+            Filter service = FilterTestHelper.CompileOrThrow("ClimateControl.v2", stack);
+            Filter method = FilterTestHelper.CompileOrThrow("ClimateControl.v2.SetTemperature", stack);
+            Filter value = FilterTestHelper.CompileOrThrow("ClimateControl.v2.SetTemperature.req.request.zone == 7", stack);
+
+            bool serviceMatched = FilterTestHelper.MatchOrThrow(service, packet);
+            bool lazyAfterService = packet.HasUnpopulatedLazyFields;
+            bool methodMatched = FilterTestHelper.MatchOrThrow(method, packet);
+            bool lazyAfterMethod = packet.HasUnpopulatedLazyFields;
+            bool valueMatched = FilterTestHelper.MatchOrThrow(value, packet);
+
+            await Assert.That(serviceMatched).IsTrue();
+            await Assert.That(lazyAfterService).IsTrue();
+            await Assert.That(methodMatched).IsTrue();
+            await Assert.That(lazyAfterMethod).IsTrue();
+            await Assert.That(valueMatched).IsTrue();
+            FieldId zone = FilterTestHelper.FieldIdOf(stack, "ClimateControl.v2.SetTemperature.req.request.zone");
+            await Assert.That(packet.IterFieldsDfs(materialize: false).Count(f => f.FieldId == zone)).IsEqualTo(1);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TheFilterInputCompletesServiceMethodAndElementNames()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N"));
+        using Stack stack = _Build(directory);
+        try
+        {
+            static List<string> Complete(string marked, Stack stack)
+            {
+                int caret = marked.IndexOf('|', StringComparison.Ordinal);
+                return [.. Filter.GetCompletions(marked.Remove(caret, 1), caret, stack).Items.Select(static item => item.Text)];
+            }
+
+            await Assert.That(Complete("ClimateControl.v2.Set|", stack)).Contains("ClimateControl.v2.SetTemperature");
+            await Assert.That(Complete("ClimateControl.v|", stack)).Contains("ClimateControl.v2");
+            await Assert.That(Complete("ClimateControl.v2.SetTemperature.req.re|", stack)).Contains("ClimateControl.v2.SetTemperature.req.request");
+            FilterCompletions kinds = Filter.GetCompletions("ClimateControl.v2.Set", 21, stack);
+            await Assert.That(kinds.Items.First(static item => item.Text == "ClimateControl.v2.SetTemperature").Kind).IsEqualTo(FilterCompletionKind.Field);
         }
         finally
         {
@@ -111,14 +204,14 @@ internal sealed class SomeIpPayloadFilterTests
             Packet packetC = FilterTestHelper.ParseIndexed(stack, index, c, packetId: 2);
 
             // The member direction group is a superset: A and B hold a message of the member, C does not.
-            IndexGroupId group = stack.GetIndexGroupId("someip.payload.climatecontrol.v2.settemperature.in")!.Value;
-            IndexGroupId outGroup = stack.GetIndexGroupId("someip.payload.climatecontrol.v2.settemperature.out")!.Value;
+            IndexGroupId group = stack.GetIndexGroupId("someip.payload.ClimateControl.v2.SetTemperature.req")!.Value;
+            IndexGroupId outGroup = stack.GetIndexGroupId("someip.payload.ClimateControl.v2.SetTemperature.resp")!.Value;
             await Assert.That(index.GetGroupBitmap(group).Contains(0)).IsFalse();
             await Assert.That(index.GetGroupBitmap(outGroup).Contains(0)).IsTrue();
             await Assert.That(index.GetGroupBitmap(outGroup).Contains(1)).IsTrue();
             await Assert.That(index.GetGroupBitmap(outGroup).Contains(2)).IsFalse();
 
-            Filter filter = FilterTestHelper.CompileOrThrow("someip.payload.climatecontrol.v2.settemperature.out.current_c == 25", stack);
+            Filter filter = FilterTestHelper.CompileOrThrow("ClimateControl.v2.SetTemperature.resp.current_c == 25", stack);
 
             await Assert.That(FilterTestHelper.MatchOrThrow(filter, packetA)).IsTrue();
             await Assert.That(FilterTestHelper.MatchOrThrow(filter, packetB)).IsFalse();

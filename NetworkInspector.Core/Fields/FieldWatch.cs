@@ -70,16 +70,22 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     private readonly FieldId[]? _Ids;
     private readonly ulong[]? _Bits;
 
+    // The ids the caller asked for, before ForExtraction widened them to the owning protocols. Used only to describe a parse
+    // plan ("2 fields"); null for None, All, and watches made by Only. Never mutated after construction, so sharing a watch
+    // across threads stays safe. Not part of equality: the accepted ids decide, this list is descriptive.
+    private readonly FieldId[]? _Requested;
+
     #endregion
 
     #region Construction
 
-    private FieldWatch(WatchKind kind, int one, FieldId[]? ids, ulong[]? bits)
+    private FieldWatch(WatchKind kind, int one, FieldId[]? ids, ulong[]? bits, FieldId[]? requested = null)
     {
         _Kind = kind;
         _One = one;
         _Ids = ids;
         _Bits = bits;
+        _Requested = requested;
     }
 
     /// <summary>Accepts nothing. Does not expand a deferred group. This is <c>default(FieldWatch)</c>.</summary>
@@ -151,6 +157,59 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
         return new FieldWatch(WatchKind.Bitset, 0, copy, bits);
     }
 
+    /// <summary>
+    /// Accepts the listed fields plus every field of their owning protocols, so every deferred container that can hold a listed
+    /// field expands in a parse without field tree.
+    /// <para>
+    /// <b>Why:</b> <see cref="Only(IStack, ReadOnlySpan{FieldId})"/> expands a deferred container only when the container or a
+    /// field of its index group is watched. A listed field inside a container outside that group would then be silently missing
+    /// from an export or a filter verdict (a field-tree lookup that misses materializes every pending container of the field's
+    /// protocol; without a tree nothing does that, so the watch must). Accepting all fields of the owning protocols makes the
+    /// parse expand exactly those protocols' containers. Cost: more expansion and more observer calls than
+    /// <see cref="Only(IStack, ReadOnlySpan{FieldId})"/> (the observer ignores the extra ids), paid once per owning protocol and
+    /// never for unrelated protocols. Use this for extraction (exports, filters); use <c>Only</c> when the caller handles misses.
+    /// </para>
+    /// <para>Built once: allocates the id lists and, above <see cref="SpanLimit"/> ids, a bitset.</para>
+    /// </summary>
+    /// <param name="stack">Stack that assigned every id.</param>
+    /// <param name="fieldIds">One or more field ids of <paramref name="stack"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="stack"/> is null.</exception>
+    /// <exception cref="ArgumentException">The list is empty, or an id was not assigned by <paramref name="stack"/>.</exception>
+    public static FieldWatch ForExtraction(IStack stack, params ReadOnlySpan<FieldId> fieldIds)
+    {
+        ArgumentNullException.ThrowIfNull(stack);
+        if (fieldIds.Length == 0)
+        {
+            throw new ArgumentException("A field watch needs at least one field id.", nameof(fieldIds));
+        }
+
+        // Owning protocols of the requested fields. Every id is validated against the stack first, because user input
+        // (field names of an export) may be behind the ids and an id outside the stack must not index the field table.
+        ReadOnlySpan<FieldInfo> fields = stack.Fields.Span;
+        HashSet<ProtocolId> owners = [];
+        FieldId[] requested = new FieldId[fieldIds.Length];
+        for (int i = 0; i < fieldIds.Length; i++)
+        {
+            _Reject(stack, fieldIds[i]);
+            requested[i] = fieldIds[i];
+            _ = owners.Add(fields[fieldIds[i].Value].ProtocolId);
+        }
+
+        // Every field those protocols registered, containers included.
+        List<FieldId> ids = new(fieldIds.Length);
+        for (int raw = 0; raw < fields.Length; raw++)
+        {
+            if (owners.Contains(fields[raw].ProtocolId))
+            {
+                ids.Add(fields[raw].Id);
+            }
+        }
+
+        // The widened list goes through Only for the shape choice (One, Span, Bitset); the requested list is then attached.
+        FieldWatch widened = Only(stack, [.. ids]);
+        return new FieldWatch(widened._Kind, widened._One, widened._Ids, widened._Bits, requested);
+    }
+
     #endregion
 
     #region Properties
@@ -160,6 +219,32 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
 
     /// <summary>Whether this watch accepts every produced field.</summary>
     public bool IsAll => _Kind == WatchKind.All;
+
+    /// <summary>
+    /// Adds the ids the caller asked for (before <see cref="ForExtraction"/> widened them) to <paramref name="into"/>, so a parse
+    /// plan can count distinct fields over several watches ("2 fields"); it does not change what the watch accepts. Adds nothing
+    /// for <see cref="None"/> and <see cref="All"/>; <c>ParsePlan.TryCreate</c> checks <see cref="IsAll"/> first.
+    /// </summary>
+    /// <param name="into">The set that collects the distinct field ids of a parse plan.</param>
+    internal void CollectRequested(HashSet<int> into)
+    {
+        switch (_Kind)
+        {
+            case WatchKind.One:
+                _ = into.Add(_One);
+                break;
+            case WatchKind.Span:
+            case WatchKind.Bitset:
+                foreach (FieldId id in _Requested ?? _Ids!) // Invariant: Span and Bitset keep their id copy.
+                {
+                    _ = into.Add(id.Value);
+                }
+
+                break;
+            default:
+                break;
+        }
+    }
 
     #endregion
 

@@ -19,7 +19,7 @@ internal sealed class SkipFieldTreeDisplayTextTests
 
     private static Frame _Ipv6UdpFrame(Stack stack, int id) =>
         Frame.Create(
-            new FrameId(id),
+            id,
             Timestamp.FromSecs(id),
             FrameBuilders.GenerateStaticUdpIpv6Frame(),
             LinkType.Ethernet,
@@ -38,7 +38,7 @@ internal sealed class SkipFieldTreeDisplayTextTests
 
     private static Frame _EmptyFrame(Stack stack) =>
         Frame.Create(
-            new FrameId(1),
+            1,
             Timestamp.FromSecs(1),
             new byte[8],
             LinkType.Ethernet,
@@ -63,7 +63,7 @@ internal sealed class SkipFieldTreeDisplayTextTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, skipCache);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 skipStack,
                 skipWarmup,
                 in options,
@@ -79,7 +79,7 @@ internal sealed class SkipFieldTreeDisplayTextTests
         {
             ParseOptions options = new(FieldTreeMode.Build, buildCache);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 buildStack,
                 buildWarmup,
                 in options,
@@ -102,7 +102,7 @@ internal sealed class SkipFieldTreeDisplayTextTests
                 ParseOptions options = new(FieldTreeMode.Skip, skipCache);
                 skipErrParsed = Packet.TryParse(
                     skipPacket,
-                    new PacketId(i + 1),
+                    i + 1,
                     skipStack,
                     skipFrame,
                     in options,
@@ -113,7 +113,7 @@ internal sealed class SkipFieldTreeDisplayTextTests
                 ParseOptions options = new(FieldTreeMode.Build, buildCache);
                 buildErrParsed = Packet.TryParse(
                     buildPacket,
-                    new PacketId(i + 1),
+                    i + 1,
                     buildStack,
                     buildFrame,
                     in options,
@@ -131,7 +131,7 @@ internal sealed class SkipFieldTreeDisplayTextTests
             ParseOptions options = new(FieldTreeMode.Skip, skipCache);
             measuredSkipParsed = Packet.TryParse(
                 skipPacket,
-                new PacketId(warmup + 1),
+                warmup + 1,
                 skipStack,
                 skipMeasure,
                 in options,
@@ -145,7 +145,7 @@ internal sealed class SkipFieldTreeDisplayTextTests
             ParseOptions options = new(FieldTreeMode.Build, buildCache);
             measuredBuildParsed = Packet.TryParse(
                 buildPacket,
-                new PacketId(warmup + 1),
+                warmup + 1,
                 buildStack,
                 buildMeasure,
                 in options,
@@ -169,7 +169,7 @@ internal sealed class SkipFieldTreeDisplayTextTests
             {
                 ParseOptions options = new(FieldTreeMode.Skip, firstProtocol: protoId);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,

@@ -296,7 +296,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
 
             Timestamp timestamp = _TimestampFor(currentIndex);
             ParseResult<Frame> streamResult = Frame.Create(
-                new FrameId(currentIndex),
+                currentIndex,
                 timestamp,
                 streamData,
                 _LinkTypeForMode(_Options.Mode),
@@ -371,7 +371,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
 
             Timestamp timestamp = _TimestampFor(index);
             ParseResult<Frame> streamResult = Frame.Create(
-                new FrameId(index),
+                index,
                 timestamp,
                 streamData,
                 _LinkTypeForMode(_Options.Mode),
@@ -501,7 +501,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         Timestamp timestamp = _TimestampFor(index);
 
         ParseResult<Frame> result = Frame.Create(
-            new FrameId(index),
+            index,
             timestamp,
             data,
             _LinkTypeForMode(_Options.Mode),

@@ -9,8 +9,10 @@ namespace NetworkInspector.Protocols.Tests.Infrastructure.SomeIp;
 /// <para>
 /// Why a stand-in: the reader side of the hand-off belongs to the SOME/IP parser and is tested here; the publisher side belongs to
 /// the TLS and DTLS parsers and is delivered with their own rework. The stand-in follows the contract those parsers must
-/// follow, so the test shows what the SOME/IP side requires of them. <b>Thread-safety:</b> stateless apart from its constructor
-/// arguments.
+/// follow, so the test shows what the SOME/IP side requires of them. One part of that contract does not apply to it: a real
+/// decrypting protocol binds the plaintext it derives with <c>MutField.TryBindBuffer</c> before the nested parse, while this
+/// stand-in decrypts nothing and hands on its own payload, which already is a slice of the packet's frame.
+/// <b>Thread-safety:</b> stateless apart from its constructor arguments.
 /// </para>
 /// </summary>
 /// <param name="transport">The transport the plaintext is said to come from.</param>

@@ -21,7 +21,7 @@ internal sealed class ValueCacheTests
     private static Packet _Parse(Stack stack, ProtocolId firstProtocolId, ValueCacheExerciseProtocol proto)
     {
         Frame frame = Frame.Create(
-            new FrameId(1),
+            1,
             Timestamp.FromSecs(1000),
             new byte[16],
             LinkType.Ethernet,
@@ -32,7 +32,7 @@ internal sealed class ValueCacheTests
         {
             ParseOptions options = new(firstProtocol: firstProtocolId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -49,7 +49,7 @@ internal sealed class ValueCacheTests
     private static Packet _ParseId(Stack stack, ProtocolId firstProtocolId, ValueCacheExerciseProtocol proto, int packetId, long timestampSecs)
     {
         Frame frame = Frame.Create(
-            new FrameId(packetId),
+            packetId,
             Timestamp.FromSecs(timestampSecs),
             new byte[16],
             LinkType.Ethernet,
@@ -60,7 +60,7 @@ internal sealed class ValueCacheTests
         {
             ParseOptions options = new(firstProtocol: firstProtocolId);
             if (!Packet.TryParse(
-                new PacketId(packetId),
+                packetId,
                 stack,
                 frame,
                 in options,
@@ -81,7 +81,7 @@ internal sealed class ValueCacheTests
         ProtocolRegistration.RegisterStandardProtocols(builder);
         Stack stack = builder.Build();
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(1),
             FrameBuilders.GenerateStaticUdpFrame(),
             LinkType.Ethernet,
@@ -91,7 +91,7 @@ internal sealed class ValueCacheTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -621,13 +621,13 @@ internal sealed class ValueCacheTests
         using (stack)
         {
             Frame frame = Frame.Create(
-                new FrameId(1),
+                1,
                 Timestamp.FromSecs(1),
                 new byte[16],
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            Packet unsealed = new(new PacketId(0), stack, frame);
+            Packet unsealed = new(0, stack, frame);
             ValueCache cache = new(stack, [new ValueCacheFieldConfig(proto.NumberId)]);
             await Assert.That(() => cache.RecordPacket(unsealed)).Throws<ArgumentException>();
         }

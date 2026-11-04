@@ -70,6 +70,21 @@ internal sealed record ProfilingArguments
     /// <summary>Directory for the reference captures (<c>--write-golden-inputs</c>).</summary>
     internal string? GoldenDirectory { get; private set; }
 
+    /// <summary>Output directory of the export size run (<c>--write-export-sizes</c>); the sizes go to <see cref="OutPath"/> as CSV.</summary>
+    internal string? SizesDirectory { get; private set; }
+
+    /// <summary>
+    /// Frames of the export size sample, 1..<see cref="ArrayIndexIdRange.MaxCount"/> (<c>--frames</c>); null selects
+    /// <see cref="ExportSizeReport.SampleFrameCount"/>. Valid only with <c>--write-export-sizes</c>.
+    /// </summary>
+    internal int? SizesFrames { get; private set; }
+
+    /// <summary>Baseline size CSV of the size comparison (first value of <c>--compare-export-sizes</c>).</summary>
+    internal string? CompareBefore { get; private set; }
+
+    /// <summary>Size CSV to judge in the size comparison (second value of <c>--compare-export-sizes</c>).</summary>
+    internal string? CompareAfter { get; private set; }
+
     /// <summary>Processor mask for the A/B child processes (<c>--affinity 0x…</c>); null when not set.</summary>
     internal long? AffinityMask { get; private set; }
 
@@ -136,6 +151,16 @@ internal sealed record ProfilingArguments
 
     #region Private helpers
 
+    /// <summary>
+    /// Applies the option at <paramref name="i"/> to <paramref name="parsed"/> and advances <paramref name="i"/> past its value(s).
+    /// Switches (<c>--manual</c>, <c>--auto</c>, <c>--list</c>, <c>--all</c>) take no value, <c>--compare-export-sizes</c> takes
+    /// two, every other option exactly one.
+    /// </summary>
+    /// <param name="parsed">The arguments being filled.</param>
+    /// <param name="args">The command line.</param>
+    /// <param name="i">Index of the option on entry; index of its last value on success.</param>
+    /// <param name="error">The problem when the method returns false; empty otherwise.</param>
+    /// <returns><see langword="true"/> when the option is known and its value(s) were present and valid.</returns>
     private static bool _TryApplyOption(ProfilingArguments parsed, string[] args, ref int i, out string error)
     {
         error = string.Empty;
@@ -156,6 +181,12 @@ internal sealed record ProfilingArguments
                 return true;
             default:
                 break;
+        }
+
+        // The size comparison is the one option with two values (baseline CSV, then the CSV to judge).
+        if (option == "--compare-export-sizes")
+        {
+            return _TryApplyCompare(parsed, args, ref i, out error);
         }
 
         // Every remaining option takes exactly one value.
@@ -203,6 +234,11 @@ internal sealed record ProfilingArguments
             case "--write-golden-inputs":
                 parsed.GoldenDirectory = value;
                 return true;
+            case "--write-export-sizes":
+                parsed.SizesDirectory = value;
+                return true;
+            case "--frames":
+                return _TryParseFrames(parsed, value, out error);
             case "--affinity":
                 return _TryParseAffinity(parsed, value, out error);
             case "--write-filter-verdicts":
@@ -231,6 +267,58 @@ internal sealed record ProfilingArguments
         }
     }
 
+    /// <summary>
+    /// Reads the two values of <c>--compare-export-sizes</c> (the baseline CSV and the CSV to judge). Both must be present and
+    /// must not start with <c>-</c>: a missing second value would otherwise swallow the next option as a file name.
+    /// </summary>
+    /// <param name="parsed">The arguments being filled.</param>
+    /// <param name="args">The command line.</param>
+    /// <param name="i">Index of the option on entry; index of its second value on success.</param>
+    /// <param name="error">The problem when the method returns false.</param>
+    /// <returns><see langword="true"/> when both values were read.</returns>
+    private static bool _TryApplyCompare(ProfilingArguments parsed, string[] args, ref int i, out string error)
+    {
+        if (i + 2 >= args.Length || args[i + 1].StartsWith('-') || args[i + 2].StartsWith('-'))
+        {
+            error = "Option --compare-export-sizes needs two values: <beforeCsv> <afterCsv>.";
+            return false;
+        }
+
+        parsed.CompareBefore = args[i + 1];
+        parsed.CompareAfter = args[i + 2];
+        i += 2;
+        error = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// Parses the frame count of the size sample in 1..<see cref="ArrayIndexIdRange.MaxCount"/> (the number of packet ids the
+    /// stack can address, a fact of the id type and not an invented limit); sets <paramref name="error"/> otherwise.
+    /// </summary>
+    /// <param name="parsed">The arguments being filled.</param>
+    /// <param name="value">The text after <c>--frames</c>.</param>
+    /// <param name="error">The problem, naming the range, when the method returns false.</param>
+    /// <returns><see langword="true"/> when the count is valid.</returns>
+    private static bool _TryParseFrames(ProfilingArguments parsed, string value, out string error)
+    {
+        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int frames)
+            || frames < 1
+            || frames > ArrayIndexIdRange.MaxCount)
+        {
+            error = Invariant($"Option --frames must be an integer in 1..{ArrayIndexIdRange.MaxCount}; got '{value}'.");
+            return false;
+        }
+
+        parsed.SizesFrames = frames;
+        error = string.Empty;
+        return true;
+    }
+
+    /// <summary>Parses the build variant of a single run: exactly <c>A</c> or <c>B</c> (case-sensitive); sets <paramref name="error"/> otherwise.</summary>
+    /// <param name="parsed">The arguments being filled.</param>
+    /// <param name="value">The text after <c>--variant</c>.</param>
+    /// <param name="error">The problem, naming the allowed values, when the method returns false.</param>
+    /// <returns><see langword="true"/> when the value is <c>A</c> or <c>B</c>.</returns>
     private static bool _TryParseVariant(ProfilingArguments parsed, string value, out string error)
     {
         if (value is not ("A" or "B"))
@@ -324,6 +412,11 @@ internal sealed record ProfilingArguments
         return true;
     }
 
+    /// <summary>Parses the comma-separated scenario names of <c>--set</c>; surrounding blanks are trimmed and an empty name is refused.</summary>
+    /// <param name="parsed">The arguments being filled.</param>
+    /// <param name="value">The text after <c>--set</c>.</param>
+    /// <param name="error">The problem, quoting the whole text, when the method returns false.</param>
+    /// <returns><see langword="true"/> when every name is non-empty.</returns>
     private static bool _TryParseSet(ProfilingArguments parsed, string value, out string error)
     {
         string[] names = value.Split(',', StringSplitOptions.TrimEntries);
@@ -341,6 +434,14 @@ internal sealed record ProfilingArguments
         return true;
     }
 
+    /// <summary>
+    /// Checks the rules that span several options after all of them were read: at most one mode, the output path of the modes that
+    /// write a file, and the options that are valid only in one mode (<c>--frames</c>, <c>--affinity</c>, the phase lengths, the
+    /// gate options). An option outside its mode is refused instead of being ignored silently.
+    /// </summary>
+    /// <param name="parsed">The arguments after parsing.</param>
+    /// <param name="error">The first broken rule when the method returns false; empty otherwise.</param>
+    /// <returns><see langword="true"/> when the combination is valid.</returns>
     private static bool _TryValidate(ProfilingArguments parsed, out string error)
     {
         // At most one mode per invocation; mixing them would leave the intent ambiguous.
@@ -349,10 +450,28 @@ internal sealed record ProfilingArguments
             + (parsed.ReportCsv is not null ? 1 : 0)
             + (parsed.GoldenDirectory is not null ? 1 : 0)
             + (parsed.VerdictInputs is not null ? 1 : 0)
-            + (parsed.DigestInputs is not null ? 1 : 0);
+            + (parsed.DigestInputs is not null ? 1 : 0)
+            + (parsed.SizesDirectory is not null ? 1 : 0)
+            + (parsed.CompareBefore is not null ? 1 : 0);
         if (modes > 1)
         {
-            error = "Use only one of --run-once, --ab, --report, --write-golden-inputs, --write-filter-verdicts, --write-session-digest.";
+            error = "Use only one of --run-once, --ab, --report, --write-golden-inputs, --write-filter-verdicts, "
+                + "--write-session-digest, --write-export-sizes, --compare-export-sizes.";
+            return false;
+        }
+
+        // The size modes write a CSV or a Markdown report; without --out the result would have nowhere to go.
+        bool isSizeMode = parsed.SizesDirectory is not null || parsed.CompareBefore is not null;
+        if (isSizeMode && parsed.OutPath is null)
+        {
+            error = "Options --write-export-sizes and --compare-export-sizes need --out.";
+            return false;
+        }
+
+        // --frames sizes the sample; the comparison has no sample, and anywhere else it would be silently ignored.
+        if (parsed.SizesFrames is not null && parsed.SizesDirectory is null)
+        {
+            error = "Option --frames is valid only with --write-export-sizes.";
             return false;
         }
 
@@ -366,7 +485,7 @@ internal sealed record ProfilingArguments
         bool hasPhaseOption = parsed.WarmupSeconds is not null || parsed.DurationSeconds is not null;
         if (hasPhaseOption
             && (parsed.ReportCsv is not null || parsed.GoldenDirectory is not null
-                || parsed.VerdictInputs is not null || parsed.DigestInputs is not null))
+                || parsed.VerdictInputs is not null || parsed.DigestInputs is not null || isSizeMode))
         {
             error = "Options --warmup and --duration apply only to --ab, --run-once, and scenario runs.";
             return false;
@@ -406,6 +525,13 @@ internal sealed record ProfilingArguments
         return true;
     }
 
+    /// <summary>
+    /// Checks the rules of the A/B mode: the baseline executable exists, <c>--repeat</c> and <c>--out</c> are given, and exactly one
+    /// of <c>--all</c> and <c>--set</c> selects the scenarios.
+    /// </summary>
+    /// <param name="parsed">The arguments after parsing; <c>AbBaseline</c> is set.</param>
+    /// <param name="error">The first broken rule when the method returns false; empty otherwise.</param>
+    /// <returns><see langword="true"/> when the A/B request is complete.</returns>
     private static bool _TryValidateAb(ProfilingArguments parsed, out string error)
     {
         if (!File.Exists(parsed.AbBaseline))

@@ -38,7 +38,7 @@ internal sealed class EndToEndParseTests
     private static Packet _ParseTestFrame(Stack stack, byte[] frameData, ProtocolId firstProtocolId)
     {
         Frame frame = Frame.Create(
-            new FrameId(1),
+            1,
             Timestamp.FromSecs(1000),
             frameData,
             LinkType.Ethernet,
@@ -48,7 +48,7 @@ internal sealed class EndToEndParseTests
         {
             ParseOptions options = new(firstProtocol: firstProtocolId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -160,7 +160,7 @@ internal sealed class EndToEndParseTests
         using (stack)
         {
             Frame frame = Frame.Create(
-                new FrameId(1),
+                1,
                 Timestamp.FromSecs(0),
                 ReadOnlyMemory<byte>.Empty,
                 LinkType.Ethernet,
@@ -171,7 +171,7 @@ internal sealed class EndToEndParseTests
             {
                 ParseOptions options = new(firstProtocol: ethId);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -303,7 +303,7 @@ internal sealed class EndToEndParseTests
                 0x0800);
 
             Frame frame = Frame.Create(
-                new FrameId(42),
+                42,
                 Timestamp.FromSecs(9999),
                 frameData,
                 LinkType.Ethernet,
@@ -314,7 +314,7 @@ internal sealed class EndToEndParseTests
             {
                 ParseOptions options = new(firstProtocol: ethId);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -332,9 +332,9 @@ internal sealed class EndToEndParseTests
             FrameId frameId = packet.Frame.Id;
             int dataLength = packet.Frame.Length;
 
-            await Assert.That(packetId).IsEqualTo(new PacketId(0));
+            await Assert.That(packetId).IsEqualTo(0);
             await Assert.That(sourceId).IsEqualTo(expectedSourceId);
-            await Assert.That(frameId).IsEqualTo(new FrameId(42));
+            await Assert.That(frameId).IsEqualTo(42);
             await Assert.That(dataLength).IsEqualTo(14);
         }
     }
@@ -373,7 +373,7 @@ internal sealed class EndToEndParseTests
 
         byte[] data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
         Frame frame = Frame.Create(
-            new FrameId(7),
+            7,
             Timestamp.FromMillis(123),
             data,
             LinkType.Ethernet,
@@ -387,7 +387,7 @@ internal sealed class EndToEndParseTests
         int length = frame.Length;
         bool isEmpty = frame.IsEmpty;
 
-        await Assert.That(id).IsEqualTo(new FrameId(7));
+        await Assert.That(id).IsEqualTo(7);
         await Assert.That(linkType).IsEqualTo(LinkType.Ethernet);
         await Assert.That(interfaceId).IsEqualTo(ifaceId);
         await Assert.That(hasInterface).IsTrue();
@@ -400,7 +400,7 @@ internal sealed class EndToEndParseTests
     {
         FrameInterfaceRegistry registry = new();
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             ReadOnlyMemory<byte>.Empty,
             LinkType.Null,

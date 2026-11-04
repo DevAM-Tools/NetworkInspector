@@ -126,47 +126,55 @@ internal struct FieldBody
     #endregion
 
     /// <summary>
-    /// The field value. Plain read and write (no volatile): the value is written before the slot becomes visible to
-    /// other threads through the packet's published field count.
+    /// The storage location of the field value. Plain read (no volatile): the value is written before the slot becomes visible
+    /// to other threads through the packet's published field count.
+    /// <para>
+    /// <b>Why a reference:</b> the value carries a custom representation inline. The string of a deferred representation is
+    /// built once however the value is read (the deferred object remembers it, see <see cref="LazyString"/>); reading through
+    /// this reference additionally replaces the deferred object in the slab slot by its string, which releases the object and
+    /// its captured state. A copy of the value never does that.
+    /// </para>
     /// </summary>
-    internal FieldValue Value
+    /// <seealso cref="SetValue"/>
+    // readonly: a call through "ref readonly FieldBody" must not take a defensive copy, or the slot would never be replaced by its string.
+    internal readonly ref readonly FieldValue Value
     {
+        // UnscopedRef: see CustomText.
+        [UnscopedRef]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        readonly get => _Value;
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        set => _Value = value;
+        get => ref _Value;
     }
 
+    /// <summary>Replaces the field value. Plain store, not synchronized.</summary>
+    /// <param name="value">The new value.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void SetValue(FieldValue value) => _Value = value;
+
     /// <summary>
-    /// Optional custom display text. Check <see cref="LazyString.IsNull"/> for absence.
+    /// The storage location of the custom display text (absent: <see cref="LazyString.IsNull"/>). Reading it never evaluates a
+    /// deferred text.
     /// <para>
-    /// <b>⚠ Side-effecting getter with in-place materialization:</b> This getter is deliberately
-    /// NOT marked <c>readonly</c>. When called through a <b>mutable ref</b> to the
-    /// <see cref="FieldBody"/> (e.g. <c>array[i].CustomText</c>), <c>_CustomText</c> is
-    /// accessed by mutable ref — no defensive copy. <see cref="LazyString.AsString"/> then
-    /// uses <c>Unsafe.AsRef</c> + <c>Interlocked.CompareExchange</c> to atomically replace
-    /// a <c>Func&lt;string&gt;</c> factory with the evaluated string in the actual storage.
-    /// Subsequent reads see the cached result without re-evaluating the factory.
-    /// This mutation is the intentional design: the getter caches the result in-place so the
-    /// factory is only invoked once regardless of how many times the getter is called.
+    /// <b>Why a reference:</b> the string of a deferred text is built once however it is read (the deferred object remembers
+    /// it, see <see cref="LazyString"/>), and only for a reader that needs the string; a reader that checks
+    /// <see cref="LazyString.IsNull"/> or hands the text on pays nothing. Evaluating through this reference
+    /// (<c>body.CustomText.AsString</c>) additionally replaces the deferred object in the slot by its string, which releases the
+    /// object and its captured state; the read of a copy leaves the slot holding the object.
     /// </para>
     /// <para>
-    /// <b>Warning:</b> Calling through <c>ref readonly FieldBody</c> would cause a defensive
-    /// copy, and the CAS swap would apply to the copy only (caching lost). All read-side
-    /// callers (<see cref="Field.CustomText"/>, <see cref="MutField.CustomText"/>) use
-    /// <see cref="Packet.GetFieldRef"/><c>(index)</c> which yields a mutable ref.
+    /// <b>Lifetime:</b> valid as long as the slab chunk that holds this slot (chunks never move). A later
+    /// <see cref="SetCustomText"/> replaces the content, so the reference sees the replacement, not the old text. A copy
+    /// (<c>LazyString text = body.CustomText;</c>) keeps the text that was stored when it was taken.
     /// </para>
     /// </summary>
-    internal LazyString CustomText
+    /// <seealso cref="FieldVisit.CustomText"/>
+    // readonly: a call through "ref readonly FieldBody" must not take a defensive copy, or the slot would never be replaced by its string.
+    internal readonly ref readonly LazyString CustomText
     {
+        // UnscopedRef: a struct member returns a reference to its own field only when it opts out of the implicit
+        // "this is scoped" rule (CS8170). The callers hold the FieldBody by ref (a slab slot), so the reference stays valid.
+        [UnscopedRef]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get
-        {
-            // Trigger evaluation on the actual storage so the CAS swap persists.
-            // Cost for already-cached or null: one type-check branch (optimized by JIT).
-            _ = _CustomText.AsString;
-            return _CustomText;
-        }
+        get => ref _CustomText;
     }
 
     /// <summary>Replaces the custom display text. Plain store, not synchronized.</summary>

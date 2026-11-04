@@ -15,7 +15,7 @@ namespace NetworkInspector.Protocols;
 /// someip: SOME/IP, Service: 0xF232 (ClimateControl), Method: 0x0001 (SetTemperature), REQUEST
 /// ├── someip.messageid: 0xF2320001
 /// ├── someip.serviceid: 0xF232 (ClimateControl)
-/// ├── someip.service.name: ClimateControl                 [service known to the configuration]
+/// ├── someip.service.name: Climate Control                [service known to the configuration]
 /// ├── someip.methodid: 0x0001 (SetTemperature)
 /// ├── someip.method.name: SetTemperature                  [method known to the configuration]
 /// ├── someip.length: 24 (from client id)
@@ -30,7 +30,9 @@ namespace NetworkInspector.Protocols;
 /// │   └── someip.msgtype.tp: false
 /// ├── someip.returncode: E_OK (0x00)
 /// ├── someip.error.*                                      [one String field per diagnostic]
-/// ├── someip.payload: 16 bytes                            [raw bytes behind the header; a discovery message shows <c>someip_sd</c> instead]
+/// ├── ClimateControl.v2: Climate Control                  [service node: the filter name of the service, eager]
+/// │   └── ClimateControl.v2.SetTemperature: SetTemperature  [method node: the payload bytes as value, the decoded values lazy below it]
+/// ├── someip.payload: 16 bytes                            [raw bytes of every payload no other parser took; a discovery message shows <c>someip_sd</c> instead]
 /// └── someip.trailing: 5 bytes                            [fewer than 16 bytes after the last message]
 /// </code>
 /// </summary>
@@ -566,18 +568,23 @@ public sealed partial class SomeIpProtocol : IProtocol
         // still shown, because a renamed or re-versioned interface is still recognisably the same service. The method is looked
         // up only inside the resolved definition: method ids of different versions are different methods.
         bool hasModel = !Model.Services.IsEmpty;
-        bool serviceResolved = Model.TryGetService(header.ServiceId, header.InterfaceVersion, out int serviceIndex);
+
+        // A service or member the registration skipped (its name is held by another component) has no field id; it is treated as
+        // not configured, so no node is appended and nothing is decoded into fields that do not exist. Display texts are the UI names.
+        bool serviceResolved = Model.TryGetService(header.ServiceId, header.InterfaceVersion, out int serviceIndex)
+            && Model.Services.Span[serviceIndex].FieldId.IsValid;
         string? serviceName = null;
         string? methodName = null;
+        SomeIpServiceInfo? service = null;
         SomeIpMemberInfo? member = null;
         if (serviceResolved)
         {
-            SomeIpServiceInfo service = Model.Services.Span[serviceIndex];
-            serviceName = service.Name;
-            if (service.MemberById.TryGetValue(header.MethodId, out int memberIndex))
+            service = Model.Services.Span[serviceIndex];
+            serviceName = service.UiName;
+            if (service.MemberById.TryGetValue(header.MethodId, out int memberIndex) && service.Members.Span[memberIndex].FieldId.IsValid)
             {
                 member = service.Members.Span[memberIndex];
-                methodName = member.Name;
+                methodName = member.UiName;
             }
         }
         else if (Model.TryGetServiceName(header.ServiceId, out string? anyVersionName))
@@ -586,7 +593,7 @@ public sealed partial class SomeIpProtocol : IProtocol
         }
 
         bool clientNamed = Model.TryGetClientName(header.ClientId, out string? clientName);
-        names = new MessageNames(serviceName, methodName, clientName, Member: member);
+        names = new MessageNames(serviceName, methodName, clientName, Member: member, Service: service);
 
         // Length rules. The length field is untrusted: it counts the bytes behind the length field itself, so the declared total
         // is 8 + length. The sum is formed in long, so a hostile 0xFFFFFFFF can neither wrap nor be mistaken for a small value.
@@ -622,6 +629,19 @@ public sealed partial class SomeIpProtocol : IProtocol
         if (clientNamed)
         {
             context.RecordGroupPresence(_SomeipClientNameGroupId);
+        }
+
+        // The identity nodes are appended on every path of a message whose header resolves them (see _AppendIdentity), so their
+        // groups are exact: a filter on a service or a method is answered by the index and one look at an eager node, never by
+        // a decode of the payload.
+        if (service is not null)
+        {
+            context.RecordGroupPresence(service.Group);
+        }
+
+        if (member is not null)
+        {
+            context.RecordGroupPresence(member.Group);
         }
 
         if (lengthBelowMin)
@@ -717,6 +737,7 @@ public sealed partial class SomeIpProtocol : IProtocol
                 _AppendMissingPayload(in container, in header, names.Member, in context);
             }
 
+            _AppendIdentity(in container, in names, ReadOnlyMemory<byte>.Empty, populator: null);
             if (timing.Present && timingKey >= 0)
             {
                 _AppendTiming(in container, timingKey, in context);
@@ -729,6 +750,7 @@ public sealed partial class SomeIpProtocol : IProtocol
         if (tpTooShort)
         {
             _AppendTpTooShort(in container, payload);
+            _AppendIdentity(in container, in names, payload, populator: null);
             return consumed;
         }
 
@@ -758,6 +780,7 @@ public sealed partial class SomeIpProtocol : IProtocol
 
             if (delivered.IsEmpty)
             {
+                _AppendIdentity(in container, in names, ReadOnlyMemory<byte>.Empty, populator: null);
                 return consumed;
             }
 
@@ -837,6 +860,8 @@ public sealed partial class SomeIpProtocol : IProtocol
 
         if (dispatched.TryGetConsumed(out int payloadConsumed) && payloadConsumed > 0)
         {
+            // Another parser took the payload: no raw payload field, but the identity is still the message's.
+            _AppendIdentity(in container, in names, payload, populator: null);
             return 0;
         }
 
@@ -845,14 +870,9 @@ public sealed partial class SomeIpProtocol : IProtocol
             context.RecordGroupPresence(_SomeipPayloadGroupId);
         }
 
-        // A member the model defines gets its decoded container (or the marker of a switched-off decode); everything else keeps the
-        // raw bytes, which is also what a stack without a description shows.
-        if (_AppendPayload(in container, in header, names.Member, payload, partial, in context))
-        {
-            return 0;
-        }
-
-        container.Append(_PayloadFieldId, FieldValue.NewBytes(payload));
+        // The raw bytes of every payload nobody consumed, the identity nodes, and for a member the model defines the lazy decoded
+        // values below the method node (or the marker of a switched-off decode).
+        _AppendPayload(in container, in header, in names, payload, partial, in context);
         return 0;
     }
 
@@ -1020,7 +1040,8 @@ public sealed partial class SomeIpProtocol : IProtocol
     /// <summary>The names and the member that the model gave to one message; null where it knows none. The member travels with the names so that
     /// the payload branch does not look the same service and method up a second time.</summary>
     private readonly record struct MessageNames(
-        string? ServiceName, string? MethodName, string? ClientName, string? SdSummary = null, SomeIpMemberInfo? Member = null);
+        string? ServiceName, string? MethodName, string? ClientName, string? SdSummary = null, SomeIpMemberInfo? Member = null,
+        SomeIpServiceInfo? Service = null);
 
     /// <summary>
     /// The state of the packet info text. Count 0 is a unit with an incomplete header, 1 a single message, more a bundle. A small

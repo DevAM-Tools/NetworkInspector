@@ -7,7 +7,7 @@
 [nuget-badge]: https://img.shields.io/nuget/v/NetworkInspector.Exporters?logo=nuget&label=NetworkInspector.Exporters
 [nuget]: https://www.nuget.org/packages/NetworkInspector.Exporters
 
-`PcapngExporter` writes captured frames to `.pcapng` files that Wireshark, `tshark`, and every other PCAPNG
+`PcapngExporter` writes captured frames to `.pcapng` files that every PCAPNG
 reader can open. It is a frame exporter (`IFrameListener`): no protocol parsing is needed.
 
 ## Highlights
@@ -17,7 +17,7 @@ reader can open. It is a frame exporter (`IFrameListener`): no protocol parsing 
   are written back. The section header falls back to the source file's `capture.*` values.
 - **Any link type.** DLT values are passed through, also values outside the `LinkType` enum.
 - **Multi-interface output.** One IDB is created on demand for each `(FrameInterfaceId, LinkType)` pair.
-- **Nanosecond timestamps by default**, configurable from 10⁰ to 10⁻¹⁹ seconds.
+- **Nanosecond timestamps by default**, configurable from 10⁰ to 10⁻¹⁹ seconds; resolutions finer than 10⁻¹⁰ saturate for current dates (the 64-bit tick count overflows).
 
 ## Quick Start
 
@@ -51,14 +51,15 @@ static void WritePcapng(IEnumerable<Frame> frames)
 | --- | --- | --- |
 | `ToFile` / `ToStream` / `ToStdout` | Output target | required |
 | `WithUiName` / `WithDescription` | User-facing metadata | — |
-| `WithSnapLength(uint)` | Truncate stored bytes per frame | 262 144 |
+| `WithSnapLength(uint)` | Truncate stored bytes per frame (1 to `int.MaxValue`) | 262 144 |
 | `WithTimestampResolution(byte)` | Power-of-ten exponent 0..19 | 9 (ns) |
 | `WithHardware` / `WithOs` | SHB `shb_hardware` / `shb_os` | source file |
 | `WithApplication` / `WithComment` | SHB `shb_userappl` / comment | source file |
 | `WithTargetFrameCount(int)` | Stop after N frames (`0` = no limit) | 0 |
 | `WithCancellationToken` | Cooperative cancellation | none |
 
-`WithTimestampResolution` rejects bit 7 (binary resolution) and values above 19.
+`WithTimestampResolution` rejects bit 7 (binary resolution) and values above 19. The four SHB setters throw
+`ArgumentException` for a text above 65 535 UTF-8 bytes (the 16-bit option length of the format).
 
 ## Format Notes
 
@@ -68,7 +69,13 @@ static void WritePcapng(IEnumerable<Frame> frames)
   properties `capture.hardware`, `capture.os`, and `capture.application`. A PCAPNG-to-PCAPNG conversion therefore
   keeps its capture context.
 - Snap truncation writes EPB `orig_len` from the frame's length. Sources keep only the captured bytes, so the
-  original `orig_len` of an already truncated capture is not preserved.
+  original `orig_len` of an already truncated capture is not preserved. The first frame cut at the snap length raises one
+  advisory `ItemSkipped` event (`SerializationError`, not counted as skipped) that names the snap length and
+  `WithSnapLength`; `TruncatedFrameCount` counts all cut frames.
+- An IDB option is 16-bit long: interface metadata above 65 535 UTF-8 bytes (`if_name`, `if_description`, a text
+  option), a negative number, or a value of the wrong type cannot be stored.
+  It is left out, never truncated, the interface's frames are still written, and one advisory `ItemSkipped` event
+  (`SerializationError`, not counted as skipped) per interface names the options that were left out.
 
 ## Limits And Thread-Safety Notes
 

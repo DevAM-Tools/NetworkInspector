@@ -9,14 +9,14 @@ namespace NetworkInspector.Exporters.Tests.Csv;
 internal sealed class CsvExporterTests
 {
     [Test]
-    public async Task Builder_RequiresOutput()
+    public async Task BuilderRequiresOutput()
     {
         CsvExporter.Builder builder = CsvExporter.CreateBuilder();
         await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task DefaultColumns_ProducesHeaderAndRows()
+    public async Task DefaultColumnsProducesHeaderAndRows()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -43,7 +43,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task BomEnabled_WritesUtf8Bom()
+    public async Task BomEnabledWritesUtf8Bom()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -65,7 +65,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task BomDisabled_NoBom()
+    public async Task BomDisabledNoBom()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -85,7 +85,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task SemicolonDelimiter_ProducesCorrectFormat()
+    public async Task SemicolonDelimiterProducesCorrectFormat()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -105,8 +105,50 @@ internal sealed class CsvExporterTests
         await Assert.That(lines[0]).IsEqualTo("No.;Time;Info;Length");
     }
 
+    /// <summary>A delimiter that occurs in an unquoted cell (number, timestamp, or hex) would split it and shift every later column.</summary>
+    /// <param name="delimiter">An ASCII letter, a digit, or one of <c>-+.:</c>.</param>
     [Test]
-    public async Task TabDelimiter_ProducesCorrectFormat()
+    [Arguments(':')]
+    [Arguments('-')]
+    [Arguments('+')]
+    [Arguments('.')]
+    [Arguments('T')]
+    [Arguments('Z')]
+    [Arguments('A')]
+    [Arguments('f')]
+    [Arguments('0')]
+    [Arguments('7')]
+    public async Task ADelimiterThatOccursInAnUnquotedCellIsRefusedAndTheMessageNamesTheSet(char delimiter)
+    {
+        CsvExporter.Builder builder = CsvExporter.CreateBuilder();
+
+        await Assert.That(() => builder.WithDelimiter(delimiter)).Throws<ArgumentOutOfRangeException>().WithMessageContaining("unquoted cells");
+    }
+
+    /// <summary>The usual delimiters stay accepted, and a time-like export reads back with the original column count.</summary>
+    [Test]
+    public async Task TheUsualDelimitersStayAcceptedAndKeepTheColumnCountOfTheTimestampCell()
+    {
+        foreach (char delimiter in new[] { ',', ';', '\t', '|', ' ', '\'', '#' })
+        {
+            using MemoryStream ms = new();
+            using CsvExporter exporter = CsvExporter.CreateBuilder().ToStream(ms).WithBom(false).WithDelimiter(delimiter).Build();
+            Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(1);
+
+            bool accepted = exporter.OnPacket(packets[0]);
+            exporter.OnFinish();
+
+            string[] lines = _SplitCsvLines(_GetCsvString(ms));
+            await Assert.That(accepted).IsTrue();
+
+            // Four columns (number, time, info, length): the info of the probe packet holds no delimiter, so the count is exact.
+            await Assert.That(lines[1].Split(delimiter).Length >= 4).IsTrue();
+            await Assert.That(lines[0]).IsEqualTo(string.Join(delimiter, "No.", "Time", "Info", "Length"));
+        }
+    }
+
+    [Test]
+    public async Task TabDelimiterProducesCorrectFormat()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -127,7 +169,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task PipeDelimiter_ProducesCorrectFormat()
+    public async Task PipeDelimiterProducesCorrectFormat()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -148,7 +190,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task HeaderDisabled_NoHeaderRow()
+    public async Task HeaderDisabledNoHeaderRow()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -176,7 +218,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task CustomColumns_ProducesSelectedColumnsOnly()
+    public async Task CustomColumnsProducesSelectedColumnsOnly()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -202,7 +244,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task CustomColumnHeaders_OverridesDefaults()
+    public async Task CustomColumnHeadersOverridesDefaults()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -223,7 +265,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task PacketCount_TracksCorrectly()
+    public async Task PacketCountTracksCorrectly()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -244,7 +286,8 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task TargetPacketCount_LimitsExport()
+    [Category("Slow")]
+    public async Task TargetPacketCountLimitsExport()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -270,7 +313,8 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task Cancellation_StopsExport()
+    [Category("Slow")]
+    public async Task CancellationStopsExport()
     {
         using CancellationTokenSource cts = new();
         using MemoryStream ms = new();
@@ -294,7 +338,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task FileOutput_ProducesValidCsv()
+    public async Task FileOutputProducesValidCsv()
     {
         using TestDir dir = new("csv_file");
         string path = dir.FilePath("output.csv");
@@ -320,7 +364,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task EmptyExport_WithHeader_ProducesHeaderOnly()
+    public async Task EmptyExportWithHeaderProducesHeaderOnly()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -336,7 +380,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task EmptyExport_NoHeader_ProducesEmptyOutput()
+    public async Task EmptyExportNoHeaderProducesEmptyOutput()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -351,7 +395,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task TimestampColumn_HasIso8601Format()
+    public async Task TimestampColumnHasIso8601Format()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -394,7 +438,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task MultiplePackets_AllWritten_WithCorrectRowCount()
+    public async Task MultiplePacketsAllWrittenWithCorrectRowCount()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -419,7 +463,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task DefaultColumnsUsed_WhenNoneConfigured()
+    public async Task DefaultColumnsUsedWhenNoneConfigured()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -444,7 +488,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task FrameLengthColumn_HasNonZeroValue()
+    public async Task FrameLengthColumnHasNonZeroValue()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -467,7 +511,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task IsFinished_TrueAfterOnFinish()
+    public async Task IsFinishedTrueAfterOnFinish()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -483,7 +527,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task OnPacket_AfterFinish_ReturnsFalse()
+    public async Task OnPacketAfterFinishReturnsFalse()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -499,7 +543,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task BomWithFileOutput_ProducesValidFile()
+    public async Task BomWithFileOutputProducesValidFile()
     {
         using TestDir dir = new("csv_bom_file");
         string path = dir.FilePath("output.csv");
@@ -530,7 +574,8 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task DoubleFinish_DoesNotThrow()
+    [Category("Slow")]
+    public async Task DoubleFinishDoesNotThrow()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -548,7 +593,7 @@ internal sealed class CsvExporterTests
         await Assert.That(exporter.IsFinished).IsTrue();
     }
     [Test]
-    public async Task EmptyExport_ToFile_ProducesEmptyFile()
+    public async Task EmptyExportToFileProducesEmptyFile()
     {
         using TestDir dir = new("csv_empty_file");
         string path = dir.FilePath("empty.csv");
@@ -566,7 +611,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task EmptyExport_WithPacket_FileHasHeaderAndRow()
+    public async Task EmptyExportWithPacketFileHasHeaderAndRow()
     {
         using TestDir dir = new("csv_file_with_row");
         string path = dir.FilePath("output.csv");
@@ -590,7 +635,7 @@ internal sealed class CsvExporterTests
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     [Test]
-    public async Task DefaultUiName_IsCsvExporter()
+    public async Task DefaultUiNameIsCsvExporter()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -601,7 +646,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task WithUiName_OverridesDefault()
+    public async Task WithUiNameOverridesDefault()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -613,7 +658,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task Description_ReturnsNull_WhenNotSet()
+    public async Task DescriptionReturnsNullWhenNotSet()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -624,7 +669,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task Description_ReturnsConfiguredValue()
+    public async Task DescriptionReturnsConfiguredValue()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -633,6 +678,55 @@ internal sealed class CsvExporterTests
             .Build();
 
         await Assert.That(exporter.Description).IsEqualTo("Comma-separated values export");
+    }
+
+    [Test]
+    public async Task AnUndefinedColumnKindIsRefused()
+    {
+        CsvExporter.Builder builder = CsvExporter.CreateBuilder();
+
+        await Assert.That(() => builder.WithColumn((CsvColumnKind)9)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => builder.WithColumn((CsvColumnKind)(-1))).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => builder.WithColumn(CsvColumnKind.FrameLength)).ThrowsNothing();
+    }
+
+    [Test]
+    public async Task AnOutputFailureWhileWritingAPacketIsReportedAsAnIoError()
+    {
+        // No BOM and no header: the preamble writes nothing, so the first write is the packet row and fails.
+        using TestStreams.FailingStream stream = new()
+        {
+            ThrowAfterByte = 0,
+        };
+        using CsvExporter exporter = CsvExporter.CreateBuilder().ToStream(stream).WithBom(false).WithHeader(false).Build();
+        List<ExportErrorEventArgs> errors = [];
+        exporter.ItemSkipped += (_, error) => errors.Add(error);
+
+        bool goesOn = exporter.OnPacket(PacketGenerators.CreateEthernetUdpPackets(1)[0]);
+
+        await Assert.That(goesOn).IsTrue();
+        await Assert.That(errors.Count).IsEqualTo(1);
+        await Assert.That(errors[0].Kind).IsEqualTo(ExportErrorKind.IoError);
+        await Assert.That(exporter.SkippedCount).IsEqualTo(1);
+        await Assert.That(exporter.PacketCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task AFailureThatIsNoOutputFailureIsReportedAsASerializationError()
+    {
+        using CustomFieldPacketFactory factory = new();
+        using MemoryStream stream = new();
+        using CsvExporter exporter = CsvExporter.CreateBuilder().ToStream(stream).WithBom(false).WithColumn(CsvColumnKind.Info).Build();
+        List<ExportErrorEventArgs> errors = [];
+        exporter.ItemSkipped += (_, error) => errors.Add(error);
+
+        // The info text of this packet throws when it is first read, which happens while the row is built.
+        bool goesOn = exporter.OnPacket(factory.Create(5, "text", faultyInfo: true));
+
+        await Assert.That(goesOn).IsTrue();
+        await Assert.That(errors.Count).IsEqualTo(1);
+        await Assert.That(errors[0].Kind).IsEqualTo(ExportErrorKind.SerializationError);
+        await Assert.That(exporter.PacketCount).IsEqualTo(0);
     }
 
     /// <summary>Extracts the CSV string from a <see cref="MemoryStream"/>.</summary>
@@ -667,7 +761,7 @@ internal sealed class CsvExporterTests
     /// malformed output like "1969-12-31T23:59:59.-500000000Z".
     /// </summary>
     [Test]
-    public async Task TimestampColumn_PreEpoch_FormatsCorrectly()
+    public async Task TimestampColumnPreEpochFormatsCorrectly()
     {
         // -500_000_000 ns = -0.5 s = 1969-12-31T23:59:59.500000000Z
         // (one half-second before midnight Jan 1 1970)
@@ -717,7 +811,7 @@ internal sealed class CsvExporterTests
     /// must format as 1969-12-31T23:59:59.000000000Z (zero subseconds).
     /// </summary>
     [Test]
-    public async Task TimestampColumn_ExactlyMinusOneSecond_FormatsCorrectly()
+    public async Task TimestampColumnExactlyMinusOneSecondFormatsCorrectly()
     {
         const long minusOneSecondNanos = -1_000_000_000L;
 

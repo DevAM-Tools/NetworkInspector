@@ -12,7 +12,7 @@ internal sealed class FilterObserverTests
     private static Packet _Observe(Stack stack, byte[] data, int id, FilterObserver observer)
     {
         Frame frame = Frame.Create(
-            new FrameId(id),
+            id,
             Timestamp.FromNanos(id),
             data,
             LinkType.Ethernet,
@@ -20,7 +20,7 @@ internal sealed class FilterObserverTests
             stack.FrameInterfaceRegistry).Value;
         ParseObserver[] observers = [new() { Observer = observer, Watch = observer.Watch }];
         ParseOptions options = new(FieldTreeMode.Skip, observers: observers);
-        bool parsed = Packet.TryParse(new PacketId(id), stack, frame, in options, out Packet? packet, out ParseFailure failure);
+        bool parsed = Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure);
         if (!parsed || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());
@@ -45,7 +45,7 @@ internal sealed class FilterObserverTests
     private static Packet _ProbeParse(Stack stack, ProtocolId protocolId, int id, FilterObserver observer, FieldTreeMode tree)
     {
         Frame frame = Frame.Create(
-            new FrameId(id),
+            id,
             Timestamp.FromNanos(id),
             new byte[8],
             LinkType.Ethernet,
@@ -53,7 +53,7 @@ internal sealed class FilterObserverTests
             stack.FrameInterfaceRegistry).Value;
         ParseObserver[] observers = [new() { Observer = observer, Watch = observer.Watch }];
         ParseOptions options = new(tree, observers: observers, firstProtocol: protocolId);
-        bool parsed = Packet.TryParse(new PacketId(id), stack, frame, in options, out Packet? packet, out ParseFailure failure);
+        bool parsed = Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure);
         if (!parsed || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());
@@ -95,7 +95,7 @@ internal sealed class FilterObserverTests
         await Assert.That(observer).IsSameReferenceAs(FilterObserver.AlwaysMatch);
         await Assert.That(observer!.IsMatch).IsTrue();
         await Assert.That(observer.Watch.IsNone).IsTrue();
-        observer.BeginPacket(new PacketId(0), Timestamp.FromSecs(0));
+        observer.BeginPacket(0, Timestamp.FromSecs(0));
         await Assert.That(noStack.TryGetValue(out FilterObserver? also)).IsTrue();
         await Assert.That(also).IsSameReferenceAs(FilterObserver.AlwaysMatch);
         await Assert.That(missing.TryGetValue(out _)).IsFalse();
@@ -318,7 +318,7 @@ internal sealed class FilterObserverTests
             bool parsed = true;
             ParseFailure failure = ParseFailure.None;
             Frame frame = Frame.Create(
-                new FrameId(0),
+                0,
                 Timestamp.FromSecs(0),
                 new byte[4],
                 LinkType.Ethernet,
@@ -326,17 +326,17 @@ internal sealed class FilterObserverTests
                 stack.FrameInterfaceRegistry).Value;
             ParseObserver[] observers = [new() { Observer = observer, Watch = observer.Watch }];
             ParseOptions parse = new(FieldTreeMode.Skip, observers: observers, firstProtocol: protocolId);
-            parsed = Packet.TryParse(new PacketId(0), stack, frame, in parse, out _, out failure);
+            parsed = Packet.TryParse(0, stack, frame, in parse, out _, out failure);
             bool read = observer.TryReadMatch(out bool matched, out FilterError? error);
             probe.Text = "a";
             Frame second = Frame.Create(
-                new FrameId(1),
+                1,
                 Timestamp.FromSecs(1),
                 new byte[4],
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            bool again = Packet.TryParse(new PacketId(1), stack, second, in parse, out _, out _);
+            bool again = Packet.TryParse(1, stack, second, in parse, out _, out _);
             bool secondRead = observer.TryReadMatch(out bool secondMatched, out FilterError? secondError);
 
             await Assert.That(parsed).IsTrue();
@@ -604,15 +604,15 @@ internal sealed class FilterObserverTests
         for (int i = 0; i < frames.Length; i++)
         {
             Frame frame = Frame.Create(
-                new FrameId(i),
+                i,
                 Timestamp.FromSecs(i),
                 frames[i],
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
             bool parsed = recycle is null
-                ? Packet.TryParse(new PacketId(i), stack, frame, in options, out recycle, out _)
-                : Packet.TryParse(recycle, new PacketId(i), stack, frame, in options, out _);
+                ? Packet.TryParse(i, stack, frame, in options, out recycle, out _)
+                : Packet.TryParse(recycle, i, stack, frame, in options, out _);
             if (!parsed)
             {
                 continue;
@@ -633,14 +633,14 @@ internal sealed class FilterObserverTests
     private static Packet _BuildProbe(Stack stack, ProtocolId protocolId, int id)
     {
         Frame frame = Frame.Create(
-            new FrameId(id),
+            id,
             Timestamp.FromNanos(id),
             new byte[8],
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
         ParseOptions options = new(FieldTreeMode.Build, firstProtocol: protocolId);
-        bool parsed = Packet.TryParse(new PacketId(id), stack, frame, in options, out Packet? packet, out _);
+        bool parsed = Packet.TryParse(id, stack, frame, in options, out Packet? packet, out _);
         if (!parsed || packet is null)
         {
             throw new InvalidOperationException("Build parse failed.");

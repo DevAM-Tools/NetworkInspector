@@ -83,14 +83,14 @@ internal sealed class SomeIpCoreTests
         using SomeIpTestStack s = SomeIpTestStack.Create(_FullExample);
         Packet packet = s.Parse(_Udp(SomeIpBytes.Message(0xF232, 0x0001, [0, 0], clientId: 1, interfaceVersion: 2)));
 
-        await Assert.That(s.Strings(packet, "someip.service.name")).IsEquivalentTo(_Single("ClimateControl"));
-        await Assert.That(s.Strings(packet, "someip.method.name")).IsEquivalentTo(_Single("SetTemperature"));
+        await Assert.That(s.Strings(packet, "someip.service.name")).IsEquivalentTo(_Single("Climate Control"));
+        await Assert.That(s.Strings(packet, "someip.method.name")).IsEquivalentTo(_Single("Set Temperature"));
         await Assert.That(s.Strings(packet, "someip.client.name")).IsEquivalentTo(_Single("CockpitECU"));
-        await ProtocolTestHelper.AssertDisplayText(s.Stack, packet, "someip.serviceid", "0xF232 (ClimateControl)");
-        await ProtocolTestHelper.AssertDisplayText(s.Stack, packet, "someip.methodid", "0x0001 (SetTemperature)");
+        await ProtocolTestHelper.AssertDisplayText(s.Stack, packet, "someip.serviceid", "0xF232 (Climate Control)");
+        await ProtocolTestHelper.AssertDisplayText(s.Stack, packet, "someip.methodid", "0x0001 (Set Temperature)");
         await ProtocolTestHelper.AssertDisplayText(s.Stack, packet, "someip.clientid", "0x0001 (CockpitECU)");
         await ProtocolTestHelper.AssertDisplayText(
-            s.Stack, packet, "someip", "SOME/IP, Service: 0xF232 (ClimateControl), Method: 0x0001 (SetTemperature), REQUEST");
+            s.Stack, packet, "someip", "SOME/IP, Service: 0xF232 (Climate Control), Method: 0x0001 (Set Temperature), REQUEST");
     }
 
     [Test]
@@ -113,7 +113,7 @@ internal sealed class SomeIpCoreTests
         using SomeIpTestStack s = SomeIpTestStack.Create(_FullExample);
         Packet packet = s.Parse(_Udp(SomeIpBytes.Message(0xF232, 0x0099, interfaceVersion: 2)));
 
-        await Assert.That(s.Strings(packet, "someip.service.name")).IsEquivalentTo(_Single("ClimateControl"));
+        await Assert.That(s.Strings(packet, "someip.service.name")).IsEquivalentTo(_Single("Climate Control"));
         await Assert.That(s.Count(packet, "someip.method.name")).IsEqualTo(0);
         await ProtocolTestHelper.AssertDisplayText(s.Stack, packet, "someip.methodid", "0x0099 (unknown)");
     }
@@ -127,7 +127,7 @@ internal sealed class SomeIpCoreTests
         // is still recognisably the same one.
         Packet packet = s.Parse(_Udp(SomeIpBytes.Message(0xF232, 0x0001, interfaceVersion: 3)));
 
-        await Assert.That(s.Strings(packet, "someip.service.name")).IsEquivalentTo(_Single("ClimateControl"));
+        await Assert.That(s.Strings(packet, "someip.service.name")).IsEquivalentTo(_Single("Climate Control"));
         await Assert.That(s.Count(packet, "someip.method.name")).IsEqualTo(0);
     }
 
@@ -362,7 +362,7 @@ internal sealed class SomeIpCoreTests
         using SomeIpTestStack s = SomeIpTestStack.Create(_FullExample);
         Packet packet = s.Parse(_Udp(SomeIpBytes.Message(0xF232, 0x0001, interfaceVersion: 2)));
 
-        await Assert.That(packet.Info).IsEqualTo("SOME/IP 0xF232 (ClimateControl) REQUEST");
+        await Assert.That(packet.Info).IsEqualTo("SOME/IP 0xF232 (Climate Control) REQUEST");
     }
 
     [Test]
@@ -575,17 +575,17 @@ internal sealed class SomeIpCoreTests
         PacketIndex index = new(s.Stack);
         ParseOptions options = new(index: index, fieldTree: FieldTreeMode.Skip);
         Frame parsed = Frame.Create(
-            new FrameId(0), Timestamp.FromSecs(0), frame, LinkType.Ethernet, FrameInterfaceId.Invalid, s.Stack.FrameInterfaceRegistry).Value;
+            0, Timestamp.FromSecs(0), frame, LinkType.Ethernet, FrameInterfaceId.Invalid, s.Stack.FrameInterfaceRegistry).Value;
 
         for (int i = 0; i < warmup; i++)
         {
-            _ = Packet.TryParse(new PacketId(0), s.Stack, parsed, in options, out _, out _);
+            _ = Packet.TryParse(0, s.Stack, parsed, in options, out _, out _);
         }
 
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < rounds; i++)
         {
-            _ = Packet.TryParse(new PacketId(0), s.Stack, parsed, in options, out _, out _);
+            _ = Packet.TryParse(0, s.Stack, parsed, in options, out _, out _);
         }
 
         return (GC.GetAllocatedBytesForCurrentThread() - before) / rounds;

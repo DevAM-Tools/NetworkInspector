@@ -25,20 +25,7 @@ namespace NetworkInspector.Exporters.Json;
 /// </summary>
 internal static class SimdEscape
 {
-    /// <summary>
-    /// Pre-built two-character escape sequences for quote, backslash and the control characters JSON has short forms for.
-    /// UTF-8 literal properties are served from static data, so reading them never allocates.
-    /// </summary>
-    private static ReadOnlySpan<byte> _EscapeQuote => "\\\""u8;
-    private static ReadOnlySpan<byte> _EscapeBackslash => "\\\\"u8;
-    private static ReadOnlySpan<byte> _EscapeNewline => "\\n"u8;
-    private static ReadOnlySpan<byte> _EscapeReturn => "\\r"u8;
-    private static ReadOnlySpan<byte> _EscapeTab => "\\t"u8;
-    private static ReadOnlySpan<byte> _EscapeBackspace => "\\b"u8;
-    private static ReadOnlySpan<byte> _EscapeFormFeed => "\\f"u8;
-
-    /// <summary>Hex digits for \uXXXX encoding of uncommon control characters.</summary>
-    private static ReadOnlySpan<byte> _HexDigits => "0123456789abcdef"u8;
+    #region Dispatch
 
     /// <summary>
     /// Escapes JSON special characters in the input and appends the result to the buffer.
@@ -74,6 +61,10 @@ internal static class SimdEscape
         }
     }
 
+    #endregion
+
+    #region Vector paths
+
     /// <summary>
     /// Processes 32 bytes at a time using 256-bit vectors.
     /// For each chunk, checks if any byte needs escaping. If none do, copies
@@ -81,6 +72,8 @@ internal static class SimdEscape
     /// and escapes the first special character, then continues. The final partial chunk (fewer than 32 bytes)
     /// is handled by the scalar fallback.
     /// </summary>
+    /// <param name="buffer">The buffer to append escaped bytes to.</param>
+    /// <param name="input">UTF-8 encoded input bytes; at least 32 bytes.</param>
     private static void _EscapeVector256(ref PooledBuffer buffer, ReadOnlySpan<byte> input)
     {
         // Comparison vectors for characters requiring JSON escaping
@@ -141,6 +134,8 @@ internal static class SimdEscape
     /// Same algorithm as <see cref="_EscapeVector256"/> but with half the width: it serves hardware without 256-bit
     /// vectors (SSE2, AdvSimd) and inputs of 16 to 31 bytes. See the 256-bit variant for the reasoning behind each step.
     /// </summary>
+    /// <param name="buffer">The buffer to append escaped bytes to.</param>
+    /// <param name="input">UTF-8 encoded input bytes; at least 16 bytes.</param>
     private static void _EscapeVector128(ref PooledBuffer buffer, ReadOnlySpan<byte> input)
     {
         Vector128<byte> vQuote = Vector128.Create((byte)0x22);
@@ -184,10 +179,16 @@ internal static class SimdEscape
         }
     }
 
+    #endregion
+
+    #region Scalar path
+
     /// <summary>
     /// Byte-by-byte scalar fallback for short inputs or remainder after SIMD processing.
     /// Copies safe ranges in bulk where possible to minimize per-byte overhead.
     /// </summary>
+    /// <param name="buffer">The buffer to append escaped bytes to.</param>
+    /// <param name="input">UTF-8 encoded input bytes; may be empty.</param>
     private static void _EscapeScalar(ref PooledBuffer buffer, ReadOnlySpan<byte> input)
     {
         // Tracks the start of the current run of bytes that need no escaping so each run is appended with one bulk
@@ -215,12 +216,44 @@ internal static class SimdEscape
         }
     }
 
+    #endregion
+
+    #region Escape sequences
+
+    // The escape sequences are UTF-8 literal properties served from static data, so reading them never allocates.
+
+    /// <summary>Escape of a double quote (<c>\"</c>).</summary>
+    private static ReadOnlySpan<byte> _EscapeQuote => "\\\""u8;
+
+    /// <summary>Escape of a backslash (<c>\\</c>).</summary>
+    private static ReadOnlySpan<byte> _EscapeBackslash => "\\\\"u8;
+
+    /// <summary>Escape of a line feed, 0x0A (<c>\n</c>).</summary>
+    private static ReadOnlySpan<byte> _EscapeNewline => "\\n"u8;
+
+    /// <summary>Escape of a carriage return, 0x0D (<c>\r</c>).</summary>
+    private static ReadOnlySpan<byte> _EscapeReturn => "\\r"u8;
+
+    /// <summary>Escape of a horizontal tab, 0x09 (<c>\t</c>).</summary>
+    private static ReadOnlySpan<byte> _EscapeTab => "\\t"u8;
+
+    /// <summary>Escape of a backspace, 0x08 (<c>\b</c>).</summary>
+    private static ReadOnlySpan<byte> _EscapeBackspace => "\\b"u8;
+
+    /// <summary>Escape of a form feed, 0x0C (<c>\f</c>).</summary>
+    private static ReadOnlySpan<byte> _EscapeFormFeed => "\\f"u8;
+
+    /// <summary>Hex digits for \uXXXX encoding of uncommon control characters.</summary>
+    private static ReadOnlySpan<byte> _HexDigits => "0123456789abcdef"u8;
+
     /// <summary>
     /// Writes the JSON escape sequence for a single byte.
     /// Common characters get two-character sequences (\n, \t, etc.);
     /// uncommon control characters get the \u00XX form (lowercase hex digits, as RFC 8259 allows).
     /// Callers pass only quote, backslash or a byte below 0x20; any other byte would be mis-encoded as a \u00XX escape.
     /// </summary>
+    /// <param name="buffer">The buffer to append the escape sequence to.</param>
+    /// <param name="b">The byte to escape: a quote, a backslash, or a byte below 0x20.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void _WriteEscapedByte(ref PooledBuffer buffer, byte b)
     {
@@ -261,4 +294,6 @@ internal static class SimdEscape
                 break;
         }
     }
+
+    #endregion
 }

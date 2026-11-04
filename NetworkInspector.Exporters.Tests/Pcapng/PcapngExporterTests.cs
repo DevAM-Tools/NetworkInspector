@@ -9,7 +9,7 @@ namespace NetworkInspector.Exporters.Tests.Pcapng;
 internal sealed class PcapngExporterTests
 {
     [Test]
-    public async Task Builder_RejectsBinaryOrOutOfRangeTimestampResolution()
+    public async Task BuilderRejectsBinaryOrOutOfRangeTimestampResolution()
     {
         PcapngExporter.Builder binary = PcapngExporter.CreateBuilder().ToStream(new MemoryStream());
         PcapngExporter.Builder tooFine = PcapngExporter.CreateBuilder().ToStream(new MemoryStream());
@@ -19,14 +19,14 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task Builder_RequiresOutput()
+    public async Task BuilderRequiresOutput()
     {
         PcapngExporter.Builder builder = PcapngExporter.CreateBuilder();
         await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task SingleFrame_ProducesValidPcapng()
+    public async Task SingleFrameProducesValidPcapng()
     {
         using TestDir dir = new("pcapng_single");
         string path = dir.FilePath("output.pcapng");
@@ -34,7 +34,7 @@ internal sealed class PcapngExporterTests
         using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToFile(path).Build();
 
         byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(32);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 1_000_000_000, frameData);
+        Frame frame = TestHarness.CreateFrame(0, 1_000_000_000, frameData);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -48,7 +48,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task MultipleFrames_AllWritten()
+    public async Task MultipleFramesAllWritten()
     {
         using TestDir dir = new("pcapng_multi");
         string path = dir.FilePath("output.pcapng");
@@ -69,13 +69,13 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task StreamOutput_ProducesValidPcapng()
+    public async Task StreamOutputProducesValidPcapng()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
 
         byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(16);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 1_000_000, frameData);
+        Frame frame = TestHarness.CreateFrame(0, 1_000_000, frameData);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -88,7 +88,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task LazyInit_NoFileCreatedWithoutFrames()
+    public async Task LazyInitNoFileCreatedWithoutFrames()
     {
         using TestDir dir = new("pcapng_lazy");
         string path = dir.FilePath("output.pcapng");
@@ -104,7 +104,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task FrameCount_TracksCorrectly()
+    public async Task FrameCountTracksCorrectly()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
@@ -121,7 +121,8 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task TsharkValidation_Skipped_WhenNotAvailable()
+    [Category("Slow")]
+    public async Task TsharkValidationSkippedWhenNotAvailable()
     {
         if (!TsharkVerifier.IsAvailable())
         {
@@ -150,7 +151,7 @@ internal sealed class PcapngExporterTests
         {
             byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(32);
             Frame frame = Frame.Create(
-                new FrameId(i), Timestamp.FromNanos((long)i * 1_000_000_000),
+                i, Timestamp.FromNanos((long)i * 1_000_000_000),
                 frameData, LinkType.Ethernet, ifId, registry).Value;
             exporter.OnFrame(frame);
         }
@@ -167,7 +168,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task FlexRayFrame_ProducesValidPcapng()
+    public async Task FlexRayFrameProducesValidPcapng()
     {
         using TestDir dir = new("pcapng_flexray");
         string path = dir.FilePath("output.pcapng");
@@ -176,7 +177,7 @@ internal sealed class PcapngExporterTests
 
         byte[] frData = FlexRayGenerators.BuildFlexRayFrame(
             0, 10, 3, 0xABCD, [0xDE, 0xAD, 0xBE, 0xEF], sync: true);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 1_000_000_000, frData, LinkType.Flexray);
+        Frame frame = TestHarness.CreateFrame(0, 1_000_000_000, frData, LinkType.Flexray);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -191,7 +192,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task LinFrame_ProducesValidPcapng()
+    public async Task LinFrameProducesValidPcapng()
     {
         using TestDir dir = new("pcapng_lin");
         string path = dir.FilePath("output.pcapng");
@@ -199,7 +200,7 @@ internal sealed class PcapngExporterTests
         using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToFile(path).Build();
 
         byte[] linData = LinGenerators.BuildLinFrame(0x05, [0x11, 0x22, 0x33], checksum: 0x42);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 1_000_000_000, linData, LinkType.Lin);
+        Frame frame = TestHarness.CreateFrame(0, 1_000_000_000, linData, LinkType.Lin);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -214,7 +215,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task MixedLinkTypes_CreatesMultipleInterfaces()
+    public async Task MixedLinkTypesCreatesMultipleInterfaces()
     {
         using TestDir dir = new("pcapng_mixed_links");
         string path = dir.FilePath("output.pcapng");
@@ -223,18 +224,18 @@ internal sealed class PcapngExporterTests
 
         // Ethernet frame
         byte[] ethData = FrameGenerators.BuildEthernetIpv4UdpFrame(16);
-        exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 1_000_000_000, ethData));
+        exporter.OnFrame(TestHarness.CreateFrame(0, 1_000_000_000, ethData));
 
         // FlexRay frame
         byte[] frData = FlexRayGenerators.BuildFlexRayFrame(
             0, 10, 3, 0xABCD, [0xDE, 0xAD, 0xBE, 0xEF]);
         exporter.OnFrame(TestHarness.CreateFrame(
-            new FrameId(1), 2_000_000_000, frData, LinkType.Flexray));
+            1, 2_000_000_000, frData, LinkType.Flexray));
 
         // LIN frame
         byte[] linData = LinGenerators.BuildLinFrame(0x05, [0x11, 0x22, 0x33], checksum: 0x42);
         exporter.OnFrame(TestHarness.CreateFrame(
-            new FrameId(2), 3_000_000_000, linData, LinkType.Lin));
+            2, 3_000_000_000, linData, LinkType.Lin));
 
         exporter.OnFinish();
 
@@ -250,7 +251,8 @@ internal sealed class PcapngExporterTests
     // ========================================================================
 
     [Test]
-    public async Task Cancellation_StopsExport()
+    [Category("Slow")]
+    public async Task CancellationStopsExport()
     {
         using CancellationTokenSource cts = new();
         using MemoryStream ms = new();
@@ -273,7 +275,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task IsFinished_TrueAfterCancellation()
+    public async Task IsFinishedTrueAfterCancellation()
     {
         using CancellationTokenSource cts = new();
         using MemoryStream ms = new();
@@ -292,7 +294,7 @@ internal sealed class PcapngExporterTests
     // ========================================================================
 
     [Test]
-    public async Task TargetFrameCount_LimitsExport()
+    public async Task TargetFrameCountLimitsExport()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder()
@@ -312,7 +314,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task IsFinished_TrueAfterTargetReached()
+    public async Task IsFinishedTrueAfterTargetReached()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder()
@@ -335,7 +337,7 @@ internal sealed class PcapngExporterTests
     // ========================================================================
 
     [Test]
-    public async Task IsFinished_FalseBeforeOnFinish()
+    public async Task IsFinishedFalseBeforeOnFinish()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
@@ -344,7 +346,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task IsFinished_TrueAfterOnFinish()
+    public async Task IsFinishedTrueAfterOnFinish()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
@@ -355,7 +357,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task OnFrame_AfterFinish_ReturnsFalse()
+    public async Task OnFrameAfterFinishReturnsFalse()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
@@ -369,7 +371,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task DoubleFinish_IsIdempotent()
+    public async Task DoubleFinishIsIdempotent()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
@@ -390,7 +392,7 @@ internal sealed class PcapngExporterTests
     // ========================================================================
 
     [Test]
-    public async Task UiName_ReturnsDefault()
+    public async Task UiNameReturnsDefault()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
@@ -399,7 +401,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task UiName_ReturnsCustomValue()
+    public async Task UiNameReturnsCustomValue()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder()
@@ -411,7 +413,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task Description_ReturnsNull_WhenNotSet()
+    public async Task DescriptionReturnsNullWhenNotSet()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
@@ -420,7 +422,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task Description_ReturnsConfiguredValue()
+    public async Task DescriptionReturnsConfiguredValue()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder()
@@ -436,7 +438,7 @@ internal sealed class PcapngExporterTests
     // ========================================================================
 
     [Test]
-    public async Task ShbOption_AtMaxLength_WritesSuccessfully()
+    public async Task ShbOptionAtMaxLengthWritesSuccessfully()
     {
         // A string whose UTF-8 encoding is exactly 65535 bytes must succeed.
         string maxValue = new('a', 65535);
@@ -453,28 +455,86 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task ShbOption_ExceedsMaxLength_SetsHasErrors()
+    public async Task AnOverlongShbOptionIsRefusedByTheBuilder()
     {
-        // A string whose UTF-8 encoding exceeds 65535 bytes must trigger the option-length
-        // guard in PcapngWriter. The PCAPNG exporter converts the resulting
-        // ArgumentOutOfRangeException into an export error rather than letting it escape
-        // OnFinish(), so HasErrors must be true after the call completes.
         // Each ASCII character is 1 byte, so 65536 'x' chars = 65536 UTF-8 bytes > ushort.MaxValue.
         string oversizedValue = new('x', 65536);
+        PcapngExporter.Builder builder = PcapngExporter.CreateBuilder().ToStream(new MemoryStream());
 
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithHardware(oversizedValue)
-            .Build();
-
-        exporter.OnFinish();
-
-        await Assert.That(exporter.HasErrors).IsTrue();
+        await Assert.That(() => builder.WithHardware(oversizedValue)).Throws<ArgumentException>();
+        await Assert.That(() => builder.WithOs(oversizedValue)).Throws<ArgumentException>();
+        await Assert.That(() => builder.WithApplication(oversizedValue)).Throws<ArgumentException>();
+        await Assert.That(() => builder.WithComment(oversizedValue)).Throws<ArgumentException>();
     }
 
     [Test]
-    public async Task ShbOption_EmptyHardware_WritesWithoutErrors()
+    public async Task AnShbOptionIsMeasuredInUtf8BytesNotCharacters()
+    {
+        // 21846 three-byte characters are 65538 bytes but only 21846 chars; 21845 of them are 65535 bytes and fit.
+        string tooLong = new('€', 21846);
+        string fits = new('€', 21845);
+        PcapngExporter.Builder builder = PcapngExporter.CreateBuilder().ToStream(new MemoryStream());
+
+        await Assert.That(() => builder.WithComment(tooLong)).Throws<ArgumentException>();
+        await Assert.That(() => builder.WithComment(fits)).ThrowsNothing();
+    }
+
+    [Test]
+    public async Task ANullShbOptionIsRefusedByTheBuilder()
+    {
+        PcapngExporter.Builder builder = PcapngExporter.CreateBuilder().ToStream(new MemoryStream());
+
+        await Assert.That(() => builder.WithComment(null!)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task ATruncatedFrameRaisesOneAdvisoryEvent()
+    {
+        using MemoryStream stream = new();
+        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(stream).WithSnapLength(64).Build();
+        List<ExportErrorEventArgs> events = [];
+        exporter.ItemSkipped += (_, args) => events.Add(args);
+
+        // Two frames above the snap length, one exactly at it (not cut), and one more above it.
+        foreach (int length in new[] { 100, 101, 64, 200 })
+        {
+            exporter.OnFrame(TestHarness.CreateFrame(0, 1_000_000_000, new byte[length]));
+        }
+
+        exporter.OnFinish();
+
+        PcapngVerifier verifier = PcapngVerifier.FromData(stream.ToArray());
+        await Assert.That(exporter.FrameCount).IsEqualTo(4);
+        await Assert.That(exporter.TruncatedFrameCount).IsEqualTo(3);
+        await Assert.That(exporter.SkippedCount).IsEqualTo(0);
+        await Assert.That(exporter.ErrorCount).IsEqualTo(0);
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].Kind).IsEqualTo(ExportErrorKind.SerializationError);
+        await Assert.That(events[0].Message).Contains("64");
+        await Assert.That(events[0].Message).Contains("WithSnapLength");
+        await Assert.That(verifier.Frames[0].CapturedLength).IsEqualTo(64u);
+        await Assert.That(verifier.Frames[0].OriginalLength).IsEqualTo(100u);
+        await Assert.That(verifier.Frames[2].CapturedLength).IsEqualTo(64u);
+        await Assert.That(verifier.Frames[2].OriginalLength).IsEqualTo(64u);
+    }
+
+    [Test]
+    public async Task FramesWithinTheSnapLengthRaiseNoEventAndAreNotCounted()
+    {
+        using MemoryStream stream = new();
+        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(stream).WithSnapLength(64).Build();
+        List<ExportErrorEventArgs> events = [];
+        exporter.ItemSkipped += (_, args) => events.Add(args);
+
+        exporter.OnFrame(TestHarness.CreateFrame(0, 1_000_000_000, new byte[64]));
+        exporter.OnFinish();
+
+        await Assert.That(exporter.TruncatedFrameCount).IsEqualTo(0);
+        await Assert.That(events.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task ShbOptionEmptyHardwareWritesWithoutErrors()
     {
         using MemoryStream ms = new();
         using PcapngExporter exporter = PcapngExporter.CreateBuilder()

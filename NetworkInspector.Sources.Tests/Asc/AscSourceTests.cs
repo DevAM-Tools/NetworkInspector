@@ -132,8 +132,8 @@ internal sealed class AscSourceTests
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Access frames out of order
-        Frame? f2 = source.FrameById(new FrameId(2));
-        Frame? f0 = source.FrameById(new FrameId(0));
+        Frame? f2 = source.FrameById(2);
+        Frame? f0 = source.FrameById(0);
 
         await Assert.That(f2.HasValue).IsTrue();
         await Assert.That(f0.HasValue).IsTrue();
@@ -151,7 +151,7 @@ internal sealed class AscSourceTests
             "End TriggerBlock\n");
         SourceTestFixture.InitializeAndStartSource(source);
 
-        Frame? f = source.FrameById(new FrameId(999));
+        Frame? f = source.FrameById(999);
 
         await Assert.That(f.HasValue).IsFalse();
     }
@@ -270,7 +270,7 @@ internal sealed class AscSourceTests
         SourceTestFixture.InitializeAndStartSource(source);
         source.Dispose();
 
-        await Assert.That(() => source.FrameById(new FrameId(0))).Throws<ObjectDisposedException>();
+        await Assert.That(() => source.FrameById(0)).Throws<ObjectDisposedException>();
     }
 
     // ========================================================================

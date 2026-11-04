@@ -13,7 +13,7 @@ internal sealed class SomeIpTimingTests : SomeIpPayloadKit
 {
     private const long _Second = 1_000_000_000;
 
-    private static readonly string _Config = Json(Method(1, "Echo", Sites(Site("a", "uint8")), Sites(Site("r", "uint8"))));
+    private static readonly string _Config = Json(Method(1, "echo", Sites(Site("a", "uint8")), Sites(Site("r", "uint8"))));
 
     private static SomeIpTestStack _Stack(params (string Name, SettingValue Value)[] settings) =>
         SomeIpTestStack.Create(_Config, [("someip.method_timing", SettingValue.Bool(true)), .. settings]);
@@ -244,9 +244,9 @@ internal sealed class SomeIpTimingTests : SomeIpPayloadKit
     [Test]
     public async Task AModelCannotBeRegisteredOnASecondStack()
     {
-        using MemoryStream stream = new(Encoding.UTF8.GetBytes(Json(Method(1, "M", Sites(Site("a", "uint8")), "[]"))));
+        using MemoryStream stream = new(Encoding.UTF8.GetBytes(Json(Method(1, "m", Sites(Site("a", "uint8")), "[]"))));
         _ = SomeIpRegistration.TryLoadConfig(stream, out SomeIpConfig? config, out _);
-        SomeIpCompiledModel model = SomeIpConfigCompiler.Compile(config!, new List<SettingsLoadWarning>());
+        SomeIpCompiledModel model = SomeIpConfigCompiler.Compile(config!, "", new List<SettingsLoadWarning>());
 
         void RegisterOnNewBuilder()
         {

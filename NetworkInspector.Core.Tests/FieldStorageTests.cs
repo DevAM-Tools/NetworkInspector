@@ -46,13 +46,13 @@ internal sealed class FieldStorageTests
     }
 
     private static Frame _Frame(Stack stack, int id) => Frame.Create(
-        new FrameId(id), Timestamp.FromSecs(id), new byte[] { 0x01 }, LinkType.Ethernet,
+        id, Timestamp.FromSecs(id), new byte[] { 0x01 }, LinkType.Ethernet,
         FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
 
     /// <summary>A fresh Build-mode packet whose root has <paramref name="count"/> U64 children with values 0..count-1.</summary>
     private static Packet _PacketWithChildren(Fields fields, int count, int valueOffset = 0)
     {
-        Packet packet = new(new PacketId(0), fields.Stack, _Frame(fields.Stack, 0));
+        Packet packet = new(0, fields.Stack, _Frame(fields.Stack, 0));
         _AppendChildren(packet, fields.Item, count, valueOffset);
         packet.Seal();
         return packet;
@@ -70,7 +70,7 @@ internal sealed class FieldStorageTests
     /// <summary>Recycles <paramref name="packet"/> and fills it with <paramref name="count"/> children.</summary>
     private static void _Recycle(Fields fields, Packet packet, int id, int count, int valueOffset, FieldTreeMode mode = FieldTreeMode.Build)
     {
-        RecycleError? error = packet.PrepareForReuse(new PacketId(id), fields.Stack, _Frame(fields.Stack, id), mode);
+        RecycleError? error = packet.PrepareForReuse(id, fields.Stack, _Frame(fields.Stack, id), mode);
         if (error is not null)
         {
             throw new InvalidOperationException(error.Value.ToString());
@@ -260,7 +260,7 @@ internal sealed class FieldStorageTests
         int children = FieldStorage.FirstChunkSize - 1;
         Fields fields = _BuildStack();
         using Stack stack = fields.Stack;
-        Packet packet = new(new PacketId(0), stack, _Frame(stack, 0));
+        Packet packet = new(0, stack, _Frame(stack, 0));
         _AppendChildren(packet, fields.Item, children, valueOffset: 0);
         MutField root = packet.RootFieldMut();
         _ = root.Prepend(fields.Item, FieldValue.NewU64(1_000));
@@ -353,9 +353,9 @@ internal sealed class FieldStorageTests
         BinaryPrimitives.WriteUInt32BigEndian(can, 0x123u);
         can[4] = 8;
         Frame frame = Frame.Create(
-            new FrameId(0), Timestamp.FromSecs(0), can, LinkType.CanSocketcan, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+            0, Timestamp.FromSecs(0), can, LinkType.CanSocketcan, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         ParseOptions options = new();
-        bool parsed = Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure);
+        bool parsed = Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure);
         packet!.MaterializeAll();
 
         // The frame node and its descendants, plus the root.
@@ -591,7 +591,7 @@ internal sealed class FieldStorageTests
     {
         Fields fields = _BuildStack();
         using Stack stack = fields.Stack;
-        Packet packet = new(new PacketId(0), stack, _Frame(stack, 0));
+        Packet packet = new(0, stack, _Frame(stack, 0));
         MutField root = packet.RootFieldMut();
 
         // Regular appends stop at 65 533 slots (root included).
@@ -653,7 +653,7 @@ internal sealed class FieldStorageTests
     /// </summary>
     private static Packet _LazyPacket(Fields fields)
     {
-        Packet packet = new(new PacketId(0), fields.Stack, _Frame(fields.Stack, 0));
+        Packet packet = new(0, fields.Stack, _Frame(fields.Stack, 0));
         MutField root = packet.RootFieldMut();
         for (int i = 0; i < 40; i++)
         {
@@ -767,7 +767,7 @@ internal sealed class FieldStorageTests
     /// </summary>
     private static Packet _ParkedPopulatorPacket(Fields fields, ManualResetEventSlim inPopulator, ManualResetEventSlim release)
     {
-        Packet packet = new(new PacketId(0), fields.Stack, _Frame(fields.Stack, 0));
+        Packet packet = new(0, fields.Stack, _Frame(fields.Stack, 0));
         MutField root = packet.RootFieldMut();
         _ = root.AppendLazy(fields.Container, FieldValue.NewU64(1), (in MutField container) =>
         {
@@ -823,7 +823,7 @@ internal sealed class FieldStorageTests
         Fields fields = _BuildStack();
         using Stack stack = fields.Stack;
         int seenInside = -1;
-        Packet packet = new(new PacketId(0), stack, _Frame(stack, 0));
+        Packet packet = new(0, stack, _Frame(stack, 0));
         MutField root = packet.RootFieldMut();
         Packet captured = packet;
         _ = root.AppendLazy(fields.Container, FieldValue.NewU64(1), (in MutField container) =>
@@ -849,7 +849,7 @@ internal sealed class FieldStorageTests
         Fields fields = _BuildStack();
         using Stack stack = fields.Stack;
         bool returned = false;
-        Packet packet = new(new PacketId(0), stack, _Frame(stack, 0));
+        Packet packet = new(0, stack, _Frame(stack, 0));
         MutField root = packet.RootFieldMut();
         Packet captured = packet;
         _ = root.AppendLazy(fields.Container, FieldValue.NewU64(1), (in MutField container) =>

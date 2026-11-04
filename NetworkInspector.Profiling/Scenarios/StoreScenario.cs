@@ -135,7 +135,7 @@ internal sealed class StoreScenario : FootprintScenarioBase
         ParseOptions options = new();
         for (int i = 0; i < frames.Length; i++)
         {
-            if (!Packet.TryParse(new PacketId(_NextPacketId + i), stack, frames[i], in options, out Packet? packet, out ParseFailure failure))
+            if (!Packet.TryParse(_NextPacketId + i, stack, frames[i], in options, out Packet? packet, out ParseFailure failure))
             {
                 throw new InvalidOperationException(failure.ToString());
             }

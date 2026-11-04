@@ -18,7 +18,7 @@ internal sealed class PacketBufferTests
 
     private static Frame _MakeFrame(Stack stack, byte[] data, int frameId = 1) =>
         Frame.Create(
-            new FrameId(frameId),
+            frameId,
             Timestamp.FromSecs(frameId),
             data,
             LinkType.Ethernet,
@@ -31,7 +31,7 @@ internal sealed class PacketBufferTests
         using Stack stack = _BuildStack();
         byte[] frameData = FrameBuilders.GenerateStaticUdpFrame(128);
         Frame frame = _MakeFrame(stack, frameData);
-        Packet packet = new(new PacketId(0), stack, frame, FieldTreeMode.Build);
+        Packet packet = new(0, stack, frame, FieldTreeMode.Build);
 
         byte[] extra1 = [0x01, 0x02];
         byte[] extra2 = [0x03, 0x04, 0x05];
@@ -63,7 +63,7 @@ internal sealed class PacketBufferTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -80,7 +80,8 @@ internal sealed class PacketBufferTests
 
         await Assert.That(idx).IsEqualTo(0);
         await Assert.That(packet.BufferCount).IsEqualTo(1);
-        await Assert.That(packet.BindParseBuffer(new byte[] { 0x02 }).IsEmpty).IsTrue();
+        await Assert.That(packet.TryBindBuffer(new byte[] { 0x02 }, out _, out BufferBindFailure bindFailure)).IsFalse();
+        await Assert.That(bindFailure).IsEqualTo(BufferBindFailure.Sealed);
     }
 
     [Test]
@@ -88,7 +89,7 @@ internal sealed class PacketBufferTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = new(new PacketId(0), stack, frame);
+        Packet packet = new(0, stack, frame);
 
         int last = 0;
         for (int i = 0; i < 256; i++)
@@ -101,11 +102,11 @@ internal sealed class PacketBufferTests
     }
 
     [Test]
-    public async Task BindParseBufferAtCapReturnsEmpty()
+    public async Task TryBindBufferAtCapIsRefused()
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = new(new PacketId(0), stack, frame);
+        Packet packet = new(0, stack, frame);
 
         for (int i = 0; i < 255; i++)
         {
@@ -114,9 +115,11 @@ internal sealed class PacketBufferTests
 
         await Assert.That(packet.BufferCount).IsEqualTo(256);
 
-        ReadOnlyMemory<byte> bound = packet.BindParseBuffer(new byte[] { 0xAB });
+        bool bindOk = packet.TryBindBuffer(new byte[] { 0xAB }, out ReadOnlyMemory<byte> bound, out BufferBindFailure bindFailure);
         bool found = packet.TryGetEffectLayerKey(new byte[] { 0xAB }, out _);
 
+        await Assert.That(bindOk).IsFalse();
+        await Assert.That(bindFailure).IsEqualTo(BufferBindFailure.TableFull);
         await Assert.That(bound.IsEmpty).IsTrue();
         await Assert.That(packet.BufferCount).IsEqualTo(256);
         await Assert.That(found).IsFalse();
@@ -130,7 +133,7 @@ internal sealed class PacketBufferTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64)),
                 in options,
@@ -161,7 +164,7 @@ internal sealed class PacketBufferTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -180,12 +183,12 @@ internal sealed class PacketBufferTests
         Task a = Task.Run(() =>
         {
             start.SignalAndWait();
-            first = packet.PrepareForReuse(new PacketId(1), stack, frame, FieldTreeMode.Build);
+            first = packet.PrepareForReuse(1, stack, frame, FieldTreeMode.Build);
         });
         Task b = Task.Run(() =>
         {
             start.SignalAndWait();
-            second = packet.PrepareForReuse(new PacketId(1), stack, frame, FieldTreeMode.Build);
+            second = packet.PrepareForReuse(1, stack, frame, FieldTreeMode.Build);
         });
         await Task.WhenAll(a, b);
 
@@ -204,7 +207,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -237,7 +240,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -266,7 +269,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -294,12 +297,12 @@ internal sealed class PacketBufferTests
         using Stack stack = _BuildStack();
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(64);
         Frame frame1 = _MakeFrame(stack, data, 1);
-        Packet packet = new(new PacketId(0), stack, frame1, FieldTreeMode.Build);
+        Packet packet = new(0, stack, frame1, FieldTreeMode.Build);
         packet.AddBuffer(new byte[] { 0xFF });
         packet.Seal();
 
         Frame frame2 = _MakeFrame(stack, data, 2);
-        RecycleError? err = packet.PrepareForReuse(new PacketId(99), stack, frame2, FieldTreeMode.Build);
+        RecycleError? err = packet.PrepareForReuse(99, stack, frame2, FieldTreeMode.Build);
         await Assert.That(err).IsNull();
 
         await Assert.That(packet.Id.Value).IsEqualTo(99);
@@ -308,7 +311,7 @@ internal sealed class PacketBufferTests
     }
 
     [Test]
-    public async Task TryGetNextFieldValue_FindsEthTypeField()
+    public async Task TryGetFieldValue_FindsEthTypeField()
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(128));
@@ -317,7 +320,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -331,8 +334,7 @@ internal sealed class PacketBufferTests
         }
 
         FieldId ethType = stack.GetFieldId("eth.type")!.Value;
-        FieldLookupCookie cookie = default;
-        bool found = packet.TryGetNextFieldValue(ethType, ref cookie, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+        bool found = packet.TryGetFieldValue(ethType, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(found).IsTrue();
         await Assert.That(value.Type).IsNotEqualTo(FieldType.None);
     }
@@ -347,7 +349,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -361,9 +363,8 @@ internal sealed class PacketBufferTests
         }
         packet.SetError("parse failed");
 
-        FieldLookupCookie cookie = default;
-        bool found = packet.TryGetNextFieldValue(
-            stack.PacketErrorFieldId, ref cookie, out FieldValue err, materialize: true); // materialize: true — need complete field tree for assertion
+        bool found = packet.TryGetFieldValue(
+            stack.PacketErrorFieldId, out FieldValue err, materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(found).IsTrue();
         err.Data.TryGetAsString(out string msg);
         await Assert.That(msg.Contains("parse failed", StringComparison.Ordinal)).IsTrue();
@@ -380,7 +381,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -398,14 +399,14 @@ internal sealed class PacketBufferTests
             ParseOptions options = new();
             errParsed = Packet.TryParse(
                 seed,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
                 out ParseFailure _);
         }
         await Assert.That(errParsed).IsTrue();
-        await Assert.That(seed.Id).IsEqualTo(new PacketId(1));
+        await Assert.That(seed.Id).IsEqualTo(1);
     }
 
     [Test]
@@ -419,7 +420,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -439,7 +440,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(index: index, firstProtocol: eth);
             errParsed = Packet.TryParse(
                 seed,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -460,7 +461,7 @@ internal sealed class PacketBufferTests
         {
             ParseOptions options = new(index: index, firstProtocol: eth);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -472,7 +473,7 @@ internal sealed class PacketBufferTests
 
             packet = parsed;
         }
-        await Assert.That(packet.Id).IsEqualTo(new PacketId(0));
+        await Assert.That(packet.Id).IsEqualTo(0);
         await Assert.That(packet.IsFinalized).IsTrue();
     }
 
@@ -486,7 +487,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -513,7 +514,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -532,7 +533,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(index: index);
             errParsed = Packet.TryParse(
                 seed,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -551,7 +552,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -581,7 +582,7 @@ internal sealed class PacketBufferTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,

@@ -110,15 +110,15 @@ internal sealed class SessionIntegrationTests
         session.WaitForCompletion();
 
         // Packets 0 through frameCount-1 should be in the store.
-        bool foundFirst = session.TryGetPacket(new PacketId(0), out Packet? first, out _);
-        bool foundLast = session.TryGetPacket(new PacketId(frameCount - 1), out Packet? last, out _);
+        bool foundFirst = session.TryGetPacket(0, out Packet? first, out _);
+        bool foundLast = session.TryGetPacket(frameCount - 1, out Packet? last, out _);
 
         await Assert.That(foundFirst).IsTrue();
         await Assert.That(foundLast).IsTrue();
         await Assert.That(first).IsNotNull();
         await Assert.That(last).IsNotNull();
-        await Assert.That(first!.Id).IsEqualTo(new PacketId(0));
-        await Assert.That(last!.Id).IsEqualTo(new PacketId(frameCount - 1));
+        await Assert.That(first!.Id).IsEqualTo(0);
+        await Assert.That(last!.Id).IsEqualTo(frameCount - 1);
 
         session.Shutdown();
     }
@@ -201,8 +201,8 @@ internal sealed class SessionIntegrationTests
         await Assert.That(thrown).IsNotNull();
         await Assert.That(thrown!.Code).IsEqualTo(SessionErrorCode.FrameUnavailable);
         await Assert.That(session.PacketCount).IsNotEqualTo(frameCount);
-        await Assert.That(session.TryGetPacket(new PacketId(0), out _, out _)).IsFalse();
-        await Assert.That(session.TryGetPacket(new PacketId(frameCount - 1), out _, out _)).IsFalse();
+        await Assert.That(session.TryGetPacket(0, out _, out _)).IsFalse();
+        await Assert.That(session.TryGetPacket(frameCount - 1, out _, out _)).IsFalse();
 
         session.Shutdown();
     }
@@ -353,7 +353,7 @@ internal sealed class SessionIntegrationTests
         await Assert.That(listener1.Misses).IsEqualTo(0);
         await Assert.That(listener2.Misses).IsEqualTo(0);
 
-        bool got = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
+        bool got = session.TryGetPacket(0, out Packet? packet, out _);
         await Assert.That(got).IsTrue();
         await Assert.That(packet!.HasFieldTree).IsTrue();
 
@@ -382,8 +382,8 @@ internal sealed class SessionIntegrationTests
         await Assert.That(session.GetJobs().All(job => job.Status == JobStatus.Completed)).IsTrue();
         await Assert.That(session.PacketCount).IsEqualTo(2);
         await Assert.That(session.FrameCount).IsEqualTo(2);
-        await Assert.That(session.TryGetFrame(new PacketId(0), out Frame firstFrame, out _)).IsTrue();
-        await Assert.That(session.TryGetFrame(new PacketId(1), out Frame secondFrame, out _)).IsTrue();
+        await Assert.That(session.TryGetFrame(0, out Frame firstFrame, out _)).IsTrue();
+        await Assert.That(session.TryGetFrame(1, out Frame secondFrame, out _)).IsTrue();
         await Assert.That(firstFrame.IsValid).IsTrue();
         await Assert.That(secondFrame.IsValid).IsTrue();
         session.Shutdown();
@@ -416,7 +416,7 @@ internal sealed class SessionIntegrationTests
         await Assert.That(session.PacketCount).IsEqualTo(5);
         await Assert.That(session.FrameCount).IsEqualTo(5);
         await Assert.That(session.QueriesEnabled).IsTrue();
-        await Assert.That(session.TryGetFrame(new PacketId(4), out Frame late, out _)).IsTrue();
+        await Assert.That(session.TryGetFrame(4, out Frame late, out _)).IsTrue();
         await Assert.That(late.IsValid).IsTrue();
         session.Shutdown();
     }
@@ -515,7 +515,7 @@ internal sealed class SessionIntegrationTests
         {
             for (int i = fromIndex; i < toIndexExclusive; i++)
             {
-                if (!session.TryGetPacket(new PacketId(i), out Packet? packet, out _) || packet is null)
+                if (!session.TryGetPacket(i, out Packet? packet, out _) || packet is null)
                 {
                     Interlocked.Increment(ref _Misses);
                     continue;
@@ -580,7 +580,7 @@ internal sealed class SessionIntegrationTests
 
             byte[] data = TestHarness.GenerateUdpFrame(64);
             Frame frame = Frame.Create(
-                new FrameId(0),
+                0,
                 Timestamp.FromNanos(0),
                 data,
                 LinkType.Ethernet,

@@ -44,7 +44,7 @@ internal sealed class PcapngInterfaceResolutionTests
     {
         using PcapngSource source = PcapngSource.FromData(_TwoSectionsWithLateInterfaces(), "before-start");
 
-        Frame? frame = source.FrameById(new FrameId(0));
+        Frame? frame = source.FrameById(0);
 
         await Assert.That(frame).IsNull();
     }
@@ -110,7 +110,7 @@ internal sealed class PcapngInterfaceResolutionTests
 
         await Assert.That(frames.Count).IsEqualTo(3);
         await Assert.That(mismatch).IsNull();
-        await Assert.That(source.FrameById(new FrameId(1))!.Value.LinkType).IsEqualTo(LinkType.Ethernet);
+        await Assert.That(source.FrameById(1)!.Value.LinkType).IsEqualTo(LinkType.Ethernet);
     }
 
     #endregion
@@ -155,7 +155,7 @@ internal sealed class PcapngInterfaceResolutionTests
                 }
 
                 int id = random.Next(limit);
-                Frame? frame = source.FrameById(new FrameId(id));
+                Frame? frame = source.FrameById(id);
                 if (frame is null || !RandomAccessEquivalence.SameFrame(expected[id], frame.Value))
                 {
                     lock (problemLock)

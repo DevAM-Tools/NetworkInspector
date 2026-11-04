@@ -1628,6 +1628,169 @@ internal sealed class StackBuilderTests
         await Assert.That(builder.GetAnyTableProtocolIds(ProtocolTableId.Invalid)).IsNull();
     }
 
+    // === One name, one registration (protocols, fields and field alias groups) ===
+
+    [Test]
+    public async Task RegisterAliasAfterProtocolOfSameNameIsRefused()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protocolId = builder.RegisterProtocol(new StubProtocol("x", "X"));
+        FieldId field = builder.RegisterField(protocolId, "x.a", "A", FieldType.U64);
+
+        DuplicateNameRegistrationException ex = Assert.Throws<DuplicateNameRegistrationException>(
+            () => builder.RegisterFieldAliasGroup(protocolId, "x", null, [field]));
+
+        await Assert.That(ex.Name).IsEqualTo("x");
+        await Assert.That(ex.HolderKind).IsEqualTo(RegistrationHolderKind.Protocol);
+        await Assert.That(ex.Message).Contains("'x'");
+        await Assert.That(ex.Message).Contains("protocol");
+        await Assert.That(builder.GetFieldAliasGroupId("x")).IsNull();
+        Stack stack = builder.Build();
+        await Assert.That(stack.GetProtocolId("x")).IsEqualTo(protocolId);
+        await Assert.That(stack.GetFieldAliasGroupId("x")).IsNull();
+    }
+
+    [Test]
+    public async Task RegisterProtocolAfterAliasOfSameNameIsRefused()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protocolId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId source = builder.RegisterField(protocolId, "p.src", "Source", FieldType.U64);
+        FieldId destination = builder.RegisterField(protocolId, "p.dst", "Destination", FieldType.U64);
+        FieldAliasGroupId aliasId = builder.RegisterFieldAliasGroup(protocolId, "y", null, [source, destination]);
+
+        DuplicateNameRegistrationException ex = Assert.Throws<DuplicateNameRegistrationException>(
+            () => builder.RegisterProtocol(new StubProtocol("y", "Y")));
+
+        await Assert.That(ex.Name).IsEqualTo("y");
+        await Assert.That(ex.HolderKind).IsEqualTo(RegistrationHolderKind.FieldAliasGroup);
+        await Assert.That(ex.Message).Contains("field alias group");
+        await Assert.That(builder.GetProtocolId("y")).IsNull();
+
+        // The filter binds a name through the stack: the alias is what the name still resolves to.
+        Stack stack = builder.Build();
+        await Assert.That(stack.GetProtocolId("y")).IsNull();
+        await Assert.That(stack.GetFieldAliasGroupId("y")).IsEqualTo(aliasId);
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task FieldAndAliasOfSameNameRefuseEachOther(bool fieldFirst)
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protocolId = builder.RegisterProtocol(new StubProtocol("p", "P"));
+        FieldId member = builder.RegisterField(protocolId, "p.member", "Member", FieldType.U64);
+        int fieldsBefore;
+        int aliasesBefore;
+
+        DuplicateNameRegistrationException ex;
+        if (fieldFirst)
+        {
+            // (1) Field "p.any" exists, an alias "p.any" is refused with holder "field".
+            _ = builder.RegisterField(protocolId, "p.any", "Any", FieldType.U64);
+            fieldsBefore = builder.Fields.Length;
+            aliasesBefore = builder.FieldAliasGroups.Length;
+            ex = Assert.Throws<DuplicateNameRegistrationException>(
+                () => builder.RegisterFieldAliasGroup(protocolId, "p.any", null, [member]));
+            await Assert.That(ex.HolderKind).IsEqualTo(RegistrationHolderKind.Field);
+            await Assert.That(builder.GetFieldAliasGroupId("p.any")).IsNull();
+        }
+        else
+        {
+            // (2) Alias "p.addr" exists, a field "p.addr" is refused with holder "field alias group".
+            _ = builder.RegisterFieldAliasGroup(protocolId, "p.addr", null, [member]);
+            fieldsBefore = builder.Fields.Length;
+            aliasesBefore = builder.FieldAliasGroups.Length;
+            ex = Assert.Throws<DuplicateNameRegistrationException>(
+                () => builder.RegisterField(protocolId, "p.addr", "Addr", FieldType.U64));
+            await Assert.That(ex.HolderKind).IsEqualTo(RegistrationHolderKind.FieldAliasGroup);
+            await Assert.That(builder.GetFieldId("p.addr")).IsNull();
+        }
+
+        await Assert.That(ex.Name).IsEqualTo(fieldFirst ? "p.any" : "p.addr");
+        await Assert.That(builder.Fields.Length).IsEqualTo(fieldsBefore);
+        await Assert.That(builder.FieldAliasGroups.Length).IsEqualTo(aliasesBefore);
+    }
+
+    [Test]
+    public async Task FieldOfAnotherProtocolMayNotCarryProtocolName()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId a = builder.RegisterProtocol(new StubProtocol("a", "A"));
+        _ = builder.RegisterProtocol(new StubProtocol("z", "Z"));
+
+        // (1) Protocols a and z exist; protocol a registers a field named z.
+        DuplicateNameRegistrationException foreignField = Assert.Throws<DuplicateNameRegistrationException>(
+            () => builder.RegisterField(a, "z", "Z", FieldType.U64));
+        await Assert.That(foreignField.HolderKind).IsEqualTo(RegistrationHolderKind.Protocol);
+        await Assert.That(builder.GetFieldId("z")).IsNull();
+
+        // (2) The same through RegisterFieldInGroup, which inherits the rule.
+        DuplicateNameRegistrationException inGroup = Assert.Throws<DuplicateNameRegistrationException>(
+            () => builder.RegisterFieldInGroup(a, "z", "Z", FieldType.U64, "a.group"));
+        await Assert.That(inGroup.HolderKind).IsEqualTo(RegistrationHolderKind.Protocol);
+
+        // (3) Protocol a registers field w; a protocol named w is refused with holder "field".
+        _ = builder.RegisterField(a, "w", "W", FieldType.U64);
+        DuplicateNameRegistrationException lateProtocol = Assert.Throws<DuplicateNameRegistrationException>(
+            () => builder.RegisterProtocol(new StubProtocol("w", "W")));
+        await Assert.That(lateProtocol.HolderKind).IsEqualTo(RegistrationHolderKind.Field);
+        await Assert.That(builder.GetProtocolId("w")).IsNull();
+
+        // (4) A field without owner (the sentinel) named v blocks a protocol v as well.
+        _ = builder.RegisterField(ProtocolId.Invalid, "v", "V", FieldType.U64);
+        DuplicateNameRegistrationException ownerless = Assert.Throws<DuplicateNameRegistrationException>(
+            () => builder.RegisterProtocol(new StubProtocol("v", "V")));
+        await Assert.That(ownerless.HolderKind).IsEqualTo(RegistrationHolderKind.Field);
+    }
+
+    [Test]
+    public async Task ProtocolMayRegisterContainerFieldWithItsOwnName()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId q = builder.RegisterProtocol(new StubProtocol("q", "Q"));
+        ProtocolId r = builder.RegisterProtocol(new StubProtocol("r", "R"));
+
+        FieldId container = builder.RegisterField(q, "q", "Q", FieldType.None);
+
+        // A second protocol registering a field named q is refused: the name is held by the container field of q.
+        DuplicateNameRegistrationException ex = Assert.Throws<DuplicateNameRegistrationException>(
+            () => builder.RegisterField(r, "q", "Q", FieldType.U64));
+        await Assert.That(ex.HolderKind).IsEqualTo(RegistrationHolderKind.Field);
+
+        // The container field is accepted; the name resolves to the protocol first, the field stays reachable through its id.
+        Stack stack = builder.Build();
+        await Assert.That(stack.GetProtocolId("q")).IsEqualTo(q);
+        await Assert.That(stack.GetFieldId("q")).IsEqualTo(container);
+        await Assert.That(stack.Fields.Span[container.Value].ProtocolId).IsEqualTo(q);
+    }
+
+    [Test]
+    public async Task StandardStackBuildsWithoutNameConflict()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+
+        IReadOnlyList<SettingsLoadWarning> warnings = ProtocolRegistration.RegisterStandardProtocols(builder);
+        Stack stack = builder.Build();
+
+        // Every protocol, field and alias of the standard stack resolves to exactly one registration.
+        await Assert.That(warnings.Count).IsEqualTo(0);
+        await Assert.That(stack.Protocols.Length).IsGreaterThan(0);
+        FieldAliasGroupInfo[] aliases = stack.FieldAliasGroups.ToArray();
+        foreach (FieldAliasGroupInfo alias in aliases)
+        {
+            await Assert.That(stack.GetProtocolId(alias.Name)).IsNull();
+            await Assert.That(stack.GetFieldId(alias.Name)).IsNull();
+        }
+    }
+
     // === Stub protocol for test use ===
 
     private sealed class StubProtocol(string name, string uiName) : IProtocol

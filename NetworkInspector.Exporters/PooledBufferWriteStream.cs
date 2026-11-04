@@ -14,6 +14,7 @@ namespace NetworkInspector.Exporters;
 /// </summary>
 internal sealed class PooledBufferWriteStream : Stream
 {
+    /// <summary>The buffer that receives every written byte; owned by the caller of the constructor, never returned by this stream.</summary>
     private readonly PooledBuffer _Buffer;
 
     /// <summary>Creates a stream that writes into <paramref name="buffer"/>. Parameter validation is omitted: callers are internal.</summary>

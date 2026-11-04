@@ -30,7 +30,10 @@ public interface IProtocol
         get;
     }
 
-    /// <summary>Human-readable display name (e.g., "Ethernet", "Internet Protocol").</summary>
+    /// <summary>
+    /// Human-readable display name (e.g., "Ethernet", "Internet Protocol"). Required: a protocol declares it, and registration
+    /// refuses an empty text or one with control characters (<see cref="InvalidUiNameRegistrationException"/>).
+    /// </summary>
     string UiName
     {
         get;

@@ -30,7 +30,8 @@ internal static class ConvertCommand
         int ProgressInterval,
         int BlfCacheBudgetBytes,
         bool Tolerant,
-        bool Overwrite);
+        bool Overwrite,
+        bool Verbose = false);
 
     #endregion
 
@@ -72,7 +73,7 @@ internal static class ConvertCommand
     /// <param name="createExporter">Opens the listener for an output path; called for the first output and for every split.</param>
     /// <param name="splitManager">The split policy and the numbering of output paths.</param>
     /// <param name="stack">The stack for parsing; needed only when <paramref name="filter"/> is set.</param>
-    /// <param name="filter">Optional packet filter; frames of rejected packets are not written.</param>
+    /// <param name="filter">Optional run filter (observer form, or tree form as a fallback); frames of rejected packets are not written.</param>
     /// <param name="maxFrames">Stop after this many frames were written (0 = unlimited).</param>
     /// <param name="progressInterval">Print a progress line every N written frames (0 = silent).</param>
     /// <param name="tolerant">
@@ -82,6 +83,7 @@ internal static class ConvertCommand
     /// always aborts.
     /// </param>
     /// <param name="error">Receives progress lines and warnings.</param>
+    /// <param name="planLog">Receives the one <c>parse: …</c> line (<c>--verbose</c>) before the first frame; <see langword="null"/> prints nothing.</param>
     /// <param name="cancellationToken">Passed to the sources; a cancelled read throws <see cref="OperationCanceledException"/>.</param>
     /// <param name="filesWritten">Number of output files that were finished (<c>OnFinish</c> called).</param>
     /// <param name="listenerStopped">
@@ -104,11 +106,12 @@ internal static class ConvertCommand
         Func<string, IFrameListener> createExporter,
         SplitOutputManager splitManager,
         Stack? stack,
-        IFilter? filter,
+        CliRunFilter? filter,
         int maxFrames,
         int progressInterval,
         bool tolerant,
         TextWriter error,
+        TextWriter? planLog,
         CancellationToken cancellationToken,
         out int filesWritten,
         out bool listenerStopped)
@@ -127,9 +130,23 @@ internal static class ConvertCommand
         string? currentPath = null;
         IExportByteProgress? byteProgress = null;
 
-        // The index exists only for a filter. One index serves the whole run: the filter reads protocol presence from it in O(1)
-        // instead of walking the field tree of each packet. Without a filter no index (and no parsing) costs anything.
-        PacketIndex? filterIndex = filter is not null && stack is not null ? new PacketIndex(stack) : null;
+        // The plan of the run: only the filter has a demand (frame exporters demand frames only). Without a filter the plan needs no
+        // parse, so the loop stays at frame level and never parses; with an observer filter the parse is tree-free. The plan is
+        // built once, before the first frame, because it does not depend on the output.
+        ParsePlan? plan = null;
+        Packet? recyclePacket = null;
+        if (stack is not null)
+        {
+            ParseDemand[] demands = filter is null
+                ? []
+                : [filter.Demand];
+            if (!ParsePlan.TryCreate(stack, demands, out plan, out ParsePlanError planError))
+            {
+                throw new InvalidOperationException(planError.Message);
+            }
+
+            planLog?.WriteLine(ExportCommand.DescribePlan(plan, filter));
+        }
 
         RoundRobinSourceIterator iterator = new(sources);
 
@@ -170,26 +187,33 @@ internal static class ConvertCommand
 
                 iterator.RecordFrameRead();
 
-                // Judged before an output is opened, so a filter that matches nothing leaves no
-                // empty file behind. This is the only place where a frame is parsed during a conversion. The packet is parsed with
-                // the shared index so that the filter finds protocol presence in O(1); the capacity check comes first so that a
-                // run over too many packets ends with an error that names the packets. Each frame is parsed into a new packet
-                // here (the export loop reuses one packet instead).
-                if (filter is not null && stack is not null && filterIndex is not null)
+                // Judged before an output is opened, so a filter that matches nothing leaves no empty file behind. This is the only
+                // place where a frame is parsed during a conversion, and only when the plan needs a parse (a filter is set). The
+                // packet is parsed with the options of the plan: tree-free for an observer filter, with the shared index and a field
+                // tree for the fallback. The capacity check comes first so that a run over too many packets ends with an error that
+                // names the packets. One packet is recycled, because only the frame (not the packet) goes to the exporter.
+                if (filter is not null && stack is not null && plan is not null && plan.NeedsParse)
                 {
                     ArrayIndexIdRange.ThrowIfInvalidNextIndex(filterPacketId, "packet");
-                    ParseOptions filterOptions = new(index: filterIndex);
-                    if (!Packet.TryParse(
-                        new PacketId(filterPacketId++),
-                        stack,
-                        frame.Value,
-                        in filterOptions,
-                        out Packet? packet,
-                        out ParseFailure filterFailure))
+                    ParseOptions filterOptions = plan.Options;
+                    PacketId pid = filterPacketId++;
+                    Packet packet;
+                    if (recyclePacket is not null
+                        && Packet.TryParse(recyclePacket, pid, stack, frame.Value, in filterOptions, out _))
+                    {
+                        packet = recyclePacket;
+                    }
+                    else if (!Packet.TryParse(pid, stack, frame.Value, in filterOptions, out Packet? created, out ParseFailure filterFailure))
                     {
                         throw new InvalidOperationException(filterFailure.ToString());
                     }
-                    if (!CliFilter.TryMatch(filter, packet!, filterIndex, error, out bool matched))
+                    else
+                    {
+                        packet = created!;
+                    }
+
+                    recyclePacket = packet;
+                    if (!filter.TryMatch(packet, error, out bool matched))
                     {
                         throw new InvalidOperationException(
                             "Filter evaluation failed; the conversion was aborted to avoid writing a partially filtered output.");
@@ -296,6 +320,47 @@ internal static class ConvertCommand
         }
     }
 
+    /// <summary>
+    /// The loop for callers that hold a compiled tree filter and want no plan line: the filter is wrapped in its tree form.
+    /// </summary>
+    /// <param name="sources">Active, already-started frame sources; read round-robin.</param>
+    /// <param name="createExporter">Opens the listener for an output path.</param>
+    /// <param name="splitManager">The split policy and the numbering of output paths.</param>
+    /// <param name="stack">The stack for parsing; needed only when <paramref name="filter"/> is set.</param>
+    /// <param name="filter">Optional compiled tree filter.</param>
+    /// <param name="maxFrames">Stop after this many frames were written (0 = unlimited).</param>
+    /// <param name="progressInterval">Print a progress line every N written frames (0 = silent).</param>
+    /// <param name="tolerant">Whether a failed frame read is skipped with a warning.</param>
+    /// <param name="error">Receives progress lines and warnings.</param>
+    /// <param name="cancellationToken">Passed to the sources.</param>
+    /// <param name="filesWritten">Number of output files that were finished.</param>
+    /// <param name="listenerStopped">Whether the loop ended early because a listener stopped.</param>
+    /// <returns>The number of frames handed to the listener.</returns>
+    internal static long RunConvertLoop(
+        List<IFrameSource> sources,
+        Func<string, IFrameListener> createExporter,
+        SplitOutputManager splitManager,
+        Stack? stack,
+        IFilter? filter,
+        int maxFrames,
+        int progressInterval,
+        bool tolerant,
+        TextWriter error,
+        CancellationToken cancellationToken,
+        out int filesWritten,
+        out bool listenerStopped)
+    {
+        CliRunFilter? runFilter = null;
+        if (filter is not null && stack is not null)
+        {
+            runFilter = CliRunFilter.FromTree(filter, stack);
+        }
+
+        return RunConvertLoop(
+            sources, createExporter, splitManager, stack, runFilter, maxFrames, progressInterval, tolerant, error, planLog: null,
+            cancellationToken, out filesWritten, out listenerStopped);
+    }
+
     #endregion
 
     #region Private Helpers
@@ -334,6 +399,7 @@ internal static class ConvertCommand
         long blfCacheSize = 0;        // MiB; for BLF sources
         bool tolerant = false;
         bool overwrite = false;
+        bool verbose = false;
 
         // One pass over the arguments. Settings options are offered first so that they behave the same in every command; a
         // value-taking option consumes the next argument (GetNextArg advances i). Everything that is not an option is a source
@@ -378,6 +444,9 @@ internal static class ConvertCommand
                 case "--TOLERANT":
                     tolerant = true;
                     break;
+                case "--VERBOSE":
+                    verbose = true;
+                    break;
                 case "--OVERWRITE":
                     overwrite = true;
                     break;
@@ -418,7 +487,7 @@ internal static class ConvertCommand
 
         return await _ExecuteAsync(
             new ConvertArguments(sourceSpecs, outputPath, outputFormatSpec, filterExpression, settings.Build(), maxFrames,
-                splitSizeBytes, splitCount, progressInterval, blfCacheBudgetBytes, tolerant, overwrite),
+                splitSizeBytes, splitCount, progressInterval, blfCacheBudgetBytes, tolerant, overwrite, verbose),
             io,
             cancellationToken).ConfigureAwait(false);
     }
@@ -518,9 +587,9 @@ internal static class ConvertCommand
         {
             try
             {
-                IFilter? filter = null;
+                CliRunFilter? filter = null;
                 if (CliFilter.IsActive(arguments.FilterExpression)
-                    && !CliFilter.TryCompile(arguments.FilterExpression, stack, io.Error, out filter))
+                    && !CliRunFilter.TryCompile(arguments.FilterExpression, stack, io.Error, out filter))
                 {
                     return (int)ExitCode.ArgumentError;
                 }
@@ -556,7 +625,7 @@ internal static class ConvertCommand
     /// <param name="token">Cancels the run (Ctrl+C).</param>
     /// <returns>The exit code.</returns>
     private static int _RunLoop(ConvertArguments arguments, FrameFormatConfig format, List<IFrameSource> sources, Stack stack,
-        IFilter? filter, CliIo io, CancellationToken token)
+        CliRunFilter? filter, CliIo io, CancellationToken token)
     {
         // Old outputs that --overwrite moved aside; they are settled in the finally block below, whatever the run did.
         List<TargetReplacement> replacements = [];
@@ -573,6 +642,7 @@ internal static class ConvertCommand
                 arguments.ProgressInterval,
                 arguments.Tolerant,
                 io.Error,
+                arguments.Verbose ? io.Error : null,
                 token,
                 out int filesWritten,
                 out bool listenerStopped);
@@ -680,6 +750,7 @@ internal static class ConvertCommand
         error.WriteLine("  --blf-cache-size <MB> Container cache budget for BLF sources (MiB)");
         error.WriteLine("  --progress <N>        Report progress every N frames");
         error.WriteLine("  --tolerant            Skip malformed frames instead of aborting");
+        error.WriteLine("  --verbose             Print the parse work chosen for the run (parse: none | fields only, no tree (…) | field tree (…))");
         error.WriteLine("  -h, --help            Show this help message");
         error.WriteLine();
         error.WriteLine("Output format is auto-detected from the output extension (plugins add more; see 'ni plugins list'):");

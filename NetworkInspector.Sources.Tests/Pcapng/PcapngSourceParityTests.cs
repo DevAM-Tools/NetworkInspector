@@ -87,7 +87,7 @@ internal sealed class PcapngSourceParityTests
 
         FrameInterfaceRegistry registry = SourceTestFixture.InitializeAndStartSource(source);
         Frame? frame = source.NextFrame();
-        Frame? byId = source.FrameById(new FrameId(0));
+        Frame? byId = source.FrameById(0);
 
         await Assert.That(frame).IsNotNull();
         await Assert.That(errors.Count).IsEqualTo(0);

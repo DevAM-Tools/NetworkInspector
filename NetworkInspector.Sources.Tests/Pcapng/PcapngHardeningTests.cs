@@ -91,8 +91,8 @@ internal sealed class PcapngHardeningTests
 
         // Only the packets of usable interfaces are indexed, in file order.
         await Assert.That(indexed).IsEqualTo(2);
-        await Assert.That(source.FrameById(new FrameId(0))!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
-        await Assert.That(source.FrameById(new FrameId(1))!.Value.LinkType).IsEqualTo(LinkType.Ethernet);
+        await Assert.That(source.FrameById(0)!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
+        await Assert.That(source.FrameById(1)!.Value.LinkType).IsEqualTo(LinkType.Ethernet);
     }
 
     [Test]

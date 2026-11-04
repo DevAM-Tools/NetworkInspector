@@ -273,4 +273,20 @@ internal sealed class LazyStringTests
         await Assert.That(success).IsTrue();
         await Assert.That(result).IsEqualTo(string.Empty);
     }
+
+    [Test]
+    public async Task FromRawValueRoundTripsWhatRawValueReturnsAndRejectsAnythingElse()
+    {
+        LazyString deferred = LazyString.Lazy(static () => "x");
+        Func<string> bare = static () => "bare";
+
+        LazyString restored = LazyString.FromRawValue(deferred.RawValue);
+
+        await Assert.That(restored.IsLazy).IsTrue();
+        await Assert.That(restored.AsString).IsEqualTo("x");
+        await Assert.That(LazyString.FromRawValue(null).IsNull).IsTrue();
+        await Assert.That(LazyString.FromRawValue("y").AsString).IsEqualTo("y");
+        await Assert.That(() => LazyString.FromRawValue(42)).Throws<ArgumentException>();
+        await Assert.That(() => LazyString.FromRawValue(bare)).Throws<ArgumentException>();
+    }
 }

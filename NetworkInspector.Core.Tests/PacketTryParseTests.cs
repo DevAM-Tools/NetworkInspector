@@ -21,7 +21,7 @@ internal sealed class PacketTryParseTests
     private static Frame _Frame(Stack stack, int id)
     {
         return Frame.Create(
-            new FrameId(id),
+            id,
             Timestamp.FromSecs(id),
             FrameBuilders.GenerateStaticUdpIpv6Frame(),
             LinkType.Ethernet,
@@ -40,7 +40,7 @@ internal sealed class PacketTryParseTests
         ParseOptions options = new();
 
         bool parsed = Packet.TryParse(
-            new PacketId(0),
+            0,
             stack,
             _Frame(stack, 0),
             in options,
@@ -60,7 +60,7 @@ internal sealed class PacketTryParseTests
         using Stack stack = _BuildStack();
         ParseOptions options = new();
         Frame first = _Frame(stack, 0);
-        bool started = Packet.TryParse(new PacketId(0), stack, first, in options, out Packet? _, out ParseFailure _);
+        bool started = Packet.TryParse(0, stack, first, in options, out Packet? _, out ParseFailure _);
         await Assert.That(started).IsTrue();
 
         bool jumped = false;
@@ -69,7 +69,7 @@ internal sealed class PacketTryParseTests
         try
         {
             jumped = Packet.TryParse(
-                new PacketId(2),
+                2,
                 stack,
                 _Frame(stack, 2),
                 in options,
@@ -93,7 +93,7 @@ internal sealed class PacketTryParseTests
         ParseOptions options = new();
 
         bool parsed = Packet.TryParse(
-            new PacketId(0),
+            0,
             stack,
             default,
             in options,
@@ -111,7 +111,7 @@ internal sealed class PacketTryParseTests
         using Stack stack = _BuildStack();
         ParseOptions options = new();
         bool started = Packet.TryParse(
-            new PacketId(0),
+            0,
             stack,
             _Frame(stack, 0),
             in options,
@@ -125,7 +125,7 @@ internal sealed class PacketTryParseTests
 
         bool recycled = Packet.TryParse(
             packet,
-            new PacketId(1),
+            1,
             stack,
             _Frame(stack, 1),
             in options,
@@ -133,7 +133,7 @@ internal sealed class PacketTryParseTests
 
         await Assert.That(recycled).IsFalse();
         await Assert.That(failure).IsEqualTo(ParseFailure.NotFinalized);
-        await Assert.That(packet.Id).IsEqualTo(new PacketId(0));
+        await Assert.That(packet.Id).IsEqualTo(0);
     }
 
     [Test]
@@ -145,7 +145,7 @@ internal sealed class PacketTryParseTests
         ProtocolId protocolId = builder.RegisterProtocol(reject);
         using Stack stack = builder.Build();
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             new byte[16],
             LinkType.Ethernet,
@@ -154,7 +154,7 @@ internal sealed class PacketTryParseTests
         ParseOptions options = new(firstProtocol: protocolId);
 
         bool parsed = Packet.TryParse(
-            new PacketId(0),
+            0,
             stack,
             frame,
             in options,
@@ -180,9 +180,9 @@ internal sealed class PacketTryParseTests
         ParseOptions second = shared with { Cache = cacheB, Index = null };
         ProtocolId? eth = stack.GetProtocolId("eth");
 
-        bool parsed0 = Packet.TryParse(new PacketId(0), stack, _Frame(stack, 0), in first, out _, out ParseFailure failure0);
+        bool parsed0 = Packet.TryParse(0, stack, _Frame(stack, 0), in first, out _, out ParseFailure failure0);
         long afterFirst = indexA.ProtocolCardinality(eth!.Value);
-        bool parsed1 = Packet.TryParse(new PacketId(1), stack, _Frame(stack, 1), in second, out _, out ParseFailure failure1);
+        bool parsed1 = Packet.TryParse(1, stack, _Frame(stack, 1), in second, out _, out ParseFailure failure1);
         long afterSecond = indexA.ProtocolCardinality(eth.Value);
 
         await Assert.That(parsed0).IsTrue();
@@ -201,7 +201,7 @@ internal sealed class PacketTryParseTests
         using Stack stack = _BuildStack();
         ParseOptions options = new(FieldTreeMode.Skip);
         bool started = Packet.TryParse(
-            new PacketId(0),
+            0,
             stack,
             _Frame(stack, 0),
             in options,
@@ -211,7 +211,7 @@ internal sealed class PacketTryParseTests
 
         bool again = Packet.TryParse(
             packet!,
-            new PacketId(1),
+            1,
             stack,
             _Frame(stack, 1),
             in options,
@@ -219,7 +219,7 @@ internal sealed class PacketTryParseTests
 
         await Assert.That(again).IsTrue();
         await Assert.That(failure).IsEqualTo(ParseFailure.None);
-        await Assert.That(packet!.Id).IsEqualTo(new PacketId(1));
+        await Assert.That(packet!.Id).IsEqualTo(1);
         await Assert.That(packet.HasFieldTree).IsFalse();
     }
 

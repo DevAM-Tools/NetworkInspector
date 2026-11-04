@@ -16,7 +16,7 @@ internal sealed class PacketParseSequenceTests
         ParseOptions options = new();
 
         bool parsed = Packet.TryParse(
-            new PacketId(1),
+            1,
             stack,
             frame,
             in options,
@@ -34,7 +34,7 @@ internal sealed class PacketParseSequenceTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, frameId: 0),
                 in options,
@@ -47,7 +47,7 @@ internal sealed class PacketParseSequenceTests
 
         ParseOptions jumpOptions = new();
         bool jumped = Packet.TryParse(
-            new PacketId(2),
+            2,
             stack,
             _MakeFrame(stack, frameId: 2),
             in jumpOptions,
@@ -66,7 +66,7 @@ internal sealed class PacketParseSequenceTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, frameId: 0),
                 in options,
@@ -82,7 +82,7 @@ internal sealed class PacketParseSequenceTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 _MakeFrame(stack, frameId: 1),
                 in options,
@@ -98,7 +98,7 @@ internal sealed class PacketParseSequenceTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, frameId: 0),
                 in options,
@@ -111,9 +111,9 @@ internal sealed class PacketParseSequenceTests
             replay = parsed;
         }
 
-        await Assert.That(first.Id).IsEqualTo(new PacketId(0));
-        await Assert.That(second.Id).IsEqualTo(new PacketId(1));
-        await Assert.That(replay.Id).IsEqualTo(new PacketId(0));
+        await Assert.That(first.Id).IsEqualTo(0);
+        await Assert.That(second.Id).IsEqualTo(1);
+        await Assert.That(replay.Id).IsEqualTo(0);
         await Assert.That(replay.IsFinalized).IsTrue();
     }
 
@@ -128,7 +128,7 @@ internal sealed class PacketParseSequenceTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -143,7 +143,7 @@ internal sealed class PacketParseSequenceTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -170,7 +170,7 @@ internal sealed class PacketParseSequenceTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -187,7 +187,7 @@ internal sealed class PacketParseSequenceTests
             {
                 ParseOptions options = new(index: index);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -223,7 +223,7 @@ internal sealed class PacketParseSequenceTests
         await Assert.That(failure).IsEqualTo(ParseFailure.InvalidPacketId);
 
         bool next = Packet.TryParse(
-            new PacketId(0),
+            0,
             stack,
             frame,
             in options,
@@ -244,7 +244,7 @@ internal sealed class PacketParseSequenceTests
         Packet packet;
         {
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -267,7 +267,7 @@ internal sealed class PacketParseSequenceTests
 
         await Assert.That(recycled).IsFalse();
         await Assert.That(failure).IsEqualTo(ParseFailure.InvalidPacketId);
-        await Assert.That(packet.Id).IsEqualTo(new PacketId(0));
+        await Assert.That(packet.Id).IsEqualTo(0);
         await Assert.That(packet.IsFinalized).IsTrue();
     }
 
@@ -284,7 +284,7 @@ internal sealed class PacketParseSequenceTests
         byte[] data = new byte[64];
         BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(12), 0x0800);
         return Frame.Create(
-            new FrameId(frameId),
+            frameId,
             Timestamp.FromSecs(frameId),
             data,
             LinkType.Ethernet,

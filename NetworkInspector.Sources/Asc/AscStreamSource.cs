@@ -701,7 +701,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         int frameId = _FrameIndex++;
         ParseResult<Frame> result = Frame.Create(
-            new FrameId(frameId),
+            frameId,
             new Timestamp(absoluteNanos),
             frameData,
             linkType,

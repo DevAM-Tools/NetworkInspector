@@ -37,6 +37,41 @@ internal sealed class PbfExporterTruncationTests
     }
 
     [Test]
+    public async Task TheTruncationEventNamesTheFirstPacketOfTheBlock()
+    {
+        // Two blocks of two packets: the first block is shallow, the second one holds the packets that exceed the nesting depth.
+        Packet[] packets =
+        [
+            PbfInternalTests.CreateDeepPacket(2),
+            PbfInternalTests.CreateDeepPacket(2),
+            PbfInternalTests.CreateDeepPacket(18),
+            PbfInternalTests.CreateDeepPacket(18),
+        ];
+        List<ExportErrorEventArgs> events = [];
+        using MemoryStream stream = new();
+        using (PbfExporter exporter = PbfExporter.CreateBuilder()
+            .ToStream(stream)
+            .WithCompressed(false)
+            .WithMaxPacketsPerBlock(2)
+            .WithWriteMode(ExportWriteMode.Synchronous)
+            .Build())
+        {
+            exporter.ItemSkipped += (_, args) => events.Add(args);
+            foreach (Packet packet in packets)
+            {
+                _ = exporter.OnPacket(packet);
+            }
+
+            exporter.OnFinish();
+        }
+
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].Kind).IsEqualTo(ExportErrorKind.MalformedData);
+        await Assert.That(events[0].ItemIndex).IsEqualTo(2);
+        await Assert.That(events[0].Message).Contains("starting at packet 2");
+    }
+
+    [Test]
     public async Task StrictTruncationDropsTheBlockAndTheTrailerDoesNotCountItsPackets()
     {
         Packet deep = PbfInternalTests.CreateDeepPacket(18);

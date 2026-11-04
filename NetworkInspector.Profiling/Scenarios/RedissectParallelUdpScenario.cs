@@ -75,14 +75,14 @@ internal sealed class RedissectParallelUdpScenario : IProfilingScenario, IDispos
         ParseOptions options = new();
         for (int i = 0; i < _BatchSize; i++)
         {
-            PacketId id = new(i);
+            PacketId id = i;
             if (!Packet.TryParse(id, _Stack, _Frames[i], in options, out _, out ParseFailure failure))
             {
                 throw new InvalidOperationException(failure.ToString());
             }
         }
 
-        PacketId seedId = new(0);
+        PacketId seedId = 0;
         for (int t = 0; t < _ThreadCount; t++)
         {
             if (!Packet.TryParse(seedId, _Stack, _Frames[0], in options, out Packet? seeded, out ParseFailure seedFailure))
@@ -204,7 +204,7 @@ internal sealed class RedissectParallelUdpScenario : IProfilingScenario, IDispos
         ParseOptions options = new();
         for (int i = 0; i < _BatchSize; i++)
         {
-            PacketId id = new(i);
+            PacketId id = i;
             if (!Packet.TryParse(packet, id, stack, frames[i], in options, out ParseFailure failure))
             {
                 throw new InvalidOperationException(failure.ToString());

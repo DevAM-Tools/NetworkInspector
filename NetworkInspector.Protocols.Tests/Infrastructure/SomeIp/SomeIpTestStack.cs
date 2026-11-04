@@ -252,14 +252,14 @@ internal sealed class SomeIpTestStack : IDisposable
         int id = _NextPacketId++;
         index = new PacketIndex(Stack);
         Frame parsed = Frame.Create(
-            new FrameId(id),
+            id,
             Timestamp.FromMillis(id),
             frame,
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             Stack.FrameInterfaceRegistry).Value;
         ParseOptions options = new(index: index);
-        if (!Packet.TryParse(new PacketId(id), Stack, parsed, in options, out Packet? packet, out ParseFailure failure) || packet is null)
+        if (!Packet.TryParse(id, Stack, parsed, in options, out Packet? packet, out ParseFailure failure) || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());
         }

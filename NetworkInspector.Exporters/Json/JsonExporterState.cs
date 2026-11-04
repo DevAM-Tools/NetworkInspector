@@ -8,7 +8,8 @@ namespace NetworkInspector.Exporters.Json;
 /// <para>
 /// The state lives for the whole output document, not per packet: a reader of the compact format must replay the packets
 /// in file order and apply the same bookkeeping to resolve omitted values and field names. It is therefore only
-/// meaningful for one complete export and must not be reused or reset between packets. The one exception is
+/// meaningful for one complete export of one protocol stack (field ids are dense per stack, so the exporter refuses a packet of
+/// another stack) and must not be reused or reset between packets. The one exception is
 /// <see cref="Reset"/> after a packet that failed to reach the output (see there).
 /// </para>
 /// <para>
@@ -17,6 +18,8 @@ namespace NetworkInspector.Exporters.Json;
 /// </summary>
 internal sealed class JsonExporterState
 {
+    #region Configuration and state
+
     /// <summary>Tracks which fields have had their info (name, UI name, type) emitted.</summary>
     internal FieldBitmask FieldSeen
     {
@@ -35,6 +38,22 @@ internal sealed class JsonExporterState
         get; set;
     }
 
+    /// <summary>Creates a new exporter state sized for the given field count.</summary>
+    /// <param name="fieldCount">
+    /// Expected number of distinct field ids (ids <c>0</c> to <c>fieldCount - 1</c>). A sizing hint for the bitmask and the
+    /// dense arrays of the previous-value store; larger ids still work (they grow the mask or use the store's overflow
+    /// path). Must not be negative.
+    /// </param>
+    internal JsonExporterState(int fieldCount)
+    {
+        FieldSeen = new FieldBitmask(fieldCount);
+        PreviousFields = new PreviousFieldStore(fieldCount);
+    }
+
+    #endregion
+
+    #region Reset after a failed packet
+
     /// <summary>
     /// Forgets everything the state knows: no field counts as seen, no previous value or info exists. The exporter calls this
     /// after a packet failed to reach the output. That packet updated the state while it was serialized, so a later
@@ -48,15 +67,5 @@ internal sealed class JsonExporterState
         PreviousPacketInfo = null;
     }
 
-    /// <summary>Creates a new exporter state sized for the given field count.</summary>
-    /// <param name="fieldCount">
-    /// Expected number of distinct field ids (ids <c>0</c> to <c>fieldCount - 1</c>). A sizing hint for the bitmask and the
-    /// dense arrays of the previous-value store; larger ids still work (they grow the mask or use the store's overflow
-    /// path). Must not be negative.
-    /// </param>
-    internal JsonExporterState(int fieldCount)
-    {
-        FieldSeen = new FieldBitmask(fieldCount);
-        PreviousFields = new PreviousFieldStore(fieldCount);
-    }
+    #endregion
 }

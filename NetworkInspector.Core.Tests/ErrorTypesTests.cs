@@ -152,7 +152,7 @@ internal sealed class ErrorTypesTests
         using Stack stack = builder.Build();
 
         Frame frame = Frame.Create(
-            new FrameId(1),
+            1,
             Timestamp.FromSecs(1000),
             new byte[14],
             LinkType.Ethernet,
@@ -163,7 +163,7 @@ internal sealed class ErrorTypesTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,

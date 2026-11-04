@@ -122,7 +122,10 @@ public sealed partial class SomeIpProtocol
     /// <param name="delivered">The payload to hand on (empty when this segment delivers nothing).</param>
     /// <param name="partial">True when <paramref name="delivered"/> is the gap-free prefix of an incomplete message.</param>
     /// <param name="timing">The method-timing outcome of this segment (present for the segment that completes a response).</param>
-    /// <returns>No error, or the parse error for a full table of bound buffers.</returns>
+    /// <returns>
+    /// No error, or the parse error that names the limit that stopped the bind of the reassembled message: the full table of
+    /// bound buffers, or <c>someip.tp_max_derived_bytes_per_packet</c> in total.
+    /// </returns>
     private ParseResult _AppendTp(
         in MutField container,
         ReadOnlyMemory<byte> afterHeader,
@@ -215,10 +218,23 @@ public sealed partial class SomeIpProtocol
         // The reassembled payload is not a slice of the frame, so the packet binds it as an additional buffer: nested parsers need a
         // buffer the packet knows to compute their layer keys. A full table is a named parse error, never a silent drop. The same
         // array is bound on a replay, in the same order, which gives the same buffer index and therefore the same keys.
-        ReadOnlyMemory<byte> bound = container.BindParseBuffer(outcome.Payload!);
-        if (bound.IsEmpty && outcome.Payload!.Length > 0)
+        //
+        // Security: the bound messages stay referenced until the packet is recycled and one datagram can complete several of them,
+        // so the bytes bound to the packet, with this message, are counted against someip.tp_max_derived_bytes_per_packet
+        // (value, range, posture, and who may change it: SomeIpLimits.TpMaxDerivedBytesPerPacket). DerivedBytesLimit.TryBind
+        // checks the total before it binds, so a refused message leaves the packet unchanged; the TP fields of the segment are
+        // already shown and stay. The check depends only on the bound bytes and their order, so a replay reaches the same decision
+        // as the first parse. Residual risk: the message that fails was already reassembled by the session (at most the message
+        // size limit).
+        bool isBound = DerivedBytesLimit.TryBind(
+            in container, outcome.Payload!, DerivedBytesTotal, out ReadOnlyMemory<byte> bound, out DerivedBytesFailure failure);
+        if (!isBound)
         {
-            return ParseError.Custom(ProtocolName, _BoundBufferLimitMessage);
+            return ParseError.Custom(
+                ProtocolName,
+                failure == DerivedBytesFailure.TotalExceeded
+                    ? _DerivedBytesLimitText()
+                    : _BoundBufferLimitMessage);
         }
 
         _AppendTpRegions(in tpField, in outcome, bound, in context);
@@ -229,6 +245,30 @@ public sealed partial class SomeIpProtocol
         delivered = bound[..outcome.PrefixLength];
         return 0;
     }
+
+    /// <summary>
+    /// The text of the parse error for a packet whose reassembled messages would pass
+    /// <c>someip.tp_max_derived_bytes_per_packet</c> in total: it names the setting, the limit, and that the limit is the total
+    /// per packet. Sync: <c>DerivedBytesLimit.Text</c> (the wording shared with HTTP and WebSocket).
+    /// </summary>
+    /// <returns>The error text; allocates one string, on the error path only.</returns>
+    private string _DerivedBytesLimitText() => DerivedBytesLimit.Text(
+        "Reassembled SOME/IP-TP messages",
+        DerivedBytesTotal,
+        SomeIpLimits.TpMaxDerivedBytesPerPacket.Key);
+
+    /// <summary>
+    /// The total of reassembled bytes per packet as the unsigned value the packet counts against: the setting, or 0 when a caller
+    /// that built <see cref="SomeIpSettings"/> by hand gave a negative number. Internal so that the tests can pin the rule.
+    /// </summary>
+    /// <remarks>
+    /// Security: the settings layer keeps the value inside 2 KiB to 16 GiB, but <see cref="SomeIpSettings"/> is a public record that a
+    /// plugin or test can construct with any <see cref="long"/>. A bare cast would turn a negative number into a total near
+    /// 2^64, which silently removes the limit. Saturating at 0 fails closed: every message is then refused with the named error,
+    /// so a wrong value is seen at once instead of weakening the protection. Rejected alternative: a throwing check on every
+    /// segment (an exception on a hot parse path for a configuration mistake). Residual risk: none.
+    /// </remarks>
+    internal ulong DerivedBytesTotal => ulong.CreateSaturating(Settings.TpMaxDerivedBytesPerPacket);
 
     /// <summary>
     /// Shows what the outcome says went wrong or notable, one named field per cause, with the limit and its value where a limit is

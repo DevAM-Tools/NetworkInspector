@@ -25,6 +25,8 @@ internal enum InterfaceChannelLookup
 /// </summary>
 internal static class InterfaceChannelConverter
 {
+    #region Channel lookup
+
     /// <summary>
     /// Resolves the Vector channel of an interface: <see cref="BlfInterfacePropertyKeys.Channel"/> first (BLF sources),
     /// then <see cref="AscInterfacePropertyKeys.Channel"/> (ASC sources), then a trailing number of at least 1 after a
@@ -74,6 +76,9 @@ internal static class InterfaceChannelConverter
     /// Parses <c>"... N"</c>: digits after the last space, value at least 1. <c>"eth0"</c> or <c>"Interface 0"</c> give no
     /// channel, so captures from other buses keep the exporter's default instead of channel 0.
     /// </summary>
+    /// <param name="name">The interface display name.</param>
+    /// <param name="channel">The parsed channel when the result is <see langword="true"/>; otherwise 0.</param>
+    /// <returns><see langword="true"/> when the name ends in a space and a number of at least 1.</returns>
     private static bool _TryTrailingNumber(string name, out int channel)
     {
         channel = 0;
@@ -84,6 +89,10 @@ internal static class InterfaceChannelConverter
             && channel >= 1;
     }
 
+    #endregion
+
+    #region Integer conversion
+
     /// <summary>
     /// Attempts to convert <paramref name="value"/> to an <see cref="int"/> without exception-based control flow.
     /// Accepts the signed and unsigned integral types up to 32 bits, a <see cref="long"/> or <see cref="uint"/> inside the
@@ -92,6 +101,7 @@ internal static class InterfaceChannelConverter
     /// </summary>
     /// <param name="value">Property value of unknown type.</param>
     /// <param name="result">The converted value, or 0 when the conversion fails.</param>
+    /// <returns><see langword="true"/> when <paramref name="value"/> is a supported type holding an <see cref="int"/>-range value.</returns>
     internal static bool TryConvertToInt32(object? value, out int result)
     {
         switch (value)
@@ -129,6 +139,9 @@ internal static class InterfaceChannelConverter
     /// <summary>
     /// Attempts to convert <paramref name="value"/> to a <see cref="ushort"/> without exception-based control flow.
     /// </summary>
+    /// <param name="value">Property value of unknown type; see <see cref="TryConvertToInt32"/> for the accepted types.</param>
+    /// <param name="result">The converted value, or 0 when the conversion fails.</param>
+    /// <returns><see langword="true"/> when <paramref name="value"/> converts to an integer from 0 to <see cref="ushort.MaxValue"/>.</returns>
     internal static bool TryConvertToUInt16(object? value, out ushort result)
     {
         if (!TryConvertToInt32(value, out int i) || i < 0 || i > ushort.MaxValue)
@@ -140,4 +153,6 @@ internal static class InterfaceChannelConverter
         result = (ushort)i;
         return true;
     }
+
+    #endregion
 }

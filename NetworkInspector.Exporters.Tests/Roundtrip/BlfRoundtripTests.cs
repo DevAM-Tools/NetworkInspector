@@ -17,6 +17,7 @@ namespace NetworkInspector.Exporters.Tests.Roundtrip;
 /// </para>
 /// <para>tshark is required — tests fail when it is missing.</para>
 /// </summary>
+[Category("Slow")]
 internal sealed class BlfRoundtripTests
 {
     /// <summary>Reference Unix epoch base in nanoseconds (April 2026, 10 µs aligned).</summary>
@@ -29,7 +30,7 @@ internal sealed class BlfRoundtripTests
     // 1. Empty file (0 frames).
     // ========================================================================
     [Test]
-    public async Task Empty_File_Roundtrip()
+    public async Task EmptyFileRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_empty");
@@ -58,7 +59,7 @@ internal sealed class BlfRoundtripTests
     // 2. Single Ethernet frame.
     // ========================================================================
     [Test]
-    public async Task SingleEthernet_Roundtrip()
+    public async Task SingleEthernetRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_eth");
@@ -111,7 +112,7 @@ internal sealed class BlfRoundtripTests
     // 3. CAN classic — standard 11-bit and extended 29-bit IDs, varied DLCs.
     // ========================================================================
     [Test]
-    public async Task CanClassic_Roundtrip()
+    public async Task CanClassicRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_can");
@@ -151,7 +152,7 @@ internal sealed class BlfRoundtripTests
     /// as ID bit 31, not as a flags-byte EFF bit.
     /// </summary>
     [Test]
-    public async Task CanClassic_ExtendedLowIdPreserved_Roundtrip()
+    public async Task CanClassicExtendedLowIdPreservedRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_can_eff_low");
@@ -175,7 +176,7 @@ internal sealed class BlfRoundtripTests
     }
 
     [Test]
-    public async Task CanXl_Roundtrip()
+    public async Task CanXlRoundtrip()
     {
         using TestDir dir = new("rt_blf_canxl");
         string path = dir.FilePath("canxl.blf");
@@ -198,7 +199,7 @@ internal sealed class BlfRoundtripTests
         await ValueTask.CompletedTask.ConfigureAwait(false);
     }
     [Test]
-    public async Task CanFd_Roundtrip()
+    public async Task CanFdRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_canfd");
@@ -240,7 +241,7 @@ internal sealed class BlfRoundtripTests
     // 5. LIN.
     // ========================================================================
     [Test]
-    public async Task Lin_Roundtrip()
+    public async Task LinRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_lin");
@@ -268,7 +269,7 @@ internal sealed class BlfRoundtripTests
     // 6. FlexRay.
     // ========================================================================
     [Test]
-    public async Task FlexRay_Roundtrip()
+    public async Task FlexRayRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_fr");
@@ -296,7 +297,7 @@ internal sealed class BlfRoundtripTests
     // 7. Mixed bus types with multiple channels.
     // ========================================================================
     [Test]
-    public async Task Mixed_AllBusTypes_MultipleChannels_Roundtrip()
+    public async Task MixedAllBusTypesMultipleChannelsRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_mixed");
@@ -342,7 +343,7 @@ internal sealed class BlfRoundtripTests
     // 8. Bulk 10 000 frames.
     // ========================================================================
     [Test]
-    public async Task EthernetBulk_10kFrames_Roundtrip()
+    public async Task EthernetBulk10kFramesRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_bulk");
@@ -377,7 +378,7 @@ internal sealed class BlfRoundtripTests
     [Arguments(BlfCompressionLevel.Fast)]
     [Arguments(BlfCompressionLevel.Default)]
     [Arguments(BlfCompressionLevel.Best)]
-    public async Task Compression_Levels_Roundtrip(BlfCompressionLevel level)
+    public async Task CompressionLevelsRoundtrip(BlfCompressionLevel level)
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new($"rt_blf_cmp_{level}");
@@ -421,7 +422,7 @@ internal sealed class BlfRoundtripTests
     //      out-of-order frame.
     // ========================================================================
     [Test]
-    public async Task NonMonotonicTimestamp_ClampsToStartAnchor_Roundtrip()
+    public async Task NonMonotonicTimestampClampsToStartAnchorRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_nonmono");
@@ -466,7 +467,7 @@ internal sealed class BlfRoundtripTests
     // 10b. Identical (duplicate) timestamps — must round-trip exactly.
     // ========================================================================
     [Test]
-    public async Task IdenticalTimestamps_Roundtrip()
+    public async Task IdenticalTimestampsRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_ts");
@@ -498,7 +499,7 @@ internal sealed class BlfRoundtripTests
     // 11. Stream output (MemoryStream) roundtrip.
     // ========================================================================
     [Test]
-    public async Task StreamOutput_Roundtrip()
+    public async Task StreamOutputRoundtrip()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_stream");
@@ -544,7 +545,7 @@ internal sealed class BlfRoundtripTests
     // 12. Reimport in Full vs Lazy scan mode — both must yield identical frames.
     // ========================================================================
     [Test]
-    public async Task Reimport_FullScan_VsLazyScan()
+    public async Task ReimportFullScanVsLazyScan()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_scan");
@@ -586,7 +587,7 @@ internal sealed class BlfRoundtripTests
     // 13. Random access via FrameById.
     // ========================================================================
     [Test]
-    public async Task Reimport_RandomAccess_FrameById()
+    public async Task ReimportRandomAccessFrameById()
     {
         TsharkVerifier.RequireAvailable();
         using TestDir dir = new("rt_blf_rand");
@@ -618,14 +619,14 @@ internal sealed class BlfRoundtripTests
 
         foreach (int idx in order)
         {
-            Frame? got = source.FrameById(new FrameId(idx));
+            Frame? got = source.FrameById(idx);
             await Assert.That(got).IsNotNull();
             await Assert.That(got!.Value.Data.Span.SequenceEqual(originals[idx].Data.Span)).IsTrue();
             await Assert.That(got.Value.Timestamp.AsNanos).IsEqualTo(originals[idx].Timestamp.AsNanos);
             await Assert.That(got.Value.LinkType).IsEqualTo(originals[idx].LinkType);
         }
 
-        await Assert.That(source.FrameById(new FrameId(count))).IsNull();
+        await Assert.That(source.FrameById(count)).IsNull();
     }
 
     // ========================================================================

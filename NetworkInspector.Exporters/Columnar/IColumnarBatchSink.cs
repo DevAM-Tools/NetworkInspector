@@ -9,7 +9,9 @@ namespace NetworkInspector.Exporters.Columnar;
 /// calling <see cref="Complete"/> exactly once after the last <see cref="WriteBatch"/> call.
 /// <para>
 /// <b>Thread safety:</b> Implementations need not be thread-safe. The owning exporter calls <see cref="WriteBatch"/> and
-/// <see cref="Complete"/> sequentially from the single thread that drives the export.
+/// <see cref="Complete"/> sequentially, but not always from one thread: in background write mode the exporter's writer thread
+/// calls <see cref="WriteBatch"/> and the finishing thread calls <see cref="Complete"/> after joining it (the join is the
+/// happens-before). An implementation must not keep thread-affine state (thread-static data, a synchronization context).
 /// </para>
 /// </summary>
 internal interface IColumnarBatchSink

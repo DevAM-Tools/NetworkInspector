@@ -57,7 +57,7 @@ internal sealed class EagerDispatchIndexTests
         NetworkInspector.Core.Index.PacketIndex index = new(stack);
 
         Frame parsedFrame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             frame,
             LinkType.Ethernet,
@@ -65,7 +65,7 @@ internal sealed class EagerDispatchIndexTests
             stack.FrameInterfaceRegistry).Value;
 
         ParseOptions options = new(index: index);
-        if (!Packet.TryParse(new PacketId(0), stack, parsedFrame, in options, out Packet? packet, out ParseFailure failure)
+        if (!Packet.TryParse(0, stack, parsedFrame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());
@@ -140,7 +140,7 @@ internal sealed class EagerDispatchIndexTests
             NetworkInspector.Core.Index.PacketIndex index = new(stack);
 
             Frame parsedFrame = Frame.Create(
-                new FrameId(0),
+                0,
                 Timestamp.FromSecs(0),
                 frame,
                 LinkType.Ethernet,
@@ -148,7 +148,7 @@ internal sealed class EagerDispatchIndexTests
                 stack.FrameInterfaceRegistry).Value;
 
             ParseOptions options = new(index: index);
-        if (!Packet.TryParse(new PacketId(0), stack, parsedFrame, in options, out Packet? packet, out ParseFailure failure)
+        if (!Packet.TryParse(0, stack, parsedFrame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());

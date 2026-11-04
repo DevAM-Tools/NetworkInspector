@@ -230,7 +230,7 @@ internal sealed class BlfRobustnessTests
         using BlfSource source = BlfSource.FromData(data, "lz4.blf", new BlfSourceOptions { ScanMode = scanMode });
 
         List<Frame> frames = _Drain(source, out _);
-        Frame? random = source.FrameById(new FrameId(frameCount / 2));
+        Frame? random = source.FrameById(frameCount / 2);
 
         // The scanner inflated the container once; the source neither inflated it again for the sequential read nor
         // for the random access served from the cache.

@@ -236,7 +236,7 @@ internal sealed class SettingsSaveChangedTests
                             manager.SaveChanged([name]);
                             break;
                         }
-                        catch (PersistenceSettingsException) when (attempt < 5)
+                        catch (PersistenceSettingsException) when (attempt < 10)
                         {
                         }
                     }

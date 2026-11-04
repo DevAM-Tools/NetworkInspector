@@ -47,7 +47,7 @@ internal sealed class RoundtripFrameFactory
     /// </summary>
     internal Frame Create(FrameInterfaceId interfaceId, LinkType linkType, long timestampNs, byte[] data) =>
         Frame.Create(
-            new FrameId(_NextFrameId++),
+            _NextFrameId++,
             Timestamp.FromNanos(timestampNs),
             data,
             linkType,

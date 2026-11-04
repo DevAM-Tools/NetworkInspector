@@ -64,7 +64,7 @@ internal sealed class SessionBatchReadTests
         PacketRef[] refs = new PacketRef[100];
         for (int i = 0; i < refs.Length; i++)
         {
-            refs[i] = new PacketRef(new PacketId(10 + i), before[i]);
+            refs[i] = new PacketRef(10 + i, before[i]);
         }
 
         int third = session.ReadPackets(10, refs, out PacketIdLayout layout);
@@ -309,7 +309,7 @@ internal sealed class SessionBatchReadTests
         List<(int, byte[])> snapshot = [];
         for (int i = 0; i < count; i++)
         {
-            if (session.TryGetPacket(new PacketId(i), out Packet? packet, out _))
+            if (session.TryGetPacket(i, out Packet? packet, out _))
             {
                 snapshot.Add((packet.Id.Value, packet.Frame.Data.ToArray()));
             }
@@ -328,7 +328,7 @@ internal sealed class SessionBatchReadTests
         Packet?[] expected = new Packet?[length];
         for (int i = 0; i < expectedCount; i++)
         {
-            expected[i] = session.TryGetPacket(new PacketId(start + i), out Packet? packet, out _)
+            expected[i] = session.TryGetPacket(start + i, out Packet? packet, out _)
                 ? packet
                 : null;
         }

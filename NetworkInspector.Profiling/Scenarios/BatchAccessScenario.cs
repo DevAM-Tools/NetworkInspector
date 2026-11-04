@@ -89,7 +89,7 @@ internal sealed class BatchAccessScenario : IProfilingScenario
         {
             int length = Math.Min(_RangeLength, _Count - start);
             Span<Frame?> frames = _RangeFrames.AsSpan(0, length);
-            int found = source.FramesById(new FrameId(start), frames);
+            int found = source.FramesById(start, frames);
             if (found < length)
             {
                 throw new InvalidOperationException(Invariant($"Scenario {Name}: FramesById returned {found} of {length} frames at {start}."));

@@ -19,7 +19,7 @@ internal sealed class ValueCacheSeriesTests
         proto.RegisterFields(builder, protoId);
         Stack stack = builder.Build();
         Frame frame = Frame.Create(
-            new FrameId(1),
+            1,
             Timestamp.FromSecs(1000),
             new byte[16],
             LinkType.Ethernet,
@@ -29,7 +29,7 @@ internal sealed class ValueCacheSeriesTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -212,7 +212,7 @@ internal sealed class ValueCacheSeriesTests
         proto.RegisterFields(builder, protoId);
         using Stack stack = builder.Build();
         Frame frame = Frame.Create(
-            new FrameId(1),
+            1,
             Timestamp.FromSecs(1),
             new byte[16],
             LinkType.Ethernet,
@@ -222,7 +222,7 @@ internal sealed class ValueCacheSeriesTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,

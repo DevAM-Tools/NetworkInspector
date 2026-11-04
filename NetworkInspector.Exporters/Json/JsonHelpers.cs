@@ -6,8 +6,8 @@ namespace NetworkInspector.Exporters.Json;
 /// Zero-allocation JSON formatting helpers.
 /// All methods write directly to a <see cref="PooledBuffer"/> using stack-allocated
 /// scratch buffers for numeric formatting, avoiding heap allocations on the hot path
-/// (these helpers run once per exported field value). Only strings and base-64 payloads whose
-/// worst-case encoded size exceeds 512 bytes fall back to <see cref="ArrayPool{T}.Shared"/>.
+/// (these helpers run once per exported field value). Only strings whose worst-case encoded size exceeds 512 bytes fall back to
+/// <see cref="ArrayPool{T}.Shared"/>; base-64 payloads are encoded straight into the target buffer.
 /// <para>
 /// All formatting uses <see cref="CultureInfo.InvariantCulture"/> so the output never depends on the host culture.
 /// Thread safety: stateless; safe from any thread as long as each thread uses its own <see cref="PooledBuffer"/>.
@@ -15,28 +15,30 @@ namespace NetworkInspector.Exporters.Json;
 /// </summary>
 internal static class JsonHelpers
 {
+    #region Numbers
+
     /// <summary>Writes a signed 64-bit integer as a decimal string.</summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="value">The value to format.</param>
+    /// <exception cref="InvalidOperationException">The number did not fit its stack buffer (a broken invariant).</exception>
     internal static void WriteI64(ref PooledBuffer buffer, long value)
     {
         // Format into a stack buffer instead of value.ToString() to avoid a string allocation per number.
-        // "-9223372036854775808" is the longest i64 text: 19 digits plus the sign = 20 bytes.
+        // "-9223372036854775808" is the longest i64 text: 19 digits plus the sign = 20 bytes, so the format cannot fail; a failure
+        // would be a broken invariant and is reported instead of writing a malformed or silently replaced token.
         Span<byte> scratch = stackalloc byte[20];
         if (!value.TryFormat(scratch, out int bytesWritten, default, CultureInfo.InvariantCulture))
         {
-            // TryFormat cannot fail for a 20-byte buffer and a 64-bit integer; guard
-            // defensively so any unexpected future change produces null rather than
-            // a truncated/malformed JSON token.
-            buffer.Write("null"u8);
-            return;
+            ThrowValueUnreadable(FieldType.I64);
         }
+
         buffer.Write(scratch[..bytesWritten]);
     }
 
     /// <summary>Writes an unsigned 64-bit integer as a decimal string.</summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="value">The value to format.</param>
+    /// <exception cref="InvalidOperationException">The number did not fit its stack buffer (a broken invariant).</exception>
     internal static void WriteU64(ref PooledBuffer buffer, ulong value)
     {
         // Stack buffer instead of ToString() to avoid a per-number string allocation.
@@ -44,9 +46,9 @@ internal static class JsonHelpers
         Span<byte> scratch = stackalloc byte[20];
         if (!value.TryFormat(scratch, out int bytesWritten, default, CultureInfo.InvariantCulture))
         {
-            buffer.Write("null"u8);
-            return;
+            ThrowValueUnreadable(FieldType.U64);
         }
+
         buffer.Write(scratch[..bytesWritten]);
     }
 
@@ -56,6 +58,7 @@ internal static class JsonHelpers
     /// </summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="value">The value to format.</param>
+    /// <exception cref="InvalidOperationException">The number did not fit its stack buffer (a broken invariant).</exception>
     internal static void WriteF64(ref PooledBuffer buffer, double value)
     {
         // JSON (RFC 8259) has no token for NaN or Infinity; emitting "NaN" would make the whole document unparsable,
@@ -69,7 +72,11 @@ internal static class JsonHelpers
         // The default shortest round-trip text is at most 24 characters (for example "-1.7976931348623157E+308");
         // 32 bytes leave headroom, so TryFormat cannot run out of space here.
         Span<byte> scratch = stackalloc byte[32];
-        value.TryFormat(scratch, out int bytesWritten, default, CultureInfo.InvariantCulture);
+        if (!value.TryFormat(scratch, out int bytesWritten, default, CultureInfo.InvariantCulture))
+        {
+            ThrowValueUnreadable(FieldType.F64);
+        }
+
         buffer.Write(scratch[..bytesWritten]);
     }
 
@@ -78,7 +85,13 @@ internal static class JsonHelpers
     /// <param name="value">The boolean value.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void WriteBool(ref PooledBuffer buffer, bool value) =>
-        buffer.Write(value ? "true"u8 : "false"u8);
+        buffer.Write(value
+            ? "true"u8
+            : "false"u8);
+
+    #endregion
+
+    #region Strings
 
     /// <summary>
     /// Writes a JSON string with surrounding double quotes and SIMD-accelerated escaping.
@@ -87,6 +100,9 @@ internal static class JsonHelpers
     /// </summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="value">The string to write.</param>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="value"/> is longer than <see cref="_MaxJsonStringChars"/> characters.
+    /// </exception>
     internal static void WriteJsonString(ref PooledBuffer buffer, ReadOnlySpan<char> value)
     {
         buffer.WriteByte((byte)'"');
@@ -100,6 +116,11 @@ internal static class JsonHelpers
         // worst case (GetMaxByteCount is (length + 1) * 3), which avoids a second counting pass over the string.
         // The 512-byte cap keeps the stackalloc small and bounded no matter how long the string is (stack overflow
         // is not recoverable); longer strings use a pooled array instead of a fresh heap allocation.
+        if (value.Length > _MaxJsonStringChars)
+        {
+            _ThrowStringTooLarge(value.Length);
+        }
+
         int maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
         if (maxBytes <= 512)
         {
@@ -109,71 +130,211 @@ internal static class JsonHelpers
         }
         else
         {
+            // The rental is returned in finally: the escaper writes into a pooled buffer that can fail to grow.
             byte[] rented = ArrayPool<byte>.Shared.Rent(maxBytes);
-            int written = Encoding.UTF8.GetBytes(value, rented);
-            SimdEscape.EscapeJsonStringTo(ref buffer, rented.AsSpan(0, written));
-            ArrayPool<byte>.Shared.Return(rented);
-        }
-        buffer.WriteByte((byte)'"');
-    }
-
-    /// <summary>
-    /// Writes a JSON string from UTF-8 bytes with surrounding quotes and escaping.
-    /// The bytes are copied through without UTF-8 validation (only quote, backslash and control bytes are escaped),
-    /// so the caller must supply well-formed UTF-8 to obtain valid JSON.
-    /// </summary>
-    /// <param name="buffer">Target buffer.</param>
-    /// <param name="utf8">UTF-8 encoded bytes.</param>
-    internal static void WriteJsonStringUtf8(ref PooledBuffer buffer, ReadOnlySpan<byte> utf8)
-    {
-        buffer.WriteByte((byte)'"');
-        SimdEscape.EscapeJsonStringTo(ref buffer, utf8);
-        buffer.WriteByte((byte)'"');
-    }
-
-    /// <summary>
-    /// Writes a base-64 encoded string with surrounding JSON quotes.
-    /// </summary>
-    /// <param name="buffer">Target buffer.</param>
-    /// <param name="data">Raw bytes to encode.</param>
-    internal static void WriteBase64String(ref PooledBuffer buffer, ReadOnlySpan<byte> data)
-    {
-        buffer.WriteByte((byte)'"');
-        if (!data.IsEmpty)
-        {
-            // Encode into a scratch buffer sized exactly for the output (so the OperationStatus result cannot be
-            // DestinationTooSmall) rather than Convert.ToBase64String, which allocates a string per value.
-            // Same 512-byte stack cap as WriteJsonString; larger payloads use the pool. Base-64 output contains no
-            // character that needs JSON escaping, so it is appended without passing through SimdEscape.
-            int maxLen = Base64.GetMaxEncodedToUtf8Length(data.Length);
-            if (maxLen <= 512)
+            try
             {
-                Span<byte> scratch = stackalloc byte[maxLen];
-                Base64.EncodeToUtf8(data, scratch, out _, out int bytesWritten);
-                buffer.Write(scratch[..bytesWritten]);
+                int written = Encoding.UTF8.GetBytes(value, rented);
+                SimdEscape.EscapeJsonStringTo(ref buffer, rented.AsSpan(0, written));
             }
-            else
+            finally
             {
-                byte[] rented = ArrayPool<byte>.Shared.Rent(maxLen);
-                Base64.EncodeToUtf8(data, rented, out _, out int bytesWritten);
-                buffer.Write(rented.AsSpan(0, bytesWritten));
                 ArrayPool<byte>.Shared.Return(rented);
             }
         }
+
         buffer.WriteByte((byte)'"');
     }
+
+    /// <summary>
+    /// The largest number of UTF-16 code units that <see cref="WriteJsonString"/> can encode: the worst-case UTF-8 size of the text
+    /// (three bytes per code unit, <see cref="Encoding.GetMaxByteCount"/>) must fit an <see cref="int"/>. A fact of the encoder, a
+    /// constant. Threat: a text near <see cref="int.MaxValue"/> characters would make the size computation throw a framework
+    /// exception that names no export limit; the packet that holds it is reported as skipped with a message that names the limit.
+    /// Posture: not configurable, the encoder cannot do more.
+    /// </summary>
+    private const int _MaxJsonStringChars = 715_827_881;
+
+    /// <summary>The largest byte count that <see cref="Base64.GetMaxEncodedToUtf8Length"/> accepts: a fact of the encoder, a constant.</summary>
+    private const int _MaxBase64Input = 1_610_612_733;
+
+    /// <summary>
+    /// Writes a base-64 encoded string with surrounding JSON quotes (the JSON form of a bytes value and of the frame bytes).
+    /// </summary>
+    /// <param name="buffer">Target buffer.</param>
+    /// <param name="data">Raw bytes to encode; empty gives the empty string <c>""</c>.</param>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="data"/> is longer than 1 610 612 733 bytes (the limit of the Base64 encoder), or the encoder did not finish
+    /// (a broken invariant, see <see cref="WriteBase64"/>).
+    /// </exception>
+    internal static void WriteBase64String(ref PooledBuffer buffer, ReadOnlySpan<byte> data)
+    {
+        buffer.WriteByte((byte)'"');
+        WriteBase64(ref buffer, data);
+        buffer.WriteByte((byte)'"');
+    }
+
+    /// <summary>
+    /// Writes the standard Base64 text (RFC 4648 §4 alphabet, with <c>=</c> padding) of <paramref name="data"/> without quotes. The
+    /// text contains no character that needs JSON escaping, so it bypasses the escaper.
+    /// </summary>
+    /// <param name="buffer">Target buffer; grows as for every write.</param>
+    /// <param name="data">Raw bytes to encode; empty writes nothing.</param>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="data"/> is longer than 1 610 612 733 bytes (the limit of the Base64 encoder), or the encoder did not finish
+    /// (a broken invariant: the destination is sized exactly).
+    /// </exception>
+    /// <remarks>
+    /// Perf: the text is encoded straight into the pooled buffer (<see cref="PooledBuffer.Reserve"/>), so a frame of any size costs
+    /// no string, no scratch array, and no second copy; <c>Convert.ToBase64String</c> would allocate a string per value. The
+    /// reservation is the exact encoded size, so the status of the encoder is always <see cref="OperationStatus.Done"/>; any other
+    /// status is a broken invariant and goes to a cold helper, never into a truncated value.
+    /// </remarks>
+    internal static void WriteBase64(ref PooledBuffer buffer, ReadOnlySpan<byte> data)
+    {
+        if (data.IsEmpty)
+        {
+            return;
+        }
+
+        // Limit: the encoder's own bound, checked first so the failure names the limit instead of an argument of the framework.
+        if (data.Length > _MaxBase64Input)
+        {
+            _ThrowBase64TooLarge(data.Length);
+        }
+
+        int reserved = Base64.GetMaxEncodedToUtf8Length(data.Length);
+        Span<byte> target = buffer.Reserve(reserved);
+        // Invariant: for padded Base64 the maximum is the exact encoded size, so a finished encode fills the reservation completely.
+        // Reserve already counted the reservation as written; a shorter result would leave unspecified bytes in the buffer, so it is
+        // treated like any other unfinished status.
+        OperationStatus status = Base64.EncodeToUtf8(data, target, out _, out int written);
+        if (status != OperationStatus.Done || written != reserved)
+        {
+            _ThrowBase64Failed(status);
+        }
+    }
+
+    /// <summary>
+    /// The Base64 encoder did not fill an exactly sized destination (any status but <see cref="OperationStatus.Done"/>, or a short
+    /// result): a broken invariant. A cold helper keeps the throw site out of <see cref="WriteBase64"/>.
+    /// </summary>
+    /// <param name="status">The status the encoder returned.</param>
+    /// <exception cref="InvalidOperationException">Always.</exception>
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void _ThrowBase64Failed(OperationStatus status) =>
+        throw new InvalidOperationException(
+            Invariant($"Base64 encoding did not finish (status {status}) although the destination was sized for the whole output."));
+
+    /// <summary>
+    /// A byte sequence is longer than the Base64 encoder accepts. A cold helper that names the limit, so the packet that holds the
+    /// bytes is skipped with a message that says why.
+    /// </summary>
+    /// <param name="length">The length of the byte sequence.</param>
+    /// <exception cref="InvalidOperationException">Always.</exception>
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void _ThrowBase64TooLarge(int length) =>
+        throw new InvalidOperationException(
+            Invariant($"A byte sequence of {length} bytes cannot be written as one Base64 string (limit {_MaxBase64Input})."));
+
+    /// <summary>
+    /// A string is longer than <see cref="_MaxJsonStringChars"/> characters. A cold helper that names the limit, so the packet that
+    /// holds the string is skipped with a message that says why.
+    /// </summary>
+    /// <param name="length">The length of the string in UTF-16 code units.</param>
+    /// <exception cref="InvalidOperationException">Always.</exception>
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void _ThrowStringTooLarge(int length) =>
+        throw new InvalidOperationException(
+            Invariant($"A string of {length} characters cannot be written as one JSON string (limit {_MaxJsonStringChars})."));
+
+    /// <summary>
+    /// A value could not be read through the accessor of its own type or formatted into its scratch buffer: a broken invariant (the
+    /// type was just read from the same value, and every scratch is larger than the longest text of its type). Reported from a cold
+    /// helper so the writers have no throw site and never write a key without its value. The packet is skipped.
+    /// </summary>
+    /// <param name="type">The type of the value that could not be written.</param>
+    /// <exception cref="InvalidOperationException">Always.</exception>
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static void ThrowValueUnreadable(FieldType type) =>
+        throw new InvalidOperationException(Invariant($"A value of type {type} could not be read or formatted (a broken invariant)."));
+
+    /// <summary>
+    /// A packet without a field tree reached a tree writer: the shape check of the exporter should have refused it. A cold helper
+    /// shared by the three tree writers. The message is the one every exporter with a hierarchy shape reports for a skip packet.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Always.</exception>
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static void ThrowSkipPacket() =>
+        throw new InvalidOperationException("Skip packets cannot be exported (HasFieldTree is false).");
+
+    #endregion
+
+    #region Packet buffers
+
+    /// <summary>
+    /// Writes the additional buffers of <paramref name="packet"/> as a compact JSON array
+    /// <c>[{"index":1,"bytes":"&lt;Base64&gt;"},…]</c> in ascending index order (the form of the flat, array, and compact writers).
+    /// The caller writes the <c>buffers</c> key only when the packet has an additional buffer
+    /// (<see cref="Packet.BufferCount"/> above 1), so a packet without buffers has no key.
+    /// </summary>
+    /// <param name="buffer">Target buffer.</param>
+    /// <param name="packet">The packet whose buffers index 1 up to <see cref="Packet.BufferCount"/> - 1 are written.</param>
+    /// <exception cref="InvalidOperationException">
+    /// A buffer inside the packet's buffer count is missing, or the Base64 encoder did not finish (broken invariants).
+    /// </exception>
+    /// <remarks>
+    /// The bytes are encoded into <paramref name="buffer"/> here, inside the exporter's <c>OnPacket</c>, because the packet's buffers are
+    /// recycled afterwards. A bound empty buffer is <c>"bytes":""</c>, so the record stays and an empty buffer is not "absent".
+    /// Perf: Base64 goes straight into the pooled buffer like the frame bytes (<see cref="WriteBase64String"/>), no string per buffer.
+    /// Security: the Base64 text has no character that needs JSON escaping, so the capture bytes cannot break out of the string.
+    /// </remarks>
+    internal static void WriteBuffers(ref PooledBuffer buffer, Packet packet)
+    {
+        buffer.WriteByte((byte)'[');
+        int bufferCount = packet.BufferCount;
+        for (int index = 1; index < bufferCount; index++)
+        {
+            if (index > 1)
+            {
+                buffer.WriteByte((byte)',');
+            }
+
+            buffer.Write("{\"index\":"u8);
+            WriteU64(ref buffer, (ulong)index);
+            buffer.Write(",\"bytes\":"u8);
+            WriteBase64String(ref buffer, PacketBuffers.Get(packet, index));
+            buffer.WriteByte((byte)'}');
+        }
+
+        buffer.WriteByte((byte)']');
+    }
+
+    #endregion
+
+    #region Addresses and timestamps
 
     /// <summary>
     /// Writes a MAC address as a quoted string in colon-separated hex format (XX:XX:XX:XX:XX:XX).
     /// </summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="mac">The MAC address value.</param>
+    /// <exception cref="InvalidOperationException">The text did not fit its stack buffer (a broken invariant).</exception>
     internal static void WriteMacAddress(ref PooledBuffer buffer, MacAddress mac)
     {
         // Fixed-size text (FormattedLength bytes), so the stack buffer always fits and needs no escaping.
         buffer.WriteByte((byte)'"');
         Span<byte> scratch = stackalloc byte[MacAddress.FormattedLength];
-        mac.TryFormat(scratch, out int written, default, CultureInfo.InvariantCulture);
+        if (!mac.TryFormat(scratch, out int written, default, CultureInfo.InvariantCulture))
+        {
+            ThrowValueUnreadable(FieldType.MacAddress);
+        }
+
         buffer.Write(scratch[..written]);
         buffer.WriteByte((byte)'"');
     }
@@ -183,11 +344,16 @@ internal static class JsonHelpers
     /// </summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="ip">The IPv4 address value.</param>
+    /// <exception cref="InvalidOperationException">The text did not fit its stack buffer (a broken invariant).</exception>
     internal static void WriteIPv4(ref PooledBuffer buffer, IPv4Address ip)
     {
         buffer.WriteByte((byte)'"');
         Span<byte> scratch = stackalloc byte[IPv4Address.MaxFormattedLength];
-        ip.TryFormat(scratch, out int written, default, CultureInfo.InvariantCulture);
+        if (!ip.TryFormat(scratch, out int written, default, CultureInfo.InvariantCulture))
+        {
+            ThrowValueUnreadable(FieldType.IPv4Address);
+        }
+
         buffer.Write(scratch[..written]);
         buffer.WriteByte((byte)'"');
     }
@@ -198,22 +364,23 @@ internal static class JsonHelpers
     /// </summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="ts">The timestamp value.</param>
+    /// <exception cref="InvalidOperationException">The text did not fit its stack buffer (a broken invariant).</exception>
     internal static void WriteTimestamp(ref PooledBuffer buffer, Timestamp ts)
     {
         buffer.WriteByte((byte)'"');
         Span<byte> scratch = stackalloc byte[Timestamp.MaxFormattedLength];
-        ts.TryFormat(scratch, out int written, default, CultureInfo.InvariantCulture);
+        if (!ts.TryFormat(scratch, out int written, default, CultureInfo.InvariantCulture))
+        {
+            ThrowValueUnreadable(FieldType.Timestamp);
+        }
+
         buffer.Write(scratch[..written]);
         buffer.WriteByte((byte)'"');
     }
 
-    /// <summary>Writes a comma separator.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void WriteComma(ref PooledBuffer buffer) => buffer.WriteByte((byte)',');
+    #endregion
 
-    /// <summary>Writes a colon separator.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void WriteColon(ref PooledBuffer buffer) => buffer.WriteByte((byte)':');
+    #region Field values
 
     /// <summary>
     /// Writes a field type as a quoted JSON string using the canonical enum name.
@@ -231,108 +398,134 @@ internal static class JsonHelpers
     /// </summary>
     /// <param name="buffer">Target buffer.</param>
     /// <param name="value">The field value to serialize.</param>
+    /// <exception cref="InvalidOperationException">The value could not be read or formatted (a broken invariant).</exception>
     internal static void WriteFieldValue(ref PooledBuffer buffer, FieldValue value)
     {
-        switch (value.Type)
+        FieldValueData data = value.Data;
+        WriteFieldValueData(ref buffer, in data);
+    }
+
+    /// <summary>
+    /// Writes a field value payload in the JSON representation of <see cref="WriteFieldValue"/>. The body of the mapping: staged
+    /// values of the flat shapes (no <see cref="FieldValue"/> wrapper) use the same mapping as the tree writers.
+    /// </summary>
+    /// <param name="buffer">Target buffer.</param>
+    /// <param name="data">The payload to serialize.</param>
+    /// <exception cref="InvalidOperationException">The value could not be read or formatted (a broken invariant).</exception>
+    internal static void WriteFieldValueData(ref PooledBuffer buffer, in FieldValueData data)
+    {
+        switch (data.Type)
         {
             case FieldType.None:
                 buffer.Write("null"u8);
                 break;
             case FieldType.I64:
-                if (!value.Data.TryGetAsI64(out long i64))
+                if (!data.TryGetAsI64(out long i64))
                 {
-                    break;
+                    ThrowValueUnreadable(data.Type);
                 }
                 WriteI64(ref buffer, i64);
                 break;
             case FieldType.U64:
-                if (!value.Data.TryGetAsU64(out ulong u64))
+                if (!data.TryGetAsU64(out ulong u64))
                 {
-                    break;
+                    ThrowValueUnreadable(data.Type);
                 }
                 WriteU64(ref buffer, u64);
                 break;
             case FieldType.F64:
-                if (!value.Data.TryGetAsF64(out double f64))
+                if (!data.TryGetAsF64(out double f64))
                 {
-                    break;
+                    ThrowValueUnreadable(data.Type);
                 }
                 WriteF64(ref buffer, f64);
                 break;
             case FieldType.String:
-                if (!value.Data.TryGetAsString(out string str))
+                if (!data.TryGetAsString(out string str))
                 {
-                    break;
+                    ThrowValueUnreadable(data.Type);
                 }
                 WriteJsonString(ref buffer, str);
                 break;
             case FieldType.Bytes:
-                if (!value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> bytesVal))
+                if (!data.TryGetAsBytes(out ReadOnlyMemory<byte> bytesVal))
                 {
-                    break;
+                    ThrowValueUnreadable(data.Type);
                 }
                 WriteBase64String(ref buffer, bytesVal.Span);
                 break;
             case FieldType.MacAddress:
-                if (!value.Data.TryGetAsMacAddress(out MacAddress mac))
+                if (!data.TryGetAsMacAddress(out MacAddress mac))
                 {
-                    break;
+                    ThrowValueUnreadable(data.Type);
                 }
                 WriteMacAddress(ref buffer, mac);
                 break;
             case FieldType.IPv4Address:
-                if (!value.Data.TryGetAsIPv4(out IPv4Address ipv4))
+                if (!data.TryGetAsIPv4(out IPv4Address ipv4))
                 {
-                    break;
+                    ThrowValueUnreadable(data.Type);
                 }
                 WriteIPv4(ref buffer, ipv4);
                 break;
             case FieldType.IPv6Address:
-                if (!value.Data.TryGetAsIPv6(out IPv6Address ipv6))
+                if (!data.TryGetAsIPv6(out IPv6Address ipv6))
                 {
-                    break;
+                    ThrowValueUnreadable(data.Type);
                 }
                 // Scratch sizes below exceed the maximum text length of each type (IPv6 39, EUI-64 23, UUID 36);
                 // none of these texts contains a character that needs JSON escaping.
                 buffer.WriteByte((byte)'"');
                 Span<byte> ipv6Scratch = stackalloc byte[64];
-                ipv6.TryFormat(ipv6Scratch, out int ipv6Written, default, CultureInfo.InvariantCulture);
+                if (!ipv6.TryFormat(ipv6Scratch, out int ipv6Written, default, CultureInfo.InvariantCulture))
+                {
+                    ThrowValueUnreadable(FieldType.IPv6Address);
+                }
+
                 buffer.Write(ipv6Scratch[..ipv6Written]);
                 buffer.WriteByte((byte)'"');
                 break;
             case FieldType.Eui64:
-                if (!value.Data.TryGetAsEui64(out Eui64 eui64))
+                if (!data.TryGetAsEui64(out Eui64 eui64))
                 {
-                    break;
+                    ThrowValueUnreadable(data.Type);
                 }
                 buffer.WriteByte((byte)'"');
                 Span<byte> euiScratch = stackalloc byte[32];
-                eui64.TryFormat(euiScratch, out int euiWritten, default, CultureInfo.InvariantCulture);
+                if (!eui64.TryFormat(euiScratch, out int euiWritten, default, CultureInfo.InvariantCulture))
+                {
+                    ThrowValueUnreadable(FieldType.Eui64);
+                }
+
                 buffer.Write(euiScratch[..euiWritten]);
                 buffer.WriteByte((byte)'"');
                 break;
             case FieldType.Uuid:
-                if (!value.Data.TryGetAsUuid(out NetworkInspector.Values.Uuid uuid))
+                if (!data.TryGetAsUuid(out NetworkInspector.Values.Uuid uuid))
                 {
-                    break;
+                    ThrowValueUnreadable(data.Type);
                 }
                 buffer.WriteByte((byte)'"');
                 Span<byte> uuidScratch = stackalloc byte[64];
-                uuid.TryFormat(uuidScratch, out int uuidWritten, default, CultureInfo.InvariantCulture);
+                if (!uuid.TryFormat(uuidScratch, out int uuidWritten, default, CultureInfo.InvariantCulture))
+                {
+                    ThrowValueUnreadable(FieldType.Uuid);
+                }
+
                 buffer.Write(uuidScratch[..uuidWritten]);
                 buffer.WriteByte((byte)'"');
                 break;
             case FieldType.Timestamp:
-                if (!value.Data.TryGetAsTimestamp(out Timestamp ts))
+                if (!data.TryGetAsTimestamp(out Timestamp ts))
                 {
-                    break;
+                    ThrowValueUnreadable(data.Type);
                 }
                 WriteTimestamp(ref buffer, ts);
                 break;
             case FieldType.Bool:
-                if (!value.Data.TryGetAsBool(out bool boolVal))
+                if (!data.TryGetAsBool(out bool boolVal))
                 {
-                    break;
+                    ThrowValueUnreadable(data.Type);
                 }
                 WriteBool(ref buffer, boolVal);
                 break;
@@ -341,4 +534,6 @@ internal static class JsonHelpers
                 break;
         }
     }
+
+    #endregion
 }

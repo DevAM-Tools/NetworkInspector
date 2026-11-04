@@ -1149,7 +1149,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         int frameId = _FrameIndex++;
         ParseResult<Frame> result = Frame.Create(
-            new FrameId(frameId),
+            frameId,
             new Timestamp(timestampNanos),
             frameData,
             iface.LinkType,

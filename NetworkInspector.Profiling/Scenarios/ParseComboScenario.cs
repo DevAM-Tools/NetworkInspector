@@ -173,7 +173,7 @@ internal sealed class ParseComboScenario : IProfilingScenario
             _Options = new(FieldTreeMode.Skip, observers: bound);
         }
 
-        if (!Packet.TryParse(new PacketId(0), _Stack, _Frames[0], in _Options, out Packet? seeded, out ParseFailure failure))
+        if (!Packet.TryParse(0, _Stack, _Frames[0], in _Options, out Packet? seeded, out ParseFailure failure))
         {
             throw new InvalidOperationException(failure.ToString());
         }
@@ -193,7 +193,7 @@ internal sealed class ParseComboScenario : IProfilingScenario
         int sink = 0;
         for (int i = 0; i < _BatchSize; i++)
         {
-            PacketId id = new(counter + i);
+            PacketId id = counter + i;
             if (!Packet.TryParse(recycle, id, stack, frames[i], in options, out ParseFailure failure))
             {
                 throw new InvalidOperationException(failure.ToString());
@@ -287,7 +287,7 @@ internal sealed class ParseComboScenario : IProfilingScenario
         for (int i = 0; i < frames.Length; i++)
         {
             ParseResult<Frame> created = Frame.Create(
-                new FrameId(i),
+                i,
                 Timestamp.FromSecs(i),
                 syn,
                 LinkType.Ethernet,
@@ -337,5 +337,10 @@ internal sealed class ComboWatch : IFieldObserver
     public void OnField(in FieldVisit visit)
     {
         Count++;
+    }
+
+    /// <inheritdoc />
+    public void EndPacket(PacketId id, bool complete)
+    {
     }
 }

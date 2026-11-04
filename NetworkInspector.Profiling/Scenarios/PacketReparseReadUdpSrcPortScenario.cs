@@ -54,14 +54,14 @@ internal sealed class PacketReparseReadUdpSrcPortScenario : IProfilingScenario
         ParseOptions options = new();
         for (int i = 0; i < _PacketCount; i++)
         {
-            PacketId id = new(i);
+            PacketId id = i;
             if (!Packet.TryParse(id, _Stack, _Frames[i], in options, out _, out ParseFailure failure))
             {
                 throw new InvalidOperationException(failure.ToString());
             }
         }
 
-        PacketId seedId = new(0);
+        PacketId seedId = 0;
         if (!Packet.TryParse(seedId, _Stack, _Frames[0], in options, out Packet? seeded, out ParseFailure seedFailure))
         {
             throw new InvalidOperationException(seedFailure.ToString());
@@ -83,7 +83,7 @@ internal sealed class PacketReparseReadUdpSrcPortScenario : IProfilingScenario
         ParseOptions options = new();
         for (int i = 0; i < _PacketCount; i++)
         {
-            PacketId id = new(i);
+            PacketId id = i;
             if (!Packet.TryParse(recycle, id, stack, frames[i], in options, out ParseFailure failure))
             {
                 throw new InvalidOperationException(failure.ToString());

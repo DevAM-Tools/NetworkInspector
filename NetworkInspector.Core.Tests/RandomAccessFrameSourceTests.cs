@@ -34,7 +34,7 @@ internal sealed class RandomAccessFrameSourceTests
         Span<Frame?> range = buffer.AsSpan(3, length);
 
         // Act
-        int found = batch.FramesById(new FrameId(first), range);
+        int found = batch.FramesById(first, range);
 
         // Assert
         int expectedFound = 0;
@@ -42,7 +42,7 @@ internal sealed class RandomAccessFrameSourceTests
         for (int i = 0; i < length; i++)
         {
             int id = first + i;
-            Frame? expected = id >= 0 ? source.FrameById(new FrameId(id)) : null;
+            Frame? expected = id >= 0 ? source.FrameById(id) : null;
             expectedFound += expected is null ? 0 : 1;
             if (_IdOf(buffer[3 + i]) != _IdOf(expected))
             {
@@ -67,7 +67,7 @@ internal sealed class RandomAccessFrameSourceTests
         Frame?[] frames = _SentinelBuffer(5);
 
         // Act
-        int found = batch.FramesById(new FrameId(ArrayIndexIdRange.MaxValue), frames);
+        int found = batch.FramesById(ArrayIndexIdRange.MaxValue, frames);
 
         // Assert: the fake source has no frame that high, and the ids past the range are never requested.
         await Assert.That(found).IsEqualTo(0);
@@ -81,7 +81,7 @@ internal sealed class RandomAccessFrameSourceTests
         FakeSource source = new(skip: -1);
         IRandomAccessFrameSource batch = source;
 
-        int found = batch.FramesById(new FrameId(3), Span<Frame?>.Empty);
+        int found = batch.FramesById(3, Span<Frame?>.Empty);
 
         await Assert.That(found).IsEqualTo(0);
         await Assert.That(source.Reads).IsEqualTo(0);
@@ -103,7 +103,7 @@ internal sealed class RandomAccessFrameSourceTests
         OperationCanceledException? thrown = null;
         try
         {
-            _ = batch.FramesById(new FrameId(0), frames, cancellation.Token);
+            _ = batch.FramesById(0, frames, cancellation.Token);
         }
         catch (OperationCanceledException exception)
         {
@@ -127,7 +127,7 @@ internal sealed class RandomAccessFrameSourceTests
         OperationCanceledException? thrown = null;
         try
         {
-            _ = batch.FramesById(new FrameId(0), frames, cancellation.Token);
+            _ = batch.FramesById(0, frames, cancellation.Token);
         }
         catch (OperationCanceledException exception)
         {
@@ -163,7 +163,7 @@ internal sealed class RandomAccessFrameSourceTests
 
     private static Frame _MakeFrame(int id) =>
         Frame.Create(
-            new FrameId(id),
+            id,
             Timestamp.FromSecs(0),
             new byte[] { 1, 2, 3, 4 },
             LinkType.Ethernet,

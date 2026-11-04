@@ -149,21 +149,42 @@ raw: Any = lib.call()  # pyright: ignore[reportUnknownMemberType]  # Reason: {wh
 
 ## Comments and docs
 
-- Comments and semantic blocks: Section 4.6.
-- ❗ Write Google-style docstrings on every public module, class, function, and method (ruff `D`): summary, then `Args:`, `Returns:`, `Raises:`. Document thread safety and omitted validation.
+- Content, tags, navigation, and the Sync check: `tech-docs.md`. Semantic blocks: Section 4.6.
+- ❗ Write Google-style docstrings on every module, class, function, and method, private included (ruff `D` enforces the public ones; review enforces the rest): summary, then `Args:`, `Returns:`, `Raises:`, `Example:` on public entry points. Document thread safety and omitted validation.
+- Reference code by qualified name in backticks (`` `export.store.ExportStore.add` ``); no checker exists, so the Sync check greps each one.
+- Related (`tech-docs.md` § References): a `Related:` section in the docstring, one qualified name per item with a short reason. `Sync:` couplings go in the same section.
+- Sections: `# region {name}` … `# endregion` (VS Code and PyCharm fold them). No file header besides the copyright line and the module docstring; the docstring describes the file.
 
 ```python
-def pair(self, path: str) -> int | None:
-    """Return the index of the test project that covers `path`.
+class InvoiceReader:
+    """Stream one invoice CSV file into an `invoices.model.InvoiceBatch`.
+
+    Reads forward-only; memory stays bounded by the longest row, not the file.
+    Not thread-safe: create one reader per file.
+
+    Related:
+        `invoices.model.InvoiceBatch`: the model this reader fills.
+        `invoices.detect.InvoiceFileDetector`: decides which files are invoice files.
+        Architecture: docs/architecture.md § Import.
+        Sync: README.md § Options (--input).
+    """
+
+
+# region Row parsing
+```
+
+```python
+def route(self, path: str) -> int | None:
+    """Return the index of the supplier that owns the invoice file at `path`.
 
     Args:
-        path: Production file path, relative to the repository root.
+        path: Invoice file path, relative to the import root.
 
     Returns:
-        The project index, or None when no test project covers the path.
+        The supplier index, or None when no supplier owns the path.
     """
     # Index is immutable after build. Keys match OS paths.
-    index = TestProjectIndex.build(self._root)
+    index = SupplierIndex.build(self._root)
     return index.get(path)
 ```
 

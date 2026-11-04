@@ -3,8 +3,9 @@
 namespace NetworkInspector.Protocols.Tests;
 
 /// <summary>
-/// Tests that a reassembled datagram or message which cannot be handed to the next protocol, because the packet already
-/// holds the maximum of 255 bound buffers, is reported by name instead of reaching the next protocol as empty data.
+/// Tests that a reassembled datagram or message, a decoded HTTP body, or an unmasked or inflated WebSocket payload which
+/// cannot be handed to the next protocol, because the packet already holds the maximum of 255 bound buffers, is reported by
+/// name instead of reaching the next protocol as empty data.
 /// A probe protocol on a UDP port fills the packet's buffer table and then calls the protocol under test with the datagram
 /// carried in the UDP payload.
 /// </summary>
@@ -16,8 +17,11 @@ internal sealed class BoundBufferLimitTests
     private static readonly MacAddress _DstMac = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
     private static readonly MacAddress _SrcMac = MacAddress.FromBytes([0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]);
 
-    /// <summary>Binds 255 buffers to the packet and then calls the protocol with the given name.</summary>
-    private sealed class BufferFillerProtocol(string targetProtocolName) : IProtocol
+    /// <summary>
+    /// Binds <paramref name="fillCount"/> one-byte buffers to the packet (all 255 by default) and then calls the protocol
+    /// with the given name.
+    /// </summary>
+    private sealed class BufferFillerProtocol(string targetProtocolName, int fillCount = _AdditionalBufferLimit, int bufferSize = 1) : IProtocol
     {
         public string Name => "buffer.filler";
 
@@ -25,9 +29,9 @@ internal sealed class BoundBufferLimitTests
 
         public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
         {
-            for (int index = 0; index < _AdditionalBufferLimit; index++)
+            for (int index = 0; index < fillCount; index++)
             {
-                if (parentField.BindParseBuffer(new byte[1]).IsEmpty)
+                if (!parentField.TryBindBuffer(new byte[bufferSize], out _, out _))
                 {
                     return NetworkInspector.Core.Errors.ParseError.Custom(Name, "The probe could not fill the buffer table.");
                 }
@@ -59,6 +63,20 @@ internal sealed class BoundBufferLimitTests
         });
         return builder.Build();
     }
+
+    /// <summary>
+    /// Builds a stack in which the buffer filler (see <see cref="BufferFillerProtocol"/>) runs on the probe port, fills
+    /// <paramref name="fillCount"/> buffers, and calls <paramref name="targetProtocolName"/>; the probe protocol is
+    /// registered in the HTTP content-type table and the WebSocket payload table, so a nested dispatch is observable.
+    /// </summary>
+    private static Stack _BuildStackWithProbe(string targetProtocolName, int fillCount, BoundSliceProbeProtocol probe) =>
+        BoundSliceProbeProtocol.BuildStack(probe, builder =>
+        {
+            _ = builder.RegisterProtocol(new BufferFillerProtocol(targetProtocolName, fillCount), static (b, id, _) =>
+            {
+                b.RegisterParserInU64TableByName(UdpProtocol.PortTableName, _ProbePort, id);
+            });
+        });
 
     private static byte[] _UdpFrame(ReadOnlySpan<byte> payload)
     {
@@ -120,6 +138,54 @@ internal sealed class BoundBufferLimitTests
         return frame;
     }
 
+    /// <summary>
+    /// Like <see cref="_BuildStack"/>, but the probe binds one buffer of <paramref name="bufferSize"/> bytes before it calls the target,
+    /// and the three per-packet totals (HTTP, WebSocket, SOME/IP-TP) are at their 2 KiB minimum, below that buffer.
+    /// </summary>
+    private static Stack _BuildStackWithBigBoundBuffer(string targetProtocolName, int bufferSize)
+    {
+        using SettingsManager settings = new();
+        foreach (string key in (string[])["http.max_derived_bytes_per_packet", "ws.max_derived_bytes_per_packet", "someip.tp_max_derived_bytes_per_packet"])
+        {
+            settings.PreloadValue(key, SettingValue.U64(2048));
+        }
+
+        StackBuilder builder = new(settings, new FrameInterfaceRegistry());
+        ProtocolRegistration.RegisterStandardProtocols(builder);
+        builder.RegisterProtocol(new BufferFillerProtocol(targetProtocolName, fillCount: 1, bufferSize: bufferSize), static (b, id, _) =>
+        {
+            b.RegisterParserInU64TableByName(UdpProtocol.PortTableName, _ProbePort, id);
+        });
+        return builder.Build();
+    }
+
+    /// <summary>
+    /// IPv4 reassembly has no total of its own: with 4 KiB already bound to the packet, above every per-protocol total, the
+    /// completed datagram is still bound and dispatched, and no error is reported.
+    /// </summary>
+    [Test]
+    public async Task Ipv4ReassemblyIsNotLimitedByTheBytesAlreadyBound()
+    {
+        using Stack stack = _BuildStackWithBigBoundBuffer("ip", 4096);
+
+        Packet packet = _ParseTwoFragments(stack, _Ipv4Fragment(0x2000), _Ipv4Fragment(0x0001));
+
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, packet, "packet.error").ConfigureAwait(false);
+        await Assert.That(packet.BufferCount).IsGreaterThanOrEqualTo(3);
+    }
+
+    /// <summary>IPv6 reassembly has no total of its own either (see <see cref="Ipv4ReassemblyIsNotLimitedByTheBytesAlreadyBound"/>).</summary>
+    [Test]
+    public async Task Ipv6ReassemblyIsNotLimitedByTheBytesAlreadyBound()
+    {
+        using Stack stack = _BuildStackWithBigBoundBuffer("ipv6", 4096);
+
+        Packet packet = _ParseTwoFragments(stack, _Ipv6Fragment(0x0001), _Ipv6Fragment(0x0008));
+
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, packet, "packet.error").ConfigureAwait(false);
+        await Assert.That(packet.BufferCount).IsGreaterThanOrEqualTo(3);
+    }
+
     [Test]
     public async Task Ipv4DatagramReassembledWithAFullBufferTableIsReported()
     {
@@ -155,6 +221,131 @@ internal sealed class BoundBufferLimitTests
 
         await ProtocolTestHelper.AssertStringFieldContains(stack, packet, "packet.error", "255").ConfigureAwait(false);
     }
+
+    #region HTTP decoded body and WebSocket derived payload
+
+    /// <summary>The decoded body of <see cref="_ChunkedHttpResponse"/>.</summary>
+    private static readonly byte[] _HttpDecodedBody = Encoding.ASCII.GetBytes("hello");
+
+    /// <summary>A chunked response whose content type selects the probe; its decoded body is <see cref="_HttpDecodedBody"/>.</summary>
+    private static byte[] _ChunkedHttpResponse() => Encoding.ASCII.GetBytes(
+        "HTTP/1.1 200 OK\r\nContent-Type: " + BoundSliceProbeProtocol.ContentType + "\r\nTransfer-Encoding: chunked\r\n\r\n"
+        + "5\r\nhello\r\n0\r\n\r\n");
+
+    /// <summary>Encodes one masked, unfragmented text frame with <see cref="WebSocketLayer"/>.</summary>
+    private static byte[] _MaskedTextFrame(string text, uint maskingKey)
+    {
+        WebSocketLayer layer = new(Encoding.UTF8.GetBytes(text), WebSocketOpcode.Text, new WebSocketFrameOptions(Fin: true, MaskingKey: maskingKey));
+        ArrayBufferWriter<byte> writer = new(initialCapacity: 64);
+        layer.WriteStream(writer);
+        return writer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>
+    /// With 255 filled buffers a chunked body cannot be bound: the packet shows the HTTP limit message that names 255, the
+    /// table stays at its limit, and the nested protocol is not called.
+    /// </summary>
+    [Test]
+    public async Task HttpBodyDecodedWithAFullBufferTableIsReportedAndNotDispatched()
+    {
+        BoundSliceProbeProtocol probe = new();
+        using Stack stack = _BuildStackWithProbe("http", _AdditionalBufferLimit, probe);
+
+        Packet packet = ProtocolTestHelper.ParseFrame(stack, _UdpFrame(_ChunkedHttpResponse()), 0, Timestamp.FromMillis(0));
+
+        await ProtocolTestHelper.AssertStringFieldContains(stack, packet, "packet.error", "255").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertStringFieldContains(stack, packet, "packet.error", "Decoded HTTP body").ConfigureAwait(false);
+        await Assert.That(packet.BufferCount).IsEqualTo(1 + _AdditionalBufferLimit).Because("nothing is added to a full table");
+        await Assert.That(probe.Observations.Count).IsEqualTo(0).Because("the nested protocol is not called");
+    }
+
+    /// <summary>
+    /// Boundary: with 254 filled buffers the decoded body becomes the 255th additional buffer and the nested protocol gets it.
+    /// </summary>
+    [Test]
+    public async Task HttpBodyDecodedIntoTheLastFreeBufferSlotIsParsed()
+    {
+        // Control and boundary: with one slot left the decoded body becomes the 255th additional buffer.
+        BoundSliceProbeProtocol probe = new();
+        using Stack stack = _BuildStackWithProbe("http", _AdditionalBufferLimit - 1, probe);
+
+        Packet packet = ProtocolTestHelper.ParseFrame(stack, _UdpFrame(_ChunkedHttpResponse()), 0, Timestamp.FromMillis(0));
+
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, packet, "packet.error").ConfigureAwait(false);
+        await Assert.That(packet.BufferCount).IsEqualTo(1 + _AdditionalBufferLimit);
+        await Assert.That(packet.Buffer(_AdditionalBufferLimit)!.Value.Span.SequenceEqual(_HttpDecodedBody)).IsTrue();
+
+        BoundSliceProbeProtocol.Observation seen = probe.Observations.Single();
+        await Assert.That(seen.IsPacketSlice).IsTrue();
+        await Assert.That(seen.BufferIndex).IsEqualTo(_AdditionalBufferLimit);
+    }
+
+    /// <summary>
+    /// With 255 filled buffers a masked payload cannot be bound: the packet shows the WebSocket limit message that names 255,
+    /// the table stays at its limit, and the nested protocol is not called.
+    /// </summary>
+    [Test]
+    public async Task WebSocketPayloadUnmaskedWithAFullBufferTableIsReportedAndNotDispatched()
+    {
+        BoundSliceProbeProtocol probe = new();
+        using Stack stack = _BuildStackWithProbe("websocket", _AdditionalBufferLimit, probe);
+
+        Packet packet = ProtocolTestHelper.ParseFrame(
+            stack, _UdpFrame(_MaskedTextFrame("masked payload", 0xDEADBEEF)), 0, Timestamp.FromMillis(0));
+
+        await ProtocolTestHelper.AssertStringFieldContains(stack, packet, "packet.error", "255").ConfigureAwait(false);
+        await ProtocolTestHelper.AssertStringFieldContains(stack, packet, "packet.error", "WebSocket payload").ConfigureAwait(false);
+        await Assert.That(packet.BufferCount).IsEqualTo(1 + _AdditionalBufferLimit);
+        await Assert.That(probe.Observations.Count).IsEqualTo(0).Because("the nested protocol is not called");
+    }
+
+    /// <summary>
+    /// Boundary: with 254 filled buffers the unmasked payload becomes the 255th additional buffer and the nested protocol gets
+    /// it.
+    /// </summary>
+    [Test]
+    public async Task WebSocketPayloadUnmaskedIntoTheLastFreeBufferSlotIsParsed()
+    {
+        BoundSliceProbeProtocol probe = new();
+        using Stack stack = _BuildStackWithProbe("websocket", _AdditionalBufferLimit - 1, probe);
+
+        Packet packet = ProtocolTestHelper.ParseFrame(
+            stack, _UdpFrame(_MaskedTextFrame("masked payload", 0xDEADBEEF)), 0, Timestamp.FromMillis(0));
+
+        await ProtocolTestHelper.AssertFieldNotPresent(stack, packet, "packet.error").ConfigureAwait(false);
+        await Assert.That(packet.BufferCount).IsEqualTo(1 + _AdditionalBufferLimit);
+        await Assert.That(packet.Buffer(_AdditionalBufferLimit)!.Value.Span.SequenceEqual("masked payload"u8)).IsTrue();
+        await Assert.That(probe.Observations.Single().BufferIndex).IsEqualTo(_AdditionalBufferLimit);
+    }
+
+    /// <summary>
+    /// The limit error of the first frame ends the dispatch, not the frame walk: the index groups of the frames behind it are
+    /// still recorded, because the presence index must name every field the lazy populator will emit. The second frame is a
+    /// ping, whose group <c>websocket.ping</c> only that frame can record.
+    /// </summary>
+    [Test]
+    public async Task WebSocketFrameWalkContinuesAfterTheLimitErrorAndRecordsLaterGroups()
+    {
+        BoundSliceProbeProtocol probe = new();
+        using Stack stack = _BuildStackWithProbe("websocket", _AdditionalBufferLimit, probe);
+        byte[] ping = [0x89, 0x02, (byte)'o', (byte)'k'];
+        byte[] payload = [.. _MaskedTextFrame("masked payload", 0xDEADBEEF), .. ping];
+        NetworkInspector.Core.Index.PacketIndex index = new(stack);
+
+        Frame frame = Frame.Create(
+            0, Timestamp.FromMillis(0), _UdpFrame(payload), LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+        ParseOptions options = new(index: index);
+        bool parsed = Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure);
+
+        await Assert.That(parsed).IsTrue().Because(failure.ToString());
+        await ProtocolTestHelper.AssertStringFieldContains(stack, packet!, "packet.error", "255").ConfigureAwait(false);
+        IndexGroupId pingGroup = stack.GetFieldIndexGroup(stack.GetFieldId("websocket.payload.ping")!.Value);
+        await Assert.That(pingGroup.IsValid).IsTrue();
+        await Assert.That(index.GetGroupBitmap(pingGroup).Contains(0)).IsTrue()
+            .Because("the frame behind the failed frame is still walked and its group recorded");
+    }
+
+    #endregion
 
     [Test]
     public async Task Ipv4DatagramReassembledWithRoomInTheBufferTableIsNotAnError()

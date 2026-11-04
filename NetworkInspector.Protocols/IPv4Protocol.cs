@@ -604,8 +604,8 @@ public sealed partial class IPv4Protocol : IProtocol
                 if (reassembled is not null)
                 {
                     // Bind the datagram so nested Parse can key effects on this packet's buffers.
-                    ReadOnlyMemory<byte> reassembledPayload = parentField.BindParseBuffer(reassembled);
-                    if (reassembledPayload.IsEmpty && reassembled.Length > 0)
+                    // No total of its own: the datagram is bounded by the defragmenter, so only the table can refuse.
+                    if (!parentField.TryBindBuffer(reassembled, out ReadOnlyMemory<byte> reassembledPayload, out _))
                     {
                         // The packet holds at most 255 bound buffers. An empty slice would reach the next protocol as
                         // "no data" without any sign of why, so the limit is named here.

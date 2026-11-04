@@ -236,7 +236,7 @@ internal static class SessionDigestWriter
             _EnsureCapacity(toIndexExclusive);
             for (int i = fromIndex; i < toIndexExclusive; i++)
             {
-                if (!session.TryGetPacket(new PacketId(i), _Recycle, out Packet? packet, out SessionFailure? failure))
+                if (!session.TryGetPacket(i, _Recycle, out Packet? packet, out SessionFailure? failure))
                 {
                     Failure ??= Invariant($"{i} {failure?.Code}");
                     continue;

@@ -119,7 +119,7 @@ internal sealed class PcapngSourceMultiInterfaceTests
         int[] accessOrder = [15, 3, 19, 0, 7, 11];
         foreach (int id in accessOrder)
         {
-            Frame? frame = source.FrameById(new FrameId(id));
+            Frame? frame = source.FrameById(id);
             await Assert.That(frame).IsNotNull();
             await Assert.That(frame!.Value.Data.Span.SequenceEqual(expected[id])).IsTrue();
         }

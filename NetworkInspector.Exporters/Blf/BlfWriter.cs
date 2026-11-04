@@ -3,13 +3,12 @@
 namespace NetworkInspector.Exporters.Blf;
 
 /// <summary>
-/// Low-level BLF file writer with container buffering and zlib compression.
+/// Low-level BLF file writer: writes the file header, compresses (zlib) and writes log containers, and builds the final header.
 /// <para>
-/// Objects are accumulated in an internal buffer (up to 10 MB) and periodically
-/// flushed as compressed log containers. The 144-byte file header is written
-/// immediately on construction with placeholder values; call <see cref="Finish"/>
-/// to compute final statistics and optionally rewrite the header via
-/// <see cref="BlfWriterFinishResult.UpdateHeader"/>.
+/// The objects are collected in <see cref="BlfContainer"/>s by the exporter; this type is the <see cref="IBatchWriter{TBatch}"/>
+/// that turns a full container into a compressed log container on the stream. The 144-byte file header is written immediately
+/// on construction with placeholder values; call <see cref="Finish"/> to compute final statistics and optionally rewrite the
+/// header via <see cref="BlfWriterFinishResult.UpdateHeader"/>.
 /// </para>
 /// <para>
 /// <b>Seek-free by design:</b> Only <see cref="Stream.Write(ReadOnlySpan{byte})"/>
@@ -24,33 +23,34 @@ namespace NetworkInspector.Exporters.Blf;
 /// the first object — both are best-effort optimizations for
 /// seekable streams. For non-seekable streams (pipes, network), the header
 /// placeholders remain and the file is still valid.
-/// <b>Thread safety:</b> Not thread-safe; all calls must come from one thread (the owning exporter).
+/// </para>
+/// <para>
+/// <b>Threads:</b> in background mode <see cref="Write"/> runs on the writer thread "BLF export writer"; the header, the realign
+/// before the first object, <see cref="ToRelative"/>, and <see cref="Finish"/> run on the caller's thread, before the first
+/// container is handed over or after the writer thread was joined, so the stream is never used by two threads at once.
+/// <see cref="BytesWritten"/> is read by the caller during the export (progress, size splitting) and written by the writer
+/// thread, so it uses <see cref="Interlocked"/>/<see cref="Volatile"/>; the other totals are read only in <see cref="Finish"/>,
+/// after the join.
 /// </para>
 /// </summary>
-internal sealed class BlfWriter
+internal sealed class BlfWriter : IBatchWriter<BlfContainer>
 {
-    #region Fields
+    #region Configuration and state
+
+    /// <summary>
+    /// Largest compressed-output capacity rented up front: 64 MiB, the largest container the exporter accepts. The shared array
+    /// pool hands a returned array of this size (and of the smaller sizes the test pins) out again on the same thread, so the
+    /// rent on the caller's thread is the last allocation of the buffer in a normal export.
+    /// </summary>
+    /// <remarks>Sync: <c>PooledBufferTests.TheSharedPoolReusesAnArrayOfThisSizeOnTheSameThread</c> (its largest size).</remarks>
+    private const int _PooledCapacityLimit = 64 * 1024 * 1024;
 
     /// <summary>BLF file header size in bytes.</summary>
-    private const int _FileHeaderSize = 144;
+    internal const int FileHeaderSize = 144;
 
-    /// <summary>Combined size of block header (16) + log object header V1 (16).</summary>
-    private const int _ObjectHeaderTotalSize =
+    /// <summary>Combined size of block header (16) + log object header V1 (16); shared with <see cref="BlfContainer"/>.</summary>
+    internal const int ObjectHeaderTotalSize =
         BlfConstants.BlockHeaderSize + BlfConstants.LogObjectHeaderType1Size; // 32
-
-    /// <summary>
-    /// Maximum uncompressed container buffer size before flushing (10 MiB). A tuning value, not a format limit: it only
-    /// bounds the memory of the container buffer and the size of one compression call. It is defined in
-    /// <see cref="BlfConstants"/>. A single object larger than this still gets its own container (see
-    /// <see cref="WriteRawObject"/>).
-    /// </summary>
-    private const int _MaxContainerBufferSize = BlfConstants.MaxContainerBufferSize;
-
-    /// <summary>
-    /// Initial container capacity. Grows toward <see cref="_MaxContainerBufferSize"/> on demand
-    /// so tiny exports do not rent a full 10 MiB buffer up front.
-    /// </summary>
-    private const int _InitialContainerBufferSize = 256 * 1024;
 
     /// <summary>Target stream. Owned by the caller; not disposed here.</summary>
     private readonly Stream _Stream;
@@ -65,37 +65,37 @@ internal sealed class BlfWriter
     private readonly CompressionLevel _Compression;
 
     /// <summary>
-    /// Uncompressed objects of the container being built. Each object is reserved and written in place, so no per-object
-    /// array is allocated. Flushed (compressed and written) by <see cref="FlushContainer"/>.
+    /// Buffer for the zlib-compressed container output, reused across <see cref="Write"/> calls so that no container allocates.
+    /// <para>
+    /// <b>Why it is rented in the constructor:</b> in background mode <see cref="Write"/> runs on a fresh writer thread. A
+    /// buffer that grows there rents every doubling step (16 KiB, 32 KiB, …) from <see cref="ArrayPool{T}.Shared"/> on a thread
+    /// whose per-thread cache is empty, while the arrays of the previous exporter were returned on the caller's thread. Each
+    /// of those rents misses and allocates a new array, about 0.5 MiB of garbage per exporter (measured with
+    /// <c>GC.GetAllocatedBytesForCurrentThread</c> on the writer thread: 517 KB for the first container, 264 bytes for every
+    /// later one). The caller's thread is the one that returned the arrays, so renting here hits its cache and the writer thread
+    /// finds the buffer already large enough.
+    /// </para>
+    /// <para>
+    /// <b>Capacity:</b> the container size (at most <see cref="_PooledCapacityLimit"/>), because compressed data is never larger
+    /// than the container except for data that does not compress at all. The pool rounds the rent up to the next power of two
+    /// (a 10 MiB container rents a 16 MiB array). A container whose output still exceeds the capacity grows the buffer on the
+    /// writer thread (correct, only allocating; rare and bounded by the container size).
+    /// </para>
     /// </summary>
-    private readonly PooledBuffer _ContainerBuffer;
-
-    /// <summary>
-    /// Pre-allocated buffer for zlib-compressed container output.
-    /// Reused across <see cref="FlushContainer"/> calls to avoid per-flush allocations.
-    /// Grows as needed (worst-case zlib output is slightly larger than input).
-    /// </summary>
-    private readonly PooledBuffer _CompressedBuf = new(0);
+    private readonly PooledBuffer _CompressedBuf;
 
     /// <summary>Number of objects written into containers so far (the header <c>obj_count</c>).</summary>
-    private int _ObjectCount;
+    private int _ObjectsWritten;
 
     /// <summary>Bytes of containers written to the stream after the file header (padded, as stored).</summary>
     private long _BytesWritten;
 
     /// <summary>
-    /// Count of frames whose absolute timestamp was earlier than <see cref="_StartNs"/>.
-    /// A non-zero value indicates frames with negative relative timestamps that were
-    /// clamped to zero.  Callers can poll this to surface a diagnostic to the user.
+    /// Total size the file would have if all containers were stored uncompressed. This is the value written to the LOGG header
+    /// <c>len_uncompressed</c> field; the compressed file size would make a reader scan past the last object. Each flushed
+    /// container contributes 16 bytes LOBJ block header, 16 bytes container header, the uncompressed content, and the 4-byte
+    /// alignment padding.
     /// </summary>
-    private long _NonMonotonicTimestampCount;
-
-    // Total size the file would have if all containers were stored uncompressed.
-    // This is the value written to the LOGG header `len_uncompressed` field;
-    // using the compressed file size instead causes a reader to scan past the
-    // last object. Each flushed container
-    // contributes (16 LOBJ block header + 16 container header + uncompressed content +
-    // 4-byte alignment padding).
     private long _UncompressedBytesWritten;
 
     /// <summary>Zone of the header SYSTEMTIME fields (see the constructor).</summary>
@@ -108,16 +108,15 @@ internal sealed class BlfWriter
     /// </summary>
     private readonly long _HeaderPosition;
 
-    #endregion
-
-    #region Constructors
-
     /// <summary>
     /// Creates a BLF writer and writes the 144-byte file header immediately.
     /// </summary>
     /// <param name="stream">Target output stream.</param>
     /// <param name="startNs">
     /// Start timestamp in nanoseconds since Unix epoch. Floored to whole milliseconds (the header resolution).
+    /// </param>
+    /// <param name="maxContainerSize">
+    /// Uncompressed container size of the exporter in bytes; sizes the compressed-output buffer (see <c>_CompressedBuf</c>).
     /// </param>
     /// <param name="compression">Compression level for container output. Use
     /// <see cref="CompressionLevel.NoCompression"/> to disable compression.</param>
@@ -129,6 +128,7 @@ internal sealed class BlfWriter
     internal BlfWriter(
         Stream stream,
         long startNs,
+        int maxContainerSize,
         CompressionLevel compression = CompressionLevel.Optimal,
         TimeZoneInfo? timestampTimeZone = null)
     {
@@ -140,7 +140,13 @@ internal sealed class BlfWriter
         // would drop that residual, because the header cannot store it.
         _StartNs = (startNs / 1_000_000L) * 1_000_000L;
         _Compression = compression;
-        _ContainerBuffer = new PooledBuffer(_InitialContainerBufferSize);
+
+        // Perf: the buffer is rented here, on the caller's thread, at the container size (see _CompressedBuf): the writer thread
+        // then never rents on its empty cache. An uncompressed writer never touches the buffer, so it rents nothing.
+        int compressedCapacity = compression == CompressionLevel.NoCompression
+            ? 0
+            : Math.Min(maxContainerSize, _PooledCapacityLimit);
+        _CompressedBuf = new PooledBuffer(compressedCapacity);
 
         // Remember where the file begins before the header goes out; a stream that already holds earlier data must not have
         // that data overwritten when the header is patched later.
@@ -152,31 +158,36 @@ internal sealed class BlfWriter
 
     #endregion
 
-    #region Public API
+    #region File header and anchor
 
     /// <summary>LOGG <c>start_date</c> anchor used for relative object timestamps (floored to whole milliseconds).</summary>
     internal long AnchorStartNanos => _StartNs;
 
     /// <summary>
-    /// If no objects have been written yet, the container buffer is empty, the stream is
-    /// seekable, and <paramref name="earliestAbsoluteNanos"/> floor-ms is earlier than the
-    /// current anchor, rewinds and rewrites only the 144-byte file header so the anchor
-    /// matches the minimum seen timestamp. The condition is "no object written at all" (the object count is zero), so it
-    /// only helps when the frames before the early one produced no objects, for example because they were skipped.
+    /// If no object has been appended yet (the caller states it), the stream is seekable, and
+    /// <paramref name="earliestAbsoluteNanos"/> floor-ms is earlier than the current anchor, rewinds and rewrites only the
+    /// 144-byte file header so the anchor matches the minimum seen timestamp. The condition is "no object appended at all", so
+    /// it only helps when the frames before the early one produced no objects, for example because they were skipped.
     /// Once an object exists, the header can no longer be moved because its relative timestamp is already encoded.
+    /// <para>
+    /// Runs on the caller's thread and only before the first container is handed to the writer thread, so it never races with a
+    /// container write (the stream is not used by two threads at once).
+    /// </para>
     /// </summary>
+    /// <param name="earliestAbsoluteNanos">The smallest frame timestamp seen so far.</param>
+    /// <param name="objectsAppended">Whether any object was appended to a container already (the exporter counts them).</param>
     /// <returns><c>true</c> when the header was rewritten with the earlier anchor; <c>false</c> when nothing changed.</returns>
-    internal bool TryRealignStartEarlier(long earliestAbsoluteNanos)
+    internal bool TryRealignStartEarlier(long earliestAbsoluteNanos, bool objectsAppended)
     {
-        // Called once per frame by the exporter, so the common case (no earlier timestamp, or an object already written)
+        // Called once per frame by the exporter, so the common case (no earlier timestamp, or an object already appended)
         // must be a few integer compares: the stream is not touched before these checks pass.
         long newStart = (earliestAbsoluteNanos / 1_000_000L) * 1_000_000L;
-        if (newStart >= _StartNs || _ObjectCount != 0 || _ContainerBuffer.Length != 0)
+        if (newStart >= _StartNs || objectsAppended)
         {
             return false;
         }
 
-        long headerEnd = _HeaderPosition + _FileHeaderSize;
+        long headerEnd = _HeaderPosition + FileHeaderSize;
         if (!_Stream.CanSeek || _Stream.Position != headerEnd)
         {
             return false;
@@ -199,102 +210,89 @@ internal sealed class BlfWriter
     }
 
     /// <summary>
-    /// Number of objects whose timestamp was earlier than the file's start anchor
-    /// (<see cref="AnchorStartNanos"/>) and whose relative tick was clamped to zero.
-    /// A non-zero count indicates the caller supplied out-of-order timestamps; the
-    /// affected frames appear with a relative timestamp of 0 in the BLF output.
+    /// Converts an absolute timestamp to the object field: nanoseconds relative to the millisecond <c>start_date</c> anchor. A
+    /// negative delta is not representable in the unsigned object field, so it clamps to 0 (the exporter reports the first
+    /// clamp once per export). Runs on the caller's thread.
     /// </summary>
-    internal long NonMonotonicTimestampCount => _NonMonotonicTimestampCount;
-
-    /// <summary>Number of objects written so far.</summary>
-    internal int ObjectCount => _ObjectCount;
-
-    /// <summary>
-    /// Approximate output size if the container buffer were flushed now.
-    /// </summary>
-    internal long EstimatedOutputBytes =>
-        _FileHeaderSize + _BytesWritten + _ContainerBuffer.Length;
-
-    /// <summary>
-    /// Writes a raw BLF object into the container buffer.
-    /// The buffer is flushed automatically when it would exceed the 10 MB threshold.
-    /// <para>
-    /// <b>Container boundary invariant:</b> A BLF object is always fully contained
-    /// within a single container — it is never split across container boundaries.
-    /// If adding this object would exceed the container limit, the current container
-    /// is flushed first, and the object starts in a fresh container. A single object
-    /// larger than the container limit is written into its own dedicated container
-    /// (the check <c>_ContainerBuffer.Length &gt; 0</c> prevents a flush when the
-    /// buffer is empty).
-    /// </para>
-    /// </summary>
-    /// <param name="objectType">BLF object type (e.g., <see cref="BlfConstants.ObjTypeEthernetFrame"/>).</param>
-    /// <param name="objectVersion">Object structure version (typically 0).</param>
-    /// <param name="timestampNs">Absolute timestamp in nanoseconds since Unix epoch.</param>
-    /// <param name="payload">Pre-built object payload bytes.</param>
-    internal void WriteRawObject(
-        uint objectType,
-        ushort objectVersion,
-        long timestampNs,
-        ReadOnlySpan<byte> payload)
+    /// <param name="timestampNs">Absolute timestamp in nanoseconds since the Unix epoch.</param>
+    /// <returns>The relative timestamp for the object header.</returns>
+    internal ulong ToRelative(long timestampNs)
     {
-        // Nanoseconds relative to the millisecond start_date anchor. A negative delta
-        // is not representable in the unsigned object field, so it clamps to 0.
         long relativeNs = timestampNs - _StartNs;
         if (relativeNs < 0)
         {
-            _NonMonotonicTimestampCount++;
             relativeNs = 0;
         }
-        ulong blfTimestamp = (ulong)relativeNs;
 
-        // Calculate object sizes with 4-byte alignment
-        int rawObjectSize = _ObjectHeaderTotalSize + payload.Length;
-        int padding = BlfConstants.AlignmentPaddingByteCount(rawObjectSize);
-        int totalObjectSize = rawObjectSize + padding;
+        return (ulong)relativeNs;
+    }
 
-        // If adding this object would exceed the container limit, flush first.
-        // This guarantees no object spans container boundaries.
-        if (_ContainerBuffer.Length > 0
-            && _ContainerBuffer.Length + totalObjectSize > _MaxContainerBufferSize)
-        {
-            FlushContainer();
-        }
+    /// <summary>Writes the initial 144-byte BLF file header with placeholder values.</summary>
+    /// <param name="startNs">Anchor in nanoseconds since the Unix epoch; written as the header <c>start_date</c>.</param>
+    private void _WriteFileHeader(long startNs)
+    {
+        Span<byte> header = stackalloc byte[FileHeaderSize];
+        header.Clear();
 
-        // Reserve space for the entire object (headers + payload + padding)
-        Span<byte> buf = _ContainerBuffer.Reserve(totalObjectSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(header, BlfConstants.FileMagic);                // "LOGG"
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(4), (uint)FileHeaderSize);         // header_length = 144
+        // api_version, application, app_major, app_minor = 0 (already zeroed)
+        header[13] = _CompressionLevelToByte(_Compression);                       // compression_level
+        // len_compressed, len_uncompressed, obj_count, app_build = 0 (placeholder)
+        _WriteBlfDate(header.Slice(40), startNs);                                 // start_date
+        // end_date = 0 (placeholder)
 
-        // -- Block header (16 bytes) --
-        BinaryPrimitives.WriteUInt32LittleEndian(buf, BlfConstants.ObjectMagic);               // "LOBJ" signature
-        BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(4), (ushort)_ObjectHeaderTotalSize); // header_size = 32
-        BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(6), 1);                            // header_type = V1
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(8), (uint)rawObjectSize);           // object_length (unpadded)
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(12), objectType);                   // object_type
-
-        // -- Log object header V1 (16 bytes) --
-        //   uint32 flags (4) | uint16 client_index (2) | uint16 object_version (2) | uint64 object_timestamp (8)
-        // Timestamp is last. A timestamp-first layout cannot be reconstructed by BLF readers.
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(16), BlfConstants.TimestampResolution1Ns); // flags = 1 ns
-        BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(20), 0);                            // client_index
-        BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(22), objectVersion);                // object_version
-        BinaryPrimitives.WriteUInt64LittleEndian(buf.Slice(24), blfTimestamp);                 // object_timestamp (nanoseconds)
-
-        // -- Payload --
-        payload.CopyTo(buf.Slice(_ObjectHeaderTotalSize));
-
-        // -- 4-byte alignment padding (zeros) --
-        if (padding > 0)
-        {
-            buf.Slice(rawObjectSize, padding).Clear();
-        }
-
-        _ObjectCount++;
+        _Stream.Write(header);
     }
 
     /// <summary>
-    /// Flushes the current container buffer to the output stream.
-    /// Compresses the accumulated objects with zlib if compression is enabled,
-    /// then writes the container (block header + log obj header + container header + data).
+    /// Writes a 16-byte BLF date (Windows SYSTEMTIME layout) from Unix nanoseconds.
+    /// Layout: Year(2) + Month(2) + DayOfWeek(2) + Day(2) + Hour(2) + Minute(2) + Second(2) + Millisecond(2).
+    /// <para>
+    /// The fields are written as wall-clock components in the configured time zone (default UTC, see the constructor).
+    /// A SYSTEMTIME carries no zone, and Vector's reference tooling interprets it in the reader's zone, so writer and
+    /// reader must agree on the zone to recover the absolute timestamps. A fixed, configurable zone (instead of the
+    /// host's local zone) keeps files reproducible across machines. A timestamp of 0 or less writes all zeros.
+    /// </para>
+    /// </summary>
+    /// <param name="dest">The 16 bytes of the date field; overwritten completely.</param>
+    /// <param name="unixNanos">Absolute time in nanoseconds since the Unix epoch; 0 or less writes an all-zero date.</param>
+    private void _WriteBlfDate(Span<byte> dest, long unixNanos)
+    {
+        if (unixNanos <= 0)
+        {
+            dest.Slice(0, 16).Clear();
+            return;
+        }
+
+        // The BLF header stores wall-clock SYSTEMTIME without a zone; the zone is a builder option (default UTC) so
+        // writer and reader agree on a machine-independent zone, independent of the host's local time.
+        DateTimeOffset dto = DateTimeOffset.FromUnixTimeMilliseconds(unixNanos / 1_000_000);
+        DateTime local = TimeZoneInfo.ConvertTime(dto, _TimestampTimeZone).DateTime;
+
+        BinaryPrimitives.WriteUInt16LittleEndian(dest, (ushort)local.Year);
+        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(2), (ushort)local.Month);
+        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(4), (ushort)local.DayOfWeek); // Sunday = 0
+        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(6), (ushort)local.Day);
+        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(8), (ushort)local.Hour);
+        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(10), (ushort)local.Minute);
+        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(12), (ushort)local.Second);
+        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(14), (ushort)(unixNanos / 1_000_000 % 1_000));
+    }
+
+    #endregion
+
+    #region Container writing
+
+    /// <summary>
+    /// Bytes of containers written to the stream after the file header (padded, as stored). Safe to read while the writer
+    /// thread runs; the exporter adds the header and the pending container for its size estimate.
+    /// </summary>
+    internal long BytesWritten => Interlocked.Read(ref _BytesWritten);
+
+    /// <summary>
+    /// Compresses one container with zlib if compression is enabled, then writes it (block header + container header + data).
+    /// Called on the writer thread in background mode and on the caller's thread in synchronous mode, never concurrently.
     /// <para>
     /// Padding policy: <c>object_length</c> is the unpadded total
     /// (16-byte block header + 16-byte container header + compressed payload). 0–3 zero
@@ -304,14 +302,17 @@ internal sealed class BlfWriter
     /// The writer compresses with zlib only; LZ4 is a source-side read method.
     /// </para>
     /// </summary>
-    internal void FlushContainer()
+    /// <param name="container">The full container; empty containers write nothing.</param>
+    public void Write(BlfContainer container)
     {
-        if (_ContainerBuffer.Length == 0)
+        ArgumentNullException.ThrowIfNull(container);
+        ReadOnlySpan<byte> content = container.Content;
+        if (content.Length == 0)
         {
             return;
         }
 
-        uint uncompressedSize = (uint)_ContainerBuffer.Length;
+        uint uncompressedSize = (uint)content.Length;
         ushort compressionMethod;
         int compressedLen;
 
@@ -319,15 +320,14 @@ internal sealed class BlfWriter
         {
             // No compression — write raw buffer data directly
             compressionMethod = BlfConstants.CompressionNone;
-            compressedLen = _ContainerBuffer.Length;
+            compressedLen = content.Length;
         }
         else
         {
-            // Compress the buffer with zlib into the pre-allocated _CompressedBuf.
-            // This avoids the double allocation that MemoryStream.ToArray() caused
-            // (the MemoryStream internal buffer plus the extra ToArray copy).
+            // Perf: compress into the reused _CompressedBuf. A MemoryStream plus ToArray would allocate twice per container
+            // (its buffer and the copy).
             compressionMethod = BlfConstants.CompressionZlib;
-            _CompressWithZlib(_ContainerBuffer.WrittenSpan, _CompressedBuf);
+            _CompressWithZlib(content, _CompressedBuf);
             compressedLen = _CompressedBuf.Length;
         }
 
@@ -369,7 +369,7 @@ internal sealed class BlfWriter
         }
         else
         {
-            _Stream.Write(_ContainerBuffer.WrittenSpan);
+            _Stream.Write(content);
         }
 
         // Write 4-byte alignment padding
@@ -380,7 +380,7 @@ internal sealed class BlfWriter
             _Stream.Write(pad.Slice(0, containerPadding));
         }
 
-        _BytesWritten += paddedLength;
+        Interlocked.Add(ref _BytesWritten, paddedLength);
 
         // Track the size this container would have if stored uncompressed, so we can
         // populate the LOGG `len_uncompressed` field correctly (see field comment).
@@ -390,76 +390,7 @@ internal sealed class BlfWriter
         int uncompressedTotal = containerHeaderTotal + (int)uncompressedSize;
         int uncompressedPadded = uncompressedTotal + BlfConstants.AlignmentPaddingByteCount(uncompressedTotal);
         _UncompressedBytesWritten += uncompressedPadded;
-
-        _ContainerBuffer.Reset();
-    }
-
-    /// <summary>
-    /// Finalizes the BLF file: flushes remaining buffered objects, computes
-    /// final statistics, and returns a result that can update the file header.
-    /// </summary>
-    /// <param name="endNs">End timestamp in nanoseconds since Unix epoch.
-    /// Used for the file header end date.</param>
-    /// <returns>A <see cref="BlfWriterFinishResult"/> with the finalized file header.</returns>
-    internal BlfWriterFinishResult Finish(long endNs)
-    {
-        FlushContainer();
-        _Stream.Flush();
-
-        // Return the container buffer and compressed buffer to the pool (no longer needed)
-        _ContainerBuffer.Return();
-        _CompressedBuf.Return();
-
-        // Build the finalized 144-byte file header with all statistics
-        byte[] finalHeader = new byte[_FileHeaderSize];
-        Span<byte> h = finalHeader;
-        h.Clear();
-
-        BinaryPrimitives.WriteUInt32LittleEndian(h, BlfConstants.FileMagic);                    // "LOGG"
-        BinaryPrimitives.WriteUInt32LittleEndian(h.Slice(4), (uint)_FileHeaderSize);             // header_length = 144
-        // h[8..12] = 0  (api_version, already zeroed)
-        // h[12]    = 0  (application, already zeroed)
-        h[13] = _CompressionLevelToByte(_Compression);                           // compression_level
-        // h[14..16] = 0 (application_major, application_minor, already zeroed)
-
-        long totalFileSize = _FileHeaderSize + _BytesWritten;
-        // For an uncompressed file the two sizes are identical. For a compressed file
-        // len_uncompressed must be the size the file would have if all
-        // containers were uncompressed; using the compressed size makes a reader try to
-        // scan past the actual end.
-        long uncompressedFileSize = _FileHeaderSize + _UncompressedBytesWritten;
-        BinaryPrimitives.WriteUInt64LittleEndian(h.Slice(16), (ulong)totalFileSize);            // len_compressed
-        BinaryPrimitives.WriteUInt64LittleEndian(h.Slice(24), (ulong)uncompressedFileSize);     // len_uncompressed
-        BinaryPrimitives.WriteUInt32LittleEndian(h.Slice(32), (uint)_ObjectCount);              // obj_count
-        // h[36..40] = 0 (application_build, already zeroed)
-
-        _WriteBlfDate(h.Slice(40), _StartNs);                                    // start_date
-        _WriteBlfDate(h.Slice(56), endNs);                                       // end_date
-        // h[72..76] = 0  (restore_point_offset, already zeroed)
-        // h[76..144] = 0 (padding, already zeroed)
-
-        return new BlfWriterFinishResult(finalHeader, _ObjectCount, _HeaderPosition);
-    }
-
-    #endregion
-
-    #region Private Helpers
-
-    /// <summary>Writes the initial 144-byte BLF file header with placeholder values.</summary>
-    private void _WriteFileHeader(long startNs)
-    {
-        Span<byte> header = stackalloc byte[_FileHeaderSize];
-        header.Clear();
-
-        BinaryPrimitives.WriteUInt32LittleEndian(header, BlfConstants.FileMagic);                // "LOGG"
-        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(4), (uint)_FileHeaderSize);         // header_length = 144
-        // api_version, application, app_major, app_minor = 0 (already zeroed)
-        header[13] = _CompressionLevelToByte(_Compression);                       // compression_level
-        // len_compressed, len_uncompressed, obj_count, app_build = 0 (placeholder)
-        _WriteBlfDate(header.Slice(40), startNs);                                 // start_date
-        // end_date = 0 (placeholder)
-
-        _Stream.Write(header);
+        _ObjectsWritten += container.ObjectCount;
     }
 
     /// <summary>
@@ -471,6 +402,8 @@ internal sealed class BlfWriter
     /// destination array instead of allocating a <see cref="MemoryStream"/>.
     /// </para>
     /// </summary>
+    /// <param name="data">The uncompressed container content.</param>
+    /// <param name="destination">Receives the complete zlib stream; its previous content is discarded.</param>
     private void _CompressWithZlib(ReadOnlySpan<byte> data, PooledBuffer destination)
     {
         // The zlib stream is declared after (so disposed before) the destination stream: disposing it writes the final
@@ -482,43 +415,61 @@ internal sealed class BlfWriter
         zlib.Write(data);
     }
 
+    #endregion
+
+    #region Finish
+
     /// <summary>
-    /// Writes a 16-byte BLF date (Windows SYSTEMTIME layout) from Unix nanoseconds.
-    /// Layout: Year(2) + Month(2) + DayOfWeek(2) + Day(2) + Hour(2) + Minute(2) + Second(2) + Millisecond(2).
-    /// <para>
-    /// The fields are written as wall-clock components in the configured time zone (default UTC, see the constructor).
-    /// A SYSTEMTIME carries no zone, and Vector's reference tooling interprets it in the reader's zone, so writer and
-    /// reader must agree on the zone to recover the absolute timestamps. A fixed, configurable zone (instead of the
-    /// host's local zone) keeps files reproducible across machines. A timestamp of 0 or less writes all zeros.
-    /// </para>
+    /// Finalizes the BLF file: computes the final statistics and returns a result that can update the file header. All containers
+    /// must have been written (the writer thread joined, lost containers accounted) before this call; it flushes the stream.
     /// </summary>
-    private void _WriteBlfDate(Span<byte> dest, long unixNanos)
+    /// <param name="endNs">End timestamp in nanoseconds since Unix epoch.
+    /// Used for the file header end date.</param>
+    /// <returns>A <see cref="BlfWriterFinishResult"/> with the finalized file header.</returns>
+    internal BlfWriterFinishResult Finish(long endNs)
     {
-        if (unixNanos <= 0)
-        {
-            dest.Slice(0, 16).Clear();
-            return;
-        }
+        _Stream.Flush();
 
-        // The BLF header stores wall-clock SYSTEMTIME without a zone; the zone is a builder option (default UTC) so
-        // writer and reader agree on a machine-independent zone, independent of the host's local time.
-        DateTimeOffset dto = DateTimeOffset.FromUnixTimeMilliseconds(unixNanos / 1_000_000);
-        DateTime local = TimeZoneInfo.ConvertTime(dto, _TimestampTimeZone).DateTime;
+        // Return the compressed buffer to the pool (no longer needed)
+        _CompressedBuf.Return();
 
-        BinaryPrimitives.WriteUInt16LittleEndian(dest, (ushort)local.Year);
-        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(2), (ushort)local.Month);
-        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(4), (ushort)local.DayOfWeek); // Sunday = 0
-        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(6), (ushort)local.Day);
-        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(8), (ushort)local.Hour);
-        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(10), (ushort)local.Minute);
-        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(12), (ushort)local.Second);
-        BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(14), (ushort)(unixNanos / 1_000_000 % 1_000));
+        // Build the finalized 144-byte file header with all statistics
+        byte[] finalHeader = new byte[FileHeaderSize];
+        Span<byte> h = finalHeader;
+        h.Clear();
+
+        BinaryPrimitives.WriteUInt32LittleEndian(h, BlfConstants.FileMagic);                    // "LOGG"
+        BinaryPrimitives.WriteUInt32LittleEndian(h.Slice(4), (uint)FileHeaderSize);             // header_length = 144
+        // h[8..12] = 0  (api_version, already zeroed)
+        // h[12]    = 0  (application, already zeroed)
+        h[13] = _CompressionLevelToByte(_Compression);                           // compression_level
+        // h[14..16] = 0 (application_major, application_minor, already zeroed)
+
+        long totalFileSize = FileHeaderSize + _BytesWritten;
+        // For an uncompressed file the two sizes are identical. For a compressed file
+        // len_uncompressed must be the size the file would have if all
+        // containers were uncompressed; using the compressed size makes a reader try to
+        // scan past the actual end.
+        long uncompressedFileSize = FileHeaderSize + _UncompressedBytesWritten;
+        BinaryPrimitives.WriteUInt64LittleEndian(h.Slice(16), (ulong)totalFileSize);            // len_compressed
+        BinaryPrimitives.WriteUInt64LittleEndian(h.Slice(24), (ulong)uncompressedFileSize);     // len_uncompressed
+        BinaryPrimitives.WriteUInt32LittleEndian(h.Slice(32), (uint)_ObjectsWritten);            // obj_count
+        // h[36..40] = 0 (application_build, already zeroed)
+
+        _WriteBlfDate(h.Slice(40), _StartNs);                                    // start_date
+        _WriteBlfDate(h.Slice(56), endNs);                                       // end_date
+        // h[72..76] = 0  (restore_point_offset, already zeroed)
+        // h[76..144] = 0 (padding, already zeroed)
+
+        return new BlfWriterFinishResult(finalHeader, _ObjectsWritten, _HeaderPosition);
     }
 
     /// <summary>
     /// Maps <see cref="CompressionLevel"/> to a byte value for the BLF file header.
     /// Corresponds to the zlib compression level (0=off, 1=fast, 6=default, 9=best).
     /// </summary>
+    /// <param name="level">The compression level of the containers.</param>
+    /// <returns>The zlib level byte for the header's <c>compression_level</c> field; 6 for a level without a preset.</returns>
     private static byte _CompressionLevelToByte(CompressionLevel level) => level switch
     {
         CompressionLevel.NoCompression => 0,
@@ -538,16 +489,13 @@ internal sealed class BlfWriter
 /// </summary>
 internal sealed class BlfWriterFinishResult
 {
-    #region Fields
+    #region Configuration and state
 
+    /// <summary>The complete 144-byte finalized file header that <see cref="UpdateHeader"/> writes.</summary>
     private readonly byte[] _FinalizedHeader;
 
     /// <summary>Stream position where the file header was written; <see cref="UpdateHeader"/> rewrites it there.</summary>
     private readonly long _HeaderPosition;
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>Creates a new finish result.</summary>
     /// <param name="finalizedHeader">The complete 144-byte finalized file header.</param>
@@ -560,15 +508,15 @@ internal sealed class BlfWriterFinishResult
         _HeaderPosition = headerPosition;
     }
 
-    #endregion
-
-    #region Public API
-
     /// <summary>Total number of objects written to the BLF file.</summary>
     internal int ObjectCount
     {
         get;
     }
+
+    #endregion
+
+    #region Header update
 
     /// <summary>
     /// Seeks to the position where the file started (0 for a fresh stream; the writer's start position when the caller

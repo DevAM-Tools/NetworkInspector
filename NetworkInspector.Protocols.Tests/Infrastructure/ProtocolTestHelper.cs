@@ -40,7 +40,7 @@ internal static class ProtocolTestHelper
         Stack stack = builder.Build();
 
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             frameData,
             linkType,
@@ -48,7 +48,7 @@ internal static class ProtocolTestHelper
             stack.FrameInterfaceRegistry).Value;
 
         ParseOptions options = new();
-        if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+        if (!Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());
@@ -76,7 +76,7 @@ internal static class ProtocolTestHelper
         Stack stack = builder.Build();
 
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             frameData,
             linkType,
@@ -84,7 +84,7 @@ internal static class ProtocolTestHelper
             stack.FrameInterfaceRegistry).Value;
 
         ParseOptions options = new();
-        if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+        if (!Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());
@@ -101,7 +101,7 @@ internal static class ProtocolTestHelper
     {
         Stack stack = SharedStack;
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             frameData,
             linkType,
@@ -109,7 +109,7 @@ internal static class ProtocolTestHelper
             stack.FrameInterfaceRegistry).Value;
 
         ParseOptions options = new();
-        if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+        if (!Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());
@@ -259,7 +259,7 @@ internal static class ProtocolTestHelper
         FrameInterfaceId? interfaceId = null)
     {
         Frame frame = Frame.Create(
-            new FrameId(packetIndex),
+            packetIndex,
             timestamp,
             frameData,
             linkType,
@@ -267,7 +267,7 @@ internal static class ProtocolTestHelper
             stack.FrameInterfaceRegistry).Value;
 
         ParseOptions options = new();
-        PacketId id = new(packetIndex);
+        PacketId id = packetIndex;
         if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
@@ -275,6 +275,23 @@ internal static class ProtocolTestHelper
         }
 
         return packet;
+    }
+
+    /// <summary>
+    /// Copies one buffer of a packet so a test can compare its bytes after the packet is gone.
+    /// </summary>
+    /// <param name="packet">The parsed packet.</param>
+    /// <param name="index">The buffer index: 0 is the frame, 1 and above are the additional buffers.</param>
+    /// <returns>The bytes of the buffer; an empty array when the packet has no buffer with that index.</returns>
+    internal static byte[] BufferBytes(Packet packet, int index)
+    {
+        ReadOnlyMemory<byte>? buffer = packet.Buffer(index);
+        if (buffer is null)
+        {
+            return [];
+        }
+
+        return buffer.Value.ToArray();
     }
 
     /// <summary>

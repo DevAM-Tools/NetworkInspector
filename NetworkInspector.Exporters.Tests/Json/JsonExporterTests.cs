@@ -9,14 +9,14 @@ namespace NetworkInspector.Exporters.Tests.Json;
 internal sealed class JsonExporterTests
 {
     [Test]
-    public async Task Builder_RequiresOutput()
+    public async Task BuilderRequiresOutput()
     {
         JsonExporter.Builder builder = JsonExporter.CreateBuilder();
         await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task CompactFormat_ProducesValidJson()
+    public async Task CompactFormatProducesValidJson()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -39,7 +39,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task PrettyFormat_ProducesValidJson()
+    public async Task PrettyFormatProducesValidJson()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -62,7 +62,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task ArrayFormat_ProducesValidJson()
+    public async Task ArrayFormatProducesValidJson()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -85,7 +85,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task OnPacket_SkipPacket_ReportsSkippedAndWritesNoPacket()
+    public async Task OnPacketSkipPacketReportsSkippedAndWritesNoPacket()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -94,7 +94,7 @@ internal sealed class JsonExporterTests
             .Build();
 
         byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(32);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0, frameData);
+        Frame frame = TestHarness.CreateFrame(0, 0, frameData);
         ParseOptions options = new(FieldTreeMode.Skip);
         if (!Packet.TryParse(TestHarness.NextPacketId(), TestHarness.GetStack(), frame, in options, out Packet? skip, out ParseFailure failure)
             || skip is null)
@@ -102,19 +102,41 @@ internal sealed class JsonExporterTests
             throw new InvalidOperationException(failure.ToString());
         }
 
-        int skippedEvents = 0;
-        exporter.ItemSkipped += (_, _) => skippedEvents++;
+        List<ExportErrorEventArgs> events = [];
+        exporter.ItemSkipped += (_, args) => events.Add(args);
         bool accepted = exporter.OnPacket(skip);
         exporter.OnFinish();
 
         await Assert.That(accepted).IsTrue();
         await Assert.That(exporter.SkippedCount).IsEqualTo(1);
+        await Assert.That(exporter.ErrorCount).IsEqualTo(1);
         await Assert.That(exporter.PacketCount).IsEqualTo(0);
-        await Assert.That(skippedEvents).IsEqualTo(1);
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].Kind).IsEqualTo(ExportErrorKind.SerializationError);
+        await Assert.That(events[0].Message).IsEqualTo("Skip packets cannot be exported (HasFieldTree is false).");
     }
 
     [Test]
-    public async Task EmptyExport_ProducesEmptyJsonArray()
+    public async Task OnPacketSkipPacketStopsAStrictExportWithoutAnEvent()
+    {
+        using MemoryStream ms = new();
+        using JsonExporter exporter = JsonExporter.CreateBuilder().ToStream(ms).Build();
+        exporter.ErrorTolerance = ErrorToleranceMode.Strict;
+        ParseOptions options = new(FieldTreeMode.Skip);
+        Packet skip = TestHarness.ParseFrame(TestHarness.CreateFrame(0, 0, FrameGenerators.BuildEthernetIpv4UdpFrame(32)), in options);
+        int skippedEvents = 0;
+        exporter.ItemSkipped += (_, _) => skippedEvents++;
+
+        bool accepted = exporter.OnPacket(skip);
+
+        await Assert.That(accepted).IsFalse();
+        await Assert.That(exporter.HasErrors).IsTrue();
+        await Assert.That(exporter.SkippedCount).IsEqualTo(1);
+        await Assert.That(skippedEvents).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EmptyExportProducesEmptyJsonArray()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -133,7 +155,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task FileOutput_ProducesValidJson()
+    public async Task FileOutputProducesValidJson()
     {
         using TestDir dir = new("json_file");
         string path = dir.FilePath("output.json");
@@ -158,7 +180,8 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task Cancellation_StopsExport()
+    [Category("Slow")]
+    public async Task CancellationStopsExport()
     {
         using CancellationTokenSource cts = new();
         using MemoryStream ms = new();
@@ -183,7 +206,8 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task TargetPacketCount_LimitsExport()
+    [Category("Slow")]
+    public async Task TargetPacketCountLimitsExport()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -211,7 +235,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task PrettyFormat_ContainsIndentation()
+    public async Task PrettyFormatContainsIndentation()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -231,7 +255,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task DefaultUiName_IsJsonExporter()
+    public async Task DefaultUiNameIsJsonExporter()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -242,7 +266,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task WithUiName_OverridesDefault()
+    public async Task WithUiNameOverridesDefault()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -258,7 +282,7 @@ internal sealed class JsonExporterTests
     // ========================================================================
 
     [Test]
-    public async Task IsFinished_FalseBeforeOnFinish()
+    public async Task IsFinishedFalseBeforeOnFinish()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -270,7 +294,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task IsFinished_TrueAfterOnFinish()
+    public async Task IsFinishedTrueAfterOnFinish()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -284,7 +308,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task OnPacket_AfterFinish_ReturnsFalse()
+    public async Task OnPacketAfterFinishReturnsFalse()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -301,7 +325,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task DoubleFinish_IsIdempotent()
+    public async Task DoubleFinishIsIdempotent()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -325,7 +349,7 @@ internal sealed class JsonExporterTests
     // ========================================================================
 
     [Test]
-    public async Task Statistics_TracksWrittenCount()
+    public async Task StatisticsTracksWrittenCount()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -354,7 +378,7 @@ internal sealed class JsonExporterTests
     // ========================================================================
 
     [Test]
-    public async Task Description_ReturnsNull_WhenNotSet()
+    public async Task DescriptionReturnsNullWhenNotSet()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -365,7 +389,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task Description_ReturnsConfiguredValue()
+    public async Task DescriptionReturnsConfiguredValue()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -377,7 +401,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task PrettyFormat_FieldType_IsTextualName()
+    public async Task PrettyFormatFieldTypeIsTextualName()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -397,7 +421,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task ArrayFormat_FieldType_IsTextualName()
+    public async Task ArrayFormatFieldTypeIsTextualName()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -417,7 +441,7 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    public async Task CompactFormat_FieldType_IsNumericEnumValue()
+    public async Task CompactFormatFieldTypeIsNumericEnumValue()
     {
         using MemoryStream ms = new();
         using JsonExporter exporter = JsonExporter.CreateBuilder()
@@ -434,6 +458,123 @@ internal sealed class JsonExporterTests
         await Assert.That(typeElement.ValueKind).IsEqualTo(JsonValueKind.Number);
         await Assert.That(typeElement.GetInt32()).IsEqualTo((int)FieldType.MacAddress);
         verifier.Dispose();
+    }
+
+    [Test]
+    public async Task TheCompactFormatRefusesAPacketOfAnotherStackAndKeepsTheEarlierPacketsValid()
+    {
+        // The compact format names a field id once per document; the custom stack registers other fields than the standard
+        // stack, so the same id names another field there and a reader would keep the first stack's name.
+        using CustomFieldPacketFactory factory = new();
+        (Packet standard, Packet custom) = _PacketOfEachStack(factory);
+        using MemoryStream stream = new();
+        using JsonExporter exporter = JsonExporter.CreateBuilder().ToStream(stream).WithFormat(JsonExportFormat.Compact).Build();
+        List<ExportErrorEventArgs> errors = [];
+        exporter.ItemSkipped += (_, args) => errors.Add(args);
+
+        bool first = exporter.OnPacket(standard);
+        bool second = exporter.OnPacket(custom);
+        exporter.OnFinish();
+
+        using JsonDocument document = JsonDocument.Parse(stream.ToArray());
+        await Assert.That(first).IsTrue();
+        await Assert.That(second).IsFalse();
+        await Assert.That(errors.Count).IsEqualTo(1);
+        await Assert.That(errors[0].Kind).IsEqualTo(ExportErrorKind.StackMismatch);
+        await Assert.That(errors[0].ItemIndex).IsEqualTo(1);
+        await Assert.That(exporter.PacketCount).IsEqualTo(1);
+        await Assert.That(exporter.ErrorCount).IsEqualTo(1);
+        await Assert.That(document.RootElement.GetArrayLength()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task TheCompactFormatRefusesEveryLaterPacketOnceTheStackChanged()
+    {
+        // The refusal is fatal, so a later packet of the first stack is not written after a gap either.
+        using CustomFieldPacketFactory factory = new();
+        (Packet standard, Packet custom) = _PacketOfEachStack(factory);
+        using MemoryStream stream = new();
+        using JsonExporter exporter = JsonExporter.CreateBuilder().ToStream(stream).WithFormat(JsonExportFormat.Compact).Build();
+
+        _ = exporter.OnPacket(standard);
+        _ = exporter.OnPacket(custom);
+        bool later = exporter.OnPacket(standard);
+        exporter.OnFinish();
+
+        await Assert.That(later).IsFalse();
+        await Assert.That(exporter.PacketCount).IsEqualTo(1);
+        await Assert.That(exporter.ErrorCount).IsEqualTo(1);
+    }
+
+    [Test]
+    [Arguments(JsonExportFormat.Pretty, ExportShape.Hierarchy)]
+    [Arguments(JsonExportFormat.Array, ExportShape.Hierarchy)]
+    [Arguments(JsonExportFormat.Compact, ExportShape.AllFields)]
+    public async Task TheFormatsThatNameEveryFieldAcceptPacketsOfTwoStacks(JsonExportFormat format, ExportShape shape)
+    {
+        // Pretty, Array, and the flat shapes write the name of every field, so a second stack is harmless there.
+        using CustomFieldPacketFactory factory = new();
+        (Packet standard, Packet custom) = _PacketOfEachStack(factory);
+        using MemoryStream stream = new();
+        using JsonExporter exporter = JsonExporter.CreateBuilder()
+            .ToStream(stream)
+            .WithFormat(format)
+            .WithContent(JsonExporter.DefaultContent with { Shape = shape })
+            .Build();
+
+        bool first = exporter.OnPacket(standard);
+        bool second = exporter.OnPacket(custom);
+        exporter.OnFinish();
+
+        using JsonDocument document = JsonDocument.Parse(stream.ToArray());
+        await Assert.That(first).IsTrue();
+        await Assert.That(second).IsTrue();
+        await Assert.That(exporter.ErrorCount).IsEqualTo(0);
+        await Assert.That(document.RootElement.GetArrayLength()).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task ASkippedFirstPacketDoesNotPinTheStackOfACompactExport()
+    {
+        // Nothing of the skipped packet reached the document, so the document has no stack yet.
+        using CustomFieldPacketFactory factory = new();
+        Frame frame = TestHarness.CreateFrame(0, 0, FrameGenerators.BuildEthernetIpv4UdpFrame(32));
+        ParseOptions skipOptions = new(FieldTreeMode.Skip);
+        if (!Packet.TryParse(TestHarness.NextPacketId(), TestHarness.GetStack(), frame, in skipOptions, out Packet? skip, out ParseFailure failure)
+            || skip is null)
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        Packet custom = factory.Create(5, "text");
+        using MemoryStream stream = new();
+        using JsonExporter exporter = JsonExporter.CreateBuilder().ToStream(stream).WithFormat(JsonExportFormat.Compact).Build();
+
+        _ = exporter.OnPacket(skip);
+        bool accepted = exporter.OnPacket(custom);
+        exporter.OnFinish();
+
+        await Assert.That(accepted).IsTrue();
+        await Assert.That(exporter.PacketCount).IsEqualTo(1);
+        await Assert.That(exporter.SkippedCount).IsEqualTo(1);
+    }
+
+    /// <summary>
+    /// One packet of the standard test stack and one of the factory's own stack. The ids differ, as in a session where every
+    /// packet has a unique number.
+    /// </summary>
+    /// <param name="factory">The factory with its own stack.</param>
+    /// <returns>A standard-stack packet and a packet of the factory's stack.</returns>
+    private static (Packet Standard, Packet Custom) _PacketOfEachStack(CustomFieldPacketFactory factory)
+    {
+        Packet standard = TestHarness.ParseFrame(TestHarness.CreateFrame(1, 1_000_000, FrameGenerators.BuildEthernetIpv4UdpFrame(8)));
+        Packet custom = factory.Create(77, "hello");
+        while (custom.Id.Value == standard.Id.Value)
+        {
+            custom = factory.Create(77, "hello");
+        }
+
+        return (standard, custom);
     }
 
     /// <summary>

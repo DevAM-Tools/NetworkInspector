@@ -495,6 +495,10 @@ public sealed partial class TcpProtocol
             in parentField, stream, forward, owner, closing: isFin && !isRst, in context, ref outcome, out bool emitted);
         if (extractResult.TryPropagateError(out ParseResult extractError))
         {
+            // An error can only come from a PDU that was dispatched, so the mode is the one of the success path below. The effect
+            // is recorded on error exits too; with the mode left at None a replay of this packet would dispatch nothing and show
+            // neither the PDUs that were parsed before the error nor the error itself (a nested limit error, for example).
+            outcome.Mode = PayloadDispatchMode.ReassemblyPdu;
             return extractError;
         }
 
@@ -508,6 +512,8 @@ public sealed partial class TcpProtocol
                 ParseResult tailResult = _DispatchPdu(in parentField, owner, tail, tailPacketIds, in context, ref outcome);
                 if (tailResult.TryPropagateError(out ParseResult tailError))
                 {
+                    // Same reason as for the error of the extraction above: the effect of an error exit keeps the PDUs.
+                    outcome.Mode = PayloadDispatchMode.ReassemblyPdu;
                     return tailError;
                 }
             }
@@ -601,8 +607,7 @@ public sealed partial class TcpProtocol
         // data slice gets an effect layer key. The recorded PduEffect keeps the same bytes: a replay binds them again in the
         // same order and therefore gets the same buffer index and layer key as this first parse. A zero-copy slice of the
         // frame here would key as the frame on ingest but as an extra buffer on replay, and the replay lookup would miss.
-        ReadOnlyMemory<byte> bound = parentField.BindParseBuffer(pdu);
-        if (bound.IsEmpty)
+        if (!parentField.TryBindBuffer(pdu, out ReadOnlyMemory<byte> bound, out _))
         {
             // The packet holds at most 255 bound buffers (a constant of the packet's effect keys), so a segment that
             // completes more PDUs than that cannot nest-parse the rest. An empty slice would reach the inner
@@ -691,8 +696,7 @@ public sealed partial class TcpProtocol
                     {
                         // Binding in recorded order reproduces the buffer indices (and thus effect layer keys) of the first
                         // parse, so nested stateful layers find their own recorded effects.
-                        ReadOnlyMemory<byte> bound = parentField.BindParseBuffer(pdu.PduBytes);
-                        if (bound.IsEmpty)
+                        if (!parentField.TryBindBuffer(pdu.PduBytes, out ReadOnlyMemory<byte> bound, out _))
                         {
                             // Same limit as on the first parse (the replay binds the same PDUs in the same order).
                             return ParseError.Custom(ProtocolName, _BoundBufferLimitMessage);

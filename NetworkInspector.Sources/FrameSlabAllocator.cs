@@ -1,6 +1,6 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
-using ByteSlab = NetworkInspector.Core.Fields.SlabAllocator<byte>;
+using CoreByteSlabAllocator = NetworkInspector.Core.Fields.SlabAllocator<byte>;
 
 namespace NetworkInspector.Sources;
 
@@ -11,6 +11,12 @@ namespace NetworkInspector.Sources;
 /// uninitialised backing memory because every frame byte is written before the frame is published.
 /// </summary>
 /// <remarks>
+/// <para>
+/// <b>Lifetime model:</b> GC regions (see the Core <c>SlabAllocator</c>): frames are handed to consumers that keep them for
+/// unrelated periods, so a slab can only die with its last frame. This type adds frame policy (rollover, bypass) on top of
+/// that one implementation; it is not a second allocator. The exporter batch arena (<c>BatchByteArena</c>) cannot be used here
+/// because it resets all payloads at once.
+/// </para>
 /// <para>
 /// <b>Retention:</b> a slab stays alive while any frame references it. A consumer that holds one frame keeps at most
 /// one slab (<see cref="SlabSize"/> bytes) alive; frames above a quarter of the slab get their own array so a single
@@ -44,7 +50,7 @@ internal sealed class FrameSlabAllocator
     #region Fields
 
     /// <summary>Current slab; replaced when the rest does not fit. Old slabs live on through their frames.</summary>
-    private ByteSlab _Slab;
+    private CoreByteSlabAllocator _Slab;
 
     #endregion
 

@@ -725,7 +725,7 @@ internal sealed class PacketIndexTests
 
         byte[] data = FrameBuilders.GenerateStaticUdpFrame(512);
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             data,
             LinkType.Ethernet,
@@ -744,7 +744,7 @@ internal sealed class PacketIndexTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -778,7 +778,7 @@ internal sealed class PacketIndexTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -807,7 +807,7 @@ internal sealed class PacketIndexTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -837,7 +837,7 @@ internal sealed class PacketIndexTests
             {
                 ParseOptions options = new(index: index);
                 if (!Packet.TryParse(
-                    new PacketId(i),
+                    i,
                     stack,
                     frame,
                     in options,
@@ -864,7 +864,7 @@ internal sealed class PacketIndexTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -891,7 +891,7 @@ internal sealed class PacketIndexTests
             {
                 ParseOptions options = new(index: index);
                 if (!Packet.TryParse(
-                    new PacketId(i),
+                    i,
                     stack,
                     frame,
                     in options,
@@ -924,7 +924,7 @@ internal sealed class PacketIndexTests
             {
                 ParseOptions options = new(index: index);
                 if (!Packet.TryParse(
-                    new PacketId(i),
+                    i,
                     stack,
                     frame,
                     in options,
@@ -958,7 +958,7 @@ internal sealed class PacketIndexTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -983,7 +983,7 @@ internal sealed class PacketIndexTests
 
         // Parse IPv4 frame for packets 0-4
         byte[] ipv4Data = FrameBuilders.GenerateStaticUdpFrame(512);
-        Frame ipv4Frame = Frame.Create(new FrameId(0), Timestamp.FromSecs(0), ipv4Data,
+        Frame ipv4Frame = Frame.Create(0, Timestamp.FromSecs(0), ipv4Data,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
 
         for (int i = 0; i < 5; i++)
@@ -991,7 +991,7 @@ internal sealed class PacketIndexTests
             {
                 ParseOptions options = new(index: index);
                 if (!Packet.TryParse(
-                    new PacketId(i),
+                    i,
                     stack,
                     ipv4Frame,
                     in options,
@@ -1005,7 +1005,7 @@ internal sealed class PacketIndexTests
 
         // Parse IPv6 frame for packets 5-9
         byte[] ipv6Data = FrameBuilders.GenerateStaticUdpIpv6Frame(512);
-        Frame ipv6Frame = Frame.Create(new FrameId(0), Timestamp.FromSecs(0), ipv6Data,
+        Frame ipv6Frame = Frame.Create(0, Timestamp.FromSecs(0), ipv6Data,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
 
         for (int i = 5; i < 10; i++)
@@ -1013,7 +1013,7 @@ internal sealed class PacketIndexTests
             {
                 ParseOptions options = new(index: index);
                 if (!Packet.TryParse(
-                    new PacketId(i),
+                    i,
                     stack,
                     ipv6Frame,
                     in options,

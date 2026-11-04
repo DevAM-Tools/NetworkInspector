@@ -52,7 +52,7 @@ internal sealed class FrameByIdStressTests
                     int length = Math.Min(64, limit);
                     int first = random.Next(limit - length + 1);
                     Span<Frame?> frames = buffer.AsSpan(0, length);
-                    _ = source.FramesById(new FrameId(first), frames);
+                    _ = source.FramesById(first, frames);
                     for (int i = 0; i < length; i++)
                     {
                         if (frames[i] is not { } frame || !RandomAccessEquivalence.SameFrame(expected[first + i], frame))
@@ -87,7 +87,7 @@ internal sealed class FrameByIdStressTests
 
         // Assert: no wrong or missing frame during the scan; afterwards every id resolves through a batch.
         Frame?[] afterScan = new Frame?[count];
-        int found = source.FramesById(new FrameId(0), afterScan);
+        int found = source.FramesById(0, afterScan);
         await Assert.That(read).IsEqualTo(count);
         await Assert.That(failures).IsEqualTo(0);
         await Assert.That(successes).IsGreaterThan(0);
@@ -155,7 +155,7 @@ internal sealed class FrameByIdStressTests
         ReadOnlyMemory<byte>[] sequential = new ReadOnlyMemory<byte>[count];
         for (int i = 0; i < count; i++)
         {
-            Frame? f = source.FrameById(new FrameId(i));
+            Frame? f = source.FrameById(i);
             await Assert.That(f).IsNotNull();
             sequential[i] = f!.Value.Data;
         }
@@ -163,7 +163,7 @@ internal sealed class FrameByIdStressTests
         ConcurrentDictionary<int, bool> outcomes = new();
         Parallel.For(0, count, i =>
         {
-            Frame? f = source.FrameById(new FrameId(i));
+            Frame? f = source.FrameById(i);
             bool match = f.HasValue && f.Value.Data.Span.SequenceEqual(sequential[i].Span);
             outcomes[i] = match;
         });
@@ -197,7 +197,7 @@ internal sealed class FrameByIdStressTests
         ReadOnlyMemory<byte>[] sequential = new ReadOnlyMemory<byte>[count];
         for (int i = 0; i < count; i++)
         {
-            Frame? f = source.FrameById(new FrameId(i));
+            Frame? f = source.FrameById(i);
             await Assert.That(f).IsNotNull();
             sequential[i] = f!.Value.Data;
         }
@@ -205,7 +205,7 @@ internal sealed class FrameByIdStressTests
         ConcurrentDictionary<int, bool> outcomes = new();
         Parallel.For(0, count, i =>
         {
-            Frame? f = source.FrameById(new FrameId(i));
+            Frame? f = source.FrameById(i);
             bool match = f.HasValue && f.Value.Data.Span.SequenceEqual(sequential[i].Span);
             outcomes[i] = match;
         });
@@ -275,7 +275,7 @@ internal sealed class FrameByIdStressTests
         Parallel.For(0, count * 4, n =>
         {
             int i = n % count;
-            Frame? f = source.FrameById(new FrameId(i));
+            Frame? f = source.FrameById(i);
             outcomes[n] = f.HasValue && f.Value.Data.Span.SequenceEqual(sequential[i]);
         });
 
@@ -300,12 +300,12 @@ internal sealed class FrameByIdStressTests
 
         for (int i = 0; i < prefix; i++)
         {
-            Frame? f = source.FrameById(new FrameId(i));
+            Frame? f = source.FrameById(i);
             await Assert.That(f).IsNotNull();
             await Assert.That(f!.Value.Data.Span.SequenceEqual(expected[i])).IsTrue();
         }
 
-        await Assert.That(source.FrameById(new FrameId(expected.Length - 1))).IsNull();
+        await Assert.That(source.FrameById(expected.Length - 1)).IsNull();
 
         // Scan the rest on one thread while readers hit every id: each result is null (not indexed yet) or correct.
         int wrong = 0;
@@ -318,7 +318,7 @@ internal sealed class FrameByIdStressTests
         Parallel.For(0, expected.Length * 4, n =>
         {
             int i = n % expected.Length;
-            Frame? f = source.FrameById(new FrameId(i));
+            Frame? f = source.FrameById(i);
             if (f.HasValue && !f.Value.Data.Span.SequenceEqual(expected[i]))
             {
                 _ = Interlocked.Increment(ref wrong);
@@ -330,7 +330,7 @@ internal sealed class FrameByIdStressTests
         int missing = 0;
         for (int i = 0; i < expected.Length; i++)
         {
-            Frame? f = source.FrameById(new FrameId(i));
+            Frame? f = source.FrameById(i);
             if (!f.HasValue || !f.Value.Data.Span.SequenceEqual(expected[i]))
             {
                 missing++;

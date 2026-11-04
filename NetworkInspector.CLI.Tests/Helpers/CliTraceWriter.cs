@@ -34,12 +34,12 @@ internal static class CliTraceWriter
 
         // A SYN comes first: the stream tracker numbers relative to the initial sequence number of a SYN, so without it
         // the relative and the absolute rendering would be the same. The SYN uses the number just below the data.
-        exporter.OnFrame(Frame.Create(new FrameId(0), Timestamp.FromSecs(1_000), _TcpSegment(FirstSequence - 1, 0x02, 0), LinkType.Ethernet,
+        exporter.OnFrame(Frame.Create(0, Timestamp.FromSecs(1_000), _TcpSegment(FirstSequence - 1, 0x02, 0), LinkType.Ethernet,
             FrameInterfaceId.Invalid, registry).Value);
         for (int i = 0; i < count; i++)
         {
             byte[] bytes = _TcpSegment(FirstSequence + (uint)(PayloadBytes * i), 0x18, PayloadBytes, (byte)i);
-            Frame frame = Frame.Create(new FrameId(i + 1), Timestamp.FromSecs(1_001 + i), bytes, LinkType.Ethernet, FrameInterfaceId.Invalid,
+            Frame frame = Frame.Create(i + 1, Timestamp.FromSecs(1_001 + i), bytes, LinkType.Ethernet, FrameInterfaceId.Invalid,
                 registry).Value;
             exporter.OnFrame(frame);
         }
@@ -47,9 +47,63 @@ internal static class CliTraceWriter
         exporter.OnFinish();
     }
 
+    /// <summary>
+    /// Writes a PCAPNG with one UDP datagram (192.0.2.1:40000 to 192.0.2.2:40001, 24 payload bytes 1 to 24) that two IPv4 fragments
+    /// carry: the second frame completes the datagram, so its packet has one additional buffer, the reassembled UDP datagram.
+    /// </summary>
+    /// <param name="path">Output path.</param>
+    /// <returns>The reassembled datagram (UDP header and payload) that the buffer holds.</returns>
+    /// <remarks>
+    /// Sync: <c>ExportContentOptionsTests._FragmentFrames</c> in NetworkInspector.Plugins.Tests (the same layout of two IPv4
+    /// fragments of one UDP datagram, built as frame objects instead of a capture file; the payload values and addresses differ).
+    /// </remarks>
+    internal static byte[] WriteFragmentedUdpPcapng(string path)
+    {
+        byte[] datagram = new byte[8 + 24];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(datagram, 40000);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(datagram.AsSpan(2), 40001);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(datagram.AsSpan(4), (ushort)datagram.Length);
+        for (int i = 8; i < datagram.Length; i++)
+        {
+            datagram[i] = (byte)(i - 7);
+        }
+
+        FrameInterfaceRegistry registry = new();
+        using NetworkInspector.Exporters.Pcapng.PcapngExporter exporter = NetworkInspector.Exporters.Pcapng.PcapngExporter.CreateBuilder()
+            .ToFile(path).Build();
+        exporter.OnFrame(Frame.Create(0, Timestamp.FromSecs(1_000), _Fragment(datagram.AsSpan(0, 16), 0, moreFragments: true),
+            LinkType.Ethernet, FrameInterfaceId.Invalid, registry).Value);
+        exporter.OnFrame(Frame.Create(1, Timestamp.FromSecs(1_001), _Fragment(datagram.AsSpan(16), 16, moreFragments: false),
+            LinkType.Ethernet, FrameInterfaceId.Invalid, registry).Value);
+        exporter.OnFinish();
+        return datagram;
+    }
+
     #endregion
 
     #region Private Helpers
+
+    /// <summary>One Ethernet frame with an IPv4 header (identification 0x1234, protocol UDP) that carries one fragment.</summary>
+    private static byte[] _Fragment(ReadOnlySpan<byte> payload, int byteOffset, bool moreFragments)
+    {
+        byte[] frame = new byte[14 + 20 + payload.Length];
+        frame[0] = 0x02;
+        frame[5] = 0x02;
+        frame[6] = 0x02;
+        frame[11] = 0x01;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(12), 0x0800);
+        Span<byte> ip = frame.AsSpan(14);
+        ip[0] = 0x45;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(ip[2..], (ushort)(20 + payload.Length));
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(ip[4..], 0x1234);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(ip[6..], (ushort)((byteOffset / 8) | (moreFragments ? 0x2000 : 0)));
+        ip[8] = 64;
+        ip[9] = 17;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(ip[12..], 0xC0000201);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(ip[16..], 0xC0000202);
+        payload.CopyTo(frame.AsSpan(34));
+        return frame;
+    }
 
     private static byte[] _TcpSegment(uint sequence, byte flags, int payloadLength, byte fill = 0)
     {

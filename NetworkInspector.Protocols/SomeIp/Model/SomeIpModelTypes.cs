@@ -4,10 +4,10 @@ namespace NetworkInspector.Protocols.SomeIp.Model;
 
 // The immutable result of compiling a SOME/IP service description (SomeIpConfigCompiler). Everything the parser does per
 // packet is an array index or one frozen-dictionary probe into these types: the compiler resolves type names to indices,
-// derives every registered field name, and checks every consistency rule once, so the parse path never validates the
-// configuration. The types are public because a host can inspect a compiled model; nothing here is mutable after
-// registration except the field and group ids, which the registration assigns exactly once on the single-threaded build
-// phase (see SomeIpUsageSite).
+// takes every filter name from the description (the configured names, unchanged), and checks every consistency rule once, so
+// the parse path never validates the configuration. The types are public because a host can inspect a compiled model; nothing
+// here is mutable after registration except the field and group ids, which the registration assigns exactly once on the
+// single-threaded build phase (see SomeIpUsageSite).
 //
 // Why the member tree lives on the usage sites and not on the types: a type is defined once per service and referenced from
 // many places, but every occurrence is its own filterable field (same type at two paths means two registered fields).
@@ -244,6 +244,12 @@ public sealed class SomeIpUsageSite
 
     /// <summary>The index group of the member direction this site belongs to; assigned like <see cref="FieldId"/>.</summary>
     public IndexGroupId GroupId { get; set; } = IndexGroupId.Invalid;
+
+    /// <summary>
+    /// The diagnostic text when the entry of this site is broken (an invalid or repeated name); empty otherwise. A site with a
+    /// defect has no field and no children: the decoder stops at it and the registration skips it.
+    /// </summary>
+    public string Defect { get; init; } = "";
 }
 
 /// <summary>The top-level sites of one parameter list of a member direction.</summary>
@@ -268,11 +274,20 @@ public sealed class SomeIpMemberInfo
     /// <summary>The kind.</summary>
     public SomeIpMemberKind Kind { get; init; }
 
-    /// <summary>The configured display name (the field name for the members of a field).</summary>
+    /// <summary>The configured name (the field name for the members of a field).</summary>
     public string Name { get; init; } = "";
 
-    /// <summary>The path token of the member in registered names, including the direction-independent accessor suffix.</summary>
-    public string Token { get; init; } = "";
+    /// <summary>The display name: the configured <c>ui_name</c>, else <see cref="Name"/>.</summary>
+    public string UiName { get; init; } = "";
+
+    /// <summary>The segment of the member in filter names: the configured name, with the accessor suffix for a field.</summary>
+    public string Segment { get; init; } = "";
+
+    /// <summary>The filter name of the member (the method node): service path, then <see cref="Segment"/>.</summary>
+    public string Path { get; init; } = "";
+
+    /// <summary>The name of the index group of all messages of this member: <c>someip.payload.{service}.v{major}.{segment}</c>.</summary>
+    public string GroupName { get; init; } = "";
 
     /// <summary>The request payload: method input; setter: the type; getter: empty.</summary>
     public SomeIpParameterList In { get; init; }
@@ -288,6 +303,12 @@ public sealed class SomeIpMemberInfo
 
     /// <summary>The resolved transformation properties.</summary>
     public SomeIpTransformation Transform { get; init; }
+
+    /// <summary>The method node field; <see cref="FieldId.Invalid"/> until the registration assigns it, and afterwards when the member was skipped.</summary>
+    public FieldId FieldId { get; set; } = FieldId.Invalid;
+
+    /// <summary>The index group of all messages of this member (exact); assigned by the registration.</summary>
+    public IndexGroupId Group { get; set; } = IndexGroupId.Invalid;
 
     /// <summary>The index group of the request direction; assigned by the registration.</summary>
     public IndexGroupId InGroup { get; set; } = IndexGroupId.Invalid;
@@ -311,11 +332,17 @@ public sealed class SomeIpServiceInfo
     /// <summary>The interface major version.</summary>
     public byte MajorVersion { get; init; }
 
-    /// <summary>The display name.</summary>
+    /// <summary>The configured name (one segment of every filter name of the service).</summary>
     public string Name { get; init; } = "";
 
-    /// <summary>The path token in registered names, <c>{token}.v{major}</c>.</summary>
-    public string Token { get; init; } = "";
+    /// <summary>The display name: the configured <c>ui_name</c>, else <see cref="Name"/>.</summary>
+    public string UiName { get; init; } = "";
+
+    /// <summary>The filter name of the service (the service node): <c>[prefix.]{name}.v{major}</c>.</summary>
+    public string Path { get; init; } = "";
+
+    /// <summary>The name of the index group of all messages of this service version: <c>someip.payload.{name}.v{major}</c>.</summary>
+    public string GroupName { get; init; } = "";
 
     /// <summary>The members in declaration order.</summary>
     public ReadOnlyMemory<SomeIpMemberInfo> Members { get; init; }
@@ -325,4 +352,10 @@ public sealed class SomeIpServiceInfo
 
     /// <summary>Eventgroup id to name.</summary>
     public FrozenDictionary<ushort, string> EventGroupNames { get; init; } = FrozenDictionary<ushort, string>.Empty;
+
+    /// <summary>The service node field; <see cref="FieldId.Invalid"/> until the registration assigns it, and afterwards when the service was skipped.</summary>
+    public FieldId FieldId { get; set; } = FieldId.Invalid;
+
+    /// <summary>The index group of all messages of this service version (exact); assigned by the registration.</summary>
+    public IndexGroupId Group { get; set; } = IndexGroupId.Invalid;
 }

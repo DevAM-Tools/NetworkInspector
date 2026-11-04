@@ -155,9 +155,9 @@ internal sealed class BlfLazyScanTests
         }
 
         // Now random access should work
-        Frame? f0 = source.FrameById(new FrameId(0));
-        Frame? f1 = source.FrameById(new FrameId(1));
-        Frame? f2 = source.FrameById(new FrameId(2));
+        Frame? f0 = source.FrameById(0);
+        Frame? f1 = source.FrameById(1);
+        Frame? f2 = source.FrameById(2);
 
         await Assert.That(f0).IsNotNull();
         await Assert.That(f1).IsNotNull();
@@ -186,7 +186,7 @@ internal sealed class BlfLazyScanTests
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Without reading, random access to an out-of-range ID should be null
-        Frame? invalid = source.FrameById(new FrameId(999));
+        Frame? invalid = source.FrameById(999);
         await Assert.That(invalid).IsNull();
     }
 

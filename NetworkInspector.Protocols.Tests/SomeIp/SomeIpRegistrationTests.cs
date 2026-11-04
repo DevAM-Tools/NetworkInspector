@@ -138,8 +138,9 @@ internal sealed class SomeIpRegistrationTests
         using SomeIpTestStack s = SomeIpTestStack.Create();
         ReadOnlySettingsManagerView settings = s.Stack.Settings;
 
-        await Assert.That(settings.GetSettingsInGroup("someip").Count).IsEqualTo(21);
+        await Assert.That(settings.GetSettingsInGroup("someip").Count).IsEqualTo(23);
         await Assert.That(settings.GetStringSetting(SomeIpRegistration.ConfigFileSetting)).IsEqualTo(string.Empty);
+        await Assert.That(settings.GetStringSetting(SomeIpRegistration.FieldPrefixSetting)).IsEqualTo(string.Empty);
         await Assert.That(settings.GetBoolSetting(SomeIpRegistration.DecodePayloadSetting)).IsTrue();
         await Assert.That(settings.GetBoolSetting(SomeIpRegistration.ShowTypeMetadataSetting)).IsFalse();
         await Assert.That(settings.GetBoolSetting(SomeIpRegistration.VerifyE2eCrcSetting)).IsFalse();
@@ -155,7 +156,7 @@ internal sealed class SomeIpRegistrationTests
     [Test]
     public async Task EveryLimitIsASettingWithTheRangeAndTheSevenTextsOfItsDefinition()
     {
-        await Assert.That(SomeIpLimits.All.Count).IsEqualTo(10);
+        await Assert.That(SomeIpLimits.All.Count).IsEqualTo(11);
 
         using SomeIpTestStack s = SomeIpTestStack.Create();
         foreach (SomeIpLimitDefinition limit in SomeIpLimits.All)

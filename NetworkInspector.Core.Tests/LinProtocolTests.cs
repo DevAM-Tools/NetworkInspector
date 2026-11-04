@@ -18,7 +18,7 @@ internal sealed class LinProtocolTests
         Stack stack = builder.Build();
 
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             frameData,
             LinkType.Lin,
@@ -29,7 +29,7 @@ internal sealed class LinProtocolTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -162,7 +162,7 @@ internal sealed class LinProtocolTests
             NetworkInspector.Core.Index.PacketIndex index = new(stack);
 
             Frame frame = Frame.Create(
-                new FrameId(0),
+                0,
                 Timestamp.FromSecs(0),
                 frameData,
                 LinkType.Lin,
@@ -172,7 +172,7 @@ internal sealed class LinProtocolTests
             {
                 ParseOptions options = new(index: index);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -264,12 +264,12 @@ internal sealed class LinProtocolTests
 
         byte[] frameData = FrameBuilders.GenerateLinFrame(pid: 0x10, payload: [0x01, 0x02, 0x03, 0x04]);
         Frame frame = Frame.Create(
-            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            0, Timestamp.FromSecs(0), frameData,
             LinkType.Lin, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -301,12 +301,12 @@ internal sealed class LinProtocolTests
         byte[] frameData = FrameBuilders.GenerateLinFrame(
             pid: 0x10, payload: [0x01, 0x02, 0x03, 0x04], msgType: 3);
         Frame frame = Frame.Create(
-            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            0, Timestamp.FromSecs(0), frameData,
             LinkType.Lin, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -337,12 +337,12 @@ internal sealed class LinProtocolTests
         byte[] frameData = FrameBuilders.GenerateLinFrame(
             pid: 0x10, payload: [0x01, 0x02, 0x03, 0x04], errorFlags: 0x01);
         Frame frame = Frame.Create(
-            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            0, Timestamp.FromSecs(0), frameData,
             LinkType.Lin, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,

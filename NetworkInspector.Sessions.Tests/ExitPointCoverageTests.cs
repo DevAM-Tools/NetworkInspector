@@ -31,7 +31,7 @@ internal sealed class ExitPointCoverageTests
             InvalidOperationException? caught = null;
             try
             {
-                session.TryGetPacket(new PacketId(0), out Packet? _, out _);
+                session.TryGetPacket(0, out Packet? _, out _);
             }
             catch (InvalidOperationException exception)
             {

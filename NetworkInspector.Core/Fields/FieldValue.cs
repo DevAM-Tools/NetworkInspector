@@ -11,7 +11,10 @@ namespace NetworkInspector.Core.Fields;
 /// </para>
 /// <para>
 /// <b>Thread-safety:</b> an immutable value type that may be shared across threads. A lazily evaluated custom text
-/// caches its result inside its own storage location (see <see cref="LazyString"/>), not in this struct.
+/// builds its string once per deferred object and caches it inside its own storage location (see <see cref="LazyString"/>);
+/// the location of the custom representation is the field of this struct. Evaluate it through a reference to the stored value
+/// (<c>ref readonly FieldValue value = ref field.Value;</c>) so the stored value drops the deferred object; a copy of this
+/// struct carries its own copy of the representation, shares the one build, and keeps holding the deferred object.
 /// </para>
 /// </summary>
 [StructLayout(LayoutKind.Auto)]
@@ -20,18 +23,46 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// <summary>None value constant (container fields).</summary>
     public static readonly FieldValue None;
 
-    /// <summary>The inner value data.</summary>
+    /// <summary>
+    /// The inner value data. Its <see cref="FieldValueData.ToString()"/> and <c>TryFormat</c> give the default text of the data,
+    /// ignoring <see cref="CustomRepresentation"/>: the part for a caller that builds its own line from the parts of a field (see
+    /// <see cref="Field.ToString()"/> for the default line).
+    /// </summary>
     public FieldValueData Data { get; }
 
-    /// <summary>Optional custom display representation (check <see cref="LazyString.IsNull"/> for absence).</summary>
-    public LazyString CustomRepresentation { get; }
+    /// <summary>
+    /// The custom representation, or the default (null) <see cref="LazyString"/> for none. It is also the location in which a
+    /// deferred representation caches its string (see <see cref="LazyString"/>): this field of whichever
+    /// <see cref="FieldValue"/> instance is read through a reference.
+    /// </summary>
+    private readonly LazyString _CustomRepresentation;
+
+    /// <summary>
+    /// Optional custom display representation (check <see cref="LazyString.IsNull"/> for absence), as a reference to the
+    /// storage of this value. Reading the property never evaluates a deferred text.
+    /// <para>
+    /// The string is built once however it is read (see <see cref="LazyString"/>). Evaluating through the reference
+    /// (<c>value.CustomRepresentation.AsString</c>) additionally replaces the deferred object in the value that was read; when
+    /// that value is read through a reference to its stored location (a field, a visit, an <see langword="in"/> parameter),
+    /// the stored value drops the object and its captured state. Assigning it to a local
+    /// (<c>LazyString text = value.CustomRepresentation;</c>) shares the build but keeps holding the object.
+    /// </para>
+    /// </summary>
+    public ref readonly LazyString CustomRepresentation
+    {
+        // UnscopedRef: a struct member returns a reference to its own field only when it opts out of the implicit
+        // "this is scoped" rule (CS8170); the reference is exactly as long-lived as the location of the FieldValue read.
+        [UnscopedRef]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => ref _CustomRepresentation;
+    }
 
     /// <summary>Creates a field value from raw data and optional custom representation.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private FieldValue(FieldValueData data, LazyString customRepresentation)
     {
         Data = data;
-        CustomRepresentation = customRepresentation;
+        _CustomRepresentation = customRepresentation;
     }
 
     /// <summary>The field type discriminant.</summary>
@@ -39,16 +70,6 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => Data.Type;
-    }
-
-    /// <summary>
-    /// Returns a <see cref="DefaultText"/> wrapper that formats the raw data value,
-    /// ignoring the <see cref="CustomRepresentation"/>.
-    /// </summary>
-    public DefaultText DataText
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => new(Data);
     }
 
     /// <summary>Creates a new FieldValue with a custom representation.</summary>
@@ -175,8 +196,9 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     #region ISpanFormattable
 
     /// <summary>
-    /// Formats the value into a character span.
-    /// Uses <see cref="CustomRepresentation"/> if present, otherwise formats the raw data.
+    /// Formats the value into a character span: the default string representation of the value.
+    /// Uses <see cref="CustomRepresentation"/> if present, otherwise formats the raw data. It is the value part of the default
+    /// display line of a field (see <see cref="Field.ToString()"/>).
     /// Expected failure (span too small) is reported by the return value, not by an exception.
     /// </summary>
     /// <param name="destination">Target span.</param>
@@ -228,7 +250,10 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
         return Data.TryFormat(utf8Destination, out bytesWritten, format, provider);
     }
 
-    /// <summary>Returns the custom representation if present, otherwise the formatted data value.</summary>
+    /// <summary>
+    /// Returns the default string representation of the value: the custom representation if present, otherwise the formatted
+    /// data value. It is the value part of the default display line of a field (see <see cref="Field.ToString()"/>).
+    /// </summary>
     public override string ToString()
     {
         if (!CustomRepresentation.IsNull)
@@ -248,8 +273,10 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// <summary>
     /// Tries to determine the number of characters needed to format this value.
     /// When a custom representation is present, returns its exact length.
-    /// Otherwise delegates to the underlying <see cref="FieldValueData"/>. Exporters call it to presize their buffers; it
-    /// is a plain method (no interface) because every caller names the concrete type.
+    /// Otherwise delegates to the underlying <see cref="FieldValueData"/>. A caller that presizes the buffer for
+    /// <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> of this value uses it; it is a plain
+    /// method (no interface) because every caller names the concrete type. The exporters format the data text, so they presize
+    /// with <see cref="FieldValueData.TryGetStringSize"/>.
     /// </summary>
     public bool TryGetStringSize(ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
     {
@@ -322,44 +349,5 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// <summary>Creates a Timestamp field value.</summary>
     public static implicit operator FieldValue(Timestamp value) => NewTimestamp(value);
 
-    #endregion
-
-    #region Nested DefaultText
-
-    /// <summary>
-    /// Lightweight wrapper that formats the raw <see cref="FieldValueData"/>
-    /// ignoring any <see cref="FieldValue.CustomRepresentation"/>.
-    /// Implements <see cref="ISpanFormattable"/> and <see cref="IUtf8SpanFormattable"/>
-    /// so it can be used directly in interpolated strings and formatting pipelines.
-    /// </summary>
-    [StructLayout(LayoutKind.Auto)]
-    // Suppression approved: CA1034 — DefaultText is a public formatting wrapper intentionally nested on FieldValue for discoverability.
-    [SuppressMessage("Design", "CA1034:Nested types should not be visible",
-        Justification = "DefaultText is a lightweight formatting wrapper tightly coupled to FieldValue")]
-    public readonly struct DefaultText(FieldValueData data) : ISpanFormattable, IUtf8SpanFormattable
-    {
-        private readonly FieldValueData _Data = data;
-
-        /// <summary>Formats the raw data value into a character span.</summary>
-        public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
-            => _Data.TryFormat(destination, out charsWritten, format, provider);
-
-        /// <summary>Formats the raw data value into a UTF-8 byte span.</summary>
-        public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
-            => _Data.TryFormat(utf8Destination, out bytesWritten, format, provider);
-
-        /// <summary>Returns the formatted string of the raw data value.</summary>
-        public override string ToString() => _Data.ToString();
-
-        /// <summary>Returns the formatted string of the raw data value.</summary>
-        public string ToString(string? format, IFormatProvider? formatProvider) => _Data.ToString();
-
-        /// <inheritdoc cref="FieldValueData.TryGetStringSize"/>
-        public bool TryGetStringSize(ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
-            => _Data.TryGetStringSize(format, provider, out size);
-
-        /// <summary>Implicit conversion to string for convenience.</summary>
-        public static implicit operator string(DefaultText text) => text.ToString();
-    }
     #endregion
 }

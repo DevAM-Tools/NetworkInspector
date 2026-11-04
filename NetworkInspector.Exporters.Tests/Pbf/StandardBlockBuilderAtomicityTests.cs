@@ -12,7 +12,7 @@ internal sealed class StandardBlockBuilderAtomicityTests
     /// <summary>Builds the block of the given packets; <paramref name="failing"/> packets are offered but must be rejected.</summary>
     private static byte[] _BuildBlock(int maxFieldId, IEnumerable<(Packet Packet, bool Failing)> sequence)
     {
-        StandardBlockBuilder builder = new(maxFieldId);
+        StandardBlockBuilder builder = new(maxFieldId, ExportContents.Full);
         try
         {
             foreach ((Packet packet, bool failing) in sequence)
@@ -67,7 +67,7 @@ internal sealed class StandardBlockBuilderAtomicityTests
         using CustomFieldPacketFactory factory = new();
         Packet good = factory.Create(7, null);
         Packet failing = factory.Create(7, "text");
-        StandardBlockBuilder builder = new(factory.TextFieldId.Value);
+        StandardBlockBuilder builder = new(factory.TextFieldId.Value, ExportContents.Full);
         try
         {
             builder.AddPacket(good);

@@ -597,7 +597,7 @@ internal sealed class SessionValueCacheTests
         SessionPhase phaseAfterFailure = session.Phase;
         bool queriesAfterFailure = session.QueriesEnabled;
         Stack stackAfterFailure = session.Stack;
-        bool readAfterFailure = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
+        bool readAfterFailure = session.TryGetPacket(0, out Packet? packet, out _);
         bool ingestAbandoned = ingestBefore.IsAbandoned;
 
         // The gate and the restart flag were reset, so a valid restart still works.

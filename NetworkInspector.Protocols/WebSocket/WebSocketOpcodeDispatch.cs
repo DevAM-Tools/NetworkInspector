@@ -23,7 +23,13 @@ public sealed partial class WebSocketProtocol
     /// Masked payloads are unmasked and per-message-compressed payloads (RSV1) are inflated
     /// exactly as the lazy populator does, so the dispatched bytes match the displayed payload.
     /// If inflating fails or passes the size limit, the compressed bytes are dispatched unchanged (the populator reports the
-    /// error or limit field).</para>
+    /// error or limit field). Every unmasked or inflated payload is bound as an additional packet buffer before it is
+    /// dispatched (see <c>_DispatchFramePayload</c>), so a packet with many masked frames can fill the 255-entry buffer
+    /// table; the first frame that finds it full reports the limit, the frames after it are not dispatched, and the index
+    /// groups of all frames are still recorded. The bound payloads stay alive as long as the packet, so their sum is bounded
+    /// too: all payloads that this protocol binds to the packet together may not exceed
+    /// <c>ws.max_derived_bytes_per_packet</c>, and the first frame that would pass it reports the limit by name and ends the
+    /// dispatch like the table limit does. The inflated size of one payload is bounded by <c>ws.max_decompressed_bytes</c>.</para>
     /// <para>Every length/offset is bounds-checked before slicing; a truncated frame header ends the
     /// walk rather than producing an out-of-range slice. A frame whose payload is cut by the end of the data is
     /// dispatched with the bytes that are present, like the populator shows them.</para>
@@ -35,7 +41,11 @@ public sealed partial class WebSocketProtocol
     /// <param name="container">The lazy <c>websocket</c> container on which the sub-protocols are dispatched.</param>
     /// <param name="wsData">The TCP payload, starting at a frame header.</param>
     /// <param name="context">Parse context that carries the packet index.</param>
-    /// <returns>0, or the first error reported by a dispatched sub-protocol.</returns>
+    /// <returns>
+    /// 0, or the first error: one reported by a dispatched sub-protocol, or one of the two limit errors of
+    /// <c>_DispatchFramePayload</c> (the 255-buffer table is full, or the bound payloads would pass
+    /// <c>ws.max_derived_bytes_per_packet</c> in total).
+    /// </returns>
     private ParseResult _DispatchWebSocketPayloads(in MutField container, ReadOnlyMemory<byte> wsData, in ParseContext context)
     {
         ReadOnlySpan<byte> span = wsData.Span;
@@ -129,13 +139,25 @@ public sealed partial class WebSocketProtocol
     }
 
     /// <summary>
-    /// Unmasks and (for RSV1) inflates the payload of a text or binary frame, then dispatches it.
+    /// Unmasks and (for RSV1) inflates the payload of a text or binary frame, binds the derived bytes to the packet, then
+    /// dispatches them.
     /// </summary>
     /// <param name="container">The lazy <c>websocket</c> container on which the sub-protocols are dispatched.</param>
     /// <param name="header">The frame header.</param>
     /// <param name="rawPayload">The payload bytes present in the packet (masked as on the wire).</param>
     /// <param name="context">The parse context that carries the packet index.</param>
-    /// <returns>0, or the error reported by the dispatched sub-protocol.</returns>
+    /// <returns>
+    /// 0 (also when the derived payload is empty and nothing is dispatched), the error reported by the dispatched
+    /// sub-protocol, or a parse error when the derived payload cannot be bound to the packet (nothing is dispatched then):
+    /// the table already holds 255 additional buffers, or the payloads this protocol bound to the packet would pass
+    /// <c>ws.max_derived_bytes_per_packet</c> in total; each message names its limit.
+    /// </returns>
+    /// <remarks>
+    /// A masked or inflated payload is a fresh array, so it is bound once as an additional packet buffer and the bound slice
+    /// is what the opcode dispatch receives. A payload that is neither masked nor inflated is already a slice of the bytes
+    /// this protocol was given, binds nothing, and counts for neither limit. Cost: one buffer-table entry and the payload
+    /// length against the total of the packet per masked or inflated frame.
+    /// </remarks>
     private ParseResult _DispatchFramePayload(
         in MutField container, in FrameHeader header, ReadOnlyMemory<byte> rawPayload, in ParseContext context)
     {
@@ -146,16 +168,72 @@ public sealed partial class WebSocketProtocol
         // RFC 7692: inflate per-message compressed payloads before dispatch so the
         // dispatched bytes match the bytes the populator displays.
         ReadOnlyMemory<byte> effectivePayload = payloadData;
+        bool inflated = false;
         if (header.IsCompressed
             && _DecompressPermessageDeflate(payloadData, out ReadOnlyMemory<byte> decompressed) == DecompressionStatus.Succeeded)
         {
             effectivePayload = decompressed;
+            inflated = true;
+        }
+
+        // Invariant: the slice handed to a nested protocol is either a slice of the bytes this protocol was given or a
+        // slice bound to the packet. A nested protocol that keys state on the bytes (Parse data must be a slice of the
+        // packet's buffers, see MutField.TryGetEffectLayerKey) and a buffer export rely on that.
+        //
+        // Unmasked or inflated bytes are derived, not a frame slice: they are bound once so nested protocols can locate
+        // them and a buffer export sees them. A raw payload (neither masked nor inflated) is already a packet slice and
+        // stays as it is. A failed inflate falls back to the unmasked bytes, which are still a fresh array when the frame
+        // is masked, so the condition is "masked or inflated", not "changed by inflating".
+        if (header.Masked || inflated)
+        {
+            // An empty derived payload (an inflated empty message) has nothing to parse: nothing is bound or dispatched.
+            if (effectivePayload.IsEmpty)
+            {
+                return 0;
+            }
+
+            // Security: two limits stop the bind, and each is named. (1) Every bound payload stays referenced until the packet is
+            // recycled, so without a bound on the sum one packet could keep up to 255 inflated payloads of
+            // ws.max_decompressed_bytes each (deflate reaches about 1000:1, so about 1 MiB of small frames pins about 1 GiB) and
+            // exhaust the memory of a tree-free parse, which would release each payload after its dispatch. The sum of the bytes
+            // of all bytes bound to the packet, with this payload, therefore may not pass ws.max_derived_bytes_per_packet (see
+            // the setting for value, range, posture, and who may change it). DerivedBytesLimit.TryBind checks the total before
+            // it binds, so a refused payload leaves the packet unchanged; the packet keeps one sum for all protocols, so it also
+            // covers payloads that an earlier WebSocket layer of the same packet bound (a tunnel, several records). (2) The table of additional buffers
+            // holds at most 255 entries (the effect-key format), and every masked (client-to-server) frame takes one, so a packet
+            // with many small masked frames can fill it. Either way the payload is not parsed further and the cause is named; the
+            // caller keeps walking the frames, so the index groups of the later frames of the packet are still recorded and only
+            // the dispatch of the later frames stops after the first error. Rejected alternatives: dispatching the unbound bytes
+            // (a stateful nested protocol would fail with a generic message and a buffer export would miss the bytes), accepting
+            // the 255-fold ceiling (a hostile capture exhausts memory). Residual risk: the payload that fails the check was
+            // already inflated (at most ws.max_decompressed_bytes, freed right away), so the peak is the total plus one payload.
+            bool isBound = DerivedBytesLimit.TryBind(
+                in container, effectivePayload, _MaxDerivedBytesPerPacket, out ReadOnlyMemory<byte> bound, out DerivedBytesFailure failure);
+            if (!isBound)
+            {
+                return ParseError.Custom(
+                    ProtocolName,
+                    failure == DerivedBytesFailure.TotalExceeded
+                        ? _DerivedBytesLimitText()
+                        : _BoundBufferLimitMessage);
+            }
+
+            effectivePayload = bound;
         }
 
         return header.Opcode == 1
             ? _DispatchTextPayload(in container, effectivePayload, in context)
             : _DispatchBinaryPayload(in container, effectivePayload, in context);
     }
+
+    /// <summary>
+    /// The text of the parse error for a packet whose unmasked or inflated payloads would pass
+    /// <c>ws.max_derived_bytes_per_packet</c> in total: it names the setting, the limit, and that the limit is the total per
+    /// packet. Sync: <c>DerivedBytesLimit.Text</c> (the wording shared with HTTP and SOME/IP-TP).
+    /// </summary>
+    /// <returns>The error text; allocates one string, on the error path only.</returns>
+    private string _DerivedBytesLimitText() => DerivedBytesLimit.Text(
+        "Unmasked or decompressed WebSocket payloads", _MaxDerivedBytesPerPacket, "ws.max_derived_bytes_per_packet");
 
     /// <summary>
     /// Dispatches a text-frame payload (opcode 1): first the <c>ws.port</c> table (port-based

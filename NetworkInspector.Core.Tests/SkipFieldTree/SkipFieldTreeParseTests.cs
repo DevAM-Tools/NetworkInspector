@@ -19,7 +19,7 @@ internal sealed class SkipFieldTreeParseTests
 
     private static Frame _Ipv6UdpFrame(Stack stack, int frameId = 1) =>
         Frame.Create(
-            new FrameId(frameId),
+            frameId,
             Timestamp.FromSecs(frameId),
             FrameBuilders.GenerateStaticUdpIpv6Frame(),
             LinkType.Ethernet,
@@ -28,7 +28,7 @@ internal sealed class SkipFieldTreeParseTests
 
     private static Frame _Ipv4UdpFrame(Stack stack, int frameId = 1) =>
         Frame.Create(
-            new FrameId(frameId),
+            frameId,
             Timestamp.FromSecs(frameId),
             FrameBuilders.GenerateStaticUdpFrame(),
             LinkType.Ethernet,
@@ -47,7 +47,7 @@ internal sealed class SkipFieldTreeParseTests
 
     private static Frame _EmptyFrame(Stack stack) =>
         Frame.Create(
-            new FrameId(1),
+            1,
             Timestamp.FromSecs(1),
             new byte[8],
             LinkType.Ethernet,
@@ -68,7 +68,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Skip);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -103,7 +103,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -130,7 +130,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -148,7 +148,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack2,
                 frame2,
                 in options,
@@ -175,7 +175,7 @@ internal sealed class SkipFieldTreeParseTests
             {
                 ParseOptions options = new(FieldTreeMode.Skip, firstProtocol: protoId);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     _EmptyFrame(stack),
                     in options,
@@ -203,7 +203,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Skip);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -238,7 +238,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(index: buildIndex);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 buildStack,
                 buildFrame,
                 in options,
@@ -251,7 +251,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, index: skipIndex);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 skipStack,
                 skipFrame,
                 in options,
@@ -283,7 +283,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, buildCache);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -298,7 +298,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, skipCache);
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 frame,
                 in options,
@@ -327,7 +327,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, first);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -342,7 +342,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, replay);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -367,7 +367,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, first);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -382,7 +382,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, replay, recordOnReplay: true);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -410,7 +410,7 @@ internal sealed class SkipFieldTreeParseTests
 
         ParseOptions options = new((FieldTreeMode)2);
         bool parsed = Packet.TryParse(
-            new PacketId(0),
+            0,
             stack,
             frame,
             in options,
@@ -430,7 +430,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Skip);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -447,7 +447,7 @@ internal sealed class SkipFieldTreeParseTests
             ParseOptions options = new(FieldTreeMode.Build);
             if (!Packet.TryParse(
                 packet,
-                new PacketId(1),
+                1,
                 stack,
                 frame,
                 in options,
@@ -475,7 +475,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -492,7 +492,7 @@ internal sealed class SkipFieldTreeParseTests
             ParseOptions options = new(FieldTreeMode.Skip);
             if (!Packet.TryParse(
                 packet,
-                new PacketId(1),
+                1,
                 stack,
                 frame,
                 in options,
@@ -519,7 +519,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Skip);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -550,7 +550,7 @@ internal sealed class SkipFieldTreeParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build);
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 frame,
                 in options,

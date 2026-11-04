@@ -66,6 +66,16 @@ public sealed partial class WebSocketProtocol : IProtocol
     /// </summary>
     public const string PortTableName = "ws.port";
 
+    /// <summary>
+    /// Error text for an unmasked or inflated payload that cannot be handed on because the packet's table of bound buffers is full.
+    /// Limit: 255 additional buffers per packet (a constant of the packet's effect keys, not configurable); secure by
+    /// default. Exceeding it is an expected failure that is named, not a silent drop.
+    /// </summary>
+    /// <seealso cref="HttpProtocol"/>
+    /// <remarks>Sync: <c>HttpProtocol._BoundBufferLimitMessage</c> (the HTTP text of the same limit).</remarks>
+    private const string _BoundBufferLimitMessage =
+        "Unmasked or decompressed WebSocket payload cannot be parsed further: a packet can hold at most 255 additional buffers";
+
     /// <summary>Index group for always-present WebSocket fields.</summary>
     private const string _WsIndexGroup = "websocket";
 
@@ -91,6 +101,7 @@ public sealed partial class WebSocketProtocol : IProtocol
 
     #region Protocol container
 
+    /// <summary>Id of the <c>websocket</c> field ("WebSocket", bytes); set by the generated registration.</summary>
     [BytesField("websocket", "WebSocket", IndexGroup = _WsIndexGroup)]
     private FieldId _ProtocolFieldId;
 
@@ -98,9 +109,14 @@ public sealed partial class WebSocketProtocol : IProtocol
 
     #region Dispatch tables
 
+    /// <summary>Id of the string-keyed table <c>ws.protocol</c> ("WebSocket Sub-Protocol"); declared for extension, nothing looks up in it yet.</summary>
     [ProtocolTableString(ProtocolTableName, "WebSocket Sub-Protocol")]
     private ProtocolTableId _ProtocolTableId;
 
+    /// <summary>
+    /// Id of the table <c>ws.port</c> ("WebSocket Server Port"), keyed by the fixed key 0: a protocol registered there receives
+    /// every text and binary payload before the <c>text</c> and <c>data</c> fallback.
+    /// </summary>
     [ProtocolTableU64(PortTableName, "WebSocket Server Port")]
     private ProtocolTableId _PortTableId;
 
@@ -108,27 +124,35 @@ public sealed partial class WebSocketProtocol : IProtocol
 
     #region Frame fields
 
+    /// <summary>Id of the <c>websocket.frame</c> field ("WebSocket Frame", a container without a value); set by the generated registration.</summary>
     [NoneField("websocket.frame", "WebSocket Frame", IndexGroup = _WsIndexGroup)]
     private FieldId _FrameFieldId;
 
+    /// <summary>Id of the <c>websocket.fin</c> field ("FIN", a boolean); set by the generated registration.</summary>
     [BoolField("websocket.fin", "FIN", IndexGroup = _WsIndexGroup)]
     private FieldId _FinFieldId;
 
+    /// <summary>Id of the <c>websocket.rsv</c> field ("RSV", an unsigned integer); set by the generated registration.</summary>
     [U64Field("websocket.rsv", "RSV", IndexGroup = _WsIndexGroup)]
     private FieldId _RsvFieldId;
 
+    /// <summary>Id of the <c>websocket.opcode</c> field ("Opcode", an unsigned integer); set by the generated registration.</summary>
     [U64Field("websocket.opcode", "Opcode", IndexGroup = _WsIndexGroup)]
     private FieldId _OpcodeFieldId;
 
+    /// <summary>Id of the <c>websocket.mask</c> field ("Mask", a boolean); set by the generated registration.</summary>
     [BoolField("websocket.mask", "Mask", IndexGroup = _WsIndexGroup)]
     private FieldId _MaskFieldId;
 
+    /// <summary>Id of the <c>websocket.payload_length</c> field ("Payload Length", an unsigned integer); set by the generated registration.</summary>
     [U64Field("websocket.payload_length", "Payload Length", IndexGroup = _WsIndexGroup)]
     private FieldId _PayloadLengthFieldId;
 
+    /// <summary>Id of the <c>websocket.masking_key</c> field ("Masking Key", an unsigned integer); set by the generated registration.</summary>
     [U64Field("websocket.masking_key", "Masking Key", IndexGroup = _WsMaskKeyGroup)]
     private FieldId _MaskingKeyFieldId;
 
+    /// <summary>Id of the <c>websocket.payload</c> field ("Payload", bytes); set by the generated registration.</summary>
     [BytesField("websocket.payload", "Payload", IndexGroup = _WsPayloadGroup)]
     private FieldId _PayloadFieldId;
 
@@ -136,6 +160,7 @@ public sealed partial class WebSocketProtocol : IProtocol
 
     #region Per-message compressed flag (RSV1)
 
+    /// <summary>Id of the <c>websocket.pmc</c> field ("Per-Message Compressed", a boolean); set by the generated registration.</summary>
     [BoolField("websocket.pmc", "Per-Message Compressed", IndexGroup = _WsPmcGroup)]
     private FieldId _PmcFieldId;
 
@@ -143,6 +168,7 @@ public sealed partial class WebSocketProtocol : IProtocol
 
     #region Text payload (decoded UTF-8 for text frames)
 
+    /// <summary>Id of the <c>websocket.payload.text</c> field ("Text Payload", a string); set by the generated registration.</summary>
     [StringField("websocket.payload.text", "Text Payload", IndexGroup = _WsTextGroup)]
     private FieldId _PayloadTextField;
 
@@ -150,9 +176,11 @@ public sealed partial class WebSocketProtocol : IProtocol
 
     #region Ping/Pong payload
 
+    /// <summary>Id of the <c>websocket.payload.ping</c> field ("Ping Payload", bytes); set by the generated registration.</summary>
     [BytesField("websocket.payload.ping", "Ping Payload", IndexGroup = _WsPingGroup)]
     private FieldId _PingPayloadFieldId;
 
+    /// <summary>Id of the <c>websocket.payload.pong</c> field ("Pong Payload", bytes); set by the generated registration.</summary>
     [BytesField("websocket.payload.pong", "Pong Payload", IndexGroup = _WsPongGroup)]
     private FieldId _PongPayloadFieldId;
 
@@ -160,9 +188,12 @@ public sealed partial class WebSocketProtocol : IProtocol
     private const string _WsCloseGroup = "websocket.close";
 
     // Close frame sub-fields (opcode 8): first 2 bytes = status code, rest = reason UTF-8 string
+
+    /// <summary>Id of the <c>websocket.close.code</c> field ("Status Code", an unsigned integer); set by the generated registration.</summary>
     [U64Field("websocket.close.code", "Status Code", IndexGroup = _WsCloseGroup)]
     private FieldId _CloseCodeFieldId;
 
+    /// <summary>Id of the <c>websocket.close.reason</c> field ("Reason", a string); set by the generated registration.</summary>
     [StringField("websocket.close.reason", "Reason", IndexGroup = _WsCloseGroup)]
     private FieldId _CloseReasonFieldId;
 
@@ -170,6 +201,7 @@ public sealed partial class WebSocketProtocol : IProtocol
 
     #region Per-message decompressed payload (RFC 7692)
 
+    /// <summary>Id of the <c>websocket.payload.decompressed</c> field ("Decompressed Payload", bytes); set by the generated registration.</summary>
     [BytesField("websocket.payload.decompressed", "Decompressed Payload", IndexGroup = "websocket.payload.decompressed")]
     private FieldId _DecompressedPayloadFieldId;
 
@@ -185,6 +217,7 @@ public sealed partial class WebSocketProtocol : IProtocol
 
     #region Continuation frame info
 
+    /// <summary>Id of the <c>websocket.continuation</c> field ("Continuation Frame", a boolean); set by the generated registration.</summary>
     [BoolField("websocket.continuation", "Continuation Frame", IndexGroup = "websocket.continuation")]
     private FieldId _ContinuationFieldId;
 
@@ -221,7 +254,9 @@ public sealed partial class WebSocketProtocol : IProtocol
     /// <param name="context">Parse context used to record index presence and to dispatch frame payloads.</param>
     /// <returns>
     /// All of <paramref name="data"/> as consumed, or a <see cref="ParseError"/> when it is shorter than a frame header,
-    /// starts with a reserved opcode, or a dispatched sub-protocol reports an error.
+    /// starts with a reserved opcode, a dispatched sub-protocol reports an error, or an unmasked or inflated payload cannot be
+    /// bound: the packet already holds 255 additional buffers, or the bound payloads would pass
+    /// <c>ws.max_derived_bytes_per_packet</c> in total (the first frame that finds a limit reached reports it; the frames after it are not dispatched).
     /// </returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {

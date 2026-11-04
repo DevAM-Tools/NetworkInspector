@@ -1,6 +1,6 @@
 ---
 name: complex-task
-description: Orchestrate requirements (if needed), plan, checkpoint, implement/review loop, and one Closing Exam. Use on /complex-task or large multi-phase tasks.
+description: Orchestrate requirements (if needed), plan, checkpoint, implement with step reviews, and one Closing Review. Use on /complex-task or large multi-phase tasks.
 argument-hint: Describe task, optionally include existing plan artifact path to resume
 agent: agent
 ---

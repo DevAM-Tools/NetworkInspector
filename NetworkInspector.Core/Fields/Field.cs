@@ -20,9 +20,15 @@ namespace NetworkInspector.Core.Fields;
 /// contract: tree links are read with volatile loads and only indices below the packet's published field count are
 /// followed (see the navigation methods), so a sealed packet can be walked from several threads.
 /// </para>
+/// <para>
+/// <b>Display line:</b> <see cref="ToString()"/> and <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/>
+/// give the field's default display line: the custom text alone when one is set, else the UI name for a field without a
+/// value, else UI name, <c>": "</c>, and the value's default string (see <see cref="FieldValue.ToString()"/>). Every part stays
+/// readable (<see cref="FieldInfo"/>, <see cref="Value"/>, <see cref="CustomText"/>), so a caller can build an own line instead.
+/// </para>
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public readonly struct Field : IEquatable<Field>
+public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFormattable
 {
     /// <summary>The owning packet.</summary>
     public Packet Packet { get; }
@@ -62,6 +68,7 @@ public readonly struct Field : IEquatable<Field>
     #region Validity
 
     /// <summary>Whether this field reference points to a valid packet and index.</summary>
+    /// <remarks>Sync: <c>FieldDisplayLine</c> repeats the condition for the cursors it formats (no packet, or the null index).</remarks>
     public bool IsValid
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -82,12 +89,18 @@ public readonly struct Field : IEquatable<Field>
     /// <summary>Gets the field's metadata from the stack registry.</summary>
     public FieldInfo? FieldInfo => Packet.Stack.GetField(FieldId);
 
-    /// <summary>The field's value.</summary>
+    /// <summary>
+    /// The field's value, as a reference to the field's own storage. The string of a deferred custom representation is built
+    /// once however the value is read (see <see cref="LazyString"/>); evaluating it through the reference
+    /// (<c>field.Value.CustomRepresentation.AsString</c>) additionally replaces the deferred object in the field by its string.
+    /// A copy (<c>FieldValue value = field.Value;</c>) costs 32 bytes and leaves the field holding the deferred object, so keep
+    /// the reference (<c>ref readonly FieldValue value = ref field.Value;</c>) when the value is read repeatedly.
+    /// </summary>
     /// <exception cref="InvalidOperationException">
     /// The packet was parsed with <see cref="FieldTreeMode.Skip"/> and this is not its root (such packets keep no field
     /// slab); use <see cref="TryGetValue"/> when that is expected.
     /// </exception>
-    public FieldValue Value
+    public ref readonly FieldValue Value
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
@@ -101,7 +114,7 @@ public readonly struct Field : IEquatable<Field>
                 ThrowHelpers.ThrowSkipFieldTreeValue();
             }
 
-            return Packet.GetFieldRef(StorageIndex).Value;
+            return ref Packet.GetFieldRef(StorageIndex).Value;
         }
     }
 
@@ -130,7 +143,11 @@ public readonly struct Field : IEquatable<Field>
     /// Tries to read this field's custom display text. Returns <see langword="false"/> for
     /// skip-tree children that cannot expose a stored <see cref="FieldBody"/>.
     /// </summary>
-    /// <param name="text">Custom display text when the read is allowed.</param>
+    /// <param name="text">
+    /// A copy of the custom display text when the read is allowed. The copy is not evaluated; it shares the one build of the
+    /// string with every other copy (see <see cref="LazyString"/>). Read <see cref="CustomText"/> to also release the deferred
+    /// object in the field's own storage.
+    /// </param>
     /// <returns><see langword="true"/> when text was stored in <paramref name="text"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetCustomText(out LazyString text)
@@ -146,18 +163,20 @@ public readonly struct Field : IEquatable<Field>
     }
 
     /// <summary>
-    /// Optional custom display text (check <see cref="LazyString.IsNull"/> for absence).
+    /// Optional custom display text (check <see cref="LazyString.IsNull"/> for absence), as a reference to the field's own
+    /// storage. Reading the property never evaluates a deferred text.
     /// <para>
-    /// Accesses <see cref="FieldBody.CustomText"/> through a mutable ref to the actual
-    /// array element. If the text is a lazy <c>Func&lt;string&gt;</c>, it is evaluated
-    /// in-place and the result is atomically cached for all future reads.
+    /// The string of a deferred text is built once however it is read (see <see cref="LazyString"/>), and only for a reader that
+    /// needs it: a reader that only checks for absence or hands the text on pays nothing. Evaluating through the reference
+    /// (<c>field.CustomText.AsString</c>) additionally replaces the deferred object in the field by its string; a copy
+    /// (<c>LazyString text = field.CustomText;</c>) shares the one build but leaves the field holding the deferred object.
     /// </para>
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// The packet was parsed with <see cref="FieldTreeMode.Skip"/> and this is not its root; use
     /// <see cref="TryGetCustomText"/> when that is expected.
     /// </exception>
-    public LazyString CustomText
+    public ref readonly LazyString CustomText
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
@@ -167,9 +186,8 @@ public readonly struct Field : IEquatable<Field>
                 ThrowHelpers.ThrowSkipFieldTreeValue();
             }
 
-            // GetFieldRef yields a mutable ref (no defensive copy) so the lazy text is evaluated and cached in the slab
-            // slot itself; see FieldBody.CustomText.
-            return Packet.GetFieldRef(StorageIndex).CustomText;
+            // GetFieldRef yields a ref to the slab slot (no copy), so the reference points at the storage that caches.
+            return ref Packet.GetFieldRef(StorageIndex).CustomText;
         }
     }
 
@@ -242,6 +260,64 @@ public readonly struct Field : IEquatable<Field>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => Packet.GetFieldRef(StorageIndex).NeedsMaterialization;
     }
+
+    #endregion
+
+    #region Default string representation
+
+    // The default display line (custom text alone; else the UI name for a field without a value; else UI name, ": ", and the
+    // value's default string) is built by FieldDisplayLine, which MutField calls too, so the two cursors cannot drift apart.
+    // The parts stay readable (FieldInfo, Value, CustomText), so a caller can build an own line instead.
+
+    /// <summary>
+    /// Returns the default display line of this field: the custom text alone when one is set, else the UI name for a field without
+    /// a value, else the UI name, <c>": "</c>, and the value's default string (see <see cref="FieldValue.ToString()"/>). A field
+    /// id that the stack does not know has no UI name: its line is the value part alone.
+    /// </summary>
+    /// <returns>
+    /// The line. Never throws (a debugger, a log line, or an interpolation may call it on any field, and CA1065 forbids exceptions
+    /// in <c>ToString</c>): a default (invalid) field gives the empty string; a cursor of a <see cref="FieldTreeMode.Skip"/> packet
+    /// other than its root, which keeps no value or text (see <see cref="Value"/>), gives the label alone. Allocates the result
+    /// string (and one temporary for the value part); use
+    /// <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> on hot paths.
+    /// </returns>
+    /// <remarks>
+    /// The line is not escaped: a custom text or string value holds whatever the capture holds, so a consumer that writes it to a
+    /// terminal, a CSV cell, or markup escapes it for that target. Reading builds a deferred custom text (see
+    /// <see cref="LazyString"/>) and caches it in the field. Sync: EXPORTER_GUIDE § Rebuilding the display line.
+    /// </remarks>
+    /// <seealso cref="FieldValue.ToString()"/>
+    /// <seealso cref="CustomText"/>
+    public override string ToString() => FieldDisplayLine.GetLine(Packet, StorageIndex, FieldId);
+
+    /// <summary>Returns <see cref="ToString()"/>; both arguments are ignored (every field has exactly one default line).</summary>
+    /// <param name="format">Ignored.</param>
+    /// <param name="formatProvider">Ignored; numbers use the invariant culture.</param>
+    /// <returns>The same line as <see cref="ToString()"/>.</returns>
+    public string ToString(string? format, IFormatProvider? formatProvider) => ToString();
+
+    /// <summary>Formats the default display line into a character span; reports failure when it does not fit.</summary>
+    /// <param name="destination">Target span.</param>
+    /// <param name="charsWritten">Characters written; 0 when the method returns <see langword="false"/>.</param>
+    /// <param name="format">Ignored, as for <see cref="FieldValue"/>: every line has one form.</param>
+    /// <param name="provider">Ignored; numbers use the invariant culture.</param>
+    /// <returns>
+    /// <see langword="false"/> when <paramref name="destination"/> is too small (its contents are then unspecified). The invalid
+    /// and skip-tree cases follow <see cref="ToString()"/>: an empty line (true, 0 written), and the label alone.
+    /// </returns>
+    /// <remarks>Perf: writes straight into <paramref name="destination"/>; no allocation. A deferred custom text is built once and
+    /// caches in the field's own slot.</remarks>
+    public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
+        => FieldDisplayLine.TryFormat(Packet, StorageIndex, FieldId, destination, out charsWritten);
+
+    /// <summary>Formats the default display line as UTF-8; same cases and failure contract as the character overload.</summary>
+    /// <param name="utf8Destination">Target span.</param>
+    /// <param name="bytesWritten">Bytes written; 0 when the method returns <see langword="false"/>.</param>
+    /// <param name="format">Ignored.</param>
+    /// <param name="provider">Ignored; numbers use the invariant culture.</param>
+    /// <returns><see langword="false"/> when <paramref name="utf8Destination"/> is too small.</returns>
+    public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
+        => FieldDisplayLine.TryFormat(Packet, StorageIndex, FieldId, utf8Destination, out bytesWritten);
 
     #endregion
 

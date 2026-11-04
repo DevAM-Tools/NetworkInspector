@@ -24,14 +24,14 @@ internal sealed class EvalTreeCodegenTests
     private static Packet _ParseLazy(Stack stack, ProtocolId firstProtocol, int packetId)
     {
         Frame frame = Frame.Create(
-            new FrameId(packetId),
+            packetId,
             Timestamp.FromNanos(packetId),
             new byte[4],
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             stack.FrameInterfaceRegistry).Value;
         ParseOptions options = new(FieldTreeMode.Build, firstProtocol: firstProtocol);
-        if (!Packet.TryParse(new PacketId(packetId), stack, frame, in options, out Packet? packet, out ParseFailure failure))
+        if (!Packet.TryParse(packetId, stack, frame, in options, out Packet? packet, out ParseFailure failure))
         {
             throw new InvalidOperationException(failure.ToString());
         }

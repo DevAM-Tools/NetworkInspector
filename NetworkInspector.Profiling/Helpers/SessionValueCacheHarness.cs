@@ -29,7 +29,7 @@ internal static class SessionValueCacheHarness
         ArgumentOutOfRangeException.ThrowIfZero(frames.Length);
 
         ParseResult<Frame> trigger = Frame.Create(
-            new FrameId(frames.Length),
+            frames.Length,
             Timestamp.FromSecs(frames.Length),
             frames[0].Data,
             LinkType.Ethernet,

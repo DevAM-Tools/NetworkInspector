@@ -7,9 +7,426 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.20.0] — Exports that parse only what they write, a writer thread for the big formats, and SOME/IP names you can type
 
-Nothing yet.
+Delta since 0.19.0. Version is `0.20.0` in `Directory.Build.props`.
+
+**An export parses only what it writes.** Every field exporter (CSV, JSON, Text, PBF, Parquet, DuckDB) takes an
+`ExportContent`: selected fields, all fields, or all fields with their hierarchy. A run states what its exporter, its filter,
+and its caches need (`ParsePlan`) and parses each frame once with exactly that, so an export of two fields builds no field
+tree. `ni export capture.pcapng -o ports.duckdb -f "duckdb:fields=udp.srcport;udp.dstport" --verbose` prints
+`parse: fields only, no tree (2 fields, 1 observer)` and is many times faster than the full export.
+
+**DuckDB, Parquet, PBF, and BLF write on a second thread.** A full batch is encoded, compressed, and written while the next
+one fills, with memory bounded by two batches. `WithWriteMode(ExportWriteMode.Synchronous)` keeps every write on the calling
+thread. The overlap needs a free core: BLF gains about 3 % on an idle machine, and on a machine with busy cores it is up to
+7 % slower than 0.19.0 in the background mode, so choose `Synchronous` there (`-f "blf:writeMode=sync"`).
+
+**SOME/IP services, methods, and values have names you can type.** `ClimateControl.v2` selects a service,
+`ClimateControl.v2.SetTemperature` a method, `ClimateControl.v2.SetTemperature.req.request.zone == 7` a value; the filter input
+completes them, none needs quotes, and the names are the ones of the service description, unchanged.
+
+**A session can export a range of its packets** (`SessionExport.TryStart`) on a job thread while ingest keeps running.
+
+### Highlights
+
+| Area | What you get | Start here |
+| --- | --- | --- |
+| Export content | Selected fields, all fields, or the hierarchy; first, last, or all occurrences of a field | [Exporter guide](NetworkInspector.Exporters/EXPORTER_GUIDE.md) §14 |
+| Parse plan | One parse per frame with the least work all consumers allow; `--verbose` says what was chosen | [Core README](NetworkInspector.Core/README.md) |
+| Writer thread | DuckDB, Parquet, PBF, and BLF overlap parsing and writing | [Exporter guide](NetworkInspector.Exporters/EXPORTER_GUIDE.md) §9.5 |
+| CLI | `fields`, `occurrence`, `shape`, `info`, `frames`, `buffers`, `text`, `repr`, `writeMode`, `batchPackets`, `batchBytes`, `containerSize` for every format; DuckDB `storageVersion`; Parquet `compression` and `compressionLevel` | [CLI README](NetworkInspector.CLI/README.md) |
+| Smaller exports | Frame bytes and buffers are opt-in, addresses are integers in the binary formats, Parquet is Zstandard, DuckDB storage is `v1.5.0` | [Exporter guide](NetworkInspector.Exporters/EXPORTER_GUIDE.md) §12.3 |
+| Sessions | `ISessionReader.TryVisitPackets`, `SessionExport.TryStart` | [Session guide](NetworkInspector.Sessions/SESSION_GUIDE.md) §8.6 |
+| SOME/IP | Filter names for services, methods, and values; `someip.field_prefix` | [Protocols README](NetworkInspector.Protocols/README.md) |
+| Field observers | `EndPacket`, custom text in a tree-free parse | [Core README](NetworkInspector.Core/README.md) |
+| Ids | `PacketId` and `FrameId` convert implicitly from `int` | [Core README](NetworkInspector.Core/README.md) |
+
+### Upgrade notes
+
+Every breaking change is described in detail in the sections below. In short, besides the table of the exporter rework:
+
+| You used | Now |
+| --- | --- |
+| `someip.payload.<service>.v<major>.<member>[.in\|.out].<path>` in filters and exports | `[<prefix>.]<service>.v<major>.<member>[.req\|.resp].<path>`; the names of the description are used unchanged (no lower-casing, no replaced characters, no numeric suffixes) |
+| `filter_name` in a SOME/IP description (usage sites, bitfield members) | Remove it; the filter name is the `name`, and `ui_name` sets the display text on every level |
+| `RegisterProtocol`, `RegisterField`, `RegisterFieldInGroup`, `RegisterFieldAliasGroup` with a name another kind holds | `DuplicateNameRegistrationException` (its `HolderKind` names the holder); the first registration keeps the name |
+| `SomeIpServiceInfo` / `SomeIpMemberInfo` `Token` | `Path`, `Segment`, `GroupName`, `FieldId`, `Group`, `UiName` |
+| A Text export that read `Label: custom text` lines or lower-case hex | A custom text is the whole line (no UI name in front of it, so a dissector that wants the label writes it into the text; a custom text that holds no label, such as the value part of many built-in protocol fields, shows without a label in Text lines and in `Field.ToString()`), a flat shape line is `name=<display line>`, and bytes are upper-case hex (`0A FF 00`) |
+| A reader of the PBF Columnar custom-text and custom-representation columns (fields 15 and 18) that expected one entry per row | The columns list the rows as entries: sub-field 1 is a row with a text (also an empty one), sub-field 2 is a run of rows without a text; a column without any text is not written. The PBF format version stays 1 |
+| A reader of the address values in DuckDB, Parquet, PBF Standard, or PBF Columnar that expected `BLOB` / byte-array / length-delimited bytes | Addresses are unsigned integers: IPv4 `UINTEGER` / `UINT_32` / fixed32 (PBF field 19 packed in Columnar), MAC and EUI-64 `UBIGINT` / `UINT_64` / varint or fixed64 (field 20 packed), IPv6 `UHUGEINT`, UUID `UUID`; in Parquet and PBF the 128-bit types are the two halves `value_hi` and `value_lo` (PBF fields 5 and 11, columns 20 and 21). The big-endian reading of the address bytes, so `ORDER BY value` is the address order; `WHERE value BETWEEN 3232235776 AND 3232236031` selects `192.168.1.0/24`. Conversion back to text: [exporter guide](NetworkInspector.Exporters/EXPORTER_GUIDE.md) § 12.3, Address values. CSV, JSON, and Text keep the notation |
+| An export that relied on the frame bytes (`ExportContent.FrameBytes` was true by default: DuckDB, Parquet, PBF Columnar) | `FrameBytes` is false by default in every exporter; set `FrameBytes = true` (`WithContent(DuckDbExporter.DefaultContent with { FrameBytes = true })`) or pass `frames=true` on the CLI (`-f duckdb:frames=true`). The field tree already holds the parsed bytes of every layer, so a default export is smaller |
+| `WithContent` of CSV, JSON, Text, or the standard PBF layout refused `FrameBytes = true` | JSON, Text, and both PBF layouts accept it; CSV takes the frame as a column (`WithColumn(CsvColumnKind.FrameBytes)`) and still refuses the content member, naming the column kind |
+| A Parquet dataset read by a tool without Zstandard support (the library default was Snappy) | Parquet files are written with Zstandard at the optimal level by default; export with `-f parquet:compression=snappy` (or `WithCompression(ParquetCompression.Snappy)`) for the former codec |
+| A CSV export with an ASCII letter, a digit, or one of `-+.:` as the delimiter (`WithDelimiter`, `csv:delimiter=`) | The delimiter is refused with a message that names the set: such a character occurs in the unquoted number, timestamp, and hex cells and would split them, so the file was corrupt; use `,`, `;`, a tab, `\|`, or another character |
+| `WithCancellationToken(token: …)` of the CSV, JSON, and Text builders | The parameter is `cancellationToken`, like every other builder; only a call with the named argument `token:` changes |
+| A DuckDB export opened by a DuckDB older than 1.5 | The file is written with storage version `v1.5.0` by default and an older DuckDB refuses it; export with `storageVersion=v1.0.0` (or the version of that DuckDB, for example `-f duckdb:storageVersion=v1.2.0`), or `WithStorageVersion` in code |
+| A protocol that binds a buffer with `MutField.BindParseBuffer` (returned an empty slice on failure) | `MutField.TryBindBuffer(buffer, out bound, out BufferBindFailure failure)`: the only bind, it returns `false` with `TableFull` (255 buffers) or `Sealed` and stores nothing then. It has no limit that a caller could omit; the packet knows no protocol. A protocol that derives bytes from untrusted input reads `MutField.BoundBytes` (the sum of all bound bytes) and applies its own total before it binds (`DerivedBytesLimit.TryBind` does it for the built-in protocols) |
+| `MutField.TryBindDerivedBuffer` and `DerivedBindFailure` (never released) | Removed with `BindParseBuffer`; use `TryBindBuffer` and, for a per-packet total, `BoundBytes` |
+| `Packet.TryGetNextFieldValue(id, ref cookie, out value, materialize)` | Removed: `Packet.TryGetNextField(id, ref cookie, out Field field, materialize)` returns the field; read the value with `ref readonly FieldValue value = ref field.Value;` (no 32-byte copy). `Packet.TryGetFieldValue` stays for the first occurrence |
+| A dispatch with `TryCallNextProtocolU64`, `TryCallNextProtocolString`, `TryCallNextProtocolBytes`, `TryCallNextProtocolBool`, or `TryCallNextProtocolAny` on a table of another key type | An error result that names the table and both key types; it read as `NotDispatched` (no protocol for the key) before |
+| A packet with many decoded HTTP bodies, unmasked or inflated WebSocket payloads, or reassembled SOME/IP-TP messages beyond 256 MiB (SOME/IP-TP: 64 MiB) | The body, payload, or message that passes the total is not parsed and `packet.error` names `http.max_derived_bytes_per_packet`, `ws.max_derived_bytes_per_packet`, or `someip.tp_max_derived_bytes_per_packet`; raise the setting if the capture needs it. The total counts every byte bound to the packet when the protocol binds, whichever protocol bound it (the TCP PDUs of the same packet included), not only the bytes of that protocol; because of that the minimum of the three totals is 2 KiB (a smaller total would refuse a body whenever the PDU or the reassembled datagram alone passes it) |
+| A plugin built against 0.19.0 | Rebuild it against 0.20.0: Core changed public signatures (`ref readonly` field properties, `IFieldObserver.EndPacket`), so an old plugin fails when its code runs |
+
+### Exporter rework: exports parse only what they write, batch writing on a second thread
+
+**Field observers get what a parse without field tree needs.** `IFieldObserver.EndPacket(id, complete)` is called once for
+every `BeginPacket` that ran, before the packet is sealed (a required member: every observer implements it, and an observer
+without per-packet state leaves the body empty); `FieldVisit.CustomText` is a `ref readonly LazyString` to the text set at append (the field's own slot in a parse with tree, so a deferred
+text evaluated through it is cached for the tree and later readers); `ParseObserver.DisplayText` makes dissectors build custom
+text and gated custom representations for the fields of a tree-free parse; `FieldWatch.ForExtraction(stack, ids)` accepts the
+ids plus every field of their owning protocols, so a field inside a lazy container outside its index group is no longer missed.
+`FilterObserver.ExtractionWatch` and `FilterObserver.ParseDemand` replace the internal owner-expanding watch.
+
+**One parse for all consumers.** `ParseDemand`, `IParseDemandSource`, and `ParsePlan` let an exporter, a filter, and a value cache
+state what they need (nothing, a parse without field tree, a field tree) and take the least parse work that serves all of them.
+`ParsePlan.ToString()` describes the choice in one line.
+
+**Custom text is final at append.** `MutField.SetCustomText`, `AppendCustomText`, and `ClearCustomText` are discouraged and now
+throw `InvalidOperationException` after the packet is sealed (a sealed packet is read by other threads and the text store is
+not synchronized). The SOME/IP array and union texts are set at append, so a tree-free export shows the same text as the field
+tree; an empty union inside an array keeps its element prefix (`[2] union X (empty)`).
+
+**DuckDB, Parquet, PBF, and BLF write on a writer thread.** A full batch is encoded, compressed, and written by a thread named
+`"{format} export writer"` while the caller fills the next batch (`ExportWriteMode.Background`, the default); the new
+`WithWriteMode(ExportWriteMode.Synchronous)` keeps every write on the calling thread. Memory stays bounded by two batches. A
+batch that fails to write is reported one batch later in background mode (at the latest by `OnFinish`) and by the completing
+call in synchronous mode; its packets leave `WrittenCount` and count as skipped. Batch sizes are validated with a message that
+names the range (`1`–`int.MaxValue` packets, `1`–`long.MaxValue` bytes); `BlfExporter.Builder.WithMaxContainerSize` sets the BLF
+container size (64 KiB – 64 MiB, default 10 MiB). Parquet writes value columns from pooled arrays (no array per column and flush),
+PBF writes `Bytes` values, frame bytes, and address values straight from their memory (no array per value), and `ByteSlab` is now
+`BatchByteArena` with the allocator lifetime models documented at the three allocator types.
+
+**Exports write what you ask for, and parse only what that needs.** Every field exporter (CSV, JSON, Text, PBF Standard, PBF
+Columnar, Parquet, DuckDB) takes an `ExportContent` (`WithContent`) with a shape: selected fields, all fields, or all fields with
+hierarchy. A field that occurs several times in a packet is kept with its `occurrence` (`All`, `First`, or `Last` per field); the
+values, types, and custom texts are the same in every shape and from every feed. The exporter states its parse need
+(`IParseDemandSource`), and a run parses each frame once with exactly what its consumers need: an export of two fields builds no
+field tree (`duckdb-selected` about 291 000 packets/s against about 11 000 for the hierarchy; `csv-selected` about 1.29 million
+against about 174 000 for the former column export), `ni convert` without a filter parses nothing, and a filter on plain fields
+adds no tree either. A packet the filter rejects is simply never committed, so it leaves no row.
+
+**`ni` chooses the parse work and says so.** `ni export` takes the same options for every format (`fields`, `occurrence`,
+`shape`, `info`, `frames`, `buffers`, `text`, `repr`, `separator` for CSV, `writeMode`, `batchPackets`, `batchBytes`, and `containerSize` for
+BLF); `--verbose` prints one line such as `parse: fields only, no tree (2 fields, 1 observer)` and, when a filter needs the field
+tree (a subtree scope, a protocol-presence term), why the run builds it. An output that received no packet is discarded instead
+of left behind empty, and a split is decided after the packet that reached the threshold, so the packets of a split are never
+shared between two outputs.
+
+**Sessions run exports as pull-driven jobs.** `SessionExport.TryStart` exports a packet range of a session (any shape, optional
+filter) on a job thread through the new `ISessionReader.TryVisitPackets`, which parses a range with your own `ParseOptions`
+under one stack lease. Ingest keeps running; `SessionExportJob` reports visited and exported counts and why a job ended early.
+
+**Breaking changes (migration):**
+
+| Change | Migration |
+|--------|-----------|
+| A caller-owned stream passed to the PBF or BLF exporter (`ToStream`, `ToStdout`) is written by the writer thread | Do not use the stream until `OnFinish` returned, or choose `WithWriteMode(ExportWriteMode.Synchronous)` |
+| DuckDB, Parquet, PBF, BLF report a failed batch one batch later (background mode) | Read the counters after `OnFinish`, or choose the synchronous mode for the old timing |
+| `MutField.SetCustomText` / `AppendCustomText` / `ClearCustomText` throw after seal | Set the text when appending the field (`AppendWithCustomText`) |
+| `WithMaxPacketsPerBlock(0)` / `WithMaxBlockSize(0)` now throw `ArgumentOutOfRangeException` naming the range (was `ThrowIfNegativeOrZero`) | Pass a value of at least 1 |
+| `FilterObserver.CreateOwnerExpandingWatch()` (internal) is gone | Use `FilterObserver.ExtractionWatch` |
+| `ColumnarDetailFlags`, `WithDetailFlags(…)` on DuckDB, Parquet, and PBF Columnar | `WithContent(new ExportContent { … })`; `IncludeTopology` is `Shape = ExportShape.Hierarchy`, the other flags are `ExportContent` members |
+| CSV `WithFieldColumn(name, FieldId, header)`, `CsvColumnKind.Field`, the field members of `CsvColumnDefinition` | `WithContent` with `Shape = SelectedFields` and a `FieldSelection` (the header is the field name); start from `CsvExporter.ContentTemplate`, which is a starting point and not the default: without `WithContent` CSV still writes packet rows, so `DefaultContent` exists on every field exporter except CSV |
+| CLI `csv:columns=a;b` | `csv:fields=a;b` (the same names; `name:first` / `name:last` choose the occurrence); `columns` is refused as an unknown option, and the message lists the options, `fields` among them. Custom texts and representations are written as extra columns by default; add `text=false,repr=false` for one column per field as before |
+| CSV wrote only the first occurrence of a field | one cell per field with all occurrences joined by `\|` (option `separator`); `csv:fields=ip.src:first` keeps the old result |
+| DuckDB `field_{id}` tables, Parquet `field_{id}` files, PBF Columnar field blocks | the second column of a flat shape is `occurrence`, not a node id; the hierarchy shape keeps `node_id` and the topology; new `export_info` table / `export_info.parquet` / PBF header shape; `layout_version` is 1 (the first released layout) |
+| PBF files | The format version stays 1 although the layout changed incompatibly (shape code in the header, `occurrence` position column, presence-encoded texts, integer addresses): a reader written for the files of 0.19.0 must read the shape code of the header first (absent means hierarchy) and the new encodings of the columns and fields named in the upgrade notes |
+| A packet exporter received only packets with a field tree | an exporter fed by its own observer receives packets without a tree; a packet with neither a tree nor staged fields is skipped with a message that says why |
+| `IFieldObserver` implementations | add `EndPacket(id, complete)`, a required member; an observer without per-packet state leaves the body empty, and one that keeps state per packet closes or discards it there |
+| `Field.Value`, `Field.CustomText`, `MutField.Value`, `MutField.CustomText`, `FieldValue.CustomRepresentation` return `ref readonly` | Source: reading them is unchanged (`FieldValue v = field.Value;` copies); keep `ref readonly FieldValue v = ref field.Value;` to read repeatedly, and an evaluated deferred text then replaces the deferred object in the field. Expression-tree lambdas over these properties no longer compile (CS8153). Binary: rebuild every plugin against 0.20.0 |
+| `LazyString.Lazy(factory)` | builds the string once per call however many copies are read, and allocates a small wrapper besides the delegate; `LazyString.FromRawValue` throws `ArgumentException` for a value `RawValue` cannot return |
+| `FieldValue.DataText` and the nested type `FieldValue.DefaultText` | `FieldValue.Data` (a `FieldValueData`): `value.Data.ToString()`, `$"{value.Data}"`, and `value.Data.TryFormat(…)` give the same default text of the data, ignoring the custom representation |
+
+Performance: the profiling tool gained export scenarios that include the parse (`export-*-hierarchy`, `export-*-frames`, the
+`-sync` controls, `writer-handoff`) and a recorded baseline in `artifacts/perf/exporter-rework/`.
+
+### SOME/IP: filter names for services, methods, and values
+
+Before, a decoded value was reachable only as `someip.payload.<service>.v<major>.<member>[.in|.out].<path>` with names that
+were lower-cased, stripped of characters, and sometimes numbered (`_2`) — names nobody had written — and a service or a method
+could not be filtered without a quoted string compare on `someip.service.name`. Now every service, every method, and every value
+in a payload is a field whose filter name is built from the names of the service description, unchanged and with their exact case:
+`[<prefix>.]<service>.v<major>.<member>[.req|.resp].<path>`.
+
+```text
+ClimateControl.v2                                         every message of the service, version 2
+ClimateControl.v2.SetTemperature                          every message of the method
+ClimateControl.v2.SetTemperature && someip.msgtype == 0x80      the responses of the method
+ClimateControl.v2.SetTemperature.req.request.zone == 7    a value of the request
+```
+
+- **Names.** A name starts with an ASCII letter or an underscore and continues with letters, digits, and underscores. The
+  direction `req` or `resp` appears for methods and for the getter and setter of a field; events and notifiers have none. The
+  filter input completes all of them. `ui_name` (service, member, parameter, member of a type, bit) is the display text and defaults
+  to the name; `filter_name` is gone.
+- **A broken name is one warning and the entry is skipped, nothing is renamed.** An invalid or repeated service is skipped; an
+  invalid or repeated member is not registered (its messages show the method as unknown); an invalid or repeated parameter,
+  structure member, TLV member, or union alternative stops the decode of that payload at its position with a diagnostic that names
+  it, and the bytes from there on are `someip.payload.unparsed`; an invalid or repeated bit is left out.
+- **`someip.field_prefix`** (default empty) puts a text such as `acme` or `acme.car` in front of every filter name, for users who
+  need the names to stay clear of protocols and plugins. An invalid value is reported and not used.
+- **The service node and the method node exist on every message of the member** (also an empty request, an error, a segment, or a
+  payload another parser took); `someip.payload` is always the raw bytes of a payload that no other parser took, so
+  `len(someip.payload) > 100` selects by size with or without a description. A filter on a service or a method is answered from
+  the packet index without decoding any payload.
+- **A protocol, a field, and a field alias group can no longer share a name.** The three kinds are one namespace in the stack
+  builder and the first registration keeps a name: a later `RegisterProtocol`, `RegisterField`, `RegisterFieldInGroup`, or
+  `RegisterFieldAliasGroup` with a name that another kind holds throws `DuplicateNameRegistrationException`, whose new
+  `HolderKind` (`RegistrationHolderKind`) is `Protocol`, `Field`, or `FieldAliasGroup`. Before, the filter resolved such a name to one holder by a fixed
+  order and the other one silently stopped working. A protocol's own container field may still carry the protocol's name
+  (protocol `someip`, field `someip`). A SOME/IP name that another component holds skips the service, or else the member, with one
+  warning that names the name and its holder.
+
+### DuckDB export
+
+- **Every topology node has a name.** Protocols and groups get a catalog row without a table (`table_name` is `NULL`,
+  `field_type` is 0), so the tree of a packet can be rebuilt with the query of the README; `topology.custom_text` holds the display
+  line of a structure node (for example the summary of a protocol layer). The Parquet catalog has the same nullable `table_name`.
+- **A failing last batch no longer loses the catalog.** `OnFinish` always completes the catalog and counts a lost batch once:
+  `WrittenCount` equals the rows in `packets`, `SkippedCount` the lost packets.
+- **A rejected packet leaves no trace.** A packet the batch rejects (for example a value it cannot store) is rolled back with its
+  catalog rows and its frame bytes, so a batch never holds half a packet.
+- **No byte array per frame and per bytes value.** Frame bytes and `Bytes` values are copied once into pooled chunks
+  (`BatchByteArena`), so a warm export allocates nothing for them.
+- Flush thresholds (`WithMaxPacketsPerBlock`, `WithMaxBlockSize`) are labeled secure by default and refuse a value outside their
+  range with a message that names it.
+
+### Packet and frame ids convert implicitly from `int`
+
+- **`PacketId id = 7;` and `source.FrameById(7)` compile.** `PacketId` and `FrameId` gain `implicit operator` from `int`
+  (the other direction existed already), so the plain index a caller has no longer needs `new PacketId(index)` /
+  `new FrameId(index)`: `Packet.TryParse(nextId, stack, frame, in options, out packet, out failure)`.
+  The conversion runs the same range check as the constructor, so a value below `-1` or above `ArrayIndexIdRange.MaxValue`
+  throws `ArgumentOutOfRangeException` at the conversion, and `-1` is `Invalid`. `new PacketId(int)` still works.
+- **Comparing an id with an `int` is now an id comparison.** `id == 5` and `id < count` convert the `int` side to the id type
+  (the user-defined operators of the id win over the predefined `int` operators), so an out-of-range `int` throws instead of
+  comparing as a number. An id still converts to `int` for indexing and arithmetic.
+
+### A field prints its display line
+
+- **`field.ToString()`, `$"{field}"`, and `TryFormat` give the display line.** `Field` and `MutField` implement `ISpanFormattable` and
+  `IUtf8SpanFormattable`, like `FieldValue`. The line is the custom text alone when a dissector set one
+  (also an empty one); the UI name for a field without a value; otherwise the UI name, `: `, and the value's default string.
+  `FieldValue.ToString()` stays the value part, so the parts (`FieldInfo.UiName`, `Value`, `Value.Data`,
+  `Value.CustomRepresentation`, `CustomText`) still build an own line. Before, `ToString()` of a field printed the type name. The
+  members never throw: a default field gives the empty line, and every cursor of a skip-tree packet except its root shows its
+  label alone. A field id that the stack does not know (no `FieldInfo` at all) has no label: its line is the value part alone (no
+  label, no `: `).
+
+### Custom texts in the exports
+
+- **A custom text and a custom representation are written only when a dissector set one, and an empty one is not an absent
+  one.** DuckDB and Parquet write NULL for an absent text and `''` for an empty one, PBF Standard writes field 6 / 7 only for a set
+  text (a zero-length field for an empty one), PBF Columnar presence-encodes its text columns (absent rows are runs, an empty text
+  is an entry), JSON writes the key only for a set text, and CSV writes an empty unquoted cell for an absent text and `""` for an
+  empty one (one occurrence per cell; a wide cell that joins several occurrences cannot show the difference). Breaking: a reader of
+  the PBF Columnar columns must walk the entries (see the upgrade note). The rule that rebuilds a display line from these parts is
+  in the [exporter guide](NetworkInspector.Exporters/EXPORTER_GUIDE.md) § 12.3 and in the README of every field exporter.
+- **The Text export writes the display line of every field.** A custom text is the whole line (before, the UI name was written in
+  front of it, so a text that already held the label showed it twice), a field without a value shows its UI name, and every other
+  field shows UI name, `: `, and the custom representation or the default text; bytes are upper-case hex everywhere (before:
+  lower case). A flat shape writes `name=<display line>`. Breaking for anything that parsed the old lines.
+- **Every format keeps the text of a protocol layer.** The custom text of a node without a value (`Ethernet II, Src: …`) was kept by
+  DuckDB, PBF Standard, CSV, JSON, and Text but not by Parquet and PBF Columnar, so a reader of those two showed the UI name.
+  Now `topology.parquet` has the nullable string column `custom_text` and the PBF Columnar topology message has the
+  presence-encoded text column in field 5 (both only with `CustomText`; null or an absent row for a value node and for a node whose
+  dissector set no text). A reader rebuilds the same layer lines as the Text export. The tree-free shapes have no layers.
+- **The Text export escapes C1 controls and the backslash.** A value with U+0080–U+009F (U+009B is a control sequence introducer on
+  terminals that honor C1) is written as `\u009b`, and a backslash as `\\`, so a literal `\n` in a value no longer looks like an
+  escaped line feed. Breaking for anything that read a backslash verbatim from a Text export.
+- **A JSON tree export honors `Info = false`.** The tree styles (compact, pretty, array) wrote `info` (`IN`) whatever the content
+  said; now the key is left out when `Info` is off. The Text exporter has no info line and ignores the member.
+
+### Addresses are integers in the binary formats
+
+- **DuckDB, Parquet, PBF Standard, and PBF Columnar store IPv4, MAC, EUI-64, IPv6, and UUID values as unsigned integers**, the
+  big-endian reading of the address bytes, so the numeric order is the address order and a subnet is a range query
+  (`WHERE value BETWEEN 3232235776 AND 3232236031`). DuckDB: `UINTEGER`, `UBIGINT`, `UBIGINT`, `UHUGEINT`, and the native `UUID`;
+  Parquet: `UINT_32`, `UINT_64`, `UINT_64`, and the two `UINT_64` halves `value_hi` and `value_lo` for IPv6 and UUID; PBF Standard:
+  field 5 fixed32, varint, fixed64, and fixed64 plus field 11; PBF Columnar: packed fixed-width columns 19, 20, and 21. The
+  PBF encodings are never larger than the length-delimited bytes they replace (an IPv4 value in a Standard record is 5 bytes instead
+  of 6; a Columnar row is 4 instead of 6).
+  CSV, JSON, and Text keep the readable notation. The exporter guide ([§ 12.3](NetworkInspector.Exporters/EXPORTER_GUIDE.md), Address
+  values) lists how a reader turns each integer back into the display text. Breaking for readers of the old byte forms (see the
+  upgrade note).
+- **`layout_version` is 1.** 0.20.0 is the first release that writes it, so the layout of the new exports is its first version.
+  The PBF format version stays 1 although the PBF layout changed incompatibly.
+- **DuckDB writes IPv6 values without a heap object per value.** The appender of DuckDB.NET takes a 128-bit integer only as a
+  `BigInteger`; the exporter appends the two 64-bit halves to a temporary staging table and moves each batch into the field table
+  with one `INSERT … SELECT` inside the batch transaction, so a failed batch still rolls back as a whole.
+
+### Frame bytes are opt-in in every packet exporter
+
+- **A default export no longer copies the frame of every packet.** The field tree is the leading content of an export and already
+  holds the parsed bytes of every layer, so `ExportContent.FrameBytes` is `false` by default in DuckDB, Parquet, and PBF Columnar
+  (it was `true`). The default files are smaller by the size of the captured frames. Breaking for a reader that expected the
+  `frame_bytes` column or the PBF column 13 (see the upgrade note).
+- **Every packet exporter can write the frame on request** (`FrameBytes = true`, CLI `frames=true`): DuckDB `packets.frame_bytes`
+  and Parquet `frame_bytes` (an empty frame is an empty value, not NULL), PBF Columnar column 13, **PBF Standard** packet field 6,
+  **JSON** the key `frame_bytes` in every style and shape (standard Base64 with padding), **CSV** the column
+  `CsvColumnKind.FrameBytes` (upper-case hex without separators; packet rows and the selected-fields layout; the all-fields and
+  hierarchy layouts refuse it, also as `csv:shape=all,frames=true`), and **Text** a hex dump `Frame bytes (n):` after the lines of
+  each packet (16 bytes per line, upper-case hex, no ASCII column). The option `frames` is registered for all of them and
+  defaults to `false`.
+- **No measured export configuration grew.** Measured on a synthetic sample of 20 000 identical 512-byte IPv6/UDP frames, the default
+  Parquet dataset shrank from 7,384,267 to 1,961,128 bytes (no frame copy, Zstandard instead of Snappy), the default DuckDB file
+  from 31,731,712 to 29,634,560 bytes, the default PBF Columnar file from 849,202 to 793,496 bytes, and the default Text output by
+  2,000,000 bytes; the CSV and JSON outputs kept their size to the byte. Because every sample frame carries the same bytes, the
+  numbers show that nothing got larger, not how much a real capture shrinks.
+
+### Additional packet buffers in every packet exporter
+
+- **A packet exporter can write the bytes that protocols attach to a packet** (`ExportContent.Buffers = true`, CLI `buffers=true`,
+  off by default): the datagram an IPv4 or IPv6 fragment completes, the PDU a TCP stream completes, a SOME/IP-TP message, a decoded
+  (dechunked or inflated) HTTP body, an unmasked or inflated WebSocket payload. Each buffer is written with its index (1 to 255;
+  index 0 is the frame): DuckDB the table `packet_buffers(packet_id, buffer_index UTINYINT, bytes BLOB)`, Parquet the file
+  `packet_buffers.parquet`, **PBF Columnar** the block field 16, **PBF Standard** the repeated packet field 7, **JSON** the key
+  `buffers` (`[{"index":1,"bytes":"<Base64>"}]`, in every style and shape), **CSV** the column `CsvColumnKind.Buffers`
+  (`<index>:<HEX>` records joined by `;`; packet rows and the selected-fields layout only, refused next to the all-fields and
+  hierarchy layouts, also as `csv:shape=all,buffers=true`), and **Text** a block `Buffer i (n):` with a hex dump per buffer. A packet
+  without additional buffers has no record, and a bound empty buffer is an empty value. The frame exporters (PCAPNG, BLF, ASC) have
+  no such option.
+- **The field tree stays the leading content**: the field tables, the topology, the catalog, and the protocols of an export are the
+  same with `frames` and `buffers` on and off. A buffer can hold decoded content that the frame does not show in clear and can be
+  much larger than the frames; the estimate of a batch counts the buffers, so `batchBytes` bounds the memory they take.
+
+### DuckDB storage version
+
+- **The DuckDB file format is chosen, never the library default.** `DuckDbExporter.Builder.WithStorageVersion(DuckDbStorageVersion)` and
+  the CLI option `duckdb:storageVersion=v1.0.0|v1.1.0|v1.2.0|v1.3.0|v1.4.0|v1.5.0` (enum members `V1Dot0` to `V1Dot5`) set DuckDB's
+  `storage_compatibility_version` when the file is created. The default is `v1.5.0` (`DuckDbExporter.DefaultStorageVersion`), so a file needs DuckDB 1.5 or later to open;
+  an older reader needs `storageVersion=v1.0.0` (opens in DuckDB 1.0 and later) or the version of its release. An undefined
+  enum value throws `ArgumentOutOfRangeException` that lists the six texts, and a CLI value outside them is refused with the allowed
+  values before any file is created. There is no compaction or copy option: the export only appends, and it ends with the checkpoint.
+
+### Parquet compression
+
+- **Every Parquet file is compressed with a codec the exporter chooses, never the library default.** The default is Zstandard at the
+  optimal level (`ParquetExporter.DefaultCompression`, `DefaultCompressionLevel`); Parquet.Net would write Snappy.
+  `Builder.WithCompression(codec, level)` and the CLI options `parquet:compression=none|snappy|gzip|brotli|lz4|zstd` and
+  `compressionLevel=fastest|optimal|smallest` set the codec and the level on every writer of the dataset (`packets`,
+  `packet_buffers`, `topology`, `catalog`, `protocols`, `export_info`, and every field file). `lz4` is written as the `LZ4_RAW` codec of the
+  Parquet specification (a reader reports `LZ4_RAW`); `brotli` is not read by every tool. An undefined enum value throws
+  `ArgumentOutOfRangeException` that lists the allowed values, and a CLI value outside the list is refused with the allowed values before
+  any file is created. A reader that predates Zstandard needs `compression=snappy` or `gzip`.
+
+### Fixed
+
+- **JSON and Text honored `text` and `repr` only in the flat shapes.** The JSON tree styles (`Pretty`, `Array`, `Compact`)
+  wrote `custom_text` and `custom_representation` whatever the content said, and the Text tree wrote the custom text always; they
+  now leave a switched-off text out and do not read it. A CSV export wrote an empty text as an empty cell, the same as an absent
+  one; it now writes `""`.
+- **The decoded HTTP body and the unmasked or inflated WebSocket payload were not among the packet's buffers.** HTTP handed the
+  dechunked and/or inflated body, and WebSocket the unmasked and/or inflated payload, to the nested protocol as a fresh array
+  that is not a slice of any packet buffer. A stateful nested protocol then refused it ("Parse data is not a slice of this
+  packet's buffers"), and `Packet.Buffer(i)` did not show the bytes. Both protocols now bind the derived bytes once before the
+  nested dispatch, so `Packet.BufferCount` is one higher for such a packet (an undecoded body and an unmasked, uncompressed
+  frame add nothing). An empty decoded body is not dispatched. A packet that already holds 255 additional buffers reports
+  `packet.error` with a message that names the limit (`Decoded HTTP body cannot be parsed further: …` and `Unmasked or
+  decompressed WebSocket payload cannot be parsed further: …`) instead of parsing the payload; every masked frame takes one
+  buffer, so a packet with more than 255 masked frames reports it at the first frame beyond that and does not dispatch the later
+  ones. The bound bytes stay alive as long as the packet and one packet can complete many messages, so HTTP, WebSocket, and
+  SOME/IP-TP each bound the sum of the bytes bound to one packet (all protocols together) when they bind, with a setting of
+  their own, next to their per-item limit:
+  `http.max_derived_bytes_per_packet` and `ws.max_derived_bytes_per_packet` (default 256 MiB each, four times the per-item
+  default, 2 KiB to 128 GiB) and `someip.tp_max_derived_bytes_per_packet` (default 64 MiB, the buffered-bytes default, 2 KiB to
+  16 GiB). The body, payload, or message that would pass the total is not parsed, `packet.error` names the setting and says it
+  is the total per packet, and the later payloads of the packet are not dispatched. The per-item limits are unchanged
+  (`http.max_decompressed_bytes`, `ws.max_decompressed_bytes`, `someip.tp_max_message_size`: a larger item stays undecoded or is
+  refused by its own field). Unmasked, uncompressed payloads and undecoded bodies bind nothing and do not count. The protocol
+  guide (§22.4) states the rule for dissector authors. A buffer export (`buffers=true`) lists these bytes.
+- **A file written on the first nine days of a month read back with every timestamp 0 (ASC).** The header date pads a one-digit
+  day with a blank (`Sun Nov  1 10:00:00.250 2026`); the reader demanded two digits for the day, so the start time stayed 0.
+  It now reads a one-digit day with and without milliseconds, in the 24-hour and the 12-hour style.
+- **The BLF exporter allocated about 0.5 MiB per export on its writer thread.** The first container compressed on the new thread
+  grew its output buffer from an empty per-thread pool cache; the buffer is now rented on the calling thread at the container
+  size, where the pool has the arrays (see the exporter guide, §11.7). With compression the exporter holds a buffer of the
+  container size for the compressed output besides the two containers.
+- **The BLF exporter wrote a CAN FD or CAN XL frame on a channel above 255 on another channel.** The objects store the channel in
+  one byte, so channel 300 was written as 44. Such a frame is now skipped as `MalformedData` with a message that names the limit.
+- **The BLF exporter cut a CAN FD frame that declared more than 64 data bytes to 64 bytes.** The frame is corrupt; it is now
+  skipped as `MalformedData` instead of becoming a plausible 64-byte frame.
+- **The ASC exporter repaired a corrupt or cut CAN payload count without a word.** A CAN FD frame that declared more than 64 data
+  bytes, or a classic frame that declared more than 8, was written with its count cut to the maximum; a frame that declared
+  more bytes than it carried was written with the bytes present. A count above the maximum is now skipped as `MalformedData`
+  with a message that names the declared count and the limit, like the BLF exporter does for CAN FD. A frame cut by a snap length
+  is still written with the bytes present, and the first such frame now raises one advisory `ItemSkipped` event
+  (`MalformedData`, not counted as skipped) that names the declared and the present bytes.
+- **The ASC exporter repaired a corrupt or cut LIN data length without a word.** A LIN frame that declared more than 8 data
+  bytes was written with 8, and a frame that declared more bytes than it carried was written with the bytes present. A length
+  above 8 is now skipped as `MalformedData` with a message that names the declared length and the limit, like for CAN. A frame cut
+  by a snap length is still written with the bytes present, and the first such LIN frame now raises one advisory `ItemSkipped`
+  event (`MalformedData`, not counted as skipped) that names the declared and the present bytes. A well-formed frame is unchanged.
+- **The ASC exporter reported every write exception as `IoError`.** A failure of the line writer that is not an `IOException`
+  is now `SerializationError`, like in the other exporters.
+- **A strict BLF export reported one frame too many.** When the synchronous write of a container failed, the call that
+  completed the container returned `true`; it now returns `false`. A write failure that is not an I/O failure is reported as
+  `SerializationError`, not `IoError`.
+- **`BlfExporter.Builder.WithCompressionLevel` accepted any number.** `(BlfCompressionLevel)7` became the default level without a
+  message; it now throws `ArgumentOutOfRangeException`.
+- **A CSV export with the apostrophe as delimiter shifted the columns of every neutralized cell.** With formula neutralization on
+  (the default), a text cell such as `=1` was written as `'=1`; the added apostrophe is the delimiter, so readers saw an extra
+  empty column. Such a cell is now quoted (`"'=1"`).
+- **`CsvExporter.Builder.WithColumn` accepted a `CsvColumnKind` that is not defined.** `(CsvColumnKind)9` added a column with
+  the header `9` and an empty cell on every row; it now throws `ArgumentOutOfRangeException` that names the defined kinds.
+- **A CSV export reported a failed write of the output as a serialization error.** A packet whose rows could not be written
+  because the output threw an `IOException` (a full disk, a closed pipe) raised `ItemSkipped` with `SerializationError`; it is now
+  `IoError`, like in the other exporters.
+- **A compact JSON export that spanned a session restart named the fields of the second stack with the names of the first.** The
+  compact format writes a field name once per document and refers to it by field id afterwards, and field ids are dense per
+  stack, so id 17 names another field after a restart. `JsonExporter` now refuses a packet of another stack than its first
+  written packet's with `ExportErrorKind.StackMismatch`; the packets written before stay a valid document. Pretty, Array, and the
+  flat shapes write the name of every field and are not affected.
+- **The text export at its default level `standard` (and at `summary`) printed hardly more than the packet header.** A protocol
+  layer (`frame`, `eth`, `ip`, `udp`, …) carries its raw bytes as a `Bytes` value, and the detail levels dropped every `Bytes`
+  field together with its subtree, so the default output had no protocols. A protocol layer now stays visible below `full` as
+  `Label: display text` without hex, `standard` goes on with its value fields, and `summary` writes one line per layer. Only a
+  `Bytes` field without children, such as a payload, is still left out below `full`. `full` is unchanged. The "Known issue"
+  notes about `text:level=full` are gone from the READMEs.
+- **A text export wrote control characters of a capture unescaped.** A line feed in a DNS name or an HTTP header forged
+  `Packet N` lines in logs, and an escape character reached the terminal of a text export to standard output. The C0 controls and
+  DEL in field values and display texts are now written as `\n`, `\r`, `\t`, or `\xHH`; an escape counts with its escaped width
+  toward `truncate`. Printable text, including non-ASCII, is unchanged.
+- **A text export reported a failed write of the output as a serialization error.** An `IOException` now raises `ItemSkipped`
+  with `IoError`, like in the other exporters.
+- **The text, JSON, and CSV exports reported a hierarchy packet without a field tree differently from the other exporters.** A
+  packet parsed with `FieldTreeMode.Skip` was reported as `ExportErrorKind.Other` (CSV with its own message). The Text, JSON, and
+  CSV exporters now report it like DuckDB, Parquet, and PBF: skipped and counted, `ItemSkipped` with
+  `ExportErrorKind.SerializationError` and the message `Skip packets cannot be exported (HasFieldTree is false).`, no exception.
+- **`TextExporter.Builder.WithDetailLevel` accepted any number.** `(TextDetailLevel)7` behaved like `Full` without a message; it
+  now throws `ArgumentOutOfRangeException`.
+- **A PCAPNG interface with a very long name lost every frame, and other unusable interface metadata vanished without a word.**
+  An `if_name` above 65 535 UTF-8 bytes made the interface description fail again for every frame of that interface (one
+  `ItemSkipped` per frame, no frame written). A longer description and a negative, mistyped, or oversized option were dropped
+  silently. Such metadata is now left out (never truncated), the frames are written, and one advisory `ItemSkipped` event
+  (`SerializationError`, not counted as skipped) per interface names the options that were left out.
+- **A PCAPNG export cut frames at the snap length without telling the caller.** The first frame above the snap length (262 144
+  bytes by default) now raises one advisory `ItemSkipped` event that names the snap length and `WithSnapLength`, and the new
+  `PcapngExporter.TruncatedFrameCount` counts all cut frames.
+- **`PcapngExporter.Builder.WithHardware`, `WithOs`, `WithApplication`, and `WithComment` accepted a text the format cannot
+  hold.** A text above 65 535 UTF-8 bytes ended the export with a failed start at the first frame; the setter now throws
+  `ArgumentException`, and the `comment` option of the PCAPNG export reports it as an invalid option.
+- **A packet whose parse ended in an error of a nested protocol lost the error and the nested parse when it was parsed again.**
+  The TCP layer recorded the reassembled messages of such a packet with the dispatch mode "nothing dispatched", so a view, a
+  filter, or a session that parsed the packet again showed no `packet.error` and none of the messages that had parsed before the
+  error (for example after HTTP refused a body because of `http.max_derived_bytes_per_packet`). The mode of an error exit is now
+  recorded, and the second parse equals the first.
+
+### Dependencies
+
+- `DuckDB.NET.Data.Full` 1.5.5 → 1.5.6.1.
+
+### Contributors
+
+- The commit-message workflow and the instructions state that a commit message, `CHANGELOG.md`, and review text carry no
+  attribution trailer and no tool name: the person who commits is the only author.
+- `NetworkInspector.Profiling` measures the exporters with the parse included (`export-*-hierarchy`, `export-*-selected`,
+  `export-*-selected-tree`, `export-*-frames`) and has a `-sync` control next to every writer-thread scenario; compare a change
+  with `--ab <baseline-exe> --repeat <n> --set <names>` against a frozen baseline executable. `--write-export-sizes <dir>
+  --out <csv> [--frames <n>]` exports a fixed sample in every configuration and records the bytes of each, and
+  `--compare-export-sizes <beforeCsv> <afterCsv> --out <md>` reports the change per configuration and exits 1 when one
+  grew or is missing.
 
 ---
 

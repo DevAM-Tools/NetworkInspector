@@ -55,7 +55,7 @@ internal sealed class PcapngTraceWriter : IDisposable
     internal void Add(long nanosAfterBase, byte[] bytes)
     {
         // The timestamp is the fixed base plus the recipe's own offset (never the clock), so equal recipes write equal bytes.
-        Frame frame = Frame.Create(new FrameId(_Written), Timestamp.FromNanos(TraceRecipe.BaseNanos + nanosAfterBase), bytes, _LinkType,
+        Frame frame = Frame.Create(_Written, Timestamp.FromNanos(TraceRecipe.BaseNanos + nanosAfterBase), bytes, _LinkType,
             FrameInterfaceId.Invalid, _Registry).Value;
         _Exporter.OnFrame(frame);
         _Written++;

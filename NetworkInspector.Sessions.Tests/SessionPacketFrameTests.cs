@@ -64,7 +64,7 @@ internal sealed class SessionPacketFrameTests
         Dictionary<int, int> lastFramePerSource = [];
         for (int p = 0; p < packets; p++)
         {
-            if (!session.TryGetFrame(new PacketId(p), out Frame frame, out SessionFailure? failure))
+            if (!session.TryGetFrame(p, out Frame frame, out SessionFailure? failure))
             {
                 return $"Packet {p}: {failure?.Message}";
             }
@@ -178,7 +178,7 @@ internal sealed class SessionPacketFrameTests
         public void Dispose() => _Registry = null;
 
         private Frame _Create(int id) =>
-            Frame.Create(new FrameId(id), Timestamp.FromNanos(id * 1_000L), _Frames[id], LinkType.Ethernet, _InterfaceId, _Registry!).Value;
+            Frame.Create(id, Timestamp.FromNanos(id * 1_000L), _Frames[id], LinkType.Ethernet, _InterfaceId, _Registry!).Value;
 
         private static int[] _BuildIds(int count)
         {

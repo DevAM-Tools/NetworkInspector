@@ -28,12 +28,12 @@ internal sealed class DispatchContextTests
         using Stack stack = builder.Build();
         byte[] data = [0x01];
         Frame frame = Frame.Create(
-            new FrameId(1), Timestamp.FromSecs(0), data,
+            1, Timestamp.FromSecs(0), data,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         {
             ParseOptions options = new(firstProtocol: parentId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -69,12 +69,12 @@ internal sealed class DispatchContextTests
         using Stack stack = builder.Build();
         byte[] data = [0x99];
         Frame frame = Frame.Create(
-            new FrameId(1), Timestamp.FromSecs(0), data,
+            1, Timestamp.FromSecs(0), data,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         {
             ParseOptions options = new(firstProtocol: parentId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,

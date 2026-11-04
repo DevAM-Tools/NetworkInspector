@@ -31,9 +31,15 @@ namespace NetworkInspector.Core.Fields;
 /// <para>
 /// <b>Misuse:</b> <c>default(MutField)</c> has a null packet; <see cref="IsValid"/> is false and most members throw
 /// <see cref="NullReferenceException"/> on it. Check <see cref="IsValid"/> when a cursor may come from a <c>default</c>.
+/// The formatting members are the exception: they never throw and give the empty line for such a cursor.
+/// </para>
+/// <para>
+/// <b>Display line:</b> <see cref="ToString()"/> and <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/>
+/// give the same default display line as <see cref="Field"/> for the field as built so far (the custom text alone when set,
+/// else the UI name for a field without a value, else UI name, <c>": "</c>, and the value's default string).
 /// </para>
 /// </summary>
-public readonly ref struct MutField
+public readonly ref struct MutField : ISpanFormattable, IUtf8SpanFormattable
 {
     /// <summary>The owning packet.</summary>
     public readonly Packet Packet { get; }
@@ -63,6 +69,7 @@ public readonly ref struct MutField
     /// Whether this field reference points to a valid packet and index. False only for <c>default(MutField)</c> or a cursor
     /// whose index is <see cref="FieldBody.NullIndex"/>; the skip-tree index counts as valid.
     /// </summary>
+    /// <remarks>Sync: <c>FieldDisplayLine</c> repeats the condition for the cursors it formats (no packet, or the null index).</remarks>
     public readonly bool IsValid
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -79,12 +86,15 @@ public readonly ref struct MutField
     /// <summary>Gets the field's metadata from the stack registry (a registry lookup by <see cref="FieldId"/>, not a stored reference).</summary>
     public readonly FieldInfo? FieldInfo => Packet.Stack.GetField(FieldId);
 
-    /// <summary>The field's value.</summary>
+    /// <summary>
+    /// The field's value, as a reference to the field's own storage (see <see cref="Field.Value"/> for what a reference saves
+    /// over a copy).
+    /// </summary>
     /// <exception cref="InvalidOperationException">
     /// The packet was parsed with <see cref="FieldTreeMode.Skip"/> and this cursor is neither the root nor the field currently
     /// being populated by a skip-tree lazy populator: a skip parse keeps no stored values to read back.
     /// </exception>
-    public readonly FieldValue Value
+    public readonly ref readonly FieldValue Value
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
@@ -96,22 +106,21 @@ public readonly ref struct MutField
                 ThrowHelpers.ThrowSkipFieldTreeValue();
             }
 
-            return Packet.GetFieldRef(StorageIndex).Value;
+            return ref Packet.GetFieldRef(StorageIndex).Value;
         }
     }
 
     /// <summary>
-    /// Optional custom display text (check <see cref="LazyString.IsNull"/> for absence).
-    /// Accesses <see cref="FieldBody.CustomText"/> through a mutable ref for in-place caching.
+    /// Optional custom display text (check <see cref="LazyString.IsNull"/> for absence), as a reference to the field's own
+    /// storage.
     /// </summary>
     /// <remarks>
-    /// Reading this property forces a lazy text to be evaluated. <see cref="FieldBody.CustomText"/> evaluates the text in the
-    /// packet's own storage (the packet hands out a mutable reference to the stored body) and only then returns a copy, so the
-    /// evaluated string is cached for every later reader and the returned copy is already evaluated. Evaluating a copy taken
-    /// earlier would cache only in that copy.
+    /// Reading this property never evaluates a deferred text. The string is built once however it is read (see
+    /// <see cref="LazyString"/>); evaluating through the reference (<c>field.CustomText.AsString</c>) additionally replaces the
+    /// deferred object in the packet's storage by its string, which a copy (<c>LazyString text = field.CustomText;</c>) does not.
     /// </remarks>
     /// <exception cref="InvalidOperationException">Same condition as <see cref="Value"/>.</exception>
-    public readonly LazyString CustomText
+    public readonly ref readonly LazyString CustomText
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
@@ -122,30 +131,56 @@ public readonly ref struct MutField
                 ThrowHelpers.ThrowSkipFieldTreeValue();
             }
 
-            return Packet.GetFieldRef(StorageIndex).CustomText;
+            return ref Packet.GetFieldRef(StorageIndex).CustomText;
         }
     }
 
     /// <summary>
-    /// Stores <paramref name="buffer"/> on the owning packet for nested parse and effect keys.
-    /// The additional-buffer cap is a constant, not a setting: 255, because the effect-layer key
-    /// uses bits 31–24. A full table returns <see cref="ReadOnlyMemory{T}.Empty"/> and does not store.
-    /// After Seal this returns <see cref="ReadOnlyMemory{T}.Empty"/> and does not store.
+    /// Stores owned bytes on the packet for nested parse and effect keys, or names why it could not. This is the only way to
+    /// attach a buffer; it is safe for every protocol because it carries no limit that a caller could leave out or loosen.
+    /// </summary>
+    /// <param name="buffer">
+    /// Reassembled, decoded, unmasked, or inflated bytes that outlive this parse (not a pooled or stack buffer); the packet keeps
+    /// the memory itself, no copy.
+    /// </param>
+    /// <param name="bound">The stored slice to hand to the nested parse; empty when the method returns <see langword="false"/>.</param>
+    /// <param name="failure">
+    /// <see cref="BufferBindFailure.TableFull"/> when the packet holds 255 buffers, <see cref="BufferBindFailure.Sealed"/> after
+    /// Seal, else <see cref="BufferBindFailure.None"/>.
+    /// </param>
+    /// <returns><see langword="true"/> when the buffer was stored; a refused bind changes nothing.</returns>
+    /// <remarks>
+    /// <para>The packet decides only whether a slot is free (255, the effect-layer key packs the index in bits 31–24). It does not
+    /// know the calling protocol and has no byte limit. A protocol that derives bytes from untrusted input, where one packet can
+    /// complete many messages, applies its own per-packet total: read <see cref="BoundBytes"/>, refuse when
+    /// <c>BoundBytes + buffer.Length</c> would pass the protocol's setting, and name that setting in the error. Bytes that a
+    /// bounded reassembly buffer already held (a TCP PDU, an IP datagram) need no such total.</para>
+    /// <para>Pass the returned slice, not <paramref name="buffer"/>, to the nested parse; an empty <paramref name="bound"/> means
+    /// "do not nest-parse". Thread-safety: one writer until the packet is sealed.</para>
+    /// </remarks>
+    /// <seealso cref="BoundBytes"/>
+    /// <seealso cref="BufferBindFailure"/>
+    /// <seealso cref="TryGetEffectLayerKey"/>
+    public readonly bool TryBindBuffer(ReadOnlyMemory<byte> buffer, out ReadOnlyMemory<byte> bound, out BufferBindFailure failure)
+        => Packet.TryBindBuffer(buffer, out bound, out failure);
+
+    /// <summary>
+    /// Number of bytes bound to the packet so far through <see cref="TryBindBuffer"/>, whichever protocol bound them; 0 for a
+    /// packet that has bound nothing, and again 0 for every parse of a recycled packet.
     /// </summary>
     /// <remarks>
-    /// The packet keeps the memory itself (no copy) so a nested parser can be handed the returned slice and a later
-    /// <see cref="TryGetEffectLayerKey"/> can still recognize it as a packet buffer. The memory must therefore stay valid for
-    /// the packet's lifetime (owned bytes such as reassembled data, not a pooled or stack buffer). An empty return is the
-    /// caller's signal that nothing was stored; treat it as "do not nest-parse this slice".
+    /// A protocol compares it with its own per-packet setting before it binds derived bytes. The sum counts the bytes of every
+    /// protocol together, so the total a setting bounds is the memory the packet pins when that protocol binds.
     /// </remarks>
-    public readonly ReadOnlyMemory<byte> BindParseBuffer(ReadOnlyMemory<byte> buffer)
-        => Packet.BindParseBuffer(buffer);
+    /// <seealso cref="TryBindBuffer"/>
+    public readonly ulong BoundBytes => Packet.AdditionalBufferBytes;
 
     /// <summary>
     /// Packs the location of <paramref name="data"/> inside this packet's buffers into an
     /// effect-store layer key. Returns <see langword="false"/> when <paramref name="data"/> is
     /// not a slice of a packet buffer or the packed index/offset does not fit.
     /// </summary>
+    /// <seealso cref="TryBindBuffer"/>
     public readonly bool TryGetEffectLayerKey(ReadOnlyMemory<byte> data, out int key)
         => Packet.TryGetEffectLayerKey(data, out key);
 
@@ -224,6 +259,59 @@ public readonly ref struct MutField
 
     #endregion
 
+    #region Default string representation
+
+    // The default display line of the field being built, by the same rule as Field.ToString: FieldDisplayLine builds it for both
+    // cursors. Inside a dissector the line reflects the value and the texts set so far: a text that is set later (SetCustomText)
+    // is not in a line that was already read, and a deferred text is built by the first read, so a text that the dissector
+    // completes later in the parse must not be read before then.
+
+    /// <summary>
+    /// Returns the default display line of this field as built so far (see <see cref="Field.ToString()"/> for the rule and for
+    /// the line of a field id that the stack does not know).
+    /// </summary>
+    /// <returns>
+    /// The line. Never throws: a default (invalid) cursor gives the empty string; a cursor of a <see cref="FieldTreeMode.Skip"/>
+    /// packet other than its root, which keeps no value or text, gives the label alone (also inside a populator). Allocates the
+    /// result string; use <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> to avoid it.
+    /// </returns>
+    /// <remarks>
+    /// Reading builds a deferred custom text and freezes it for every copy (see <see cref="LazyString"/>), so a text that the
+    /// dissector completes later in the parse must not be read before then, also not by a debugger or a log line. The line is not
+    /// escaped (see <see cref="Field.ToString()"/>).
+    /// </remarks>
+    /// <seealso cref="Field.ToString()"/>
+    public readonly override string ToString() => FieldDisplayLine.GetLine(Packet, StorageIndex, FieldId);
+
+    /// <summary>Returns <see cref="ToString()"/>; both arguments are ignored (every field has exactly one default line).</summary>
+    /// <param name="format">Ignored.</param>
+    /// <param name="formatProvider">Ignored; numbers use the invariant culture.</param>
+    /// <returns>The same line as <see cref="ToString()"/>.</returns>
+    public readonly string ToString(string? format, IFormatProvider? formatProvider) => ToString();
+
+    /// <summary>Formats the default display line into a character span; reports failure when it does not fit.</summary>
+    /// <param name="destination">Target span.</param>
+    /// <param name="charsWritten">Characters written; 0 when the method returns <see langword="false"/>.</param>
+    /// <param name="format">Ignored.</param>
+    /// <param name="provider">Ignored; numbers use the invariant culture.</param>
+    /// <returns>
+    /// <see langword="false"/> when <paramref name="destination"/> is too small. A default (invalid) cursor gives the empty line
+    /// (true, 0 written); a non-root cursor of a skip-tree packet gives the label alone.
+    /// </returns>
+    /// <remarks>Perf: writes straight into <paramref name="destination"/>; no allocation.</remarks>
+    public readonly bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
+        => FieldDisplayLine.TryFormat(Packet, StorageIndex, FieldId, destination, out charsWritten);
+
+    /// <summary>Formats the default display line as UTF-8; same cases and failure contract as the character overload.</summary>
+    /// <param name="utf8Destination">Target span.</param>
+    /// <param name="bytesWritten">Bytes written; 0 when the method returns <see langword="false"/>.</param>
+    /// <param name="format">Ignored.</param>
+    /// <param name="provider">Ignored; numbers use the invariant culture.</param>
+    /// <returns><see langword="false"/> when <paramref name="utf8Destination"/> is too small.</returns>
+    public readonly bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
+        => FieldDisplayLine.TryFormat(Packet, StorageIndex, FieldId, utf8Destination, out bytesWritten);
+
+    #endregion
 
     #region Value Setters
 
@@ -233,20 +321,38 @@ public readonly ref struct MutField
     /// unsynchronized (a multi-word struct write), so use it only while the packet is still being built by one thread.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly void SetValue(FieldValue value) => Packet.GetFieldRef(StorageIndex).Value = value;
+    public readonly void SetValue(FieldValue value) => Packet.GetFieldRef(StorageIndex).SetValue(value);
 
     /// <summary>
     /// Sets custom display text. Goes through the packet (not a direct store) so an attached value cache that records
     /// display text sees the change.
     /// </summary>
+    /// <remarks>
+    /// <b>Discouraged.</b> Set the text when appending the field (<c>AppendWithCustomText</c> with a state object whose
+    /// <c>ToString()</c> you complete before the parse returns). Field observers
+    /// receive a field when it is appended and never see a later change, so tree-free exports and the field tree would show
+    /// different texts. <b>Refused after seal:</b> throws <see cref="InvalidOperationException"/> once the packet is sealed
+    /// (for example inside a lazy populator that runs after the parse), because readers on other threads may read the text.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The packet is sealed.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly void SetCustomText(LazyString text) => Packet.SetFieldCustomText(StorageIndex, FieldId, text);
 
     /// <summary>Clears custom display text. Goes through the packet so an attached value cache is updated as well.</summary>
+    /// <remarks>
+    /// <b>Discouraged</b> for the same reason as <see cref="SetCustomText"/>: observers never see the change. <b>Refused after
+    /// seal.</b> Set the text when appending the field instead.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The packet is sealed.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly void ClearCustomText() => Packet.ClearFieldCustomText(StorageIndex, FieldId);
 
     /// <summary>Appends to custom display text. Goes through the packet so an attached value cache is updated as well.</summary>
+    /// <remarks>
+    /// <b>Discouraged</b> for the same reason as <see cref="SetCustomText"/>: observers never see the change. <b>Refused after
+    /// seal.</b> Build the whole text and set it when appending the field instead.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The packet is sealed.</exception>
     public readonly void AppendCustomText(LazyString suffix) => Packet.AppendFieldCustomText(StorageIndex, FieldId, suffix);
 
     #endregion
@@ -312,7 +418,8 @@ public readonly ref struct MutField
     //     delegate allocation); the arguments are joined without separators using the invariant culture.
     // The arity ladders (one overload per argument count) exist instead of a params array or a string.Format call because a
     // params array allocates on every call and boxes value-type arguments before formatting is even needed, which would
-    // defeat step 1 on the hot path. If a new arity is added, copy the whole pattern and keep the tuple items in order.
+    // defeat step 1 on the hot path. If a new arity is added, add it to all six ladders (plain and lazy, for append, prepend, and
+    // insert-after; the last ones follow the lazy ladder of append) and keep the tuple items in order.
 
     /// <summary>
     /// Whether custom display text or custom representation should be built for
@@ -948,6 +1055,325 @@ public readonly ref struct MutField
         return AppendLazyWithCustomText(fieldId, value, text, populator);
     }
 
+    // The ladders of all positions have the same shape: plain and lazy, 1 to 9 text parts, for append, prepend, and insert-after.
+    // The 9-part plain overloads and the lazy ladders of prepend and insert-after follow here; adding an arity means adding it to
+    // all six ladders.
+
+    /// <summary>Nine-part overload of <c>AppendWithCustomText</c>: the parts are joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField AppendWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7, T8>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Append(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}{s.Item8}{s.Item9}"));
+        return AppendWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Nine-part overload of <c>PrependWithCustomText</c>: the parts are joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField PrependWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7, T8>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return Prepend(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}{s.Item8}{s.Item9}"));
+        return PrependWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Nine-part overload of <c>InsertAfterWithCustomText</c>: the parts are joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField InsertAfterWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7, T8>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfter(fieldId, value);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}{s.Item8}{s.Item9}"));
+        return InsertAfterWithCustomText(fieldId, value, text);
+    }
+
+    /// <summary>Overload of <c>PrependLazyWithCustomText</c> with 1 text part: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField PrependLazyWithCustomText<T0>(
+        FieldId fieldId, FieldValue value, T0 arg0, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return PrependLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            arg0,
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s}"));
+        return PrependLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>PrependLazyWithCustomText</c> with 2 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField PrependLazyWithCustomText<T0, T1>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return PrependLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}"));
+        return PrependLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>PrependLazyWithCustomText</c> with 3 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField PrependLazyWithCustomText<T0, T1, T2>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return PrependLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}"));
+        return PrependLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>PrependLazyWithCustomText</c> with 4 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField PrependLazyWithCustomText<T0, T1, T2, T3>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return PrependLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}"));
+        return PrependLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>PrependLazyWithCustomText</c> with 5 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField PrependLazyWithCustomText<T0, T1, T2, T3, T4>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return PrependLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}"));
+        return PrependLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>PrependLazyWithCustomText</c> with 6 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField PrependLazyWithCustomText<T0, T1, T2, T3, T4, T5>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return PrependLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}"));
+        return PrependLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>PrependLazyWithCustomText</c> with 7 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField PrependLazyWithCustomText<T0, T1, T2, T3, T4, T5, T6>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return PrependLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}"));
+        return PrependLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>PrependLazyWithCustomText</c> with 8 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField PrependLazyWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return PrependLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}{s.Item8}"));
+        return PrependLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>PrependLazyWithCustomText</c> with 9 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField PrependLazyWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7, T8>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return PrependLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}{s.Item8}{s.Item9}"));
+        return PrependLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>InsertAfterLazyWithCustomText</c> with 1 text part: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField InsertAfterLazyWithCustomText<T0>(
+        FieldId fieldId, FieldValue value, T0 arg0, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfterLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            arg0,
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s}"));
+        return InsertAfterLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>InsertAfterLazyWithCustomText</c> with 2 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField InsertAfterLazyWithCustomText<T0, T1>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfterLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}"));
+        return InsertAfterLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>InsertAfterLazyWithCustomText</c> with 3 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField InsertAfterLazyWithCustomText<T0, T1, T2>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfterLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}"));
+        return InsertAfterLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>InsertAfterLazyWithCustomText</c> with 4 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField InsertAfterLazyWithCustomText<T0, T1, T2, T3>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfterLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}"));
+        return InsertAfterLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>InsertAfterLazyWithCustomText</c> with 5 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField InsertAfterLazyWithCustomText<T0, T1, T2, T3, T4>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfterLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}"));
+        return InsertAfterLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>InsertAfterLazyWithCustomText</c> with 6 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField InsertAfterLazyWithCustomText<T0, T1, T2, T3, T4, T5>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfterLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}"));
+        return InsertAfterLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>InsertAfterLazyWithCustomText</c> with 7 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField InsertAfterLazyWithCustomText<T0, T1, T2, T3, T4, T5, T6>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfterLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}"));
+        return InsertAfterLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>InsertAfterLazyWithCustomText</c> with 8 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField InsertAfterLazyWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfterLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}{s.Item8}"));
+        return InsertAfterLazyWithCustomText(fieldId, value, text, populator);
+    }
+
+    /// <summary>Overload of <c>InsertAfterLazyWithCustomText</c> with 9 text parts: joined and formatted lazily, only when custom text is wanted.</summary>
+    public readonly MutField InsertAfterLazyWithCustomText<T0, T1, T2, T3, T4, T5, T6, T7, T8>(
+        FieldId fieldId, FieldValue value, T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8, LazyPopulator populator)
+    {
+        if (!Packet.WantsCustomText(fieldId))
+        {
+            return InsertAfterLazy(fieldId, value, populator);
+        }
+
+        LazyString text = LazyString.FormatLazy(
+            (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8),
+            static s => string.Create(CultureInfo.InvariantCulture, $"{s.Item1}{s.Item2}{s.Item3}{s.Item4}{s.Item5}{s.Item6}{s.Item7}{s.Item8}{s.Item9}"));
+        return InsertAfterLazyWithCustomText(fieldId, value, text, populator);
+    }
+
     #endregion
 
     /// <summary>Creates a MutField for a child at the given storage index (internal implementation detail).</summary>
@@ -1078,6 +1504,19 @@ public readonly ref struct MutField
     private static ParseResult _MissingTable() =>
         ParseError.ProtocolTableMissing(null, "Dispatch table is not registered on this stack.");
 
+    /// <summary>
+    /// Error when a dispatch method of another key type is called on a table: a configuration fault of the calling protocol, not a
+    /// key miss. Names the table, the key type it has, and the key type of the method.
+    /// </summary>
+    /// <param name="table">The resolved table.</param>
+    /// <param name="used">The key type of the dispatch method that was called.</param>
+    /// <remarks>Cold path (the check passes on every correct call): not inlined, and the only place that allocates the text.</remarks>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ParseResult _WrongKeyType(ProtocolTable table, ProtocolTableKeyType used) =>
+        ParseError.ProtocolTableMissing(
+            null,
+            string.Create(CultureInfo.InvariantCulture, $"Dispatch table '{table.Name}' has key type {table.KeyType}, not {used}."));
+
     /// <summary>Error when the dispatch table id is invalid.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ParseResult _InvalidTableId() =>
@@ -1086,7 +1525,7 @@ public readonly ref struct MutField
     /// <summary>
     /// Dispatches to the next protocol by u64 key lookup.
     /// Returns Ok from the callee, <see cref="ParseResult.NotDispatched"/> when the table exists
-    /// and the key has no protocol, or Error when the stack/table is missing or the callee errors.
+    /// and the key has no protocol, or Error when the stack/table is missing, the table has another key type, or the callee errors.
     /// </summary>
     public readonly ParseResult TryCallNextProtocolU64(
         ProtocolTableId tableId, ulong key, ReadOnlyMemory<byte> data, in ParseContext context)
@@ -1110,6 +1549,13 @@ public readonly ref struct MutField
             return _MissingTable();
         }
 
+        // Perf: one byte compare on the hot path, no allocation; the error text is built only on the miss. Without the check a
+        // call of another key type reads as NotDispatched, because the lookup returns an empty list for another key type.
+        if (table.KeyType != ProtocolTableKeyType.U64)
+        {
+            return _WrongKeyType(table, ProtocolTableKeyType.U64);
+        }
+
         ReadOnlySpan<ProtocolId> protocols = table.GetAllU64(key);
         ParseContext dispatchedContext = context.WithDispatch(DispatchContext.ForU64(tableId, key, context.SelfProtocolId));
         if (protocols.Length <= 1)
@@ -1128,7 +1574,7 @@ public readonly ref struct MutField
     /// <summary>
     /// Dispatches to the next protocol by string key lookup.
     /// Returns Ok from the callee, <see cref="ParseResult.NotDispatched"/> when the table exists
-    /// and the key has no protocol, or Error when the stack/table is missing or the callee errors.
+    /// and the key has no protocol, or Error when the stack/table is missing, the table has another key type, or the callee errors.
     /// </summary>
     public readonly ParseResult TryCallNextProtocolString(
         ProtocolTableId tableId, string key, ReadOnlyMemory<byte> data, in ParseContext context)
@@ -1152,6 +1598,12 @@ public readonly ref struct MutField
             return _MissingTable();
         }
 
+        // Same key-type check as in TryCallNextProtocolU64.
+        if (table.KeyType != ProtocolTableKeyType.String)
+        {
+            return _WrongKeyType(table, ProtocolTableKeyType.String);
+        }
+
         ReadOnlySpan<ProtocolId> protocols = table.GetAllString(key);
         ParseContext dispatchedContext = context.WithDispatch(DispatchContext.ForString(tableId, key, context.SelfProtocolId));
         if (protocols.Length <= 1)
@@ -1170,7 +1622,7 @@ public readonly ref struct MutField
     /// <summary>
     /// Dispatches to the next protocol by bytes key lookup.
     /// Returns Ok from the callee, <see cref="ParseResult.NotDispatched"/> when the table exists
-    /// and the key has no protocol, or Error when the stack/table is missing or the callee errors.
+    /// and the key has no protocol, or Error when the stack/table is missing, the table has another key type, or the callee errors.
     /// </summary>
     public readonly ParseResult TryCallNextProtocolBytes(
         ProtocolTableId tableId, BytesKey key, ReadOnlyMemory<byte> data, in ParseContext context)
@@ -1194,6 +1646,12 @@ public readonly ref struct MutField
             return _MissingTable();
         }
 
+        // Same key-type check as in TryCallNextProtocolU64.
+        if (table.KeyType != ProtocolTableKeyType.Bytes)
+        {
+            return _WrongKeyType(table, ProtocolTableKeyType.Bytes);
+        }
+
         ReadOnlySpan<ProtocolId> protocols = table.GetAllBytes(key);
         ParseContext dispatchedContext = context.WithDispatch(DispatchContext.ForBytes(tableId, key, context.SelfProtocolId));
         if (protocols.Length <= 1)
@@ -1212,7 +1670,7 @@ public readonly ref struct MutField
     /// <summary>
     /// Dispatches to the next protocol by bool key lookup.
     /// Returns Ok from the callee, <see cref="ParseResult.NotDispatched"/> when the table exists
-    /// and the key has no protocol, or Error when the stack/table is missing or the callee errors.
+    /// and the key has no protocol, or Error when the stack/table is missing, the table has another key type, or the callee errors.
     /// </summary>
     public readonly ParseResult TryCallNextProtocolBool(
         ProtocolTableId tableId, bool key, ReadOnlyMemory<byte> data, in ParseContext context)
@@ -1236,6 +1694,12 @@ public readonly ref struct MutField
             return _MissingTable();
         }
 
+        // Same key-type check as in TryCallNextProtocolU64.
+        if (table.KeyType != ProtocolTableKeyType.Bool)
+        {
+            return _WrongKeyType(table, ProtocolTableKeyType.Bool);
+        }
+
         ReadOnlySpan<ProtocolId> protocols = table.GetAllBool(key);
         ParseContext dispatchedContext = context.WithDispatch(DispatchContext.ForBool(tableId, key, context.SelfProtocolId));
         if (protocols.Length <= 1)
@@ -1254,7 +1718,7 @@ public readonly ref struct MutField
     /// <summary>
     /// Dispatches to any protocol registered in the table.
     /// Returns Ok from the callee, <see cref="ParseResult.NotDispatched"/> when the table exists
-    /// and has zero protocols, or Error when the stack/table is missing or the callee errors.
+    /// and has zero protocols, or Error when the stack/table is missing, the table has another key type, or the callee errors.
     /// </summary>
     public readonly ParseResult TryCallNextProtocolAny(
         ProtocolTableId tableId, ReadOnlyMemory<byte> data, in ParseContext context)
@@ -1276,6 +1740,12 @@ public readonly ref struct MutField
         if (table is null)
         {
             return _MissingTable();
+        }
+
+        // Same key-type check as in TryCallNextProtocolU64.
+        if (table.KeyType != ProtocolTableKeyType.Any)
+        {
+            return _WrongKeyType(table, ProtocolTableKeyType.Any);
         }
 
         ReadOnlySpan<ProtocolId> protocols = table.GetAllAny();

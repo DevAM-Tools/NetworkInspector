@@ -129,8 +129,9 @@ internal sealed class IPv6BasicTests
             foreach (FieldId memberId in members)
             {
                 FieldLookupCookie cookie = FieldLookupCookie.Start;
-                while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value, materialize: true)) // materialize: true — need complete field tree for assertion
+                while (packet.TryGetNextField(memberId, ref cookie, out Field valueField, materialize: true)) // materialize: true — need complete field tree for assertion
                 {
+                    FieldValue value = valueField.Value;
                     bool ok = value.Data.TryGetAsIPv6(out IPv6Address addr);
                     await Assert.That(ok).IsTrue().Because("alias member values must be IPv6 addresses");
                     found.Add(addr.ToString().ToUpperInvariant());

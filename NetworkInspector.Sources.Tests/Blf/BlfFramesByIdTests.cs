@@ -52,8 +52,8 @@ internal sealed class BlfFramesByIdTests
         using BlfSource source = BlfSource.FromData(_Build(containerCount: 1, framesPerContainer: 4, _CompressionNone), "before-start");
         Frame?[] frames = new Frame?[2];
 
-        await Assert.That(() => source.FramesById(new FrameId(0), frames)).Throws<InvalidOperationException>();
-        await Assert.That(() => source.FrameById(new FrameId(0))).Throws<InvalidOperationException>();
+        await Assert.That(() => source.FramesById(0, frames)).Throws<InvalidOperationException>();
+        await Assert.That(() => source.FrameById(0)).Throws<InvalidOperationException>();
     }
 
     #endregion
@@ -68,8 +68,8 @@ internal sealed class BlfFramesByIdTests
         Frame?[] tail = new Frame?[5];
         Frame?[] beyond = new Frame?[3];
 
-        int tailFound = source.FramesById(new FrameId(2), tail);
-        int beyondFound = source.FramesById(new FrameId(ArrayIndexIdRange.MaxValue), beyond);
+        int tailFound = source.FramesById(2, tail);
+        int beyondFound = source.FramesById(ArrayIndexIdRange.MaxValue, beyond);
 
         await Assert.That(tailFound).IsEqualTo(2);
         await Assert.That(RandomAccessEquivalence.SameFrame(sequential[2], tail[0]!.Value)).IsTrue();
@@ -92,7 +92,7 @@ internal sealed class BlfFramesByIdTests
         OperationCanceledException? thrown = null;
         try
         {
-            _ = source.FramesById(new FrameId(1), frames, cancellation.Token);
+            _ = source.FramesById(1, frames, cancellation.Token);
         }
         catch (OperationCanceledException exception)
         {
@@ -112,7 +112,7 @@ internal sealed class BlfFramesByIdTests
         source.Dispose();
         Frame?[] frames = new Frame?[2];
 
-        await Assert.That(() => source.FramesById(new FrameId(1), frames)).Throws<ObjectDisposedException>();
+        await Assert.That(() => source.FramesById(1, frames)).Throws<ObjectDisposedException>();
     }
 
     #endregion
@@ -131,7 +131,7 @@ internal sealed class BlfFramesByIdTests
         // Act: break the LOBJ signature of the object of frame 7.
         data[_NthInnerObjectSignature(data, 7)] = (byte)'X';
         Frame?[] batch = new Frame?[frames.Count];
-        int found = source.FramesById(new FrameId(0), batch);
+        int found = source.FramesById(0, batch);
 
         // Assert
         await Assert.That(found).IsEqualTo(frames.Count - 1);

@@ -23,6 +23,8 @@ namespace NetworkInspector.Exporters.Json;
 /// </summary>
 internal sealed class FieldBitmask
 {
+    #region Configuration and state
+
     /// <summary>The bits, 64 field ids per word. Replaced (not mutated in size) when a larger field id arrives.</summary>
     private ulong[] _Words;
 
@@ -39,12 +41,17 @@ internal sealed class FieldBitmask
         _Words = new ulong[(fieldCount + 63) / 64];
     }
 
+    #endregion
+
+    #region Test-and-set and reset
+
     /// <summary>
     /// Inserts a field ID into the bitmask.
     /// Returns <c>true</c> if the field was newly inserted (first occurrence);
     /// <c>false</c> if it was already present.
     /// </summary>
     /// <param name="fieldIdValue">The numeric value of the <see cref="FieldId"/>.</param>
+    /// <returns><see langword="true"/> when the id was not in the set before (first occurrence); otherwise <see langword="false"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool Insert(int fieldIdValue)
     {
@@ -81,4 +88,6 @@ internal sealed class FieldBitmask
         Array.Clear(_Words);
         _NegativeIds?.Clear();
     }
+
+    #endregion
 }

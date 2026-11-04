@@ -41,10 +41,17 @@ public static class TsharkVerifier
     /// Time the availability probe may take. The probe runs once per test process, usually while every test module of a
     /// full solution run starts at the same moment, and its result is cached for the whole process: a probe that times
     /// out under that load would fail every cross-validation test of the module as "tshark not found". The extraction calls
-    /// below allow 10 to 60 s, so the probe allows as much as the slowest common call; a missing tshark still fails at once
+    /// below allow 30 to 60 s, so the probe allows as much as the slowest common call; a missing tshark still fails at once
     /// (the process cannot be started), so the longer wait costs nothing when tshark is absent.
     /// </summary>
     private const int _ProbeTimeoutMs = 30_000;
+
+    /// <summary>
+    /// Time one single-packet field or PDML extraction may take. Hundreds of such calls start while every test module of a
+    /// full solution run is busy, and a call that is killed on expiry fails its cross-validation test as "tshark did not emit
+    /// the field"; a healthy call takes well under a second, so the wait costs nothing when the machine is free.
+    /// </summary>
+    private const int _ExtractionTimeoutMs = 30_000;
 
     /// <summary>Cached availability result (<see langword="null"/> = not yet probed).</summary>
     private static bool? _IsAvailable;
@@ -189,7 +196,7 @@ public static class TsharkVerifier
             string decodeArg = string.IsNullOrEmpty(decodeAs) ? string.Empty : $" -d {decodeAs}";
             string arguments = $"-r \"{tempFile}\"{decodeArg} -T fields {fieldArgs} -c 1";
 
-            (int exit, string output, string stderrOut, _) = TsharkProcess.Run(arguments, 10_000, profileDir);
+            (int exit, string output, string stderrOut, _) = TsharkProcess.Run(arguments, _ExtractionTimeoutMs, profileDir);
             if (exit != 0)
             {
                 bool rejectedDynamicFields =
@@ -366,7 +373,7 @@ public static class TsharkVerifier
             TsharkPcapWriter.Write(tempFile, frameData, dlt);
             string decodeArg = string.IsNullOrEmpty(decodeAs) ? string.Empty : $" -d {decodeAs}";
             string arguments = $"-r \"{tempFile}\"{decodeArg} -T pdml -c 1";
-            (int exit, string output, string stderrOut, _) = TsharkProcess.Run(arguments, 10_000, profileDir);
+            (int exit, string output, string stderrOut, _) = TsharkProcess.Run(arguments, _ExtractionTimeoutMs, profileDir);
             if (exit != 0)
             {
                 throw new InvalidOperationException(

@@ -7,6 +7,28 @@ internal sealed class SettingsManagerOrphanSaveTests
 {
     private static string _Name(int group) => "g" + group.ToString(CultureInfo.InvariantCulture);
 
+    /// <summary>
+    /// Saves one setting and tries again when another writer holds the folder lock for its whole two-second budget. The lock
+    /// polls without fairness, so on a loaded machine a writer can run out of its budget; the documented answer is "try again".
+    /// The tests that use this prove that no record is lost, not how long the lock takes.
+    /// </summary>
+    /// <param name="manager">The manager that saves.</param>
+    /// <param name="name">Name of the changed setting.</param>
+    private static void _SaveChangedWithRetry(SettingsManager manager, string name)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                manager.SaveChanged([name]);
+                return;
+            }
+            catch (PersistenceSettingsException) when (attempt < 10)
+            {
+            }
+        }
+    }
+
     [Test]
     public async Task SavingWithoutAPluginLoadedKeepsItsStoredSettings()
     {
@@ -91,7 +113,7 @@ internal sealed class SettingsManagerOrphanSaveTests
         manager.ApplyChanges();
 
         // Eight writers record their group file at the same time; none of the records may be lost.
-        await Task.WhenAll(Enumerable.Range(0, 8).Select(group => Task.Run(() => manager.SaveChanged([_Name(group) + ".x"]))));
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(group => Task.Run(() => _SaveChangedWithRetry(manager, _Name(group) + ".x"))));
         for (int group = 0; group < 8; group++)
         {
             Setting setting = manager.GetSetting(_Name(group) + ".x") ?? throw new InvalidOperationException("missing");

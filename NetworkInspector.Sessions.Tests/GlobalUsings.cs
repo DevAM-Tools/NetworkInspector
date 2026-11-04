@@ -5,6 +5,7 @@ global using System;
 global using System.Buffers.Binary;
 global using System.Collections.Generic;
 global using System.Diagnostics;
+global using System.IO;
 global using System.Globalization;
 global using System.Linq;
 global using System.Reflection;
@@ -57,4 +58,11 @@ global using NetworkInspector.Sessions.Tests.Helpers;
 global using TUnit.Assertions;
 global using TUnit.Assertions.Extensions;
 global using TUnit.Core;
+#endregion
+
+#region NetworkInspector.Exporters
+global using DuckDB.NET.Data;
+global using NetworkInspector.Exporters;
+global using NetworkInspector.Exporters.Csv;
+global using NetworkInspector.Exporters.DuckDb;
 #endregion

@@ -162,5 +162,17 @@ public enum SessionErrorCode
     /// </summary>
     RestartOptionOutOfRange,
 
+    /// <summary>
+    /// An argument of a session helper is unusable in a way the type system cannot express (for example a parse plan whose demands
+    /// conflict). The message names the problem. Reported as a <see cref="SessionFailure"/>.
+    /// </summary>
+    InvalidArgument,
+
+    /// <summary>
+    /// A filter could not produce a verdict for a packet, so a filtered operation (an export) stopped instead of keeping or dropping
+    /// data silently. The message carries the reason. Reported as a <see cref="SessionFailure"/>.
+    /// </summary>
+    FilterFailed,
+
     #endregion
 }

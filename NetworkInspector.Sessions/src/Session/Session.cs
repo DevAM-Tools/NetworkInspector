@@ -1496,7 +1496,7 @@ public sealed class Session : ISession, ISessionReader
             // the batch read may be reordered internally but the parse below must not be.
             for (int lane = 0; lane < length; lane++)
             {
-                PacketId originalId = new(start + lane);
+                PacketId originalId = start + lane;
 
                 // Fail closed on the first missing frame: a gap cannot be skipped because ids are not compressed.
                 if (chunk[lane] is not Frame frame)
@@ -2807,7 +2807,7 @@ public sealed class Session : ISession, ISessionReader
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void UnpackFrameMapping(long packed, out FrameId frameId, out FrameSourceId sourceId)
     {
-        frameId = new FrameId((int)(packed >> 32));
+        frameId = (int)(packed >> 32);
         sourceId = new FrameSourceId((int)(packed & 0xFFFF_FFFFL));
     }
 
@@ -2840,7 +2840,7 @@ public sealed class Session : ISession, ISessionReader
                 $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
         }
 
-        return new PacketId(idValue);
+        return idValue;
     }
 
     /// <summary>
@@ -3515,13 +3515,7 @@ public sealed class Session : ISession, ISessionReader
             if (builtFor.Generation != lease.Generation || !ReferenceEquals(builtFor.Stack, lease.Stack))
             {
                 packet = null;
-                failure = new SessionFailure(
-                    SessionErrorCode.OptionsStackMismatch,
-                    string.Format(
-                        CultureInfo.InvariantCulture,
-                        "The parse options were built for generation {0}; the session reads with generation {1}. Rebuild the options on CurrentStack.",
-                        builtFor.Generation,
-                        lease.Generation));
+                failure = _OptionsMismatchFailure(builtFor.Generation, lease.Generation);
                 return false;
             }
 
@@ -3851,13 +3845,163 @@ public sealed class Session : ISession, ISessionReader
                 _ReadPacketChunk(ref sources, lease.Stack, startId + done, chunk);
                 for (int i = 0; i < length; i++)
                 {
-                    destination[done + i] = new PacketRef(new PacketId(startId + done + i), chunk[i]);
+                    destination[done + i] = new PacketRef(startId + done + i, chunk[i]);
                 }
             }
 
             return total;
         }
     }
+
+    /// <inheritdoc/>
+    public bool TryVisitPackets(
+        int fromId,
+        int toIdExclusive,
+        in ParseOptions options,
+        StackView builtFor,
+        IPacketVisitor visitor,
+        out int visitedCount,
+        [NotNullWhen(false)] out SessionFailure? failure)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        ArgumentOutOfRangeException.ThrowIfNegative(fromId);
+        ArgumentOutOfRangeException.ThrowIfLessThan(toIdExclusive, fromId);
+
+        visitedCount = 0;
+
+        // Guards first (cheap, no I/O), in the order of every other read: the pause, then the range against the published count.
+        // The count is loaded once; it is published after the map entry of every id below it, so each id in [0, limit) can be
+        // looked up while ingest keeps appending.
+        if (_QueriesDisabled)
+        {
+            failure = _RefusedReadFailure();
+            return false;
+        }
+
+        int limit = _PacketCount;
+        if (toIdExclusive > limit)
+        {
+            failure = new SessionFailure(
+                SessionErrorCode.PacketNotFound,
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "The range {0} to {1} (exclusive) reaches past the {2} announced packets.",
+                    fromId,
+                    toIdExclusive,
+                    limit));
+            return false;
+        }
+
+        if (fromId == toIdExclusive)
+        {
+            failure = null;
+            return true;
+        }
+
+        // One lease for the whole call, for the reasons given at ReadPackets: a call parses on exactly one stack generation, the
+        // retired stack is released when the call returns, and the per-packet _QueriesDisabled check below ends the call early
+        // when a restart starts.
+        if (!_TryLeaseStackForRead(out StackLease lease))
+        {
+            failure = _RefusedReadFailure();
+            return false;
+        }
+
+        using (lease)
+        {
+            // The options are checked against the LEASED holder before the first parse (see the options overload of TryGetPacket).
+            if (builtFor.Generation != lease.Generation || !ReferenceEquals(builtFor.Stack, lease.Stack))
+            {
+                failure = _OptionsMismatchFailure(builtFor.Generation, lease.Generation);
+                return false;
+            }
+
+            ParseOptions effective = options.Index is null
+                ? options with { Index = SelectIndexFor(_PacketIndex, lease.Stack) }
+                : options;
+            return _VisitRange(lease.Stack, fromId, toIdExclusive, in effective, visitor, out visitedCount, out failure);
+        }
+    }
+
+    /// <summary>
+    /// The read loop of <see cref="TryVisitPackets"/> on a stack the caller holds a lease on: frames are read in chunks of 64 (one
+    /// batched read per source), then parsed and visited one by one. One packet instance is recycled for the whole call, so the
+    /// loop allocates nothing per packet; the visitor therefore sees a packet only during its call.
+    /// </summary>
+    private bool _VisitRange(
+        Stack stack,
+        int fromId,
+        int toIdExclusive,
+        in ParseOptions options,
+        IPacketVisitor visitor,
+        out int visitedCount,
+        [NotNullWhen(false)] out SessionFailure? failure)
+    {
+        RandomAccessLookup sources = new(_RandomAccessSources);
+        FrameBatch frames = default;
+        Span<FrameBatchMiss> misses = stackalloc FrameBatchMiss[_FrameBatchSize];
+        Packet? recycle = null;
+        visitedCount = 0;
+
+        for (int start = fromId; start < toIdExclusive; start += _FrameBatchSize)
+        {
+            // Frames of the whole chunk first (batched per source), parse and visit afterwards: the visitor may take time, and the
+            // sources are not touched while it runs.
+            int length = Math.Min(_FrameBatchSize, toIdExclusive - start);
+            Span<Frame?> chunk = frames;
+            chunk = chunk[..length];
+            _ReadFrameBatch(ref sources, start, chunk, misses[..length]);
+
+            for (int i = 0; i < length; i++)
+            {
+                // A restart that has started ends the call at the next packet; nothing is parsed on a stack that is being replaced.
+                if (_QueriesDisabled)
+                {
+                    failure = _RefusedReadFailure();
+                    return false;
+                }
+
+                if (chunk[i] is not Frame frame)
+                {
+                    failure = new SessionFailure(
+                        SessionErrorCode.FrameUnavailable,
+                        string.Format(
+                            CultureInfo.InvariantCulture,
+                            "The captured frame of packet {0} could not be re-read ({1}); {2} packets were visited before it.",
+                            start + i,
+                            misses[i],
+                            visitedCount));
+                    return false;
+                }
+
+                if (!_TryParseWithOptions(stack, frame, start + i, in options, recycle, out Packet? packet, out failure))
+                {
+                    return false;
+                }
+
+                recycle = packet;
+                visitedCount++;
+                if (!visitor.Visit(packet))
+                {
+                    failure = null;
+                    return true;
+                }
+            }
+        }
+
+        failure = null;
+        return true;
+    }
+
+    /// <summary>The refusal for parse options built on another generation than the one the session reads with.</summary>
+    private static SessionFailure _OptionsMismatchFailure(int builtFor, int leased)
+        => new(
+            SessionErrorCode.OptionsStackMismatch,
+            string.Format(
+                CultureInfo.InvariantCulture,
+                "The parse options were built for generation {0}; the session reads with generation {1}. Rebuild the options on CurrentStack.",
+                builtFor,
+                leased));
 
     /// <summary>
     /// Packets per batched frame read: one map group, and the chunk size of the sources' batch reads. Must not exceed 64:
@@ -3924,7 +4068,7 @@ public sealed class Session : ISession, ISessionReader
         for (int lane = 0; lane < length; lane++)
         {
             frames[lane] = null;
-            if (_TryGetPacketFrame(new PacketId(startId + lane), out FrameId frameId, out FrameSourceId sourceId))
+            if (_TryGetPacketFrame(startId + lane, out FrameId frameId, out FrameSourceId sourceId))
             {
                 frameIds[lane] = frameId;
                 sourceIds[lane] = sourceId.Value;
@@ -4025,7 +4169,7 @@ public sealed class Session : ISession, ISessionReader
                 continue;
             }
 
-            packets[i] = _ReparseOnStack(stack, frame, new PacketId(startId + i), packets[i], out Packet? packet)
+            packets[i] = _ReparseOnStack(stack, frame, startId + i, packets[i], out Packet? packet)
                 ? packet
                 : null;
         }
@@ -4203,7 +4347,7 @@ public sealed class Session : ISession, ISessionReader
                 continue;
             }
 
-            PacketId packetId = new(id);
+            PacketId packetId = id;
 
             // Known verdicts first: a cached non-match needs no re-parse (TryIsMatch would return the same cached false).
             bool cachedMatch = false;

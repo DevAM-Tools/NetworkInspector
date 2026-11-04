@@ -247,7 +247,7 @@ internal static class FilterTestHelper
     public static Packet Parse(Stack stack, byte[] frameData, int packetId = 0, long timestampNanos = 0)
     {
         Frame frame = Frame.Create(
-            new FrameId(packetId),
+            packetId,
             Timestamp.FromNanos(timestampNanos),
             frameData,
             LinkType.Ethernet,
@@ -255,7 +255,7 @@ internal static class FilterTestHelper
             stack.FrameInterfaceRegistry).Value;
 
         ParseOptions options = new();
-        PacketId id = new(packetId);
+        PacketId id = packetId;
         if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
@@ -274,7 +274,7 @@ internal static class FilterTestHelper
         long timestampNanos = 0)
     {
         Frame frame = Frame.Create(
-            new FrameId(packetId),
+            packetId,
             Timestamp.FromNanos(timestampNanos),
             frameData,
             LinkType.Ethernet,
@@ -282,7 +282,7 @@ internal static class FilterTestHelper
             stack.FrameInterfaceRegistry).Value;
 
         ParseOptions options = new(index: index);
-        PacketId id = new(packetId);
+        PacketId id = packetId;
         if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {

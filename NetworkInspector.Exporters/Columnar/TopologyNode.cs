@@ -26,4 +26,8 @@ namespace NetworkInspector.Exporters.Columnar;
 /// <param name="NodeId">Depth-first node identifier, unique within <paramref name="PacketId"/>.</param>
 /// <param name="FieldId">Registered field identifier (Core <c>FieldId.Value</c> as bare int).</param>
 /// <param name="ParentNodeId">The parent node's <see cref="NodeId"/>, or <c>-1</c> for top-level fields.</param>
-internal readonly record struct TopologyNode(int PacketId, int NodeId, int FieldId, int ParentNodeId);
+/// <param name="CustomText">
+/// Custom text of a node without a value column when <see cref="ExportContent.CustomText"/> is set; otherwise
+/// <see langword="null"/> (a value node keeps its text in its field table). The DuckDB sink, the Parquet sink, and the PBF writers write it.
+/// </param>
+internal readonly record struct TopologyNode(int PacketId, int NodeId, int FieldId, int ParentNodeId, string? CustomText);

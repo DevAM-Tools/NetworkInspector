@@ -36,13 +36,13 @@ internal sealed class BlfRandomAccessTests
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Access frame 1 first (CAN)
-        Frame? f1 = source.FrameById(new FrameId(1));
+        Frame? f1 = source.FrameById(1);
         await Assert.That(f1).IsNotNull();
         await Assert.That(f1!.Value.LinkType).IsEqualTo(LinkType.CanSocketcan);
         await Assert.That(f1.Value.Id.Value).IsEqualTo(1);
 
         // Then access frame 0 (Ethernet)
-        Frame? f0 = source.FrameById(new FrameId(0));
+        Frame? f0 = source.FrameById(0);
         await Assert.That(f0).IsNotNull();
         await Assert.That(f0!.Value.LinkType).IsEqualTo(LinkType.Ethernet);
         await Assert.That(f0.Value.Id.Value).IsEqualTo(0);
@@ -65,11 +65,11 @@ internal sealed class BlfRandomAccessTests
         SourceTestFixture.InitializeAndStartSource(source);
 
         // Valid
-        await Assert.That(source.FrameById(new FrameId(0))).IsNotNull();
+        await Assert.That(source.FrameById(0)).IsNotNull();
 
         // Out of bounds
-        await Assert.That(source.FrameById(new FrameId(1))).IsNull();
-        await Assert.That(source.FrameById(new FrameId(100))).IsNull();
+        await Assert.That(source.FrameById(1)).IsNull();
+        await Assert.That(source.FrameById(100)).IsNull();
     }
 
     // ========================================================================
@@ -98,7 +98,7 @@ internal sealed class BlfRandomAccessTests
         int[] accessOrder = [25, 0, 49, 10, 30, 5, 48, 1, 40, 15, 35, 20, 45, 2, 44, 12];
         foreach (int idx in accessOrder)
         {
-            Frame? frame = source.FrameById(new FrameId(idx));
+            Frame? frame = source.FrameById(idx);
             await Assert.That(frame).IsNotNull();
             await Assert.That(frame!.Value.Id.Value).IsEqualTo(idx);
             await Assert.That(frame.Value.Data.Span.SequenceEqual(expectedFrames[idx])).IsTrue();
@@ -116,8 +116,8 @@ internal sealed class BlfRandomAccessTests
         using BlfSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
-        Frame? f1 = source.FrameById(new FrameId(0));
-        Frame? f2 = source.FrameById(new FrameId(0));
+        Frame? f1 = source.FrameById(0);
+        Frame? f2 = source.FrameById(0);
 
         await Assert.That(f1).IsNotNull();
         await Assert.That(f2).IsNotNull();
@@ -149,7 +149,7 @@ internal sealed class BlfRandomAccessTests
         using BlfSource source = _CreateSource(blfData);
         SourceTestFixture.InitializeAndStartSource(source);
 
-        await Assert.That(source.FrameById(new FrameId(0))).IsNull();
+        await Assert.That(source.FrameById(0)).IsNull();
     }
 
     // ========================================================================
@@ -166,7 +166,7 @@ internal sealed class BlfRandomAccessTests
 
         using BlfSource source = _CreateSource(blfData);
         // FrameById() before Start() must throw, consistent with AscSource and PcapngSource.
-        await Assert.That(() => source.FrameById(new FrameId(0))).Throws<InvalidOperationException>();
+        await Assert.That(() => source.FrameById(0)).Throws<InvalidOperationException>();
     }
 
     [Test]
@@ -223,7 +223,7 @@ internal sealed class BlfRandomAccessTests
             async (i, _) =>
             {
                 int frameIndex = i % FrameCount;
-                Frame? frame = source.FrameById(new FrameId(frameIndex), _);
+                Frame? frame = source.FrameById(frameIndex, _);
 
                 if (frame is null)
                 {
@@ -300,7 +300,7 @@ internal sealed class BlfRandomAccessTests
                 {
                     // Acceptable outcomes: valid Frame, null (disposed / not found),
                     // or ObjectDisposedException.  Anything else is a bug.
-                    source.FrameById(new FrameId(i % FrameCount), _);
+                    source.FrameById(i % FrameCount, _);
                 }
                 catch (ObjectDisposedException) { /* expected after Dispose */ }
 
@@ -361,7 +361,7 @@ internal sealed class BlfRandomAccessTests
             Frame?[] frames = new Frame?[8];
             Parallel.For(0, 8, i =>
             {
-                frames[i] = source.FrameById(new FrameId(i));
+                frames[i] = source.FrameById(i);
             });
 
             await Assert.That(frames.All(static f => f.HasValue)).IsTrue();

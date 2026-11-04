@@ -1,6 +1,6 @@
 ---
 name: implement
-description: Execute approved plan or accepted review findings step-by-step. Use on /implement after plan approval.
+description: Execute approved plan or accepted review findings step-by-step with docs kept in sync, a review per step, a briefing, and one Closing Review. Use on /implement after plan approval.
 argument-hint: Reference approved plan artifact or accepted review findings
 agent: agent
 ---

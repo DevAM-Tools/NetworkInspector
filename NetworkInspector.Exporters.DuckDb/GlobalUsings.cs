@@ -2,6 +2,7 @@
 
 #region System
 global using System;
+global using System.Collections.Concurrent;
 global using System.Collections.Generic;
 global using System.Globalization;
 global using System.IO;
@@ -15,10 +16,14 @@ global using NetworkInspector.Core.Errors;
 global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Interfaces;
+global using NetworkInspector.Values;
 #endregion
 
 #region NetworkInspector.Exporters
+global using NetworkInspector.Exporters;
 global using NetworkInspector.Exporters.Columnar;
+global using NetworkInspector.Exporters.Content;
+global using NetworkInspector.Exporters.Writing;
 #endregion
 
 #region External Dependencies

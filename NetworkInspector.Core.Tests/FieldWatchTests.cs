@@ -17,7 +17,7 @@ internal sealed class FieldWatchTests
 
     private static Frame _Udp(Stack stack, int id) =>
         Frame.Create(
-            new FrameId(id),
+            id,
             Timestamp.FromSecs(id),
             FrameBuilders.GenerateStaticUdpIpv6Frame(),
             LinkType.Ethernet,
@@ -26,7 +26,7 @@ internal sealed class FieldWatchTests
 
     private static Frame _Tcp(Stack stack) =>
         Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             FrameBuilders.Generate_TcpSynFrame(),
             LinkType.Ethernet,
@@ -35,7 +35,7 @@ internal sealed class FieldWatchTests
 
     private static Frame _Empty(Stack stack, int id) =>
         Frame.Create(
-            new FrameId(id),
+            id,
             Timestamp.FromSecs(id),
             new byte[16],
             LinkType.Ethernet,
@@ -83,7 +83,7 @@ internal sealed class FieldWatchTests
             ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.All }];
             ParseOptions options = new(FieldTreeMode.Skip, observers: observers, firstProtocol: protocolId);
 
-            bool parsed = _Parse(stack, _Empty(stack, 0), new PacketId(0), options, out _);
+            bool parsed = _Parse(stack, _Empty(stack, 0), 0, options, out _);
 
             await Assert.That(parsed).IsTrue();
             await Assert.That(watch.Begins).IsEqualTo(1);
@@ -105,7 +105,7 @@ internal sealed class FieldWatchTests
             ListWatch watch = new();
             ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.All }];
             ParseOptions options = new(FieldTreeMode.Skip, observers: observers, firstProtocol: protocolId);
-            bool parsed = _Parse(stack, _Empty(stack, 0), new PacketId(0), options, out Packet? packet);
+            bool parsed = _Parse(stack, _Empty(stack, 0), 0, options, out Packet? packet);
 
             await Assert.That(parsed).IsTrue();
             FieldId root = packet!.RootField().FieldId;
@@ -123,7 +123,7 @@ internal sealed class FieldWatchTests
         ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.Only(stack, src) }];
         ParseOptions options = new(FieldTreeMode.Build, observers: observers);
 
-        bool parsed = _Parse(stack, _Udp(stack, 0), new PacketId(0), options, out _);
+        bool parsed = _Parse(stack, _Udp(stack, 0), 0, options, out _);
 
         await Assert.That(parsed).IsTrue();
         await Assert.That(watch.Ids.Count).IsEqualTo(1);
@@ -140,7 +140,7 @@ internal sealed class FieldWatchTests
         ListWatch ports = new();
         ParseObserver[] portObservers = [new() { Observer = ports, Watch = FieldWatch.Only(stack, src, dst) }];
         ParseOptions skip = new(FieldTreeMode.Skip, observers: portObservers);
-        bool udp = _Parse(stack, _Udp(stack, 0), new PacketId(0), skip, out _);
+        bool udp = _Parse(stack, _Udp(stack, 0), 0, skip, out _);
         await Assert.That(udp).IsTrue();
         await Assert.That(ports.Ids.Count).IsEqualTo(2);
         await Assert.That(ports.Ids).Contains(src);
@@ -155,7 +155,7 @@ internal sealed class FieldWatchTests
             new() { Observer = tcp, Watch = FieldWatch.Only(stack, tcpSrc, seq) },
         ];
         ParseOptions tcpOptions = new(FieldTreeMode.Skip, observers: tcpObservers);
-        bool tcpParsed = _Parse(stack, _Tcp(stack), new PacketId(1), tcpOptions, out _);
+        bool tcpParsed = _Parse(stack, _Tcp(stack), 1, tcpOptions, out _);
         await Assert.That(tcpParsed).IsTrue();
         await Assert.That(tcp.Ids.Contains(tcpSrc)).IsTrue();
         await Assert.That(tcp.Ids.Contains(seq)).IsTrue();
@@ -164,7 +164,7 @@ internal sealed class FieldWatchTests
         ListWatch produced = new();
         ParseObserver[] producedObservers = [new() { Observer = produced, Watch = FieldWatch.All }];
         ParseOptions producedOptions = new(FieldTreeMode.Skip, observers: producedObservers);
-        bool producedParsed = _Parse(stack, _Udp(stack, 2), new PacketId(2), producedOptions, out _);
+        bool producedParsed = _Parse(stack, _Udp(stack, 2), 2, producedOptions, out _);
         await Assert.That(producedParsed).IsTrue();
         FieldId[] many = new FieldId[FieldWatch.SpanLimit + 1];
         many[0] = src;
@@ -183,7 +183,7 @@ internal sealed class FieldWatchTests
         ParseObserver[] bitObservers = [new() { Observer = bitset, Watch = FieldWatch.Only(stack, many) }];
         ParseOptions bitOptions = new(FieldTreeMode.Skip, observers: bitObservers);
         await Assert.That(filled).IsEqualTo(many.Length);
-        bool bitParsed = _Parse(stack, _Udp(stack, 3), new PacketId(3), bitOptions, out _);
+        bool bitParsed = _Parse(stack, _Udp(stack, 3), 3, bitOptions, out _);
         await Assert.That(bitParsed).IsTrue();
         await Assert.That(bitset.Ids.Count).IsEqualTo(1);
         await Assert.That(bitset.Ids[0]).IsEqualTo(src);
@@ -204,7 +204,7 @@ internal sealed class FieldWatchTests
         ];
         ParseOptions options = new(FieldTreeMode.Skip, observers: observers);
 
-        bool parsed = _Parse(stack, _Udp(stack, 0), new PacketId(0), options, out _);
+        bool parsed = _Parse(stack, _Udp(stack, 0), 0, options, out _);
 
         await Assert.That(parsed).IsTrue();
         await Assert.That(first.Ids.Count).IsEqualTo(1);
@@ -223,8 +223,8 @@ internal sealed class FieldWatchTests
         ParseOptions skip = new(FieldTreeMode.Skip, observers: observers);
         ParseOptions build = new(FieldTreeMode.Build, observers: observers);
 
-        bool skipParsed = _Parse(stack, _Udp(stack, 0), new PacketId(0), skip, out Packet? skipPacket);
-        bool buildParsed = _Parse(stack, _Udp(stack, 1), new PacketId(1), build, out Packet? buildPacket);
+        bool skipParsed = _Parse(stack, _Udp(stack, 0), 0, skip, out Packet? skipPacket);
+        bool buildParsed = _Parse(stack, _Udp(stack, 1), 1, build, out Packet? buildPacket);
 
         await Assert.That(skipParsed).IsTrue();
         await Assert.That(buildParsed).IsTrue();
@@ -244,8 +244,8 @@ internal sealed class FieldWatchTests
         ParseOptions withCache = new(FieldTreeMode.Build, cache);
         ParseOptions bare = new(FieldTreeMode.Skip);
 
-        bool first = _Parse(stack, _Udp(stack, 0), new PacketId(0), withCache, out Packet? built);
-        bool second = _Parse(stack, _Udp(stack, 1), new PacketId(1), bare, out Packet? skipped);
+        bool first = _Parse(stack, _Udp(stack, 0), 0, withCache, out Packet? built);
+        bool second = _Parse(stack, _Udp(stack, 1), 1, bare, out Packet? skipped);
 
         await Assert.That(first).IsTrue();
         await Assert.That(second).IsTrue();
@@ -267,9 +267,9 @@ internal sealed class FieldWatchTests
         ParseOptions firstOptions = new(FieldTreeMode.Skip, observers: a);
         ParseOptions secondOptions = new(FieldTreeMode.Skip, observers: b);
 
-        bool parsed0 = _Parse(stack, _Udp(stack, 0), new PacketId(0), firstOptions, out _);
+        bool parsed0 = _Parse(stack, _Udp(stack, 0), 0, firstOptions, out _);
         int afterFirst = first.Ids.Count;
-        bool parsed1 = _Parse(stack, _Udp(stack, 1), new PacketId(1), secondOptions, out _);
+        bool parsed1 = _Parse(stack, _Udp(stack, 1), 1, secondOptions, out _);
 
         await Assert.That(parsed0).IsTrue();
         await Assert.That(parsed1).IsTrue();
@@ -286,8 +286,8 @@ internal sealed class FieldWatchTests
         ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.Only(stack, src) }];
         ParseOptions options = new(FieldTreeMode.Skip, observers: observers);
         Packet? packet = null;
-        bool first = Packet.TryParse(new PacketId(0), stack, _Udp(stack, 0), in options, out packet, out _);
-        bool second = Packet.TryParse(packet!, new PacketId(1), stack, _Udp(stack, 1), in options, out _);
+        bool first = Packet.TryParse(0, stack, _Udp(stack, 0), in options, out packet, out _);
+        bool second = Packet.TryParse(packet!, 1, stack, _Udp(stack, 1), in options, out _);
 
         await Assert.That(first).IsTrue();
         await Assert.That(second).IsTrue();
@@ -308,7 +308,7 @@ internal sealed class FieldWatchTests
         ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.Only(stack, src) }];
         ParseOptions options = new(FieldTreeMode.Build, observers: observers);
 
-        bool parsed = _Parse(stack, _Udp(stack, 0), new PacketId(0), options, out _);
+        bool parsed = _Parse(stack, _Udp(stack, 0), 0, options, out _);
 
         await Assert.That(parsed).IsTrue();
         await Assert.That(watch.HasField).IsTrue();
@@ -325,7 +325,7 @@ internal sealed class FieldWatchTests
         ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.Only(stack, src) }];
         ParseOptions options = new(FieldTreeMode.Skip, observers: observers);
 
-        bool parsed = _Parse(stack, _Udp(stack, 0), new PacketId(0), options, out _);
+        bool parsed = _Parse(stack, _Udp(stack, 0), 0, options, out _);
 
         await Assert.That(parsed).IsTrue();
         await Assert.That(watch.Value).IsEqualTo(12345UL);
@@ -344,8 +344,8 @@ internal sealed class FieldWatchTests
         ParseOptions watched = new(FieldTreeMode.Skip, cache, observers: observers);
         ParseOptions bare = new(FieldTreeMode.Skip);
 
-        bool with = _Parse(stack, _Udp(stack, 0), new PacketId(0), watched, out Packet? watchedPacket);
-        bool without = _Parse(stack, _Udp(stack, 1), new PacketId(1), bare, out Packet? barePacket);
+        bool with = _Parse(stack, _Udp(stack, 0), 0, watched, out Packet? watchedPacket);
+        bool without = _Parse(stack, _Udp(stack, 1), 1, bare, out Packet? barePacket);
 
         await Assert.That(with).IsTrue();
         await Assert.That(without).IsTrue();
@@ -366,7 +366,7 @@ internal sealed class FieldWatchTests
         ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.Only(stack, src) }];
         ParseOptions options = new(FieldTreeMode.Build, observers: observers);
 
-        bool parsed = _Parse(stack, _Udp(stack, 0), new PacketId(0), options, out _);
+        bool parsed = _Parse(stack, _Udp(stack, 0), 0, options, out _);
 
         await Assert.That(parsed).IsTrue();
         await Assert.That(watch.Ids.Count).IsEqualTo(1);
@@ -393,7 +393,7 @@ internal sealed class FieldWatchTests
                         ? new ParseObserver[] { new() { Observer = watch, Watch = FieldWatch.Only(stack, src) } }
                         : default;
                     ParseOptions options = new(tree, cache, observers: observers);
-                    bool parsed = Packet.TryParse(new PacketId(id), stack, _Udp(stack, id), in options, out Packet? packet, out _);
+                    bool parsed = Packet.TryParse(id, stack, _Udp(stack, id), in options, out Packet? packet, out _);
                     id++;
 
                     await Assert.That(parsed).IsTrue();
@@ -416,7 +416,7 @@ internal sealed class FieldWatchTests
         ListWatch all = new();
         ParseObserver[] allObservers = [new() { Observer = all, Watch = FieldWatch.All }];
         ParseOptions wideWatch = new(FieldTreeMode.Skip, one, observers: allObservers);
-        bool first = _Parse(stack, _Udp(stack, 0), new PacketId(0), wideWatch, out _);
+        bool first = _Parse(stack, _Udp(stack, 0), 0, wideWatch, out _);
         await Assert.That(first).IsTrue();
         await Assert.That(all.Ids.Count).IsGreaterThan(1);
         await Assert.That(one.GetSeries<ulong>(src).Count).IsEqualTo(1);
@@ -437,7 +437,7 @@ internal sealed class FieldWatchTests
         ListWatch oneWatch = new();
         ParseObserver[] oneObservers = [new() { Observer = oneWatch, Watch = FieldWatch.Only(stack, src) }];
         ParseOptions wideCache = new(FieldTreeMode.Skip, every, observers: oneObservers);
-        bool second = _Parse(stack, _Udp(stack, 1), new PacketId(1), wideCache, out _);
+        bool second = _Parse(stack, _Udp(stack, 1), 1, wideCache, out _);
         await Assert.That(second).IsTrue();
         await Assert.That(oneWatch.Ids.Count).IsEqualTo(1);
         await Assert.That(every.GetSeries<ulong>(dst).Count).IsEqualTo(1);
@@ -453,7 +453,7 @@ internal sealed class FieldWatchTests
         ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.Only(stack, src) }];
         ParseOptions options = new(FieldTreeMode.Skip, cache, observers: observers);
 
-        bool parsed = _Parse(stack, _Udp(stack, 0), new PacketId(0), options, out Packet? packet);
+        bool parsed = _Parse(stack, _Udp(stack, 0), 0, options, out Packet? packet);
 
         await Assert.That(parsed).IsTrue();
         await Assert.That(watch.Ids.Count).IsEqualTo(1);
@@ -467,11 +467,11 @@ internal sealed class FieldWatchTests
         using Stack stack = _Standard();
         FieldId src = stack.GetFieldId("udp.srcport")!.Value;
         ParseOptions bare = new(FieldTreeMode.Skip);
-        bool first = _Parse(stack, _Udp(stack, 0), new PacketId(0), bare, out _);
+        bool first = _Parse(stack, _Udp(stack, 0), 0, bare, out _);
         ListWatch watch = new();
         ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.Only(stack, src) }];
         ParseOptions replay = new(FieldTreeMode.Skip, observers: observers);
-        bool second = _Parse(stack, _Udp(stack, 0), new PacketId(0), replay, out _);
+        bool second = _Parse(stack, _Udp(stack, 0), 0, replay, out _);
 
         await Assert.That(first).IsTrue();
         await Assert.That(second).IsTrue();
@@ -496,11 +496,11 @@ internal sealed class FieldWatchTests
 
         Task leftTask = Task.Run(() =>
         {
-            Packet.TryParse(new PacketId(0), left, leftFrame, in leftOptions, out _, out _);
+            Packet.TryParse(0, left, leftFrame, in leftOptions, out _, out _);
         });
         Task rightTask = Task.Run(() =>
         {
-            Packet.TryParse(new PacketId(0), right, rightFrame, in rightOptions, out _, out _);
+            Packet.TryParse(0, right, rightFrame, in rightOptions, out _, out _);
         });
         await Task.WhenAll(leftTask, rightTask);
 
@@ -519,12 +519,12 @@ internal sealed class FieldWatchTests
         ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.Only(stack, src) }];
         ParseOptions options = new(FieldTreeMode.Build, observers: observers);
 
-        bool parsed = Packet.TryParse(new PacketId(0), stack, _Udp(stack, 0), in options, out Packet? packet, out _);
+        bool parsed = Packet.TryParse(0, stack, _Udp(stack, 0), in options, out Packet? packet, out _);
 
         await Assert.That(parsed).IsTrue();
         await Assert.That(watch.Failure).IsEqualTo(ParseFailure.NotFinalized);
         await Assert.That(watch.SawPort).IsTrue();
-        await Assert.That(packet!.Id).IsEqualTo(new PacketId(0));
+        await Assert.That(packet!.Id).IsEqualTo(0);
     }
 
     [Test]
@@ -549,7 +549,7 @@ internal sealed class FieldWatchTests
         ParseObserver[] observers = [new() { Observer = null, Watch = FieldWatch.None }];
         ParseOptions options = new(observers: observers);
 
-        await Assert.That(() => Packet.TryParse(new PacketId(0), stack, _Udp(stack, 0), in options, out _, out _))
+        await Assert.That(() => Packet.TryParse(0, stack, _Udp(stack, 0), in options, out _, out _))
             .Throws<ArgumentException>();
     }
 
@@ -563,7 +563,7 @@ internal sealed class FieldWatchTests
             ListWatch watch = new();
             ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.All }];
             ParseOptions options = new(FieldTreeMode.Build, observers: observers, firstProtocol: protocolId);
-            bool parsed = _Parse(stack, _Empty(stack, 0), new PacketId(0), options, out _);
+            bool parsed = _Parse(stack, _Empty(stack, 0), 0, options, out _);
             int countA = 0;
             for (int i = 0; i < watch.Ids.Count; i++)
             {
@@ -603,10 +603,10 @@ internal sealed class FieldWatchTests
             FieldTreeMode.Skip,
             observers: new ParseObserver[] { new() { Observer = raw, Watch = FieldWatch.Only(stack, seqRaw) } });
 
-        bool skipParsed = Packet.TryParse(new PacketId(0), stack, _Tcp(stack), in skipOptions, out _, out _);
-        bool buildParsed = Packet.TryParse(new PacketId(1), stack, _Tcp(stack), in buildOptions, out _, out _);
-        bool cacheParsed = Packet.TryParse(new PacketId(2), stack, _Tcp(stack), in cacheOptions, out _, out _);
-        bool rawParsed = Packet.TryParse(new PacketId(3), stack, _Tcp(stack), in rawOptions, out _, out _);
+        bool skipParsed = Packet.TryParse(0, stack, _Tcp(stack), in skipOptions, out _, out _);
+        bool buildParsed = Packet.TryParse(1, stack, _Tcp(stack), in buildOptions, out _, out _);
+        bool cacheParsed = Packet.TryParse(2, stack, _Tcp(stack), in cacheOptions, out _, out _);
+        bool rawParsed = Packet.TryParse(3, stack, _Tcp(stack), in rawOptions, out _, out _);
 
         await Assert.That(skipParsed).IsTrue();
         await Assert.That(buildParsed).IsTrue();
@@ -627,7 +627,7 @@ internal sealed class FieldWatchTests
             ThrowingWatch watch = new(probe.A);
             ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.All }];
             ParseOptions options = new(FieldTreeMode.Build, observers: observers, firstProtocol: protocolId);
-            bool parsed = Packet.TryParse(new PacketId(0), stack, _Empty(stack, 0), in options, out Packet? packet, out ParseFailure failure);
+            bool parsed = Packet.TryParse(0, stack, _Empty(stack, 0), in options, out Packet? packet, out ParseFailure failure);
 
             await Assert.That(parsed).IsTrue();
             await Assert.That(failure).IsEqualTo(ParseFailure.None);
@@ -650,22 +650,22 @@ internal sealed class FieldWatchTests
         ParseObserver[] observers = [new() { Observer = watch, Watch = FieldWatch.Only(stack, tcpSrc) }];
         ParseOptions watched = new(FieldTreeMode.Skip, observers: observers);
         ParseOptions bare = new(FieldTreeMode.Skip);
-        bool started = Packet.TryParse(new PacketId(0), stack, _Udp(stack, 0), in watched, out Packet? packet, out _);
+        bool started = Packet.TryParse(0, stack, _Udp(stack, 0), in watched, out Packet? packet, out _);
         await Assert.That(started).IsTrue();
         const int warmup = 8;
         for (int i = 0; i < warmup; i++)
         {
             Frame frame = _Udp(stack, i + 1);
-            Packet.TryParse(packet!, new PacketId(i + 1), stack, frame, in watched, out _);
-            Packet.TryParse(packet!, new PacketId(i + 1), stack, frame, in bare, out _);
+            Packet.TryParse(packet!, i + 1, stack, frame, in watched, out _);
+            Packet.TryParse(packet!, i + 1, stack, frame, in bare, out _);
         }
 
         Frame measure = _Udp(stack, warmup + 1);
         long beforeWatch = GC.GetAllocatedBytesForCurrentThread();
-        Packet.TryParse(packet!, new PacketId(warmup + 1), stack, measure, in watched, out _);
+        Packet.TryParse(packet!, warmup + 1, stack, measure, in watched, out _);
         long watchBytes = GC.GetAllocatedBytesForCurrentThread() - beforeWatch;
         long beforeBare = GC.GetAllocatedBytesForCurrentThread();
-        Packet.TryParse(packet!, new PacketId(warmup + 1), stack, measure, in bare, out _);
+        Packet.TryParse(packet!, warmup + 1, stack, measure, in bare, out _);
         long bareBytes = GC.GetAllocatedBytesForCurrentThread() - beforeBare;
 
         await Assert.That(watchBytes).IsLessThanOrEqualTo(bareBytes);
@@ -679,29 +679,29 @@ internal sealed class FieldWatchTests
         using Stack stack = _Standard();
         ParseOptions build = new(FieldTreeMode.Build);
         ParseOptions skip = new(FieldTreeMode.Skip);
-        bool started = Packet.TryParse(new PacketId(0), stack, _Udp(stack, 0), in build, out Packet? buildPacket, out _);
-        bool skipStarted = Packet.TryParse(new PacketId(0), stack, _Udp(stack, 0), in skip, out Packet? skipPacket, out _);
+        bool started = Packet.TryParse(0, stack, _Udp(stack, 0), in build, out Packet? buildPacket, out _);
+        bool skipStarted = Packet.TryParse(0, stack, _Udp(stack, 0), in skip, out Packet? skipPacket, out _);
         await Assert.That(started).IsTrue();
         await Assert.That(skipStarted).IsTrue();
         const int warmup = 8;
         for (int i = 0; i < warmup; i++)
         {
             Frame frame = _Udp(stack, i + 1);
-            Packet.TryParse(buildPacket!, new PacketId(i + 1), stack, frame, in build, out _);
-            Packet.TryParse(skipPacket!, new PacketId(i + 1), stack, frame, in skip, out _);
+            Packet.TryParse(buildPacket!, i + 1, stack, frame, in build, out _);
+            Packet.TryParse(skipPacket!, i + 1, stack, frame, in skip, out _);
         }
 
         (object? firstBefore, object? tableBefore) = _FieldChunks(buildPacket!);
         Frame measure = _Udp(stack, warmup + 1);
         long beforeBuild = GC.GetAllocatedBytesForCurrentThread();
-        Packet.TryParse(buildPacket!, new PacketId(warmup + 1), stack, measure, in build, out _);
+        Packet.TryParse(buildPacket!, warmup + 1, stack, measure, in build, out _);
         long buildBytes = GC.GetAllocatedBytesForCurrentThread() - beforeBuild;
         (object? firstAfter, object? tableAfter) = _FieldChunks(buildPacket!);
         long beforeSecond = GC.GetAllocatedBytesForCurrentThread();
-        Packet.TryParse(buildPacket!, new PacketId(warmup + 2), stack, measure, in build, out _);
+        Packet.TryParse(buildPacket!, warmup + 2, stack, measure, in build, out _);
         long secondBytes = GC.GetAllocatedBytesForCurrentThread() - beforeSecond;
         long beforeSkip = GC.GetAllocatedBytesForCurrentThread();
-        Packet.TryParse(skipPacket!, new PacketId(warmup + 1), stack, measure, in skip, out _);
+        Packet.TryParse(skipPacket!, warmup + 1, stack, measure, in skip, out _);
         long skipBytes = GC.GetAllocatedBytesForCurrentThread() - beforeSkip;
 
         // The first chunk and the follow-up descriptor table are reused. Protocol display text still allocates on a
@@ -812,6 +812,11 @@ internal sealed class ListWatch : IFieldObserver
 
         U64.Add(value);
     }
+
+    /// <inheritdoc />
+    public void EndPacket(PacketId id, bool complete)
+    {
+    }
 }
 
 /// <summary>Records begin and field as words so order is visible.</summary>
@@ -830,6 +835,11 @@ internal sealed class OrderWatch : IFieldObserver
     public void OnField(in FieldVisit visit)
     {
         Events.Add("field");
+    }
+
+    /// <inheritdoc />
+    public void EndPacket(PacketId id, bool complete)
+    {
     }
 }
 
@@ -876,6 +886,11 @@ internal sealed class ParentWatch : IFieldObserver
             HasNext = visit.Field.TryGetNext(out _);
         }
     }
+
+    /// <inheritdoc />
+    public void EndPacket(PacketId id, bool complete)
+    {
+    }
 }
 
 /// <summary>Tries to recycle the packet being parsed.</summary>
@@ -905,6 +920,11 @@ internal sealed class ReentryWatch : IFieldObserver
             Packet.TryParse(_Packet, _Packet.Id, _Packet.Stack, _Packet.Frame, in options, out ParseFailure failure);
             Failure = failure;
         }
+    }
+
+    /// <inheritdoc />
+    public void EndPacket(PacketId id, bool complete)
+    {
     }
 }
 
@@ -939,6 +959,11 @@ internal sealed class ThrowingWatch : IFieldObserver
             SawA = true;
             throw new InvalidOperationException("watch failed");
         }
+    }
+
+    /// <inheritdoc />
+    public void EndPacket(PacketId id, bool complete)
+    {
     }
 }
 

@@ -14,7 +14,7 @@ internal sealed class ValueCacheParseTests
         ProtocolRegistration.RegisterStandardProtocols(builder);
         Stack stack = builder.Build();
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(1),
             FrameBuilders.GenerateStaticUdpFrame(),
             LinkType.Ethernet,
@@ -26,7 +26,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -42,7 +42,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, cache);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -58,7 +58,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, cache, index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -86,7 +86,7 @@ internal sealed class ValueCacheParseTests
 
     private static Frame _Frame(Stack stack, int id = 1) =>
         Frame.Create(
-            new FrameId(id),
+            id,
             Timestamp.FromSecs(id),
             new byte[16],
             LinkType.Ethernet,
@@ -107,7 +107,7 @@ internal sealed class ValueCacheParseTests
             {
                 ParseOptions options = new(FieldTreeMode.Build, recorded);
                 if (!Packet.TryParse(
-                    new PacketId(1),
+                    1,
                     stack,
                     parsed.Frame,
                     in options,
@@ -139,7 +139,7 @@ internal sealed class ValueCacheParseTests
             {
                 ParseOptions options = new(FieldTreeMode.Build, cache);
                 if (!Packet.TryParse(
-                    new PacketId(1),
+                    1,
                     stack,
                     parsed.Frame,
                     in options,
@@ -170,7 +170,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, recorded, firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -213,7 +213,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _Frame(stack, 0),
                 in options,
@@ -234,7 +234,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 _Frame(stack, 1),
                 in options,
@@ -256,7 +256,7 @@ internal sealed class ValueCacheParseTests
             PacketIndex index = new(stack);
             ValueCache cache = new(stack, [new ValueCacheFieldConfig(portId)]);
             Frame frame = Frame.Create(
-                new FrameId(1),
+                1,
                 Timestamp.FromSecs(2),
                 FrameBuilders.GenerateStaticUdpFrame(),
                 LinkType.Ethernet,
@@ -265,7 +265,7 @@ internal sealed class ValueCacheParseTests
             {
                 ParseOptions options = new(FieldTreeMode.Build, cache, index: index);
                 if (!Packet.TryParse(
-                    new PacketId(1),
+                    1,
                     stack,
                     frame,
                     in options,
@@ -290,7 +290,7 @@ internal sealed class ValueCacheParseTests
         FieldId portId = stack.GetFieldId("udp.srcport")!.Value;
         ValueCache cache = new(stack, [new ValueCacheFieldConfig(portId)]);
         Frame frame0 = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(1),
             FrameBuilders.GenerateStaticUdpFrame(),
             LinkType.Ethernet,
@@ -300,7 +300,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, cache);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame0,
                 in options,
@@ -315,7 +315,7 @@ internal sealed class ValueCacheParseTests
         for (int i = 1; i < 100; i++)
         {
             Frame frame = Frame.Create(
-                new FrameId(i),
+                i,
                 Timestamp.FromSecs(i + 1),
                 FrameBuilders.GenerateStaticUdpFrame(),
                 LinkType.Ethernet,
@@ -326,7 +326,7 @@ internal sealed class ValueCacheParseTests
                 ParseOptions options = new(FieldTreeMode.Build, cache);
                 errParsed = Packet.TryParse(
                     packet,
-                    new PacketId(i),
+                    i,
                     stack,
                     frame,
                     in options,
@@ -348,7 +348,7 @@ internal sealed class ValueCacheParseTests
         FieldId ttlId = stack.GetFieldId("ip.ttl")!.Value;
         ValueCache cache = new(stack, [new ValueCacheFieldConfig(ttlId)]);
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(1),
             FrameBuilders.GenerateStaticUdpFrame(),
             LinkType.Ethernet,
@@ -358,7 +358,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, cache);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -383,7 +383,7 @@ internal sealed class ValueCacheParseTests
         using Stack stack = builder.Build();
         ValueCache cache = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(1),
             FrameBuilders.GenerateStaticUdpFrame(),
             LinkType.Ethernet,
@@ -392,7 +392,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, cache);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -432,7 +432,7 @@ internal sealed class ValueCacheParseTests
         }, cts.Token);
 
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(1),
             FrameBuilders.GenerateStaticUdpFrame(),
             LinkType.Ethernet,
@@ -442,7 +442,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, cache);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -457,7 +457,7 @@ internal sealed class ValueCacheParseTests
         for (int i = 1; i < 32; i++)
         {
             Frame next = Frame.Create(
-                new FrameId(i),
+                i,
                 Timestamp.FromSecs(i + 1),
                 FrameBuilders.GenerateStaticUdpFrame(),
                 LinkType.Ethernet,
@@ -468,7 +468,7 @@ internal sealed class ValueCacheParseTests
                 ParseOptions options = new(FieldTreeMode.Build, cache);
                 errParsed = Packet.TryParse(
                     packet,
-                    new PacketId(i),
+                    i,
                     stack,
                     next,
                     in options,
@@ -504,7 +504,7 @@ internal sealed class ValueCacheParseTests
             ValueCache cache = new(other, [new ValueCacheFieldConfig(protoOther.NumberId)]);
             ParseOptions options = new(FieldTreeMode.Build, cache);
             bool parsed = Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _Frame(stack),
                 in options,
@@ -523,7 +523,7 @@ internal sealed class ValueCacheParseTests
         {
             ValueCache cache = new(stack, [new ValueCacheFieldConfig(portId)]);
             Frame frame = Frame.Create(
-                new FrameId(1),
+                1,
                 Timestamp.FromSecs(2),
                 FrameBuilders.GenerateStaticUdpFrame(),
                 LinkType.Ethernet,
@@ -532,7 +532,7 @@ internal sealed class ValueCacheParseTests
             {
                 ParseOptions options = new(FieldTreeMode.Build, cache);
                 if (!Packet.TryParse(
-                    new PacketId(1),
+                    1,
                     stack,
                     frame,
                     in options,
@@ -545,7 +545,7 @@ internal sealed class ValueCacheParseTests
             {
                 ParseOptions options = new(FieldTreeMode.Build, cache);
                 if (!Packet.TryParse(
-                    new PacketId(1),
+                    1,
                     stack,
                     frame,
                     in options,
@@ -575,7 +575,7 @@ internal sealed class ValueCacheParseTests
         ValueCache cache = new(stack, [new ValueCacheFieldConfig(portId)]);
         PacketIndex index = new(stack);
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(1),
             FrameBuilders.GenerateStaticUdpFrame(),
             LinkType.Ethernet,
@@ -585,7 +585,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: eth);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -601,7 +601,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, cache, index: index, firstProtocol: eth);
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 frame,
                 in options,
@@ -618,7 +618,7 @@ internal sealed class ValueCacheParseTests
             ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: eth);
             okParsed = Packet.TryParse(
                 a,
-                new PacketId(2),
+                2,
                 stack,
                 frame,
                 in options,
@@ -629,7 +629,7 @@ internal sealed class ValueCacheParseTests
             ParseOptions options = new(FieldTreeMode.Build, cache, index: index);
             okIndexParsed = Packet.TryParse(
                 b,
-                new PacketId(3),
+                3,
                 stack,
                 frame,
                 in options,
@@ -640,7 +640,7 @@ internal sealed class ValueCacheParseTests
             ParseOptions options = new(FieldTreeMode.Build, cache, index: index, firstProtocol: eth);
             okBothParsed = Packet.TryParse(
                 a,
-                new PacketId(4),
+                4,
                 stack,
                 frame,
                 in options,
@@ -651,7 +651,7 @@ internal sealed class ValueCacheParseTests
             ParseOptions options = new(FieldTreeMode.Build, cache);
             if (!Packet.TryParse(
                 a,
-                new PacketId(5),
+                5,
                 stack,
                 frame,
                 in options,
@@ -666,7 +666,7 @@ internal sealed class ValueCacheParseTests
             ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: eth);
             if (!Packet.TryParse(
                 a,
-                new PacketId(6),
+                6,
                 stack,
                 frame,
                 in options,
@@ -679,7 +679,7 @@ internal sealed class ValueCacheParseTests
             ParseOptions options = new(FieldTreeMode.Build, cache, index: index);
             if (!Packet.TryParse(
                 a,
-                new PacketId(7),
+                7,
                 stack,
                 frame,
                 in options,
@@ -692,7 +692,7 @@ internal sealed class ValueCacheParseTests
             ParseOptions options = new(FieldTreeMode.Build, cache, index: index, firstProtocol: eth);
             if (!Packet.TryParse(
                 a,
-                new PacketId(8),
+                8,
                 stack,
                 frame,
                 in options,
@@ -707,7 +707,7 @@ internal sealed class ValueCacheParseTests
             ParseOptions options = new(FieldTreeMode.Build, cache);
             mismatchParsed = Packet.TryParse(
                 a,
-                new PacketId(9),
+                9,
                 other,
                 frame,
                 in options,
@@ -742,7 +742,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, first, firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _Frame(stack, 0),
                 in options,
@@ -758,6 +758,104 @@ internal sealed class ValueCacheParseTests
     }
 
     [Test]
+    [Arguments(FieldTreeMode.Build)]
+    [Arguments(FieldTreeMode.Skip)]
+    public async Task ParseFrame_CustomText_CompletedAfterAppend_IsRecordedFinal(FieldTreeMode tree)
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        CustomTextExerciseProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+        ValueCache cache = new(
+            stack,
+            [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.FirstOccurrence, RecordValue: false, RecordCustomText: true)]);
+        proto.DeferredText = true;
+        ParseOptions options = new(tree, cache, firstProtocol: protoId);
+        if (!Packet.TryParse(0, stack, _Frame(stack, 0), in options, out Packet? _, out ParseFailure failure))
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
+
+        ValueCacheSeries<string> series = cache.GetCustomTextSeries(proto.NumberId);
+
+        // The cache must hold the text the dissector completed, not the placeholder it had at the append.
+        await Assert.That(series.Count).IsEqualTo(1);
+        await Assert.That(series[0].Value).IsEqualTo("final");
+    }
+
+    [Test]
+    [Arguments(FieldTreeMode.Build)]
+    [Arguments(FieldTreeMode.Skip)]
+    public async Task MixedTextsOfOneFieldKeepTheirAppendOrder(FieldTreeMode tree)
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        CustomTextExerciseProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+        ValueCache first = new(
+            stack,
+            [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.FirstOccurrence, RecordValue: false, RecordCustomText: true)]);
+        ValueCache all = new(
+            stack,
+            [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.AllOccurrences, RecordValue: false, RecordCustomText: true)]);
+        proto.MixedOccurrences = true;
+        ParseOptions firstOptions = new(tree, first, firstProtocol: protoId);
+        ParseOptions allOptions = new(tree, all, firstProtocol: protoId);
+        bool firstParsed = Packet.TryParse(0, stack, _Frame(stack, 0), in firstOptions, out Packet? _, out _);
+        bool allParsed = Packet.TryParse(1, stack, _Frame(stack, 1), in allOptions, out Packet? _, out _);
+
+        ValueCacheSeries<string> firstSeries = first.GetCustomTextSeries(proto.NumberId);
+        ValueCacheSeries<string> allSeries = all.GetCustomTextSeries(proto.NumberId);
+
+        // The deferred text of occurrence 1 is recorded at the end of the parse; the plain text of occurrence 2 must wait behind
+        // it, or FirstOccurrence keeps occurrence 2 and AllOccurrences swaps the rows.
+        await Assert.That(firstParsed && allParsed).IsTrue();
+        await Assert.That(firstSeries.Count).IsEqualTo(1);
+        await Assert.That(firstSeries[0].Value).IsEqualTo("final");
+        await Assert.That(allSeries.Count).IsEqualTo(2);
+        await Assert.That(allSeries[0].Value).IsEqualTo("final");
+        await Assert.That(allSeries[1].Value).IsEqualTo("plain");
+    }
+
+    [Test]
+    public async Task AReplacedDeferredTextIsRecordedLikeAReplacedPlainText()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        CustomTextExerciseProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+        ValueCache first = new(
+            stack,
+            [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.FirstOccurrence, RecordValue: false, RecordCustomText: true)]);
+        ValueCache all = new(
+            stack,
+            [new ValueCacheFieldConfig(proto.NumberId, ValueCaptureMode.AllOccurrences, RecordValue: false, RecordCustomText: true)]);
+        proto.DeferredThenOverwrite = true;
+        ParseOptions firstOptions = new(FieldTreeMode.Build, first, firstProtocol: protoId);
+        ParseOptions allOptions = new(FieldTreeMode.Build, all, firstProtocol: protoId);
+        bool firstParsed = Packet.TryParse(0, stack, _Frame(stack, 0), in firstOptions, out Packet? _, out _);
+        bool allParsed = Packet.TryParse(1, stack, _Frame(stack, 1), in allOptions, out Packet? _, out _);
+
+        ValueCacheSeries<string> firstSeries = first.GetCustomTextSeries(proto.NumberId);
+        ValueCacheSeries<string> allSeries = all.GetCustomTextSeries(proto.NumberId);
+
+        // Same rule as ParseFrame_CustomText_FirstOccurrence_SkipsLaterMutation for plain text: the text of the append (here
+        // completed to "final"), then the change; never the changed text twice.
+        await Assert.That(firstParsed && allParsed).IsTrue();
+        await Assert.That(firstSeries.Count).IsEqualTo(1);
+        await Assert.That(firstSeries[0].Value).IsEqualTo("final");
+        await Assert.That(allSeries.Count).IsEqualTo(2);
+        await Assert.That(allSeries[0].Value).IsEqualTo("final");
+        await Assert.That(allSeries[1].Value).IsEqualTo("second");
+    }
+
+    [Test]
     public async Task ParseFrame_CustomRepresentation_IsStored()
     {
         (Stack? stack, ValueCacheExerciseProtocol proto, ProtocolId protoId) = _BuildExercise();
@@ -770,7 +868,7 @@ internal sealed class ValueCacheParseTests
             {
                 ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: protoId);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     _Frame(stack),
                     in options,
@@ -799,7 +897,7 @@ internal sealed class ValueCacheParseTests
         {
             ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _Frame(stack),
                 in options,
@@ -871,7 +969,24 @@ internal sealed class CustomTextExerciseProtocol : IProtocol
 {
     public FieldId NumberId;
     public bool OverwriteCustomText;
+
+    /// <summary>Appends a deferred text and completes it after the append, still inside the parse (like a SOME/IP variable array).</summary>
+    public bool DeferredText;
+
+    /// <summary>Appends the field twice: first with a deferred text completed to "final", then with the plain text "plain".</summary>
+    public bool MixedOccurrences;
+
+    /// <summary>Appends a deferred text, completes it to "final", then replaces it with "second" before the parse ends.</summary>
+    public bool DeferredThenOverwrite;
     private int _Resets;
+
+    /// <summary>State of a deferred text; the text is read when it is first needed, not when it is appended.</summary>
+    private sealed class CompletedLater
+    {
+        internal string Value = "placeholder";
+
+        public override string ToString() => Value;
+    }
 
     public string Name => "vcxtext";
     public string UiName => "CustomText Exercise";
@@ -885,6 +1000,32 @@ internal sealed class CustomTextExerciseProtocol : IProtocol
 
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
+        if (DeferredText)
+        {
+            CompletedLater state = new();
+            _ = parentField.AppendWithCustomText(NumberId, FieldValue.NewU64(1), state);
+            state.Value = "final";
+            return data.Length;
+        }
+
+        if (MixedOccurrences)
+        {
+            CompletedLater state = new();
+            _ = parentField.AppendWithCustomText(NumberId, FieldValue.NewU64(1), state);
+            state.Value = "final";
+            _ = parentField.AppendWithCustomText(NumberId, FieldValue.NewU64(2), new LazyString("plain"));
+            return data.Length;
+        }
+
+        if (DeferredThenOverwrite)
+        {
+            CompletedLater state = new();
+            MutField deferred = parentField.AppendWithCustomText(NumberId, FieldValue.NewU64(1), state);
+            state.Value = "final";
+            deferred.SetCustomText(new LazyString("second"));
+            return data.Length;
+        }
+
         MutField child = parentField.AppendWithCustomText(NumberId, FieldValue.NewU64(1), new LazyString("first"));
         if (OverwriteCustomText)
         {

@@ -211,7 +211,7 @@ internal abstract class FilterScenarioBase : IProfilingScenario
         ParseOptions options = new(index: index);
         for (int i = 0; i < frames.Length; i++)
         {
-            PacketId id = new(packetIdBase + i);
+            PacketId id = packetIdBase + i;
             if (!Packet.TryParse(id, stack, frames[i], in options, out Packet? packet, out ParseFailure failure))
             {
                 throw new InvalidOperationException(failure.ToString());
@@ -274,7 +274,7 @@ internal abstract class FilterScenarioBase : IProfilingScenario
         for (int t = 0; t < _TouchedCount; t++)
         {
             int slot = touched[t];
-            if (!Packet.TryParse(packets[slot], new PacketId(BatchSize + slot), stack, frames[slot], in options, out ParseFailure failure))
+            if (!Packet.TryParse(packets[slot], BatchSize + slot, stack, frames[slot], in options, out ParseFailure failure))
             {
                 throw new InvalidOperationException(failure.ToString());
             }

@@ -56,7 +56,7 @@ internal sealed class PacketFrameMapTests
     public async Task MissingAndOutOfRangeIndexesReturnFalse()
     {
         PacketFrameMap map = new();
-        map.Record(0, new FrameId(1), new FrameSourceId(0));
+        map.Record(0, 1, new FrameSourceId(0));
 
         bool beyond = map.TryGet(1, out FrameId beyondFrame, out FrameSourceId beyondSource);
         bool negative = map.TryGet(-1, out _, out _);
@@ -65,7 +65,7 @@ internal sealed class PacketFrameMapTests
         await Assert.That(negative).IsFalse();
         await Assert.That(beyondFrame).IsEqualTo(FrameId.Invalid);
         await Assert.That(beyondSource).IsEqualTo(FrameSourceId.Invalid);
-        await Assert.That(() => map.Record(5, new FrameId(2), new FrameSourceId(0))).Throws<InvalidOperationException>();
+        await Assert.That(() => map.Record(5, 2, new FrameSourceId(0))).Throws<InvalidOperationException>();
     }
 
     #endregion
@@ -136,7 +136,7 @@ internal sealed class PacketFrameMapTests
 
         for (int i = 0; i < count; i++)
         {
-            map.Record(i, new FrameId(pairs[i].Frame), new FrameSourceId(pairs[i].Source));
+            map.Record(i, pairs[i].Frame, new FrameSourceId(pairs[i].Source));
         }
 
         Volatile.Write(ref done, 1);
@@ -202,7 +202,7 @@ internal sealed class PacketFrameMapTests
 
         for (int i = 0; i < count; i++)
         {
-            map.Record(i, new FrameId(pairs[i].Frame), new FrameSourceId(pairs[i].Source));
+            map.Record(i, pairs[i].Frame, new FrameSourceId(pairs[i].Source));
         }
 
         Volatile.Write(ref done, 1);
@@ -239,7 +239,7 @@ internal sealed class PacketFrameMapTests
         for (int i = 0; i < count; i++)
         {
             (int frame, int source) = pairAt(i);
-            map.Record(i, new FrameId(frame), new FrameSourceId(source));
+            map.Record(i, frame, new FrameSourceId(source));
         }
 
         return map.UsedBytes / (double)count;
@@ -250,7 +250,7 @@ internal sealed class PacketFrameMapTests
         PacketFrameMap map = new();
         for (int i = 0; i < pairs.Length; i++)
         {
-            map.Record(i, new FrameId(pairs[i].Frame), new FrameSourceId(pairs[i].Source));
+            map.Record(i, pairs[i].Frame, new FrameSourceId(pairs[i].Source));
         }
 
         // Forward and backward: both walks decode every sealed group in full through the per-thread cache.

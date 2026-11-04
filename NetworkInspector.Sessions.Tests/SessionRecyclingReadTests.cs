@@ -21,12 +21,12 @@ internal sealed class SessionRecyclingReadTests
         session.WaitForCompletion();
 
         // First read allocates, the following reads must land in that same object.
-        session.TryGetPacket(new PacketId(0), recycle: null, out Packet? recycle, out _);
-        bool found = session.TryGetPacket(new PacketId(1), recycle, out Packet? packet, out _);
+        session.TryGetPacket(0, recycle: null, out Packet? recycle, out _);
+        bool found = session.TryGetPacket(1, recycle, out Packet? packet, out _);
 
         await Assert.That(found).IsTrue();
         await Assert.That(ReferenceEquals(packet, recycle)).IsTrue();
-        await Assert.That(packet!.Id).IsEqualTo(new PacketId(1));
+        await Assert.That(packet!.Id).IsEqualTo(1);
 
         session.Shutdown();
     }
@@ -47,9 +47,9 @@ internal sealed class SessionRecyclingReadTests
         session.TryStart(out _);
         session.WaitForCompletion();
 
-        session.TryGetPacket(new PacketId(0), recycle: null, out Packet? recycle, out _);
-        session.TryGetPacket(new PacketId(3), recycle, out Packet? recycled, out _);
-        session.TryGetPacket(new PacketId(3), recycle: null, out Packet? allocated, out _);
+        session.TryGetPacket(0, recycle: null, out Packet? recycle, out _);
+        session.TryGetPacket(3, recycle, out Packet? recycled, out _);
+        session.TryGetPacket(3, recycle: null, out Packet? allocated, out _);
 
         await Assert.That(_FieldIds(recycled!)).IsEquivalentTo(_FieldIds(allocated!));
 
@@ -96,12 +96,12 @@ internal sealed class SessionRecyclingReadTests
         session.TryStart(out _);
         session.WaitForCompletion();
 
-        session.TryGetPacket(new PacketId(0), recycle: null, out Packet? recycle, out _);
-        bool found = session.TryGetPacket(new PacketId(2), recycle, out Packet? packet, out _);
+        session.TryGetPacket(0, recycle: null, out Packet? recycle, out _);
+        bool found = session.TryGetPacket(2, recycle, out Packet? packet, out _);
 
         await Assert.That(found).IsTrue();
         await Assert.That(ReferenceEquals(packet, recycle)).IsTrue();
-        await Assert.That(packet!.Id).IsEqualTo(new PacketId(2));
+        await Assert.That(packet!.Id).IsEqualTo(2);
         await Assert.That(packet.HasFieldTree).IsTrue();
 
         session.Shutdown();
@@ -122,7 +122,7 @@ internal sealed class SessionRecyclingReadTests
         Packet?[] buffer = new Packet?[frameCount];
         for (int i = 0; i < frameCount; i++)
         {
-            session.TryGetPacket(new PacketId(i), out buffer[i], out _);
+            session.TryGetPacket(i, out buffer[i], out _);
         }
 
         Packet?[] originals = new Packet?[frameCount];
@@ -133,7 +133,7 @@ internal sealed class SessionRecyclingReadTests
         for (int i = 0; i < frameCount; i++)
         {
             await Assert.That(ReferenceEquals(buffer[i], originals[i])).IsTrue();
-            await Assert.That(buffer[i]!.Id).IsEqualTo(new PacketId(i));
+            await Assert.That(buffer[i]!.Id).IsEqualTo(i);
             await Assert.That(buffer[i]!.HasFieldTree).IsTrue();
         }
 
@@ -157,18 +157,18 @@ internal sealed class SessionRecyclingReadTests
         foreignSession.TryAddFrameSource(foreignSource, out _, out _);
         foreignSession.TryStart(out _);
         foreignSession.WaitForCompletion();
-        foreignSession.TryGetPacket(new PacketId(0), recycle: null, out Packet? foreignPacket, out _);
+        foreignSession.TryGetPacket(0, recycle: null, out Packet? foreignPacket, out _);
 
         using Session session = new(stack, SessionOptions.RedissectOnly);
         session.TryAddFrameSource(source, out _, out _);
         session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool found = session.TryGetPacket(new PacketId(1), foreignPacket, out Packet? packet, out _);
+        bool found = session.TryGetPacket(1, foreignPacket, out Packet? packet, out _);
 
         await Assert.That(found).IsTrue();
         await Assert.That(ReferenceEquals(packet, foreignPacket)).IsFalse();
-        await Assert.That(packet!.Id).IsEqualTo(new PacketId(1));
+        await Assert.That(packet!.Id).IsEqualTo(1);
 
         session.Shutdown();
         foreignSession.Shutdown();
@@ -282,7 +282,7 @@ internal sealed class SessionRecyclingReadTests
         List<int> counts = [];
         for (int i = 0; i < frameCount; i++)
         {
-            if (!session.TryGetPacket(new PacketId(i), recycle, out Packet? packet, out _))
+            if (!session.TryGetPacket(i, recycle, out Packet? packet, out _))
             {
                 counts.Add(-1);
                 continue;
@@ -328,7 +328,7 @@ internal sealed class SessionRecyclingReadTests
         {
             for (int i = fromIndex; i < toIndexExclusive; i++)
             {
-                if (!session.TryGetPacket(new PacketId(i), _Recycle, out Packet? packet, out _))
+                if (!session.TryGetPacket(i, _Recycle, out Packet? packet, out _))
                 {
                     Interlocked.Increment(ref _Misses);
                     continue;

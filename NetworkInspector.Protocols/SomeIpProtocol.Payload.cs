@@ -179,6 +179,12 @@ public sealed partial class SomeIpProtocol
         {
             foreach (SomeIpMemberInfo member in service.Members.Span)
             {
+                // A member the registration skipped has no slot and no fields; its messages are treated as not configured.
+                if (member.PayloadSlot < 0)
+                {
+                    continue;
+                }
+
                 populators[member.PayloadSlot] = (in MutField container) => _PopulatePayload(in container, member, outDirection: false, 0, verify: false);
                 populators[member.PayloadSlot + 1] = (in MutField container) => _PopulatePayload(in container, member, outDirection: true, 0, verify: false);
             }
@@ -234,38 +240,85 @@ public sealed partial class SomeIpProtocol
     #region Parse branches
 
     /// <summary>
-    /// Attaches the payload of a message that no other parser consumed: the lazy container of a configured member, or the raw
-    /// bytes. The raw bytes carry a marker when decoding is switched off, so a reader knows the bytes are undecoded by choice.
+    /// Appends the service node and, below it, the method node of a message. Called exactly once per message on every path whose
+    /// header resolved a service (also an empty payload, a segment that delivers nothing, a payload another parser took, an error):
+    /// the identity comes from the header, not from the decode, so a filter on a method selects every message of it. The method
+    /// node holds the payload bytes as its value (a slice, no copy) and, when a populator is given, builds the decoded values on
+    /// demand. The display texts are strings of the model, so no text is built per message.
+    /// </summary>
+    /// <param name="container">The message container.</param>
+    /// <param name="names">The names of the message; no service appends nothing, no member appends the service node only.</param>
+    /// <param name="payload">The value of the method node: the payload, the delivered bytes, or empty.</param>
+    /// <param name="populator">The lazy populator of the decoded values, or <see langword="null"/> for a node without children.</param>
+    private static void _AppendIdentity(in MutField container, in MessageNames names, ReadOnlyMemory<byte> payload, LazyPopulator? populator)
+    {
+        if (names.Service is not { } service)
+        {
+            return;
+        }
+
+        MutField serviceNode = container.AppendWithCustomText(service.FieldId, FieldValue.None, service.UiName);
+        if (names.Member is not { } member)
+        {
+            return;
+        }
+
+        if (populator is null)
+        {
+            _ = serviceNode.AppendWithCustomText(member.FieldId, FieldValue.NewBytes(payload), member.UiName);
+            return;
+        }
+
+        _ = serviceNode.AppendLazyWithCustomText(member.FieldId, FieldValue.NewBytes(payload), member.UiName, populator);
+    }
+
+    /// <summary>
+    /// Attaches a payload no other parser consumed: the raw bytes as <c>someip.payload</c> (every such payload, decoded or not, so
+    /// the field keeps one meaning), and the identity nodes, whose method node carries the lazy decoded values when the member
+    /// defines a parameter list for this message type and decoding is on. The raw bytes carry a marker when decoding is switched
+    /// off, so a reader knows the bytes are undecoded by choice.
     /// </summary>
     /// <param name="container">The message container.</param>
     /// <param name="header">The header of the message; for a segmented message the header of the delivering segment.</param>
-    /// <param name="member">The member the model resolved for the message, or <see langword="null"/>.</param>
+    /// <param name="names">The names of the message (service and member the model resolved, if any).</param>
     /// <param name="payload">The payload: the message payload, or the bytes a segmented message delivered.</param>
     /// <param name="partial">Whether the payload is the gap-free prefix of an incomplete segmented message.</param>
     /// <param name="context">Parse context, for index recording.</param>
-    /// <returns>True when the payload was attached (always, once the member is configured); false for an unconfigured message.</returns>
-    private bool _AppendPayload(
+    private void _AppendPayload(
         in MutField container,
         in SomeIpHeader header,
-        SomeIpMemberInfo? member,
+        in MessageNames names,
         ReadOnlyMemory<byte> payload,
         bool partial,
         in ParseContext context)
     {
-        if (!_TryGetPayloadDirection(in header, member, out bool outDirection))
+        LazyPopulator? populator = null;
+        bool decodable = _TryGetPayloadDirection(in header, names.Member, out bool outDirection);
+        if (decodable && Settings.DecodePayload)
         {
-            return false;
+            populator = _SelectPopulator(in header, names.Member!, outDirection, payload, partial, in context); // decodable: the member is set
         }
 
-        if (!Settings.DecodePayload)
+        _AppendIdentity(in container, in names, payload, populator);
+
+        MutField raw = container.Append(_PayloadFieldId, FieldValue.NewBytes(payload));
+        if (decodable && !Settings.DecodePayload)
         {
-            // The raw container exists as for an unconfigured message, with the marker next to the bytes; no member group is
-            // recorded, so a filter on a parameter selects nothing, which is right: no parameter is in the tree.
-            MutField raw = container.Append(_PayloadFieldId, FieldValue.NewBytes(payload));
+            // The marker says the bytes are undecoded by choice; no member group is recorded, so a filter on a parameter selects
+            // nothing, which is right: no parameter is in the tree.
             _ = raw.Append(_PayloadDisabledFieldId, FieldValue.NewString(_DisabledText));
-            return true;
         }
+    }
 
+    /// <summary>Records the groups of a decodable payload and returns the populator that builds its values.</summary>
+    private LazyPopulator _SelectPopulator(
+        in SomeIpHeader header,
+        SomeIpMemberInfo member,
+        bool outDirection,
+        ReadOnlyMemory<byte> payload,
+        bool partial,
+        in ParseContext context)
+    {
         // The member group is a superset: the message may hold a parameter or may not (truncated, or a TLV member that is absent),
         // and the lazy subtree cannot say before it is built. The filter verifies the candidates on the tree.
         IndexGroupId memberGroup = member.InGroup;
@@ -300,8 +353,7 @@ public sealed partial class SomeIpProtocol
             populator = _CreateVerifyingPopulator(member, outDirection, region);
         }
 
-        _ = container.AppendLazy(_PayloadFieldId, FieldValue.NewBytes(payload), populator);
-        return true;
+        return populator;
     }
 
     /// <summary>
@@ -336,7 +388,7 @@ public sealed partial class SomeIpProtocol
             _PayloadErrorFieldId,
             FieldValue.NewString(string.Create(
                 CultureInfo.InvariantCulture,
-                $"The message has no payload but '{member.Name}' declares {list.SitesCount} parameters in this direction.")));
+                $"The message has no payload but '{member.UiName}' declares {list.SitesCount} parameters in this direction.")));
     }
 
     #endregion

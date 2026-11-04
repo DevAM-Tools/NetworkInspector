@@ -96,7 +96,7 @@ internal sealed class BlockingTestFrameSource : IRandomAccessFrameSource
         byte[] data = TestHarness.GenerateUdpFrame(64);
 
         Frame frame = Frame.Create(
-            new FrameId(idx),
+            idx,
             Timestamp.FromNanos(idx * 1_000_000L),
             data,
             LinkType.Ethernet,

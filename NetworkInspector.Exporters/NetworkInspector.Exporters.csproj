@@ -11,6 +11,8 @@
     <InternalsVisibleTo Include="NetworkInspector.Exporters.Tests" />
     <!-- Companion DuckDB package consumes the internal ColumnarPacketBatch / IColumnarBatchSink contract. -->
     <InternalsVisibleTo Include="NetworkInspector.Exporters.DuckDb" />
+    <!-- The writer-handoff profiling scenario measures the internal batch hand-off. -->
+    <InternalsVisibleTo Include="NetworkInspector.Profiling" />
   </ItemGroup>
 
   <ItemGroup>

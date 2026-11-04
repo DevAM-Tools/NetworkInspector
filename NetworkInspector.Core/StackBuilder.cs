@@ -25,7 +25,7 @@ public sealed class StackBuilder : IStackBuilder
     private readonly List<FieldInfo> _Fields = [];
     private readonly Dictionary<string, FieldId> _FieldNameMap = new(StringComparer.Ordinal);
 
-    // Field alias groups (independent namespace; never resolves through _FieldNameMap)
+    // Field alias groups (own lookup map; the name still shares the conflict namespace of protocols and fields, see RegisterProtocol)
     private readonly List<FieldAliasGroupInfo> _FieldAliasGroups = [];
     private readonly Dictionary<string, FieldAliasGroupId> _FieldAliasGroupNameMap = new(StringComparer.Ordinal);
 
@@ -524,9 +524,24 @@ public sealed class StackBuilder : IStackBuilder
         string name = protocol.Name;
         _ValidateName(name);
         _ValidateUiName(protocol.UiName);
+
+        // One name, one registration: protocols, fields and aliases share one namespace for conflicts, and the first
+        // registration keeps the name. Rejected: three independent namespaces (the filter resolves protocol → field → alias, so
+        // the later of two holders silently lost or won depending on its kind). A field cannot be this protocol's own container
+        // yet, because a field needs the protocol id, so any field with this name belongs to someone else.
         if (_ProtocolNameMap.ContainsKey(name))
         {
-            throw DuplicateNameRegistrationException.For(name);
+            throw DuplicateNameRegistrationException.For(name, RegistrationHolderKind.Protocol);
+        }
+
+        if (_FieldNameMap.ContainsKey(name))
+        {
+            throw DuplicateNameRegistrationException.For(name, RegistrationHolderKind.Field);
+        }
+
+        if (_FieldAliasGroupNameMap.ContainsKey(name))
+        {
+            throw DuplicateNameRegistrationException.For(name, RegistrationHolderKind.FieldAliasGroup);
         }
 
         // Commit: the info list, the instance list (same index), and the name map move together; the cached snapshot is
@@ -584,7 +599,20 @@ public sealed class StackBuilder : IStackBuilder
 
         if (_FieldNameMap.ContainsKey(name))
         {
-            throw DuplicateNameRegistrationException.For(name);
+            throw DuplicateNameRegistrationException.For(name, RegistrationHolderKind.Field);
+        }
+
+        if (_FieldAliasGroupNameMap.ContainsKey(name))
+        {
+            throw DuplicateNameRegistrationException.For(name, RegistrationHolderKind.FieldAliasGroup);
+        }
+
+        // The container-field convention: a protocol's own field may carry the protocol's name (protocol "someip", field
+        // "someip"); the filter then resolves the name to the protocol, which is the intent. Any other owner would make the
+        // field unreachable, so it is refused.
+        if (_ProtocolNameMap.TryGetValue(name, out ProtocolId holder) && holder != protocolId)
+        {
+            throw DuplicateNameRegistrationException.For(name, RegistrationHolderKind.Protocol);
         }
 
         // The index group is still null here; RegisterFieldInGroup assigns it afterwards on the stored FieldInfo.
@@ -608,12 +636,21 @@ public sealed class StackBuilder : IStackBuilder
     public FieldAliasGroupId RegisterFieldAliasGroup(
         ProtocolId protocolId, string name, string? description, FieldId[] fieldIds)
     {
-        // Validate alias name; alias namespace is independent from field/table namespaces
-        // so the only collision check at this point is against existing alias names.
+        // An alias shares the conflict namespace of protocols and fields (see RegisterProtocol); protocol tables keep their own.
         _ValidateName(name);
         if (_FieldAliasGroupNameMap.ContainsKey(name))
         {
-            throw DuplicateNameRegistrationException.For(name);
+            throw DuplicateNameRegistrationException.For(name, RegistrationHolderKind.FieldAliasGroup);
+        }
+
+        if (_ProtocolNameMap.ContainsKey(name))
+        {
+            throw DuplicateNameRegistrationException.For(name, RegistrationHolderKind.Protocol);
+        }
+
+        if (_FieldNameMap.ContainsKey(name))
+        {
+            throw DuplicateNameRegistrationException.For(name, RegistrationHolderKind.Field);
         }
 
         ArgumentNullException.ThrowIfNull(fieldIds);

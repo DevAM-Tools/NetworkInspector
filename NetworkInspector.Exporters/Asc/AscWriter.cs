@@ -15,8 +15,8 @@ namespace NetworkInspector.Exporters.Asc;
 /// <see cref="Finish"/>. Frame records are written via <c>Write*</c> methods.
 /// </para>
 /// <para>
-/// All numeric identifiers and data bytes are written in uppercase hexadecimal;
-/// timestamps, channel numbers, DLC, and length fields are written in decimal.
+/// Identifiers, data bytes, and the CAN DLC (one digit, 0–F) are written in uppercase hexadecimal, as the <c>base hex</c> header
+/// declares; timestamps, channel numbers, and data-length fields are written in decimal.
 /// Line endings are <c>\r\n</c> for compatibility with Vector tooling.
 /// </para>
 /// <para>
@@ -25,7 +25,7 @@ namespace NetworkInspector.Exporters.Asc;
 /// </summary>
 internal sealed class AscWriter
 {
-    #region Constants
+    #region Line format
 
     /// <summary>
     /// Uppercase hex digit lookup table (ASCII). A <c>u8</c> literal property returns a span over static data in the
@@ -38,7 +38,7 @@ internal sealed class AscWriter
 
     #endregion
 
-    #region Fields
+    #region Configuration and buffers
 
     /// <summary>Anchor timestamp for computing relative offsets (nanoseconds since Unix epoch).</summary>
     private readonly long _AnchorNs;
@@ -70,19 +70,11 @@ internal sealed class AscWriter
     /// <summary>Bytes written to <see cref="_Stream"/> (committed output).</summary>
     private long _BytesWritten;
 
-    #endregion
-
-    #region Properties
-
     /// <summary>
     /// Approximate output size if all line and output buffers were flushed now.
     /// </summary>
     internal long EstimatedOutputBytes =>
         _BytesWritten + _OutputBuffer.Length + _LineBuffer.Length;
-
-    #endregion
-
-    #region Construction
 
     /// <summary>
     /// Creates a new <see cref="AscWriter"/> and emits the ASC file header
@@ -136,7 +128,7 @@ internal sealed class AscWriter
 
     #endregion
 
-    #region Public write methods
+    #region Frame lines
 
     /// <summary>
     /// Writes a CAN classic frame line.
@@ -185,7 +177,10 @@ internal sealed class AscWriter
 
         // No Tx/Rx bit on the frame. Parser ignores this token. Keep Rx.
         _LineBuffer.Write(" Rx "u8);
-        _LineBuffer.WriteByte(isRemote ? (byte)'r' : (byte)'d');
+        byte frameKind = isRemote
+            ? (byte)'r'
+            : (byte)'d';
+        _LineBuffer.WriteByte(frameKind);
         _LineBuffer.WriteByte((byte)' ');
         _LineBuffer.WriteByte(_HexDigits[dlc & 0x0F]);
 
@@ -247,9 +242,15 @@ internal sealed class AscWriter
         }
 
         _LineBuffer.WriteByte((byte)' ');
-        _LineBuffer.WriteByte(brs ? (byte)'1' : (byte)'0');
+        byte brsDigit = brs
+            ? (byte)'1'
+            : (byte)'0';
+        _LineBuffer.WriteByte(brsDigit);
         _LineBuffer.WriteByte((byte)' ');
-        _LineBuffer.WriteByte(esi ? (byte)'1' : (byte)'0');
+        byte esiDigit = esi
+            ? (byte)'1'
+            : (byte)'0';
+        _LineBuffer.WriteByte(esiDigit);
         _LineBuffer.WriteByte((byte)' ');
         // DLC is hex under base hex. One digit keeps 10..15 distinct from the decimal data length. The caller passes a DLC
         // code (0..15) from the FD length table; the mask is the same as on the classic path and keeps a stray value from
@@ -463,7 +464,10 @@ internal sealed class AscWriter
         _LineBuffer.WriteByte((byte)' ');
         _AppendHexByte(sdt);
         _LineBuffer.WriteByte((byte)' ');
-        _LineBuffer.WriteByte((flags & 0x01) != 0 ? (byte)'1' : (byte)'0');
+        byte secDigit = (flags & 0x01) != 0
+            ? (byte)'1'
+            : (byte)'0';
+        _LineBuffer.WriteByte(secDigit);
         _LineBuffer.WriteByte((byte)' ');
         _AppendHexUInt32((uint)(length - 1), 1);
         _LineBuffer.WriteByte((byte)' ');
@@ -485,6 +489,10 @@ internal sealed class AscWriter
         _LineBuffer.Write(_CrLf);
         _FlushLine();
     }
+
+    #endregion
+
+    #region Header and footer
 
     /// <summary>
     /// Writes the <c>End TriggerBlock</c> footer line and flushes the stream.
@@ -512,10 +520,6 @@ internal sealed class AscWriter
         _LineBuffer.Return();
         _OutputBuffer.Return();
     }
-
-    #endregion
-
-    #region Private helpers
 
     /// <summary>
     /// Emits the ASC file header (buffered, see the constructor remarks). This is a one-time operation called
@@ -564,6 +568,8 @@ internal sealed class AscWriter
     /// Uses Unix <c>ctime</c>-style format: <c>ddd MMM  d HH:mm:ss.fff yyyy</c>
     /// where single-digit days are space-padded (e.g., <c>Mon Jan  1 10:00:00.000 2024</c>).
     /// </summary>
+    /// <param name="dto">The capture start time.</param>
+    /// <returns>The date text for the <c>date</c> and <c>Begin Triggerblock</c> header lines.</returns>
     private static string _FormatAscDate(DateTimeOffset dto)
     {
         string dow = dto.ToString("ddd", CultureInfo.InvariantCulture);
@@ -577,6 +583,10 @@ internal sealed class AscWriter
         return $"{dow} {mon} {day} {time} {year}";
     }
 
+    #endregion
+
+    #region Number formatting
+
     /// <summary>
     /// Appends the relative timestamp <c>max(0, timestampNs - anchorNs)</c> in seconds with
     /// <see cref="_TimestampDecimals"/> fraction digits to <see cref="_LineBuffer"/>. Integer arithmetic, rounded half up:
@@ -588,7 +598,9 @@ internal sealed class AscWriter
         // Integer arithmetic only: no floating point and no string formatting on the per-frame path.
         // timestampNs <= anchor gives 0 (a frame older than the first one is clamped, never printed negative);
         // otherwise the difference of two values with anchor >= 0 cannot overflow.
-        long relative = timestampNs <= _AnchorNs ? 0L : timestampNs - _AnchorNs;
+        long relative = timestampNs <= _AnchorNs
+            ? 0L
+            : timestampNs - _AnchorNs;
         long seconds = relative / 1_000_000_000L;
         long fraction = relative % 1_000_000_000L;
 
@@ -692,6 +704,10 @@ internal sealed class AscWriter
         Utf8Formatter.TryFormat(value, scratch, out int written);
         _LineBuffer.Write(scratch[..written]);
     }
+
+    #endregion
+
+    #region Buffer flushing
 
     /// <summary>
     /// Appends the content of <see cref="_LineBuffer"/> into <see cref="_OutputBuffer"/> and

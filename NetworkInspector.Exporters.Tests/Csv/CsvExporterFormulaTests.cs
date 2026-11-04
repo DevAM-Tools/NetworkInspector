@@ -17,8 +17,7 @@ internal sealed class CsvExporterFormulaTests
             .ToStream(stream)
             .WithBom(false)
             .WithColumn(CsvColumnKind.Info)
-            .WithFieldColumn("tst.text", factory.TextFieldId)
-            .WithFieldColumn("tst.number", factory.NumberFieldId);
+            .WithContent(factory.SelectFields("tst.text", "tst.number"));
         configure?.Invoke(builder);
         using (CsvExporter exporter = builder.Build())
         {
@@ -71,7 +70,8 @@ internal sealed class CsvExporterFormulaTests
             .ToStream(stream)
             .WithBom(false)
             .WithHeader(false)
-            .WithFieldColumn("tst.text", factory.TextFieldId)
+            .WithColumn(CsvColumnKind.Info)
+            .WithContent(factory.SelectFields("tst.text"))
             .Build())
         {
             exporter.OnPacket(factory.Create(5, "\rcmd"));
@@ -80,7 +80,8 @@ internal sealed class CsvExporterFormulaTests
 
         string raw = Encoding.UTF8.GetString(stream.ToArray());
 
-        await Assert.That(raw).IsEqualTo("\"'\rcmd\"\r\n");
+        // The empty info cell comes first (the configured packet column), then the text field.
+        await Assert.That(raw).IsEqualTo(",\"'\rcmd\"\r\n");
     }
 
     [Test]
@@ -147,6 +148,50 @@ internal sealed class CsvExporterFormulaTests
     }
 
     [Test]
+    public async Task AnApostropheDelimiterQuotesANeutralizedTextCell()
+    {
+        using CustomFieldPacketFactory factory = new();
+
+        // The added prefix is an apostrophe, which is the delimiter here: unquoted it would end the cell and add a column.
+        string[] rows = _ExportRows(factory, [factory.Create(5, "=1")], builder => builder.WithDelimiter('\''));
+
+        await Assert.That(rows[0]).IsEqualTo("'\"'=1\"'5");
+    }
+
+    [Test]
+    public async Task AnApostropheDelimiterQuotesANeutralizedInfoCell()
+    {
+        using CustomFieldPacketFactory factory = new();
+
+        string[] rows = _ExportRows(factory, [factory.Create(5, "x", "=1")], builder => builder.WithDelimiter('\''));
+
+        await Assert.That(rows[0]).IsEqualTo("\"'=1\"'x'5");
+    }
+
+    [Test]
+    public async Task AnApostropheDelimiterLeavesCellsWithoutAFormulaCharacterUnquoted()
+    {
+        using CustomFieldPacketFactory factory = new();
+
+        string[] rows = _ExportRows(factory, [factory.Create(5, "ab", "info")], builder => builder.WithDelimiter('\''));
+
+        await Assert.That(rows[0]).IsEqualTo("info'ab'5");
+    }
+
+    [Test]
+    public async Task AnApostropheDelimiterWithoutNeutralizationWritesTheFormulaTextUnchanged()
+    {
+        using CustomFieldPacketFactory factory = new();
+
+        string[] rows = _ExportRows(
+            factory,
+            [factory.Create(5, "=1")],
+            builder => builder.WithDelimiter('\'').WithFormulaNeutralization(false));
+
+        await Assert.That(rows[0]).IsEqualTo("'=1'5");
+    }
+
+    [Test]
     public async Task FieldColumnScratchGrowsGeometricallyForRisingValueLengths()
     {
         using CustomFieldPacketFactory factory = new();
@@ -164,7 +209,7 @@ internal sealed class CsvExporterFormulaTests
             .ToStream(Stream.Null) // a sink that keeps nothing, so growing output buffers do not distort the measurement
             .WithBom(false)
             .WithHeader(false)
-            .WithFieldColumn("tst.text", factory.TextFieldId)
+            .WithContent(factory.SelectFields("tst.text"))
             .Build();
         exporter.OnPacket(packets[0]);
 

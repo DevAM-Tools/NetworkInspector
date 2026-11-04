@@ -62,7 +62,15 @@ public sealed class FieldInfo
         get;
     }
 
-    /// <summary>Human-readable display name (e.g., "Source Address").</summary>
+    /// <summary>
+    /// Human-readable display name (e.g., "Source Address"); never empty, because registration refuses an empty UI name or one
+    /// with control characters (<see cref="InvalidUiNameRegistrationException"/>). It is the label part of the default display
+    /// line of <see cref="Field"/> and <see cref="MutField"/>; a field id that the stack does not know has no
+    /// <see cref="FieldInfo"/> and so no label.
+    /// </summary>
+    /// <remarks>
+    /// Sync: EXPORTER_GUIDE § Rebuilding the display line (a reader of an export gets the label from the catalog as <c>ui_name</c>).
+    /// </remarks>
     public string UiName
     {
         get;

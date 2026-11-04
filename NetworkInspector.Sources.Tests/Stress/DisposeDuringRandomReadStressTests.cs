@@ -132,7 +132,7 @@ internal sealed class DisposeDuringRandomReadStressTests
         _ = RandomAccessEquivalence.StartAndReadAll(source);
         source.Dispose();
 
-        await Assert.That(() => source.FrameById(new FrameId(0))).Throws<ObjectDisposedException>();
+        await Assert.That(() => source.FrameById(0)).Throws<ObjectDisposedException>();
     }
 
     [Test]
@@ -143,7 +143,7 @@ internal sealed class DisposeDuringRandomReadStressTests
         _ = RandomAccessEquivalence.StartAndReadAll(source);
         source.Dispose();
 
-        await Assert.That(() => source.FrameById(new FrameId(0))).Throws<ObjectDisposedException>();
+        await Assert.That(() => source.FrameById(0)).Throws<ObjectDisposedException>();
     }
 
     #endregion
@@ -220,11 +220,11 @@ internal sealed class DisposeDuringRandomReadStressTests
                     : random.Next(expected.Count);
                 if (batch)
                 {
-                    _ = source.FramesById(new FrameId(first), frames);
+                    _ = source.FramesById(first, frames);
                 }
                 else
                 {
-                    frames[0] = source.FrameById(new FrameId(first));
+                    frames[0] = source.FrameById(first);
                 }
 
                 for (int i = 0; i < frames.Length; i++)

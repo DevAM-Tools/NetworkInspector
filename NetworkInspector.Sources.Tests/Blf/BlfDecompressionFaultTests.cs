@@ -56,7 +56,7 @@ internal sealed class BlfDecompressionFaultTests
     {
         using BlfSource source = _OpenWithBrokenSemaphore();
 
-        await Assert.That(() => source.FrameById(new FrameId(0))).Throws<ObjectDisposedException>();
+        await Assert.That(() => source.FrameById(0)).Throws<ObjectDisposedException>();
 
         await Assert.That(_PendingCount(source)).IsEqualTo(0);
     }
@@ -65,7 +65,7 @@ internal sealed class BlfDecompressionFaultTests
     public async Task RandomAccessReaderDoesNotHangOnAContainerWhoseWinnerFailedUnexpectedly()
     {
         using BlfSource source = _OpenWithBrokenSemaphore();
-        await Assert.That(() => source.FrameById(new FrameId(0))).Throws<ObjectDisposedException>();
+        await Assert.That(() => source.FrameById(0)).Throws<ObjectDisposedException>();
 
         // A second reader of the same container must become the winner again (and fail the same way), not wait for a
         // signal that never comes.
@@ -73,7 +73,7 @@ internal sealed class BlfDecompressionFaultTests
         {
             try
             {
-                _ = source.FrameById(new FrameId(1));
+                _ = source.FrameById(1);
                 return false;
             }
             catch (ObjectDisposedException)

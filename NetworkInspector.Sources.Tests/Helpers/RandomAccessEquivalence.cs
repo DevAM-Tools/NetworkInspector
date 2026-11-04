@@ -44,7 +44,7 @@ internal static class RandomAccessEquivalence
         {
             foreach (int length in new[] { 0, 1, 63, 64, 65, 200 })
             {
-                ranges.Add((Invariant($"first-{first}-length-{length}"), new FrameId(first), length));
+                ranges.Add((Invariant($"first-{first}-length-{length}"), first, length));
             }
         }
 
@@ -60,7 +60,7 @@ internal static class RandomAccessEquivalence
     {
         // The range is a slice of a larger buffer whose outer entries hold a sentinel frame from the first entry's read.
         Frame?[] buffer = new Frame?[length + 2];
-        Frame? sentinel = source.FrameById(new FrameId(0));
+        Frame? sentinel = source.FrameById(0);
         buffer[0] = sentinel;
         buffer[^1] = sentinel;
         int found = source.FramesById(first, buffer.AsSpan(1, length));
@@ -74,7 +74,7 @@ internal static class RandomAccessEquivalence
         {
             long id = (long)first.Value + i;
             Frame? expected = id >= 0 && id <= ArrayIndexIdRange.MaxValue
-                ? source.FrameById(new FrameId((int)id))
+                ? source.FrameById((int)id)
                 : null;
             expectedFound += expected is null ? 0 : 1;
             if (!_SameOrBothNull(expected, buffer[1 + i]))
@@ -123,7 +123,7 @@ internal static class RandomAccessEquivalence
         // An id the sequential read skipped (its frame could not be built) must not appear by id either.
         for (int id = 0; id < estimated; id++)
         {
-            if (!returned.Contains(id) && source.FrameById(new FrameId(id)) is not null)
+            if (!returned.Contains(id) && source.FrameById(id) is not null)
             {
                 return $"{label}: FrameById({id}) returned a frame the sequential read skipped.";
             }

@@ -47,7 +47,7 @@ internal sealed class ParseIngestUdpScenario : IProfilingScenario
         ParseOptions options = new();
         for (int i = 0; i < _BatchSize; i++)
         {
-            PacketId id = new(counter + i);
+            PacketId id = counter + i;
             if (!Packet.TryParse(id, stack, frames[i], in options, out _, out ParseFailure failure))
             {
                 throw new InvalidOperationException(failure.ToString());

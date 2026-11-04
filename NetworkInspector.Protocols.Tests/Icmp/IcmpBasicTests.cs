@@ -608,9 +608,9 @@ internal sealed class IcmpBasicTests
         using Stack stack = ProtocolTestHelper.BuildStack();
         NetworkInspector.Core.Index.PacketIndex index = new(stack);
         Frame parsedFrame = Frame.Create(
-            new FrameId(0), Timestamp.FromSecs(0), frame, LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+            0, Timestamp.FromSecs(0), frame, LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         ParseOptions options = new(index: index);
-        bool parsed = Packet.TryParse(new PacketId(0), stack, parsedFrame, in options, out Packet? packet, out _);
+        bool parsed = Packet.TryParse(0, stack, parsedFrame, in options, out Packet? packet, out _);
 
         await Assert.That(parsed).IsTrue();
         await Assert.That(packet).IsNotNull();

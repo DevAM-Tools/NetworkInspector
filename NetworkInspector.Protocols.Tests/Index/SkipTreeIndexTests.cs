@@ -15,9 +15,9 @@ internal sealed class SkipTreeIndexTests
         using Stack stack = ProtocolTestHelper.BuildStack();
         NetworkInspector.Core.Index.PacketIndex index = new(stack);
         Frame parsed = Frame.Create(
-            new FrameId(0), Timestamp.FromSecs(0), frame, LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
+            0, Timestamp.FromSecs(0), frame, LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         ParseOptions options = new(mode, index: index);
-        if (!Packet.TryParse(new PacketId(0), stack, parsed, in options, out _, out ParseFailure failure))
+        if (!Packet.TryParse(0, stack, parsed, in options, out _, out ParseFailure failure))
         {
             throw new InvalidOperationException(failure.ToString());
         }

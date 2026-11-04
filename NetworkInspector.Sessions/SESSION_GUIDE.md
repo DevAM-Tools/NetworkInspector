@@ -227,9 +227,10 @@ during `ReadPackets` leaves the remaining slots `null` instead of mixing two sta
 | `TryGetFrame(id, out frame, out failure)` | the raw frame, no parse | hex view |
 | `ReadPackets(from, Span<Packet?>)` | contiguous packets | simple list fill |
 | `ReadPackets(from, Span<PacketRef>, out layout)` | `(id, packet)` pairs, contiguous | list fill that keeps ids |
+| `TryVisitPackets(from, to, in options, view, visitor, out count, out failure)` | each packet of a range, parsed with **your** options, handed to your visitor on the calling thread | exports and statistics over a few fields (section 8.6), tree-free |
 | `TryReadPackets(listenerId, from, dest, mode, …)` | `All`: like above; `Matching`: only packets the listener's filter accepts | filtered list |
 
-Every read re-parses with a full field tree (`FieldTreeMode.Build`). Reads never allocate buffers; the caller
+Every read except `TryVisitPackets` re-parses with a full field tree (`FieldTreeMode.Build`); `TryVisitPackets` parses with the options you give it. Reads never allocate buffers; the caller
 owns `dest`. Reads stop at the `PacketCount` they saw when they started.
 
 ### 7.2 Failures
@@ -444,6 +445,69 @@ that sees `Cancelled` also sees why: `Completed`, `UserCancelled`, `StackReplace
 on the new stack), `SessionShutdown`, or `Failed` (see `FailureException`). The first reason wins, except that a job
 that fails is always `Failed`.
 
+### 8.6 Export a range (any shape, optional filter)
+
+`SessionExport.TryStart` runs an export as a stack-bound job by the pull principle: the job thread pulls the range in windows
+of 4 096 ids through `TryVisitPackets`, parses only what the exporter and the filter demand (a selected-fields export never
+builds a field tree), commits matching packets with `OnPacket`, and finishes the exporter in every outcome. Progress:
+`VisitedCount` and `ExportedCount` on the returned `SessionExportJob`, with the range (`FromId`, `ToIdExclusive`); a UI computes
+the rate from two samples.
+
+```csharp
+if (SessionExport.TryStart(
+        session,
+        "export udp",
+        view => CsvExporter.CreateBuilder()
+            .ToFile(path)
+            .WithContent(SelectedFields(view.Stack, "ip.src", "udp.length"))
+            .Build(),
+        0,
+        session.PacketCount,
+        "udp.length >= 56",
+        out SessionExportJob? export,
+        out SessionFailure? failure,
+        out FilterError? filterError))
+{
+    export.Job.Join();                                  // or poll export.VisitedCount for a progress display
+    exportedCount = export.ExportedCount;
+    (export.Exporter as IDisposable)?.Dispose();        // the job finished the exporter; the caller releases it
+}
+else if (filterError is not null)
+{
+    Console.Error.WriteLine("filter: " + filterError.Message);
+}
+else
+{
+    Console.Error.WriteLine("export refused: " + failure!.Value.Message);
+}
+```
+
+`SelectedFields` stands for `FieldSelection.TryCreate(view.Stack, …)` wrapped in an `ExportContent` (exporter guide §14); the
+factory receives the `StackView` so that the field names are resolved on the stack that parses the export.
+
+How it decides what to parse:
+
+- The **filter** is compiled in its tree-free form first (a `FilterObserver`, demand `Packet`). An expression that needs the field
+  tree (a subtree scope, a second `flank()`, the presence of a protocol without a container field) falls back to the tree filter;
+  this is the rule of `ni export`, so a job and the command line accept and judge the same expressions. A syntax error is returned
+  as `filterError` and nothing is created.
+- The **exporter** states its demand (`IParseDemandSource`); an exporter without it demands the field tree. The job combines both
+  into one `ParsePlan` (filter first, so its verdict exists when the exporter's packet is committed).
+- A **restart** ends the job (`JobEndReason.StackReplaced`, status `Cancelled`); the exporter is finished, so the output holds the
+  packets committed so far. Start a new export on the new stack. Cancellation is noticed after every packet, not only between windows.
+- `SessionExportJob.Failure` says why a job ended early: `FrameUnavailable` (a frame could not be re-read; the message names the
+  packet), `FilterFailed` (the filter could not decide a packet; the export stops instead of keeping or dropping data silently),
+  or `OptionsStackMismatch` (the stack was replaced between `TryStart` and the start of the job thread).
+- `TryStart` itself refuses a range past `PacketCount` with `PacketNotFound` (the message names the range and the count) and a plan
+  conflict with `InvalidArgument`; an exporter it already created is finished and disposed then.
+
+**Why a job and not a listener.** A listener is woken when packets arrive and reads what accumulated; an export has a fixed range
+and ends. The job thread parses; ingest only publishes ids and never waits for it, and no ingest parse carries the export's
+observer. The same pull is available without a job: `TryVisitPackets(from, to, in options, view, visitor, …)` calls
+`visitor.Visit(packet)` for each id in order on your thread, parsing with your options (the options rules of section 8.4), under
+**one** stack lease for the call. Read a large range in windows so that a retired stack is released soon after a restart. The packet
+passed to `Visit` is recycled for the next id: copy what you keep. Return `false` from `Visit` to stop after that packet.
+
 ## 9. Restart (re-parse with a new stack)
 
 Use `TryRestart` when the protocol settings or the protocol set change but the captured frames stay. Sources keep
@@ -599,7 +663,8 @@ for a running restart.
 - The codes a restart and its neighbours added, and where they are returned: `RestartPending` (`TryAddJob`, stack-bound job
   while a restart is pending), `RestartFromJob`, `JobsRunning`, `RestartInProgress`, `RestartOptionOutOfRange`
   (`TryRestart`), `SessionFaulted` (every `Try*` and read while `Faulted`), `OptionsStackMismatch`
-  (`TryGetPacket` with options). `TryRestart` throws only for caller bugs: a null argument, a disposed session, a factory
+  (`TryGetPacket` with options, `TryVisitPackets`), `InvalidArgument` (`SessionExport.TryStart`: conflicting parse demands), `FilterFailed`
+  (`SessionExportJob.Failure`: the filter could not decide a packet). `TryRestart` throws only for caller bugs: a null argument, a disposed session, a factory
   that returns `null` (`InvalidOperationException`) or a stack of another registry (`ArgumentException`); the factory's own
   exception propagates unchanged.
 - Listener, value-cache, and `Restarted` handler exceptions fail only their own job.
@@ -611,6 +676,7 @@ for a running restart.
 - A read call takes **one** stack lease for the whole call (two interlocked operations), not one per chunk or per packet;
   the generation rides on the lease's holder, so noticing a restart costs the read path nothing.
 - **Columns from value caches**, details from `TryGetPacket`: field trees only for what the user looks at.
+- **Exports parse on the job thread with the plan's options** (`SessionExport`, `TryVisitPackets`): an export of a few fields costs a fraction of a field-tree read, because no tree is built.
 - `SessionOptions.RedissectOnly` turns the packet index off when nobody needs presence pruning; filtered pulls
   then evaluate every packet.
 - A `Matching` pull prunes with the packet index first and re-parses only candidates. Ids whose verdict the
@@ -644,7 +710,8 @@ for a running restart.
       the generation moved; never assume "old + 1".
 - [ ] Jobs declare their binding: `StackBound` if they read session data, `Independent` only if they do not; a job ended
       with `StackReplaced` is re-created on the new stack.
-- [ ] Parse options with observers are built from a `StackView` and passed with it (`TryGetPacket` with options).
+- [ ] Parse options with observers are built from a `StackView` and passed with it (`TryGetPacket` with options, `TryVisitPackets`).
+- [ ] Exports use `SessionExport` or `TryVisitPackets`, not `ReadPackets` (which builds a field tree for every packet).
 - [ ] A `Faulted` session is answered with `TryRestart` or `Shutdown`.
 - [ ] `OnStackChanged` clears rows, filters-derived state, `FieldWatch` / observer objects bound to the old stack.
 - [ ] Reads treat `false` / `null` / 0 as "no row" only while `QueriesEnabled`.

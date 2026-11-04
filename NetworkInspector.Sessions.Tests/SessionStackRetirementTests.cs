@@ -89,7 +89,7 @@ internal sealed class SessionStackRetirementTests
         retiring.SetParseHook(_ParkOn(entered, release));
 
         // The reader passed every check and is parked inside the protocol's parse, on the stack that is about to retire.
-        Task<bool> reader = _OnDedicatedThread(() => rig.Session.TryGetPacket(new PacketId(0), out _, out _));
+        Task<bool> reader = _OnDedicatedThread(() => rig.Session.TryGetPacket(0, out _, out _));
         await Assert.That(entered.Wait(_Timeout)).IsTrue();
 
         _ = rig.RestartOnto();
@@ -138,7 +138,7 @@ internal sealed class SessionStackRetirementTests
                 Packet?[] buffer = new Packet?[8];
                 for (int i = seed; !stop.IsCancellationRequested; i++)
                 {
-                    if (rig.Session.TryGetPacket(new PacketId(i % rig.FrameCount), out _, out _))
+                    if (rig.Session.TryGetPacket(i % rig.FrameCount, out _, out _))
                     {
                         _ = Interlocked.Increment(ref successfulReads);
                     }
@@ -181,8 +181,8 @@ internal sealed class SessionStackRetirementTests
     {
         using Rig rig = new(frameCount: 4);
         ProbeProtocol retiring = rig.RestartOnto();
-        bool gotPending = rig.Session.TryGetPacket(new PacketId(0), out Packet? pending, out _);
-        bool gotMaterialized = rig.Session.TryGetPacket(new PacketId(1), out Packet? materialized, out _);
+        bool gotPending = rig.Session.TryGetPacket(0, out Packet? pending, out _);
+        bool gotMaterialized = rig.Session.TryGetPacket(1, out Packet? materialized, out _);
         materialized!.MaterializeAll(); // Non-null: gotMaterialized is asserted below.
 
         _ = rig.RestartOnto();

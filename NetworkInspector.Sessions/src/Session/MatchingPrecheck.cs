@@ -76,9 +76,9 @@ internal sealed class MatchingPrecheck
         ArgumentNullException.ThrowIfNull(observer);
         Owner = owner;
         Observer = observer;
-        // Not the observer's own watch: the owner-expanding watch makes the skip parse open every lazy container the
+        // Not the observer's own watch: the extraction watch (FieldWatch.ForExtraction) makes the skip parse open every lazy container the
         // field-tree filter would materialize, so a rejection here is a rejection there.
-        ParseObserver[] observers = [new() { Observer = observer, Watch = observer.CreateOwnerExpandingWatch() }];
+        ParseObserver[] observers = [new() { Observer = observer, Watch = observer.ExtractionWatch }];
         _Options = new ParseOptions(FieldTreeMode.Skip, observers: observers);
     }
 

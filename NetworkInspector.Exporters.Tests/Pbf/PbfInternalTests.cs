@@ -3,66 +3,12 @@
 namespace NetworkInspector.Exporters.Tests.Pbf;
 
 /// <summary>
-/// Tests for internal exporter types: typed <see cref="PreviousFieldStore"/> (sparse mode),
-/// <see cref="ColumnarBlockBuilder"/> (MaxBlockSize flush), and <see cref="Lz4Compressor"/>
+/// Tests for internal exporter types: <see cref="ColumnarBlockBuilder"/> (MaxBlockSize flush, timestamp range),
+/// <see cref="StandardBlockBuilder"/> (nesting truncation), and <see cref="Lz4Compressor"/>
 /// (incompressible data). These complement the higher-level <see cref="PbfExporterTests"/>.
 /// </summary>
 internal sealed class PbfInternalTests
 {
-    // ========================================================================
-    // PreviousFieldStore sparse mode (> 2048 distinct field IDs)
-    // ========================================================================
-
-    /// <summary>
-    /// When constructed with a <c>fieldCount</c> above the dense threshold
-    /// (2048), the store must use the sparse (Dictionary) representation and still
-    /// correctly detect same-as-previous values.
-    /// </summary>
-    [Test]
-    public async Task PreviousFieldStore_SparseMode_DetectsSameAsPrevious()
-    {
-        // fieldCount > 2048 forces sparse mode
-        PreviousFieldStore store = new(4096);
-        int fieldId = 3000;
-        FieldValue hello = FieldValue.NewString("hello");
-
-        // First call — nothing stored yet, no same flags
-        uint flags1 = store.CompareAndUpdate(fieldId, hello, default, default);
-
-        // Second call with same value — should detect SameValue
-        uint flags2 = store.CompareAndUpdate(fieldId, hello, default, default);
-
-        await Assert.That((flags1 & SameFlags.FieldSameValue) != 0).IsFalse();
-        await Assert.That((flags2 & SameFlags.FieldSameValue) != 0).IsTrue();
-    }
-
-    [Test]
-    public async Task PreviousFieldStore_SparseMode_DetectsValueChange()
-    {
-        PreviousFieldStore store = new(4096);
-        int fieldId = 3000;
-
-        store.CompareAndUpdate(fieldId, FieldValue.NewString("hello"), default, default);
-        uint flags = store.CompareAndUpdate(fieldId, FieldValue.NewString("world"), default, default);
-
-        await Assert.That((flags & SameFlags.FieldSameValue) != 0).IsFalse();
-    }
-
-    [Test]
-    public async Task PreviousFieldStore_SparseMode_Reset_ClearsPreviousValues()
-    {
-        PreviousFieldStore store = new(4096);
-        int fieldId = 3000;
-        FieldValue hello = FieldValue.NewString("hello");
-        store.CompareAndUpdate(fieldId, hello, default, default);
-
-        store.Reset();
-
-        // After reset the value should appear new again
-        uint flags = store.CompareAndUpdate(fieldId, hello, default, default);
-        await Assert.That((flags & SameFlags.FieldSameValue) != 0).IsFalse();
-    }
-
     // ========================================================================
     // ColumnarBlockBuilder MaxBlockSize flush
     // ========================================================================
@@ -73,7 +19,7 @@ internal sealed class PbfInternalTests
     /// <c>maxBlockSize</c> threshold, not only when packet count is reached.
     /// </summary>
     [Test]
-    public async Task ColumnarBlockBuilder_FlushTriggeredByMaxBlockSize()
+    public async Task ColumnarBlockBuilderFlushTriggeredByMaxBlockSize()
     {
         // Set a tiny maxBlockSize (100 bytes) with a large maxPacketsPerBlock so that
         // only the size threshold can trigger a flush.
@@ -81,7 +27,7 @@ internal sealed class PbfInternalTests
         int maxBlockSize = 100; // bytes — will be exceeded after a few packets
         int maxFieldId = 32768;
 
-        ColumnarBlockBuilder builder = new(maxFieldId, maxPacketsPerBlock, maxBlockSize);
+        ColumnarBlockBuilder builder = new(maxFieldId, ExportContents.Full, maxPacketsPerBlock, maxBlockSize);
 
         bool flushedBySize = false;
         Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(50);
@@ -110,7 +56,7 @@ internal sealed class PbfInternalTests
     /// to signal that compression should be abandoned.
     /// </summary>
     [Test]
-    public async Task Lz4Compressor_IncompressibleData_SmallOutputBuffer_ReturnsMinusOne()
+    public async Task Lz4CompressorIncompressibleDataSmallOutputBufferReturnsMinusOne()
     {
         // Random-looking bytes that resist compression (one of the simplest patterns:
         // sequential XOR with a prime to avoid any repeated sequences).
@@ -129,7 +75,7 @@ internal sealed class PbfInternalTests
     }
 
     [Test]
-    public async Task Lz4Compressor_CompressibleData_ReturnsPositiveLength()
+    public async Task Lz4CompressorCompressibleDataReturnsPositiveLength()
     {
         // Highly compressible: all zeros
         byte[] input = new byte[4096];
@@ -147,7 +93,7 @@ internal sealed class PbfInternalTests
     /// <see cref="Lz4Codec.Decompress"/>.
     /// </summary>
     [Test]
-    public async Task Lz4Compressor_Roundtrip_DecompressViaLz4Codec_RecoversOriginal()
+    public async Task Lz4CompressorRoundtripDecompressViaLz4CodecRecoversOriginal()
     {
         byte[] input = new byte[8 * 1024];
         Array.Fill(input, (byte)0x42);
@@ -176,12 +122,12 @@ internal sealed class PbfInternalTests
     /// writes correct block-index entries in the PBF trailer for columnar blocks.
     /// </summary>
     [Test]
-    public async Task ColumnarBlockBuilder_Build_MinMaxTimestamp_MatchPacketTimestamps()
+    public async Task ColumnarBlockBuilderBuildMinMaxTimestampMatchPacketTimestamps()
     {
         // Three packets with timestamps 0, 1 000 000, and 2 000 000 nanoseconds.
         // PacketGenerators.CreateEthernetUdpPackets uses timestamp = i * 1_000_000.
         int maxFieldId = 32768;
-        ColumnarBlockBuilder builder = new(maxFieldId);
+        ColumnarBlockBuilder builder = new(maxFieldId, ExportContents.Full);
 
         Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(3);
         foreach (Packet packet in packets)
@@ -206,10 +152,10 @@ internal sealed class PbfInternalTests
     /// both equal that packet's timestamp.
     /// </summary>
     [Test]
-    public async Task ColumnarBlockBuilder_Build_SinglePacket_MinMaxTimestampAreEqual()
+    public async Task ColumnarBlockBuilderBuildSinglePacketMinMaxTimestampAreEqual()
     {
         int maxFieldId = 32768;
-        ColumnarBlockBuilder builder = new(maxFieldId);
+        ColumnarBlockBuilder builder = new(maxFieldId, ExportContents.Full);
 
         long ts = 5_000_000L; // 5 ms
         Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(1);
@@ -237,10 +183,10 @@ internal sealed class PbfInternalTests
     /// truncation should occur.
     /// </summary>
     [Test]
-    public async Task StandardBlockBuilder_TruncatedFieldCount_ZeroForShallowPackets()
+    public async Task StandardBlockBuilderTruncatedFieldCountZeroForShallowPackets()
     {
         int maxFieldId = 32768;
-        StandardBlockBuilder builder = new(maxFieldId);
+        StandardBlockBuilder builder = new(maxFieldId, ExportContents.Full);
 
         Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(5);
         foreach (Packet packet in packets)
@@ -263,12 +209,12 @@ internal sealed class PbfInternalTests
     /// beyond the 16-level serializer limit.
     /// </summary>
     [Test]
-    public async Task StandardBlockBuilder_TruncatedFieldCount_IncrementedForDeeplyNestedPacket()
+    public async Task StandardBlockBuilderTruncatedFieldCountIncrementedForDeeplyNestedPacket()
     {
         Packet packet = CreateDeepPacket(18);
 
         int maxFieldId = 32768;
-        StandardBlockBuilder builder = new(maxFieldId);
+        StandardBlockBuilder builder = new(maxFieldId, ExportContents.Full);
         builder.AddPacket(packet);
 
         // At least one truncation must have been recorded because the chain exceeds
@@ -284,12 +230,12 @@ internal sealed class PbfInternalTests
     /// that the counter does not accumulate across blocks.
     /// </summary>
     [Test]
-    public async Task StandardBlockBuilder_Reset_ClearsTruncatedFieldCount()
+    public async Task StandardBlockBuilderResetClearsTruncatedFieldCount()
     {
         Packet packet = CreateDeepPacket(18);
 
         int maxFieldId = 32768;
-        StandardBlockBuilder builder = new(maxFieldId);
+        StandardBlockBuilder builder = new(maxFieldId, ExportContents.Full);
         builder.AddPacket(packet);
 
         // Verify truncation occurred (pre-condition for the reset assertion below).
@@ -314,7 +260,7 @@ internal sealed class PbfInternalTests
     /// stream and must set <see cref="PbfExporter.HasErrors"/> to <c>true</c>.
     /// </summary>
     [Test]
-    public async Task PbfExporter_StrictMode_TruncatedFieldAborts_BlockNotWritten()
+    public async Task PbfExporterStrictModeTruncatedFieldAbortsBlockNotWritten()
     {
         Packet packet = CreateDeepPacket(18);
 
@@ -401,7 +347,7 @@ internal sealed class PbfInternalTests
             FrameSourceId sourceId = registry.RegisterSource(TestHarness.CreateNullFrameSource());
             FrameInterfaceId ifId = registry.Register(sourceId, "test_null", null, LinkType.Null);
             Frame frame = Frame.Create(
-                new FrameId(1),
+                1,
                 Timestamp.FromNanos(1_000_000L),
                 // Minimal payload — the protocol ignores the raw bytes.
                 new byte[] { 0, 0, 0, 0 },
@@ -410,7 +356,7 @@ internal sealed class PbfInternalTests
                 registry).Value;
 
             ParseOptions options = new();
-            if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+            if (!Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure)
                 || packet is null)
             {
                 throw new InvalidOperationException(failure.ToString());

@@ -89,7 +89,7 @@ internal sealed class TestFrameSource : IRandomAccessFrameSource
         byte[] data = _RawFrames[idx];
 
         Frame frame = Frame.Create(
-            new FrameId(idx),
+            idx,
             Timestamp.FromNanos(idx * 1_000_000L), // 1 ms apart
             data,
             _LinkType,
@@ -266,7 +266,7 @@ internal sealed class StubbornFrameSource : IRandomAccessFrameSource
         _Entered.Set();
         _Release.Wait(CancellationToken.None);
         _Produced = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromNanos(0),
             TestHarness.GenerateUdpFrame(64),
             LinkType.Ethernet,
@@ -334,7 +334,7 @@ internal sealed class BatchCountingRandomAccessSource : IRandomAccessFrameSource
         for (int i = 0; i < frames.Length; i++)
         {
             copy[i] = first.Value + i;
-            frames[i] = _Inner.FrameById(new FrameId(first.Value + i), cancellationToken);
+            frames[i] = _Inner.FrameById(first.Value + i, cancellationToken);
             found += frames[i] is null ? 0 : 1;
         }
 

@@ -89,11 +89,29 @@ public readonly struct FrameId(int value) : IEquatable<FrameId>, IComparable<Fra
     public static bool operator !=(FrameId left, FrameId right) => left.Value != right.Value;
 
     /// <summary>
-    /// Implicitly converts a <see cref="FrameId"/> to an <see cref="int"/> (for indexing). The reverse direction is not implicit:
-    /// construct the id with <c>new FrameId(int)</c> so the range is validated.
+    /// Implicitly converts a <see cref="FrameId"/> to an <see cref="int"/> (for indexing).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator int(FrameId id) => id.Value;
+
+    /// <summary>
+    /// Implicitly converts an <see cref="int"/> to a <see cref="FrameId"/>, so <c>source.FrameById(7)</c> and
+    /// <c>FrameId id = 7;</c> read like the plain index they are.
+    /// </summary>
+    /// <remarks>
+    /// The conversion runs the same range check as <c>new FrameId(int)</c> (motivation: an id is an array index and every
+    /// existing id must be usable as one, so there is no unchecked path). Unlike most implicit conversions it therefore
+    /// <b>can throw</b>: a value that is negative but not <c>-1</c>, or above <see cref="ArrayIndexIdRange.MaxValue"/>,
+    /// throws <see cref="ArgumentOutOfRangeException"/>. Accepted risk: a computed <c>int</c> that is out of range fails at the
+    /// conversion instead of at a later array access, which is the earlier and clearer failure. Compare with a literal
+    /// (<c>id == 5</c>) uses the <see cref="FrameId"/> operators, so the literal is range-checked as well.
+    /// </remarks>
+    /// <param name="value">The raw id: <c>-1</c> for <see cref="Invalid"/>, otherwise an index in the valid range.</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="value"/> is negative but not <c>-1</c>, or is above <see cref="ArrayIndexIdRange.MaxValue"/>.
+    /// </exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static implicit operator FrameId(int value) => new(value);
 
     #endregion
 

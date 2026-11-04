@@ -239,6 +239,25 @@ internal sealed class AscHeaderTests
     }
 
     [Test]
+    [Arguments("Sun Nov  1 10:00:00.250 2026", 2026, 11, 1, 10, 0, 0, 250)]
+    [Arguments("Sun Nov 1 10:00:00.250 2026", 2026, 11, 1, 10, 0, 0, 250)]
+    [Arguments("Sun Nov  1 10:00:00 2026", 2026, 11, 1, 10, 0, 0, 0)]
+    [Arguments("Sun Nov  1 9:05:07 AM 2026", 2026, 11, 1, 9, 5, 7, 0)]
+    [Arguments("Sun Nov  1 09:05:07.500 PM 2026", 2026, 11, 1, 21, 5, 7, 500)]
+    [Arguments("Tue Nov 24 11:44:00.007 2026", 2026, 11, 24, 11, 44, 0, 7)]
+    public async Task ASingleDigitDayParsesWithAndWithoutPaddingAndFraction(
+        string text, int year, int month, int day, int hour, int minute, int second, int millisecond)
+    {
+        // The writer pads a single-digit day with a blank (ctime style); the reader must read that back, with and without a
+        // fraction and in both clock styles, or a file written on the first nine days of a month reads back with start 0.
+        long nanos = AscDateParser.TryParseToUnixNanos(text, TimeZoneInfo.Utc);
+        DateTime civil = new(year, month, day, hour, minute, second, millisecond, DateTimeKind.Unspecified);
+        long expected = (new DateTimeOffset(civil, TimeSpan.Zero).UtcDateTime.Ticks - DateTime.UnixEpoch.Ticks) * 100L;
+
+        await Assert.That(nanos).IsEqualTo(expected);
+    }
+
+    [Test]
     public async Task PreviousLogCommentStoresAbsoluteSeconds()
     {
         AscHeader header = new();

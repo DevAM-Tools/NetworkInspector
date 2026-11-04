@@ -16,15 +16,17 @@ namespace NetworkInspector.Exporters;
 /// </summary>
 public abstract class ExportOutput : IDisposable
 {
+    #region Factories
+
     /// <summary>
     /// Default buffer size for file output (4 MiB). Large blocks keep the number of write system calls low for big
     /// exports; the buffer is allocated once per file output, on the first write.
     /// </summary>
     private const int _DefaultFileBufferSize = 4 * 1024 * 1024;
 
-    /// <summary>Creates a file-backed output with a 4 MiB write buffer.
-    /// The file is not created until the first write; if no data is ever written,
-    /// no file is created on disk.
+    /// <summary>
+    /// Creates a file-backed output with a 4 MiB write buffer. The file is not created until the first write; if no data is
+    /// ever written, no file is created on disk.
     /// </summary>
     /// <param name="path">Absolute or relative path to the output file. Must not be null or empty.</param>
     /// <returns>A new <see cref="ExportOutput"/> that writes to the specified file.</returns>
@@ -32,6 +34,7 @@ public abstract class ExportOutput : IDisposable
     public static ExportOutput File(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
+
         // Validate path structure early (GetFullPath normalises separators and throws on
         // illegal characters, but does not touch the filesystem). This surfaces bad paths
         // at construction time rather than at the first Write call.
@@ -49,6 +52,10 @@ public abstract class ExportOutput : IDisposable
     /// <returns>A new <see cref="ExportOutput"/> writing to the standard output stream.</returns>
     public static ExportOutput Stdout() =>
         new StreamExportOutput(Console.OpenStandardOutput(), ownsStream: true);
+
+    #endregion
+
+    #region Writing
 
     /// <summary>Writes bytes to the output.</summary>
     /// <param name="data">The data to write.</param>
@@ -68,12 +75,15 @@ public abstract class ExportOutput : IDisposable
     /// </summary>
     public abstract long AcceptedBytes { get; protected set; }
 
+    #endregion
+
+    #region Stream access
+
     /// <summary>Gets the underlying stream, creating it if needed.</summary>
+    /// <returns>The stream to write to, or <see langword="null"/> when the output has none.</returns>
     /// <remarks>
-    /// This method replaces the former <c>UnderlyingStream</c> property. The name
-    /// makes the side-effect explicit — on a <see cref="LazyFileExportOutput"/>, the first
-    /// call materialises a new file on disk (create/truncate). Callers that only need to
-    /// query whether the stream already exists must call
+    /// The name makes the side effect explicit: on a <see cref="LazyFileExportOutput"/>, the first call materialises a new file
+    /// on disk (create/truncate). Callers that only need to query whether the stream already exists must call
     /// <see cref="TryGetExistingStream"/> instead.
     /// </remarks>
     internal abstract Stream? GetOrCreateUnderlyingStream();
@@ -118,9 +128,17 @@ public abstract class ExportOutput : IDisposable
     /// Unlike <see cref="GetOrCreateUnderlyingStream"/>, this method never creates a file
     /// or allocates a stream as a side-effect.
     /// </summary>
+    /// <returns>The stream, or <see langword="null"/> when none exists yet.</returns>
     internal abstract Stream? TryGetExistingStream();
 
-    /// <summary>Releases resources used by this output.</summary>
+    #endregion
+
+    #region Disposal
+
+    /// <summary>
+    /// Releases resources used by this output. A file or stdout output closes its stream; an output over a caller-supplied
+    /// stream leaves that stream open.
+    /// </summary>
     /// <param name="disposing">True if called from Dispose, false if from finalizer.</param>
     protected abstract void Dispose(bool disposing);
 
@@ -130,6 +148,8 @@ public abstract class ExportOutput : IDisposable
         Dispose(true);
         GC.SuppressFinalize(this);
     }
+
+    #endregion
 }
 
 /// <summary>
@@ -139,6 +159,8 @@ public abstract class ExportOutput : IDisposable
 /// </summary>
 internal sealed class LazyFileExportOutput : ExportOutput
 {
+    #region Configuration and state
+
     /// <summary>Target file path, as given by the caller (validated for illegal characters by <see cref="ExportOutput.File"/>).</summary>
     private readonly string _Path;
 
@@ -148,9 +170,6 @@ internal sealed class LazyFileExportOutput : ExportOutput
     /// <summary>The buffered file stream; <c>null</c> until the first write or <see cref="GetOrCreateUnderlyingStream"/> call.</summary>
     private Stream? _Stream;
 
-    /// <inheritdoc/>
-    public override long AcceptedBytes { get; protected set; }
-
     /// <summary>Creates a lazy file output.</summary>
     /// <param name="path">Target file path.</param>
     /// <param name="bufferSize">Write buffer size in bytes.</param>
@@ -159,6 +178,13 @@ internal sealed class LazyFileExportOutput : ExportOutput
         _Path = path;
         _BufferSize = bufferSize;
     }
+
+    #endregion
+
+    #region Writing
+
+    /// <inheritdoc/>
+    public override long AcceptedBytes { get; protected set; }
 
     /// <inheritdoc/>
     public override void Write(ReadOnlySpan<byte> data)
@@ -175,6 +201,10 @@ internal sealed class LazyFileExportOutput : ExportOutput
 
     /// <inheritdoc/>
     public override void Flush() => _Stream?.Flush();
+
+    #endregion
+
+    #region Stream access
 
     /// <inheritdoc/>
     /// <remarks>
@@ -193,30 +223,37 @@ internal sealed class LazyFileExportOutput : ExportOutput
     /// <inheritdoc/>
     internal override Stream? TryGetExistingStream() => _Stream;
 
+    #endregion
+
+    #region Disposal
+
     /// <inheritdoc/>
+    /// <remarks>
+    /// Closes the file when it was created: disposing the <see cref="BufferedStream"/> flushes its pending bytes. Nothing happens
+    /// when the file was never created, so an empty export leaves no file.
+    /// </remarks>
     protected override void Dispose(bool disposing)
     {
-        // Disposing the BufferedStream flushes its pending bytes and closes the file. Nothing happens when the file was
-        // never created, so an empty export leaves no file.
         if (disposing)
         {
             _Stream?.Dispose();
             _Stream = null;
         }
     }
+
+    #endregion
 }
 
 /// <summary>Stream-backed <see cref="ExportOutput"/> implementation.</summary>
 internal sealed class StreamExportOutput : ExportOutput
 {
+    #region Configuration and state
+
     /// <summary>The target stream.</summary>
     private readonly Stream _Stream;
 
     /// <summary>Whether <see cref="Dispose(bool)"/> disposes the stream (stdout) or leaves it to the caller.</summary>
     private readonly bool _OwnsStream;
-
-    /// <inheritdoc/>
-    public override long AcceptedBytes { get; protected set; }
 
     /// <summary>Creates a stream-backed output.</summary>
     /// <param name="stream">Target stream.</param>
@@ -226,6 +263,13 @@ internal sealed class StreamExportOutput : ExportOutput
         _Stream = stream;
         _OwnsStream = ownsStream;
     }
+
+    #endregion
+
+    #region Writing
+
+    /// <inheritdoc/>
+    public override long AcceptedBytes { get; protected set; }
 
     /// <inheritdoc/>
     public override void Write(ReadOnlySpan<byte> data)
@@ -237,13 +281,22 @@ internal sealed class StreamExportOutput : ExportOutput
     /// <inheritdoc/>
     public override void Flush() => _Stream.Flush();
 
+    #endregion
+
+    #region Stream access
+
     /// <inheritdoc/>
     internal override Stream? GetOrCreateUnderlyingStream() => _Stream;
 
     /// <inheritdoc/>
     internal override Stream? TryGetExistingStream() => _Stream;
 
+    #endregion
+
+    #region Disposal
+
     /// <inheritdoc/>
+    /// <remarks>Disposes the stream only when this output owns it (stdout); a caller-supplied stream stays open.</remarks>
     protected override void Dispose(bool disposing)
     {
         if (disposing && _OwnsStream)
@@ -251,4 +304,6 @@ internal sealed class StreamExportOutput : ExportOutput
             _Stream.Dispose();
         }
     }
+
+    #endregion
 }

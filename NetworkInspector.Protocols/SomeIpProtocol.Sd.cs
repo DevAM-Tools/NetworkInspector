@@ -446,7 +446,7 @@ public sealed partial class SomeIpProtocol
             if (model.TryGetService(service, major, out int serviceIndex))
             {
                 SomeIpServiceInfo info = model.Services.Span[serviceIndex];
-                serviceName = info.Name;
+                serviceName = info.UiName;
                 eventgroupNames = info.EventGroupNames;
             }
             else if (model.TryGetServiceName(service, out string? anyVersion))

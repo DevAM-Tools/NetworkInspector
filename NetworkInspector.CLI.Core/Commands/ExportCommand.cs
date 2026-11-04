@@ -30,7 +30,8 @@ internal static class ExportCommand
         int ProgressInterval,
         int BlfCacheBudgetBytes,
         bool Tolerant,
-        bool Overwrite);
+        bool Overwrite,
+        bool Verbose = false);
 
     #endregion
 
@@ -61,16 +62,18 @@ internal static class ExportCommand
     /// Performance: the loop parses every frame into one reused <see cref="Packet"/> (a recycle), which keeps the field storage
     /// and the packet object out of the allocator for the whole run; a new packet is created only when a recycle is refused.
     /// The assumption is that a listener is finished with the packet when <c>OnPacket</c> returns (it must copy what it keeps),
-    /// because the next iteration overwrites it in place. A filter is judged on the parsed packet before any output is opened,
-    /// so a filter that matches nothing leaves no file behind. Thread safety: single-threaded; the sources, the filter, the
-    /// recycled packet, and the listeners are driven from the calling thread only.
+    /// because the next iteration overwrites it in place. The parse follows a <see cref="ParsePlan"/> built from the demands of the
+    /// filter and the exporter, so a tree-free exporter and a tree-free filter share one parse without a field tree. The exporter
+    /// is created before the parse of the first frame (its observer is part of the plan), and an output that received no packet
+    /// is discarded when it ends, so a filter that matches nothing still leaves no file behind. Thread safety: single-threaded;
+    /// the sources, the filter, the recycled packet, and the listeners are driven from the calling thread only.
     /// </remarks>
     /// <param name="sources">Active, already-started frame sources in round-robin order.</param>
     /// <param name="createExporter">Factory that opens a new file/directory exporter for a path.</param>
     /// <param name="splitManager">Split policy (size and/or packet count); may disable splitting.</param>
     /// <param name="stack">Protocol stack that owns parsed packets.</param>
     /// <param name="filter">
-    /// Optional packet filter. When set, packets it rejects consume a packet id (every parsed frame does) but are never handed
+    /// Optional run filter (an observer form that judges during a tree-free parse, or the tree form as a fallback). When set, packets it rejects consume a packet id (every parsed frame does) but are never handed
     /// to the exporter and do not count towards <paramref name="maxPackets"/>; an evaluation failure aborts the loop with an
     /// <see cref="InvalidOperationException"/> because a filter that cannot decide must not
     /// silently keep or drop data.
@@ -84,6 +87,10 @@ internal static class ExportCommand
     /// always aborts.
     /// </param>
     /// <param name="error">Receives progress lines and warnings (the error writer of the command).</param>
+    /// <param name="planLog">
+    /// Receives the one <c>parse: …</c> line (<c>--verbose</c>) before the first frame is parsed; <see langword="null"/> prints
+    /// nothing.
+    /// </param>
     /// <param name="packetIdCounter">
     /// Monotonic packet-id allocator. Pass 0 for a fresh loop; each frame consumes the current
     /// value and then increments, so first-parse ids are dense <c>0, 1, 2, …</c>. Ids must be dense and in order because the
@@ -115,11 +122,12 @@ internal static class ExportCommand
         Func<string, IPacketListener> createExporter,
         SplitOutputManager splitManager,
         Stack stack,
-        IFilter? filter,
+        CliRunFilter? filter,
         int maxPackets,
         int progressInterval,
         bool tolerant,
         TextWriter error,
+        TextWriter? planLog,
         ref int packetIdCounter,
         CancellationToken cancellationToken,
         out int outputsWritten,
@@ -137,9 +145,15 @@ internal static class ExportCommand
         string? currentPath = null;
         IExportByteProgress? byteProgress = null;
 
-        // The index exists only for a filter. One index serves the whole run: the filter reads protocol presence from it in O(1)
-        // instead of walking the field tree of each packet, and the parse fills it. Without a filter no index is kept.
-        PacketIndex? filterIndex = filter is not null ? new PacketIndex(stack) : null;
+        // The plan of the open output: the filter's demand, the exporter's demand, and a packet-depth demand. It is rebuilt for
+        // every output because each exporter instance brings its own observer.
+        ParsePlan? plan = null;
+        bool planLogged = false;
+
+        // A rotation is decided after the packet that reached the split threshold (the counters after packet k are the counters
+        // that were checked before packet k + 1) and carried out right before the next frame is parsed, because the next output's
+        // observer must be in the plan of that parse. Nothing is opened when no further frame follows.
+        bool rotatePending = false;
 
         RoundRobinSourceIterator iterator = new(sources);
 
@@ -184,68 +198,15 @@ internal static class ExportCommand
 
                 iterator.RecordFrameRead();
 
-                // Parse the frame. The id is taken (and the counter advanced) before the capacity check, so the id of a frame is
-                // never reused; the check runs before the id is used and names the packets in its error. A recycle reuses the
-                // storage of the previous packet in place (no allocation per packet); when the stack refuses the recycle (for
-                // example a materializer still holds the packet) the same frame is parsed into a new packet, which then becomes
-                // the next recycle target. A parse that fails in both ways aborts the run.
-                int idValue = packetIdCounter++;
-                ArrayIndexIdRange.ThrowIfInvalidNextIndex(idValue, "packet");
-
-                PacketId pid = new(idValue);
-                ParseOptions exportOptions = new(index: filterIndex);
-                Packet packet;
-                if (recyclePacket is not null
-                    && Packet.TryParse(recyclePacket, pid, stack, frame.Value, in exportOptions, out _))
+                // The exporter must exist before the parse, because its observer is part of the plan. It is created only when a
+                // frame is there to parse, so an empty input still creates nothing. A rotation decided after the previous packet
+                // happens here, so this frame's fields are staged by the new output's observer and never land in the old output.
+                if (exporter is null || rotatePending)
                 {
-                    packet = recyclePacket;
-                }
-                else if (!Packet.TryParse(pid, stack, frame.Value, in exportOptions, out Packet? created, out ParseFailure exportFailure))
-                {
-                    throw new InvalidOperationException(exportFailure.ToString());
-                }
-                else
-                {
-                    packet = created!;
-                }
-
-                recyclePacket = packet;
-
-                // Judged before an output is opened, so a filter that matches nothing leaves no
-                // empty file or dataset directory behind. A rejected packet still consumes the source's turn, so a selective
-                // filter does not let one source starve the others.
-                if (filter is not null)
-                {
-                    if (!CliFilter.TryMatch(filter, packet, filterIndex, error, out bool matched))
-                    {
-                        throw new InvalidOperationException(
-                            "Filter evaluation failed; the export was aborted to avoid writing a partially filtered output.");
-                    }
-
-                    if (!matched)
-                    {
-                        iterator.Advance();
-                        continue;
-                    }
-                }
-
-                // Open the first output, or rotate to the next one when the split policy asks for it. The size comes from an
-                // in-memory counter of the exporter (no file-system probe), which is cheap enough to read for every packet.
-                long estimatedBytes = byteProgress?.EstimatedOutputBytes ?? 0;
-                if (exporter is null
-                    || (splitManager.IsSplitting
-                        && splitManager.NeedsSplit(estimatedBytes, filePackets)))
-                {
-                    // Finish the previous output first: OnFinish completes it, Dispose releases the file handle.
+                    // Finish the previous output first (an output without a packet is discarded instead, see _FinishOutput).
                     if (exporter is not null)
                     {
-                        exporter.OnFinish();
-                        (exporter as IDisposable)?.Dispose();
-                        outputsWritten++;
-
-                        // Finished: from here on nothing of it is cleaned up, even when the next output cannot be opened.
-                        exporter = null;
-                        currentPath = null;
+                        _FinishOutput(ref exporter, ref currentPath, ref outputsWritten, filePackets, splitManager, error);
                     }
 
                     // currentPath is set only after the factory returned, so a factory that fails leaves nothing to discard here
@@ -264,7 +225,61 @@ internal static class ExportCommand
                             "IExportByteProgress.EstimatedOutputBytes.");
                     }
 
+                    plan = _CreatePlan(stack, filter, exporter);
+                    if (!planLogged && planLog is not null)
+                    {
+                        planLog.WriteLine(_DescribePlan(plan, filter));
+                        planLogged = true;
+                    }
+
                     filePackets = 0;
+                    rotatePending = false;
+                }
+
+                // Parse the frame with the plan: one parse for the filter and the exporter, with exactly the depth their demands
+                // need. The id is taken (and the counter advanced) before the capacity check, so the id of a frame is never
+                // reused; the check runs before the id is used and names the packets in its error. A recycle reuses the storage
+                // of the previous packet in place (no allocation per packet); when the stack refuses the recycle (for example a
+                // materializer still holds the packet) the same frame is parsed into a new packet, which then becomes the next
+                // recycle target. A parse that fails in both ways aborts the run.
+                int idValue = packetIdCounter++;
+                ArrayIndexIdRange.ThrowIfInvalidNextIndex(idValue, "packet");
+
+                PacketId pid = idValue;
+                ParseOptions exportOptions = plan!.Options; // Invariant: the plan is built together with the first exporter.
+                Packet packet;
+                if (recyclePacket is not null
+                    && Packet.TryParse(recyclePacket, pid, stack, frame.Value, in exportOptions, out _))
+                {
+                    packet = recyclePacket;
+                }
+                else if (!Packet.TryParse(pid, stack, frame.Value, in exportOptions, out Packet? created, out ParseFailure exportFailure))
+                {
+                    throw new InvalidOperationException(exportFailure.ToString());
+                }
+                else
+                {
+                    packet = created!;
+                }
+
+                recyclePacket = packet;
+
+                // A rejected packet consumes the source's turn, so a selective filter does not let one source starve the others.
+                // Its staged fields (a tree-free exporter stages while the packet is parsed) are dropped by the next BeginPacket,
+                // so a rejected packet never reaches an output.
+                if (filter is not null)
+                {
+                    if (!filter.TryMatch(packet, error, out bool matched))
+                    {
+                        throw new InvalidOperationException(
+                            "Filter evaluation failed; the export was aborted to avoid writing a partially filtered output.");
+                    }
+
+                    if (!matched)
+                    {
+                        iterator.Advance();
+                        continue;
+                    }
                 }
 
                 // Hand the packet over. false means the listener unsubscribed itself (for example an exporter in strict mode after
@@ -279,6 +294,11 @@ internal static class ExportCommand
                 {
                     error.WriteLine($"Progress: {packetCount} packets exported");
                 }
+
+                // The split decision for the next frame. The size comes from an in-memory counter of the exporter (no file-system
+                // probe), which is cheap enough to read for every packet.
+                rotatePending = splitManager.IsSplitting
+                    && splitManager.NeedsSplit(byteProgress?.EstimatedOutputBytes ?? 0, filePackets);
 
                 iterator.Advance();
 
@@ -306,11 +326,7 @@ internal static class ExportCommand
             // only path that finalizes the output that is still open; every other exit discards it.
             if (exporter is not null)
             {
-                exporter.OnFinish();
-                (exporter as IDisposable)?.Dispose();
-                outputsWritten++;
-                exporter = null;
-                currentPath = null;
+                _FinishOutput(ref exporter, ref currentPath, ref outputsWritten, filePackets, splitManager, error);
             }
 
             return packetCount;
@@ -323,9 +339,130 @@ internal static class ExportCommand
         }
     }
 
+    /// <summary>
+    /// The loop for callers that hold a compiled tree filter and want no plan line: the filter is wrapped in its tree form.
+    /// </summary>
+    /// <param name="sources">Active, already-started frame sources in round-robin order.</param>
+    /// <param name="createExporter">Factory that opens a new file/directory exporter for a path.</param>
+    /// <param name="splitManager">Split policy (size and/or packet count); may disable splitting.</param>
+    /// <param name="stack">Protocol stack that owns parsed packets.</param>
+    /// <param name="filter">Optional compiled tree filter.</param>
+    /// <param name="maxPackets">Stop after this many packets were handed to the exporter (0 = unlimited).</param>
+    /// <param name="progressInterval">Print progress every N exported packets to the error writer (0 = silent).</param>
+    /// <param name="tolerant">Whether a failed frame read is skipped with a warning.</param>
+    /// <param name="error">Receives progress lines and warnings.</param>
+    /// <param name="packetIdCounter">Monotonic packet-id allocator.</param>
+    /// <param name="cancellationToken">Cooperative cancellation.</param>
+    /// <param name="outputsWritten">Number of output files or dataset directories finalized.</param>
+    /// <param name="listenerStopped">Whether the loop ended early because a listener stopped.</param>
+    /// <returns>Number of packets handed to the exporter.</returns>
+    internal static int RunExportLoop(
+        List<IFrameSource> sources,
+        Func<string, IPacketListener> createExporter,
+        SplitOutputManager splitManager,
+        Stack stack,
+        IFilter? filter,
+        int maxPackets,
+        int progressInterval,
+        bool tolerant,
+        TextWriter error,
+        ref int packetIdCounter,
+        CancellationToken cancellationToken,
+        out int outputsWritten,
+        out bool listenerStopped)
+    {
+        CliRunFilter? runFilter = null;
+        if (filter is not null)
+        {
+            runFilter = CliRunFilter.FromTree(filter, stack);
+        }
+
+        return RunExportLoop(
+            sources, createExporter, splitManager, stack, runFilter, maxPackets, progressInterval, tolerant, error, planLog: null,
+            ref packetIdCounter, cancellationToken, out outputsWritten, out listenerStopped);
+    }
+
     #endregion
 
     #region Private Helpers
+
+    /// <summary>
+    /// Builds the parse plan for one output: the filter's demand first, then the exporter's (a packet listener that does not state
+    /// one gets a field tree, today's behavior), then a minimal packet-depth demand because the export loop always needs a parsed
+    /// packet object to hand to <c>OnPacket</c>. The plan is rebuilt for every output because each exporter instance brings its
+    /// own observer.
+    /// </summary>
+    /// <param name="stack">The stack that parses the frames.</param>
+    /// <param name="filter">The run filter, or <see langword="null"/>.</param>
+    /// <param name="exporter">The exporter of the output that was just opened.</param>
+    /// <returns>The plan.</returns>
+    private static ParsePlan _CreatePlan(Stack stack, CliRunFilter? filter, IPacketListener exporter)
+    {
+        ParseDemand exporterDemand = ParseDemand.FieldTree;
+        if (exporter is IParseDemandSource source)
+        {
+            exporterDemand = source.ParseDemand;
+        }
+
+        ParseDemand packetDepth = new() { Depth = ParseDepth.Packet };
+        ParseDemand[] demands = filter is null
+            ? [exporterDemand, packetDepth]
+            : [filter.Demand, exporterDemand, packetDepth];
+
+        // Only conflicting caches or indexes can fail here; the CLI never adds a cache and adds at most one index.
+        if (!ParsePlan.TryCreate(stack, demands, out ParsePlan? plan, out ParsePlanError planError))
+        {
+            throw new InvalidOperationException(planError.Message);
+        }
+
+        return plan;
+    }
+
+    /// <summary>The line of <c>--verbose</c>: the plan, and why a filter builds a field tree when it does.</summary>
+    /// <param name="plan">The plan of the first output.</param>
+    /// <param name="filter">The run filter, or <see langword="null"/>.</param>
+    /// <returns>The line without a line end.</returns>
+    internal static string DescribePlan(ParsePlan plan, CliRunFilter? filter) => _DescribePlan(plan, filter);
+
+    private static string _DescribePlan(ParsePlan plan, CliRunFilter? filter)
+    {
+        string line = "parse: " + plan;
+        if (filter?.FallbackReason is { } reason)
+        {
+            line += " — filter needs the field tree: " + reason;
+        }
+
+        return line;
+    }
+
+    /// <summary>
+    /// Finishes the open output, or discards it when it received no packet: an exporter that is created before the first parse
+    /// may end up without packets (every frame filtered out, or a rotation followed only by rejected frames), and such an output
+    /// must not appear (JSON would otherwise write an empty array file, a dataset folder would stay behind).
+    /// </summary>
+    private static void _FinishOutput(
+        ref IPacketListener? exporter,
+        ref string? currentPath,
+        ref int outputsWritten,
+        int filePackets,
+        SplitOutputManager splitManager,
+        TextWriter error)
+    {
+        if (filePackets == 0)
+        {
+            CliCommandSupport.DiscardUnfinished(ref exporter, ref currentPath, splitManager.IsDirectoryOutput, error);
+            return;
+        }
+
+        // OnFinish completes the output, Dispose releases the file handle.
+        exporter!.OnFinish(); // Invariant: callers pass an open exporter.
+        (exporter as IDisposable)?.Dispose();
+        outputsWritten++;
+
+        // Finished: from here on nothing of it is cleaned up, even when the next output cannot be opened.
+        exporter = null;
+        currentPath = null;
+    }
 
     /// <summary>
     /// Parses arguments and executes export; throws <see cref="ArgumentException"/> on bad args (the caller maps it to exit
@@ -361,6 +498,7 @@ internal static class ExportCommand
         long blfCacheSize = 0;  // MiB
         bool tolerant = false;
         bool overwrite = false;
+        bool verbose = false;
 
         // One pass over the arguments. Settings options are offered first so that they behave the same in every command; a
         // value-taking option consumes the next argument (GetNextArg advances i). Everything that is not an option is a source
@@ -401,6 +539,9 @@ internal static class ExportCommand
                     break;
                 case "--TOLERANT":
                     tolerant = true;
+                    break;
+                case "--VERBOSE":
+                    verbose = true;
                     break;
                 case "--OVERWRITE":
                     overwrite = true;
@@ -445,7 +586,7 @@ internal static class ExportCommand
 
         return await _ExecuteAsync(
             new ExportArguments(sourceSpecs, outputPath, formatSpec, filterExpression, settings.Build(), maxPackets,
-                splitSizeBytes, splitCount, progressInterval, blfCacheBudgetBytes, tolerant, overwrite),
+                splitSizeBytes, splitCount, progressInterval, blfCacheBudgetBytes, tolerant, overwrite, verbose),
             io,
             cancellationToken).ConfigureAwait(false);
     }
@@ -539,9 +680,9 @@ internal static class ExportCommand
         {
             try
             {
-                IFilter? filter = null;
+                CliRunFilter? filter = null;
                 if (CliFilter.IsActive(arguments.FilterExpression)
-                    && !CliFilter.TryCompile(arguments.FilterExpression, stack, io.Error, out filter))
+                    && !CliRunFilter.TryCompile(arguments.FilterExpression, stack, io.Error, out filter))
                 {
                     return (int)ExitCode.ArgumentError;
                 }
@@ -576,7 +717,7 @@ internal static class ExportCommand
     /// <param name="io">Output and error writers.</param>
     /// <param name="token">Cancels the run (Ctrl+C).</param>
     /// <returns>The exit code.</returns>
-    private static int _RunLoop(ExportArguments arguments, PacketFormatConfig format, List<IFrameSource> sources, Stack stack, IFilter? filter,
+    private static int _RunLoop(ExportArguments arguments, PacketFormatConfig format, List<IFrameSource> sources, Stack stack, CliRunFilter? filter,
         CliIo io, CancellationToken token)
     {
         // Old outputs that --overwrite moved aside; they are settled in the finally block below, whatever the run did.
@@ -596,6 +737,7 @@ internal static class ExportCommand
                 arguments.ProgressInterval,
                 arguments.Tolerant,
                 io.Error,
+                arguments.Verbose ? io.Error : null,
                 ref packetIdCounter,
                 token,
                 out int outputsWritten,
@@ -742,6 +884,7 @@ internal static class ExportCommand
         error.WriteLine("  --blf-cache-size <MB> Container cache budget for BLF sources (MiB)");
         error.WriteLine("  --progress <N>        Report progress every N packets");
         error.WriteLine("  --tolerant            Skip malformed frames instead of aborting");
+        error.WriteLine("  --verbose             Print the parse work chosen for the run (parse: none | fields only, no tree (…) | field tree (…))");
         error.WriteLine("  -h, --help            Show this help message");
         error.WriteLine();
         error.WriteLine("Source specifications (plugins add more kinds; see 'ni plugins list'):");
@@ -755,8 +898,8 @@ internal static class ExportCommand
         error.WriteLine();
         error.WriteLine("Format specifications (plugins add more formats; see 'ni plugins list'):");
         error.WriteLine("  csv                   Comma-separated values (default for .csv); No., Time, Info, Length");
-        error.WriteLine("  csv:columns=ip.src;udp.dstport,delimiter=;,header=false,bom=false");
-        error.WriteLine("                        Field columns, delimiter, header row, and byte order mark");
+        error.WriteLine("  csv:fields=ip.src;udp.dstport,delimiter=;,header=false,bom=false");
+        error.WriteLine("                        One column per field (ip.src:last picks an occurrence), delimiter, header row, byte order mark");
         error.WriteLine("  csv:neutralizeFormulas=false");
         error.WriteLine("                        Write text cells unchanged (default: a text cell that starts with = + - @ tab or CR gets a");
         error.WriteLine("                        leading ' so that a spreadsheet does not run it as a formula)");
@@ -783,7 +926,8 @@ internal static class ExportCommand
         error.WriteLine("  ni export input.pcap -o output.json -n 100 --progress 10");
         error.WriteLine("  ni export random:count=1000,mode=udp4 -o out.json -f json");
         error.WriteLine("  ni export capture.pcap -o out.txt -f text");
-        error.WriteLine("  ni export capture.pcap -o out.csv -f csv:columns=ip.src;udp.dstport");
+        error.WriteLine("  ni export capture.pcap -o out.csv -f csv:fields=ip.src;udp.dstport");
+        error.WriteLine("  ni export capture.pcap -o out.duckdb -f duckdb:fields=ip.src;udp.dstport --verbose");
         error.WriteLine("  ni export capture.pcap -o split.json --split-count 10000");
         error.WriteLine("  ni export capture.pcap -o out_parquet -f parquet");
         error.WriteLine("  ni export capture.pcap -o out_parquet -f parquet --split-count 50000");

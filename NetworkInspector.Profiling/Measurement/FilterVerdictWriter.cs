@@ -80,7 +80,7 @@ internal static class FilterVerdictWriter
         Packet? recycle = null;
         for (int i = 0; i < frames.Length; i++)
         {
-            if (!OracleInputs.TryParse(stack, new PacketId(i), frames[i], in options, ref recycle))
+            if (!OracleInputs.TryParse(stack, i, frames[i], in options, ref recycle))
             {
                 index = null;
                 return false;
@@ -152,7 +152,7 @@ internal static class FilterVerdictWriter
         Packet? recycle = null;
         for (int i = 0; i < frames.Length; i++)
         {
-            if (!OracleInputs.TryParse(stack, new PacketId(i), frames[i], in options, ref recycle))
+            if (!OracleInputs.TryParse(stack, i, frames[i], in options, ref recycle))
             {
                 bits.Append('P');
                 continue;
@@ -236,8 +236,8 @@ internal static class FilterVerdictWriter
         ParseOptions options = new(FieldTreeMode.Build);
         Packet? late = null;
         Packet? early = null;
-        if (!OracleInputs.TryParse(stack, new PacketId(_OrderProbeLate), frames[_OrderProbeLate], in options, ref late)
-            || !OracleInputs.TryParse(stack, new PacketId(_OrderProbeEarly), frames[_OrderProbeEarly], in options, ref early))
+        if (!OracleInputs.TryParse(stack, _OrderProbeLate, frames[_OrderProbeLate], in options, ref late)
+            || !OracleInputs.TryParse(stack, _OrderProbeEarly, frames[_OrderProbeEarly], in options, ref early))
         {
             writer.WriteLine("outoforder parse-failed");
             return;
@@ -266,7 +266,7 @@ internal static class FilterVerdictWriter
         Packet? recycle = null;
         for (int i = 0; i < frames.Length; i++)
         {
-            if (!OracleInputs.TryParse(stack, new PacketId(i), frames[i], in options, ref recycle))
+            if (!OracleInputs.TryParse(stack, i, frames[i], in options, ref recycle))
             {
                 bits.Append('P');
                 continue;

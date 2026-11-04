@@ -82,7 +82,7 @@ internal sealed class CachedFrameSourceTests
         source.NextFrame();
 
         // Out-of-range FrameId
-        Frame? result = source.FrameById(new FrameId(999));
+        Frame? result = source.FrameById(999);
         await Assert.That(result).IsNull();
     }
 
@@ -96,7 +96,7 @@ internal sealed class CachedFrameSourceTests
         source.NextFrame();
 
         // Frame with ID 4 hasn't been read yet
-        Frame? result = source.FrameById(new FrameId(4));
+        Frame? result = source.FrameById(4);
         await Assert.That(result).IsNull();
     }
 

@@ -9,18 +9,29 @@ namespace NetworkInspector.Exporters.Parquet;
 /// <list type="bullet">
 ///   <item><c>packets.parquet</c> — one row per packet: <c>packet_id</c>, <c>timestamp_ns</c>,
 ///     and optionally <c>info</c> / <c>frame_bytes</c>.</item>
+///   <item><c>packet_buffers.parquet</c> — only with <see cref="ExportContent.Buffers"/>: one row per additional packet buffer
+///     (index 1 to 255: reassembled datagrams, TCP PDUs, decoded bodies): <c>packet_id</c> (INT32), <c>buffer_index</c> (UINT8),
+///     <c>bytes</c> (BYTE_ARRAY; an empty buffer is an empty array, never null); packets without additional buffers add no row, and
+///     the file is not created when no packet had one.</item>
 ///   <item><c>topology.parquet</c> — one row per field-tree node: <c>packet_id</c>, <c>node_id</c>,
-///     <c>field_id</c>, <c>parent_node_id</c>.</item>
+///     <c>field_id</c>, <c>parent_node_id</c>, and with <see cref="ExportContent.CustomText"/> the nullable string column
+///     <c>custom_text</c> (the display line of a node without a value; null where the node has a value or its dissector set no
+///     text).</item>
 ///   <item><c>catalog.parquet</c> — one row per distinct field ID observed, written once in
 ///     <see cref="Complete"/>: <c>field_id</c>, <c>name</c>, <c>ui_name</c>, <c>field_type</c>,
 ///     <c>protocol_id</c>, <c>table_name</c>, <c>description</c> (nullable).</item>
 ///   <item><c>protocols.parquet</c> — one row per protocol registered in the parsing stack, written once
 ///     when the sink is created: <c>protocol_id</c>, <c>name</c>, <c>ui_name</c>.</item>
-///   <item><c>fields/field_{id}.parquet</c> — one row per field occurrence: <c>packet_id</c>,
-///     <c>node_id</c>, a type-specific <c>value</c> column (including <c>DataField&lt;string&gt;</c>
-///     for <see cref="FieldType.String"/>; <see cref="FieldType.Timestamp"/> uses an INT64 column named
-///     <c>value_timestamp_ns</c>; bytes and all fixed-size address types use a byte-array column), and optional
-///     <c>custom_repr</c> / <c>custom_text</c> string columns.</item>
+///   <item><c>export_info.parquet</c> — <c>key</c>, <c>value</c>: the shape marker (<c>shape</c>, <c>fields</c>,
+///     <c>occurrences</c>, <c>layout_version</c>; see <see cref="ExportInfo"/>), written when the sink is created.</item>
+///   <item><c>fields/field_{id}.parquet</c> — one row per value: <c>packet_id</c>, the position column (<c>node_id</c> in the
+///     hierarchy shape, <c>occurrence</c> in the flat shapes), a type-specific <c>value</c> column (including
+///     <c>DataField&lt;string&gt;</c> for <see cref="FieldType.String"/>; <see cref="FieldType.Timestamp"/> uses an INT64
+///     column named <c>value_timestamp_ns</c>; bytes use a byte-array column; an IPv4 address is a UINT32 column, a MAC address and
+///     an EUI-64 are UINT64 columns, and an IPv6 address and a UUID have the two UINT64 columns <c>value_hi</c> and
+///     <c>value_lo</c> instead of <c>value</c>), and optional
+///     <c>custom_repr</c> / <c>custom_text</c> string columns (null where the dissector set no text, the empty string where it
+///     set an empty one).</item>
 /// </list>
 /// </para>
 /// <para>
@@ -30,93 +41,193 @@ namespace NetworkInspector.Exporters.Parquet;
 /// </para>
 /// <para>
 /// Files are opened lazily on the first non-empty batch for that table, so a table that never receives rows
-/// (for example <c>topology.parquet</c> without <see cref="ColumnarDetailFlags.IncludeTopology"/>) is never created.
+/// (for example <c>topology.parquet</c> in the flat export shapes) is never created.
+/// </para>
+/// <para>
+/// <b>Compression:</b> the sink holds one <see cref="ParquetOptions"/> with the codec and the level of the export, and every
+/// writer of the dataset takes it as a required constructor argument (the table files, the one-shot files, and every field file), so
+/// no file can fall back to the Parquet.Net default and the dataset has one codec throughout. The options object is read-only after
+/// construction and is shared by the writers, which run one after the other.
 /// </para>
 /// <para>
 /// <b>Thread safety:</b> Not thread-safe. <see cref="WriteBatch"/> and <see cref="Complete"/>
-/// must be called sequentially from a single thread, matching the exporter caller contract.
+/// must be called sequentially; the calls may come from different threads (the exporter's writer thread writes batches and
+/// the finishing thread completes after joining it) as long as each call happens after the previous one finished.
 /// </para>
 /// </summary>
+/// <remarks>
+/// Sync: Parquet/README.md § Directory Layout states the same layout.
+/// </remarks>
 internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
 {
-    #region Fields
+    #region Configuration and state
 
+    /// <summary>The <c>fields</c> directory below the root; holds one <c>field_{id}.parquet</c> per field with rows.</summary>
     private readonly string _FieldsDirectory;
-    private readonly ColumnarDetailFlags _Flags;
+
+    /// <summary>Content of the export; fixed for the lifetime of the sink, so every row group of a file has the same columns.</summary>
+    private readonly ExportContent _Content;
+
+    /// <summary>Name of the second key column of the field files: <c>node_id</c> (hierarchy) or <c>occurrence</c> (flat shapes).</summary>
+    private readonly string _PositionColumn;
+
+    /// <summary>Full path of <c>packets.parquet</c>.</summary>
+    private readonly string _PacketsPath;
+
+    /// <summary>Full path of <c>topology.parquet</c> (created only in the hierarchy shape).</summary>
+    private readonly string _TopologyPath;
+
+    /// <summary>Full path of <c>packet_buffers.parquet</c> (created only with <see cref="ExportContent.Buffers"/> and a first buffer row).</summary>
+    private readonly string _BuffersPath;
+
+    /// <summary>Full path of <c>catalog.parquet</c> (written in <see cref="Complete"/>).</summary>
+    private readonly string _CatalogPath;
+
+    /// <summary>
+    /// The writer options of every file of the dataset: the codec and the level the export chose, set explicitly so the files never
+    /// follow the Parquet.Net default. Created once in the constructor and never changed afterwards.
+    /// </summary>
+    private readonly ParquetOptions _Options;
 
     // Schema column definitions are created once and reused for every row group of the export, so each row group
     // of a file is written against exactly the columns its schema was created with.
+
+    /// <summary>The <c>packet_id</c> column of <c>packets.parquet</c>.</summary>
     private readonly DataField _PacketIdField = new DataField<int>("packet_id");
+
+    /// <summary>The <c>timestamp_ns</c> column of <c>packets.parquet</c>.</summary>
     private readonly DataField _TimestampField = new DataField<long>("timestamp_ns");
+
+    /// <summary>The optional <c>info</c> column of <c>packets.parquet</c>.</summary>
     private readonly DataField _InfoField = new DataField<string>("info");
+
+    /// <summary>The optional <c>frame_bytes</c> column of <c>packets.parquet</c>.</summary>
     private readonly DataField _FrameBytesField = new DataField<byte[]>("frame_bytes");
 
+    /// <summary>The <c>packet_id</c> column of <c>packet_buffers.parquet</c>.</summary>
+    private readonly DataField _BufferPacketIdField = new DataField<int>("packet_id");
+
+    /// <summary>The <c>buffer_index</c> column of <c>packet_buffers.parquet</c>; <c>byte</c> is the UINT8 logical type (index 1 to 255).</summary>
+    private readonly DataField _BufferIndexField = new DataField<byte>("buffer_index");
+
+    /// <summary>The <c>bytes</c> column of <c>packet_buffers.parquet</c>.</summary>
+    private readonly DataField _BufferBytesField = new DataField<byte[]>("bytes");
+
+    /// <summary>The <c>packet_id</c> column of <c>topology.parquet</c>.</summary>
     private readonly DataField _TopoPacketIdField = new DataField<int>("packet_id");
+
+    /// <summary>The <c>node_id</c> column of <c>topology.parquet</c>.</summary>
     private readonly DataField _TopoNodeIdField = new DataField<int>("node_id");
+
+    /// <summary>The <c>field_id</c> column of <c>topology.parquet</c>.</summary>
     private readonly DataField _TopoFieldIdField = new DataField<int>("field_id");
+
+    /// <summary>The <c>parent_node_id</c> column of <c>topology.parquet</c>; −1 for top-level nodes.</summary>
     private readonly DataField _TopoParentNodeIdField = new DataField<int>("parent_node_id");
+
+    /// <summary>
+    /// The optional <c>custom_text</c> column of <c>topology.parquet</c> (only with <see cref="ExportContent.CustomText"/>): the
+    /// display line of a node without a value (a protocol layer, a group); null for a value node and for a node whose dissector set
+    /// no text, the empty string for a set but empty text.
+    /// </summary>
+    private readonly DataField _TopoCustomTextField = new DataField<string?>("custom_text");
 
     // Writers are created lazily so an unused table produces no file; they stay open across batches (one row group
     // per batch) and are closed in Complete or Dispose.
+
+    /// <summary>Writer of <c>packets.parquet</c>; <see langword="null"/> until the first batch and after <see cref="Complete"/>.</summary>
     private ParquetFileWriter? _PacketsWriter;
+
+    /// <summary>Writer of <c>topology.parquet</c>; <see langword="null"/> until the first batch with topology rows and after <see cref="Complete"/>.</summary>
     private ParquetFileWriter? _TopologyWriter;
+
+    /// <summary>
+    /// Writer of <c>packet_buffers.parquet</c>; <see langword="null"/> until the first batch with buffer rows and after
+    /// <see cref="Complete"/>.
+    /// </summary>
+    private ParquetFileWriter? _BuffersWriter;
+
+    /// <summary>
+    /// Writer state per field id; an entry exists from the field's first non-empty batch until <see cref="Complete"/> or
+    /// <see cref="Dispose"/>.
+    /// </summary>
     private readonly Dictionary<int, FieldWriterState> _FieldWriters = new(64);
 
     // The sink keeps its own copy of the catalog rows so catalog.parquet can be written in Complete, once, with
     // every field that was seen in any batch (a field may first appear in a late batch).
+
+    /// <summary>The catalog rows by field id, merged from every batch (see <see cref="WriteBatch"/>); written once in <see cref="Complete"/>.</summary>
     private readonly Dictionary<int, FieldCatalogEntry> _Catalog = new(64);
+
+    /// <summary>Whether <see cref="Dispose"/> already ran; makes a second call a no-op.</summary>
     private bool _Disposed;
-
-    #endregion
-
-    #region Constructor
 
     /// <summary>
     /// Creates a sink writing into <paramref name="rootDirectory"/> (must already exist) and writes
     /// <c>protocols.parquet</c> immediately, because the protocol set is fixed by the stack for the whole export.
     /// </summary>
     /// <param name="rootDirectory">Root output directory.</param>
-    /// <param name="flags">Detail flags the batches were configured with; controls optional columns.</param>
+    /// <param name="content">Content of the export; decides the shape, the optional columns, and the position column of the field files.</param>
     /// <param name="protocols">Protocols of the parsing stack; no <c>protocols.parquet</c> is written when empty.</param>
+    /// <param name="method">The Parquet.Net codec of every file; already mapped and validated by the exporter's builder.</param>
+    /// <param name="level">The compression level of every file; already mapped and validated by the exporter's builder.</param>
     /// <exception cref="ArgumentNullException"><paramref name="protocols"/> is <see langword="null"/>.</exception>
     /// <exception cref="IOException">Old dataset files cannot be removed or the new files cannot be created.</exception>
     /// <remarks>
     /// <paramref name="rootDirectory"/> is not validated here: <see cref="ParquetExporter"/> passes the full path it
-    /// normalized in its builder, and the constructor is internal.
+    /// normalized in its builder, and the constructor is internal. <paramref name="method"/> and <paramref name="level"/> are not
+    /// validated either: they come from the Try mappings of <see cref="ParquetCompressions"/> in the builder, which refuses an
+    /// undefined value, so this sink checks nothing of its own.
     /// </remarks>
-    internal ParquetBatchSink(string rootDirectory, ColumnarDetailFlags flags, IReadOnlyList<ProtocolCatalogEntry> protocols)
+    internal ParquetBatchSink(
+        string rootDirectory,
+        ExportContent content,
+        IReadOnlyList<ProtocolCatalogEntry> protocols,
+        CompressionMethod method,
+        CompressionLevel level)
     {
         ArgumentNullException.ThrowIfNull(protocols);
 
         _FieldsDirectory = Path.Combine(rootDirectory, "fields");
-        _Flags = flags;
+        _Content = content;
+
+        // Compression is always explicit: the dataset must not change when Parquet.Net changes its default.
+        _Options = new ParquetOptions { CompressionMethod = method, CompressionLevel = level };
+
+        // The second key column of the field files says what the position means: the node id of the hierarchy shape, or the
+        // occurrence number of the flat shapes. The shape is also written to export_info.parquet, which a reader checks first.
+        if (content.Shape == ExportShape.Hierarchy)
+        {
+            _PositionColumn = "node_id";
+        }
+        else
+        {
+            _PositionColumn = "occurrence";
+        }
 
         // Remove the previous dataset before anything new is written so a re-export never mixes old and new files.
         _ClearPriorArtifacts(rootDirectory);
         Directory.CreateDirectory(_FieldsDirectory);
 
-        string PacketsPath() => Path.Combine(rootDirectory, "packets.parquet");
-        string TopologyPath() => Path.Combine(rootDirectory, "topology.parquet");
-        _PacketsPath = PacketsPath();
-        _TopologyPath = TopologyPath();
+        _PacketsPath = Path.Combine(rootDirectory, "packets.parquet");
+        _TopologyPath = Path.Combine(rootDirectory, "topology.parquet");
+        _BuffersPath = Path.Combine(rootDirectory, "packet_buffers.parquet");
         _CatalogPath = Path.Combine(rootDirectory, "catalog.parquet");
 
-        _WriteProtocols(Path.Combine(rootDirectory, "protocols.parquet"), protocols);
+        _WriteProtocols(Path.Combine(rootDirectory, "protocols.parquet"), protocols, _Options);
+        _WriteExportInfo(Path.Combine(rootDirectory, "export_info.parquet"), content, _Options);
     }
-
-    private readonly string _PacketsPath;
-    private readonly string _TopologyPath;
-    private readonly string _CatalogPath;
 
     #endregion
 
-    #region IColumnarBatchSink
+    #region Batch writing
 
     /// <inheritdoc/>
     /// <remarks>
     /// Not atomic: the row groups of one batch are appended file by file, so an exception part-way leaves the
     /// tables with different numbers of row groups for that batch. <see cref="ParquetExporter"/> reports the failure
-    /// as an export error.
+    /// as an export error. The catalog rows of the batch are merged before the first file is written, so every field file has
+    /// a catalog row even after such a failure.
     /// </remarks>
     public void WriteBatch(ColumnarPacketBatch batch)
     {
@@ -125,10 +236,30 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
             return;
         }
 
+        // Copy the catalog rows first; they are written once, at Complete. Invariant: every field file that receives a row has a
+        // catalog row, also when a later file of this batch fails (a partial batch then stays nameable). A value row (with a
+        // table) wins over a structure row of the same id: background mode alternates two batches with their own catalogs, and
+        // one batch can see an id only as a node without a value while the other wrote its field file. A batch creates a
+        // field's catalog entry once and never changes it, so keeping the first value row is harmless.
+        // Sync: DuckDbBulkWriter.WriteBatch applies the same rule.
+        foreach (KeyValuePair<int, FieldCatalogEntry> entry in batch.Catalog)
+        {
+            if (!_Catalog.TryGetValue(entry.Key, out FieldCatalogEntry? existing) || existing.TableName is null)
+            {
+                _Catalog[entry.Key] = entry.Value;
+            }
+        }
+
         // One row group per table per batch; every table carries packet_id so the tables can be joined back together.
         _WritePacketsRowGroup(batch);
 
-        if ((_Flags & ColumnarDetailFlags.IncludeTopology) != 0 && batch.Topology.Count > 0)
+        // The buffer rows are packet-level rows like the frames: a row group of their own file, never part of a field file.
+        if (_Content.Buffers && batch.BufferRowCount > 0)
+        {
+            _WriteBuffersRowGroup(batch);
+        }
+
+        if (_Content.Shape == ExportShape.Hierarchy && batch.Topology.Count > 0)
         {
             _WriteTopologyRowGroup(batch);
         }
@@ -143,27 +274,26 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
             }
 
             FieldWriterState state = _GetOrCreateFieldWriter(entry.Key, entry.Value.FieldType);
-            state.WriteRowGroup(_FieldsDirectory, entry.Value, _Flags);
-        }
-
-        // Copy the catalog rows; they are only written once, at Complete. Overwriting by id is harmless because the
-        // batch creates a field's catalog entry once and never changes it.
-        foreach (KeyValuePair<int, FieldCatalogEntry> entry in batch.Catalog)
-        {
-            _Catalog[entry.Key] = entry.Value;
+            state.WriteRowGroup(_FieldsDirectory, entry.Value, _Content);
         }
     }
+
+    #endregion
+
+    #region Completion and disposal
 
     /// <inheritdoc/>
     /// <remarks>
     /// Closing a writer writes the Parquet footer, which is what makes the file readable. Complete closes the packet,
-    /// topology and field files and then writes <c>catalog.parquet</c>, which only exists after this call
+    /// buffer, topology and field files and then writes <c>catalog.parquet</c>, which only exists after this call
     /// (<see cref="Dispose"/> closes the same files but never writes the catalog).
     /// </remarks>
     public void Complete()
     {
         _PacketsWriter?.Dispose();
         _PacketsWriter = null;
+        _BuffersWriter?.Dispose();
+        _BuffersWriter = null;
         _TopologyWriter?.Dispose();
         _TopologyWriter = null;
 
@@ -175,10 +305,6 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
 
         _WriteCatalog();
     }
-
-    #endregion
-
-    #region IDisposable
 
     /// <summary>
     /// Releases any still-open writers (which closes their files and writes their footers). Safe to call after
@@ -195,6 +321,8 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
 
         _PacketsWriter?.Dispose();
         _PacketsWriter = null;
+        _BuffersWriter?.Dispose();
+        _BuffersWriter = null;
         _TopologyWriter?.Dispose();
         _TopologyWriter = null;
         foreach (FieldWriterState state in _FieldWriters.Values)
@@ -206,76 +334,36 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
 
     #endregion
 
-    #region Private Helpers
-
-    /// <summary>
-    /// Deletes prior Parquet artifacts under <paramref name="rootDirectory"/> so a re-export to
-    /// the same path does not leave orphan <c>fields/field_*.parquet</c> files from a previous
-    /// run with a different field-ID set. Base files are overwritten via <c>File.Create</c>
-    /// anyway; clearing the fields directory is what makes re-export deterministic. The base files are deleted
-    /// as well because some are created conditionally (<c>topology.parquet</c>, <c>catalog.parquet</c>,
-    /// <c>protocols.parquet</c>), so a stale copy from an earlier run would otherwise survive next to the new dataset.
-    /// </summary>
-    /// <remarks>
-    /// Security: this deletes files in a caller-chosen directory. The threat is destroying unrelated data, so the
-    /// deletion is restricted to the four fixed dataset file names and to <c>*.parquet</c> files directly inside
-    /// <c>fields</c>; no recursion and no other pattern. Rejected alternative: deleting the whole directory, which
-    /// would remove foreign files. Accepted residual risk: a user's own <c>fields/*.parquet</c> files in the chosen
-    /// directory are removed; the Parquet README documents this as the re-export behaviour.
-    /// </remarks>
-    private static void _ClearPriorArtifacts(string rootDirectory)
-    {
-        foreach (string name in (string[])
-                 [
-                     "packets.parquet",
-                     "topology.parquet",
-                     "catalog.parquet",
-                     "protocols.parquet"
-                 ])
-        {
-            string path = Path.Combine(rootDirectory, name);
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-
-        string fieldsDirectory = Path.Combine(rootDirectory, "fields");
-        if (!Directory.Exists(fieldsDirectory))
-        {
-            return;
-        }
-
-        foreach (string file in Directory.EnumerateFiles(fieldsDirectory, "*.parquet"))
-        {
-            File.Delete(file);
-        }
-    }
+    #region Table writers
 
     /// <summary>
     /// Returns the writer state for a field ID, creating it on the field's first non-empty batch. The field's
     /// <see cref="FieldType"/> is taken from the first bag seen and then fixed for the whole export, because the
     /// Parquet column type of <c>field_{id}.parquet</c> cannot change after the file is created.
     /// </summary>
+    /// <param name="fieldIdValue">The field ID.</param>
+    /// <param name="fieldType">The field's value type; used only when the state is created.</param>
+    /// <returns>The writer state of the field; the same instance for every call with the same ID.</returns>
     private FieldWriterState _GetOrCreateFieldWriter(int fieldIdValue, FieldType fieldType)
     {
         if (!_FieldWriters.TryGetValue(fieldIdValue, out FieldWriterState? state))
         {
-            state = new FieldWriterState(fieldIdValue, fieldType);
+            state = new FieldWriterState(fieldIdValue, fieldType, _PositionColumn, _Options);
             _FieldWriters[fieldIdValue] = state;
         }
         return state;
     }
 
     /// <summary>Appends one row group to <c>packets.parquet</c>, creating the file with the flag-dependent schema on first use.</summary>
+    /// <param name="batch">The batch whose packet ids, timestamps, and optional info and frame bytes become the row group.</param>
     private void _WritePacketsRowGroup(ColumnarPacketBatch batch)
     {
-        // The schema depends on the detail flags, which are fixed for the export, so it is built once when the file
+        // The schema depends on the export content, which is fixed for the export, so it is built once when the file
         // is created. Optional columns are added to the schema only when the batch collected them; otherwise the
         // batch lists (Infos, FrameBytesList) would be empty and shorter than the other columns.
         List<DataField> fields = [_PacketIdField, _TimestampField];
-        bool includeInfo = (_Flags & ColumnarDetailFlags.IncludeInfo) != 0;
-        bool includeFrameBytes = (_Flags & ColumnarDetailFlags.IncludeFrameBytes) != 0;
+        bool includeInfo = _Content.Info;
+        bool includeFrameBytes = _Content.FrameBytes;
         if (includeInfo)
         {
             fields.Add(_InfoField);
@@ -287,11 +375,17 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
 
         // Each column of a row group must have the same row count, and Parquet.Net requires the columns to be
         // written in schema order.
-        _PacketsWriter ??= new ParquetFileWriter(_PacketsPath, new ParquetSchema(fields));
+        _PacketsWriter ??= new ParquetFileWriter(_PacketsPath, new ParquetSchema(fields), _Options);
+
+        // The id and timestamp columns are copied into pooled arrays (Parquet.Net's value-type overloads take memory, the batch
+        // keeps lists): no per-flush array garbage. The lambda captures these two locals, so a closure object exists once per
+        // row group, per flush and not per value — acceptable on this cold path. Both are returned after the awaited write.
+        using PooledColumn<int> packetIds = PooledColumn<int>.CopyOf(batch.PacketIdSpan);
+        using PooledColumn<long> timestamps = PooledColumn<long>.CopyOf(batch.TimestampSpan);
         _PacketsWriter.WriteRowGroup(rowGroup =>
         {
-            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_PacketIdField, ToArray(batch.PacketIds)));
-            ParquetFileWriter.Block(rowGroup.WriteAsync<long>(_TimestampField, ToArray(batch.Timestamps)));
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_PacketIdField, packetIds.Memory));
+            ParquetFileWriter.Block(rowGroup.WriteAsync<long>(_TimestampField, timestamps.Memory));
             if (includeInfo)
             {
                 ParquetFileWriter.Block(rowGroup.WriteAsync(_InfoField, batch.Infos));
@@ -303,68 +397,114 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
         });
     }
 
-    /// <summary>Appends one row group to <c>topology.parquet</c> (flat node rows; <c>parent_node_id</c> is −1 for top-level nodes).</summary>
-    private void _WriteTopologyRowGroup(ColumnarPacketBatch batch)
+    /// <summary>
+    /// Appends one row group to <c>packet_buffers.parquet</c> (one row per additional packet buffer), creating the file on the
+    /// first batch that has a buffer row.
+    /// </summary>
+    /// <param name="batch">The batch whose buffer rows (not empty) become the row group.</param>
+    /// <remarks>
+    /// Perf: the id and index columns are copied into pooled arrays like the packet columns (no per-flush array garbage); the
+    /// bytes column needs one <c>byte[]</c> per buffer because Parquet.Net's byte-array column takes arrays, the same cost as the
+    /// frame column (<see cref="ColumnarPacketBatch.BufferBytesList"/>).
+    /// </remarks>
+    private void _WriteBuffersRowGroup(ColumnarPacketBatch batch)
     {
-        // The batch stores topology as a list of structs (one row per node), but Parquet is written one column at a
-        // time from an array, so the rows are split into four int[] columns. This is one pass and four allocations
-        // per flush, not per node.
-        IReadOnlyList<TopologyNode> topology = batch.Topology;
-        int count = topology.Count;
-        int[] packetIds = new int[count];
-        int[] nodeIds = new int[count];
-        int[] fieldIds = new int[count];
-        int[] parentNodeIds = new int[count];
-        for (int i = 0; i < count; i++)
-        {
-            TopologyNode node = topology[i];
-            packetIds[i] = node.PacketId;
-            nodeIds[i] = node.NodeId;
-            fieldIds[i] = node.FieldId;
-            parentNodeIds[i] = node.ParentNodeId;
-        }
+        // Created lazily so an export whose packets have no additional buffer leaves no empty file; an existing reader of the
+        // dataset therefore sees packet_buffers.parquet only when it holds at least one row.
+        _BuffersWriter ??= new ParquetFileWriter(
+            _BuffersPath, new ParquetSchema(_BufferPacketIdField, _BufferIndexField, _BufferBytesField), _Options);
 
-        _TopologyWriter ??= new ParquetFileWriter(
-            _TopologyPath,
-            new ParquetSchema(_TopoPacketIdField, _TopoNodeIdField, _TopoFieldIdField, _TopoParentNodeIdField));
-        _TopologyWriter.WriteRowGroup(rowGroup =>
+        using PooledColumn<int> packetIds = PooledColumn<int>.CopyOf(batch.BufferPacketIdSpan);
+        using PooledColumn<byte> indexes = PooledColumn<byte>.CopyOf(batch.BufferIndexSpan);
+        _BuffersWriter.WriteRowGroup(rowGroup =>
         {
-            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_TopoPacketIdField, packetIds));
-            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_TopoNodeIdField, nodeIds));
-            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_TopoFieldIdField, fieldIds));
-            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_TopoParentNodeIdField, parentNodeIds));
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_BufferPacketIdField, packetIds.Memory));
+            ParquetFileWriter.Block(rowGroup.WriteAsync<byte>(_BufferIndexField, indexes.Memory));
+            ParquetFileWriter.Block(rowGroup.WriteAsync(_BufferBytesField, batch.BufferBytesList));
         });
     }
 
     /// <summary>
-    /// Returns an array holding the elements of <paramref name="source"/>: the same array when it already is one,
-    /// otherwise a new copy. <see cref="ParquetRowGroupWriter"/>'s
-    /// value-type <c>WriteAsync</c> overloads take <see cref="ReadOnlyMemory{T}"/> (which arrays
-    /// convert to implicitly), not <see cref="IReadOnlyList{T}"/>, so batch/bag columns backed by
-    /// <see cref="List{T}"/> must be materialized before writing. This costs one copy of each column per flush
-    /// (a transient allocation proportional to the block size); <see cref="List{T}.ToArray"/> is used for lists
-    /// because it is a single block copy, while the indexed loop is only the fallback for other list types.
-    /// The returned array must not be modified by the caller.
+    /// Appends one row group to <c>topology.parquet</c> (flat node rows; <c>parent_node_id</c> is −1 for top-level nodes; with
+    /// <see cref="ExportContent.CustomText"/> the last column holds the display line of a node without a value).
     /// </summary>
-    internal static T[] ToArray<T>(IReadOnlyList<T> source)
+    /// <param name="batch">The batch whose topology rows (not empty) become the row group.</param>
+    /// <remarks>
+    /// Sync: Parquet/README.md § Directory Layout and EXPORTER_GUIDE.md § Rebuilding the display line (the layer text).
+    /// </remarks>
+    private void _WriteTopologyRowGroup(ColumnarPacketBatch batch)
     {
-        if (source is T[] array)
-        {
-            return array;
-        }
+        // The batch stores topology as a list of structs (one row per node), but Parquet is written one column at a
+        // time from an array, so the rows are split into four int columns in one pass. The four arrays are rented from the
+        // pool and returned in the finally block after the awaited write. Perf: a flush leaves no array garbage behind; four
+        // new int[] of the topology's size per flush would survive into generation 1.
+        ReadOnlySpan<TopologyNode> topology = batch.TopologySpan;
+        int count = topology.Length;
+        bool includeCustomText = _Content.CustomText;
+        int[] packetIds = ArrayPool<int>.Shared.Rent(Math.Max(1, count));
+        int[] nodeIds = ArrayPool<int>.Shared.Rent(Math.Max(1, count));
+        int[] fieldIds = ArrayPool<int>.Shared.Rent(Math.Max(1, count));
+        int[] parentNodeIds = ArrayPool<int>.Shared.Rent(Math.Max(1, count));
 
-        if (source is List<T> list)
+        // The text column is an exact-size array (Parquet.Net takes the strings as an array, like every other string column of
+        // this sink): one array per flush, and only when the content asks for custom texts.
+        string?[] texts = includeCustomText
+            ? new string?[count]
+            : [];
+        try
         {
-            return list.ToArray();
-        }
+            for (int i = 0; i < count; i++)
+            {
+                TopologyNode node = topology[i];
+                packetIds[i] = node.PacketId;
+                nodeIds[i] = node.NodeId;
+                fieldIds[i] = node.FieldId;
+                parentNodeIds[i] = node.ParentNodeId;
+                if (includeCustomText)
+                {
+                    // Null stays null (an absent text); a set but empty text stays the empty string. Nothing may replace one by the other.
+                    texts[i] = node.CustomText;
+                }
+            }
 
-        T[] result = new T[source.Count];
-        for (int i = 0; i < source.Count; i++)
-        {
-            result[i] = source[i];
+            // The schema depends on the content, which is fixed for the export, so it is built once when the file is created.
+            if (_TopologyWriter is null)
+            {
+                List<DataField> topologyFields = [_TopoPacketIdField, _TopoNodeIdField, _TopoFieldIdField, _TopoParentNodeIdField];
+                if (includeCustomText)
+                {
+                    topologyFields.Add(_TopoCustomTextField);
+                }
+
+                _TopologyWriter = new ParquetFileWriter(_TopologyPath, new ParquetSchema(topologyFields), _Options);
+            }
+
+            // The memory is sliced to the row count: a rented array is longer than asked, and its spare slots must not
+            // become rows. The lambda captures the arrays (one closure per row group, not per value).
+            _TopologyWriter.WriteRowGroup(rowGroup =>
+            {
+                ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_TopoPacketIdField, packetIds.AsMemory(0, count)));
+                ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_TopoNodeIdField, nodeIds.AsMemory(0, count)));
+                ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_TopoFieldIdField, fieldIds.AsMemory(0, count)));
+                ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_TopoParentNodeIdField, parentNodeIds.AsMemory(0, count)));
+                if (includeCustomText)
+                {
+                    ParquetFileWriter.Block(rowGroup.WriteAsync(_TopoCustomTextField, texts));
+                }
+            });
         }
-        return result;
+        finally
+        {
+            ArrayPool<int>.Shared.Return(packetIds);
+            ArrayPool<int>.Shared.Return(nodeIds);
+            ArrayPool<int>.Shared.Return(fieldIds);
+            ArrayPool<int>.Shared.Return(parentNodeIds);
+        }
     }
+
+    #endregion
+
+    #region One-shot tables
 
     /// <summary>
     /// Writes <c>catalog.parquet</c> (one row per distinct field ID observed) as a single row group. Skipped when no
@@ -383,7 +523,8 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
         DataField uiName = new DataField<string>("ui_name");
         DataField fieldType = new DataField<int>("field_type");
         DataField protocolId = new DataField<int>("protocol_id");
-        DataField tableName = new DataField<string>("table_name");
+        // Nullable: a structure node (protocol, group) has a catalog row but no field table.
+        DataField tableName = new DataField<string?>("table_name");
         // Appended last so readers that address catalog columns by position keep working (new catalog
         // columns are only ever appended); nullable because a field may have no description.
         DataField description = new DataField<string?>("description");
@@ -394,7 +535,7 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
         string[] uiNames = new string[count];
         int[] fieldTypes = new int[count];
         int[] protocolIds = new int[count];
-        string[] tableNames = new string[count];
+        string?[] tableNames = new string?[count];
         string?[] descriptions = new string?[count];
         int row = 0;
         foreach (FieldCatalogEntry entry in _Catalog.Values)
@@ -410,7 +551,7 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
         }
 
         using ParquetFileWriter writer = new(
-            _CatalogPath, new ParquetSchema(fieldId, name, uiName, fieldType, protocolId, tableName, description));
+            _CatalogPath, new ParquetSchema(fieldId, name, uiName, fieldType, protocolId, tableName, description), _Options);
         writer.WriteRowGroup(rowGroup =>
         {
             ParquetFileWriter.Block(rowGroup.WriteAsync<int>(fieldId, fieldIds));
@@ -429,7 +570,8 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
     /// </summary>
     /// <param name="path">Target file path.</param>
     /// <param name="protocols">Protocols of the parsing stack.</param>
-    private static void _WriteProtocols(string path, IReadOnlyList<ProtocolCatalogEntry> protocols)
+    /// <param name="options">The writer options of the dataset (codec and level).</param>
+    private static void _WriteProtocols(string path, IReadOnlyList<ProtocolCatalogEntry> protocols, ParquetOptions options)
     {
         if (protocols.Count == 0)
         {
@@ -452,13 +594,90 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
             uiNames[row] = entry.UiName;
         }
 
-        using ParquetFileWriter writer = new(path, new ParquetSchema(protocolId, name, uiName));
+        using ParquetFileWriter writer = new(path, new ParquetSchema(protocolId, name, uiName), options);
         writer.WriteRowGroup(rowGroup =>
         {
             ParquetFileWriter.Block(rowGroup.WriteAsync<int>(protocolId, protocolIds));
             ParquetFileWriter.Block(rowGroup.WriteAsync(name, names));
             ParquetFileWriter.Block(rowGroup.WriteAsync(uiName, uiNames));
         });
+    }
+
+    /// <summary>
+    /// Writes <c>export_info.parquet</c> (<c>key</c>, <c>value</c> string columns) as a single row group: the shape marker that
+    /// a reader checks first (see <see cref="ExportInfo"/>). Written when the sink is created, so even an export without a
+    /// single packet says what it would have contained.
+    /// </summary>
+    /// <param name="path">Target file path.</param>
+    /// <param name="content">The content of the export.</param>
+    /// <param name="options">The writer options of the dataset (codec and level).</param>
+    private static void _WriteExportInfo(string path, ExportContent content, ParquetOptions options)
+    {
+        IReadOnlyList<KeyValuePair<string, string>> rows = ExportInfo.CreateRows(content);
+        DataField key = new DataField<string>("key");
+        DataField value = new DataField<string>("value");
+        string[] keys = new string[rows.Count];
+        string[] values = new string[rows.Count];
+        for (int row = 0; row < rows.Count; row++)
+        {
+            keys[row] = rows[row].Key;
+            values[row] = rows[row].Value;
+        }
+
+        using ParquetFileWriter writer = new(path, new ParquetSchema(key, value), options);
+        writer.WriteRowGroup(rowGroup =>
+        {
+            ParquetFileWriter.Block(rowGroup.WriteAsync(key, keys));
+            ParquetFileWriter.Block(rowGroup.WriteAsync(value, values));
+        });
+    }
+
+    /// <summary>
+    /// Deletes prior Parquet artifacts under <paramref name="rootDirectory"/> so a re-export to
+    /// the same path does not leave orphan <c>fields/field_*.parquet</c> files from a previous
+    /// run with a different field-ID set. Base files are overwritten via <c>File.Create</c>
+    /// anyway; clearing the fields directory is what makes re-export deterministic. The base files are deleted
+    /// as well because some are created conditionally (<c>topology.parquet</c>, <c>catalog.parquet</c>,
+    /// <c>protocols.parquet</c>), so a stale copy from an earlier run would otherwise survive next to the new dataset.
+    /// </summary>
+    /// <param name="rootDirectory">The dataset directory; it exists when the method runs.</param>
+    /// <exception cref="IOException">A prior file cannot be deleted.</exception>
+    /// <remarks>
+    /// Security: this deletes files in a caller-chosen directory. The threat is destroying unrelated data, so the
+    /// deletion is restricted to the six fixed dataset file names and to <c>*.parquet</c> files directly inside
+    /// <c>fields</c>; no recursion and no other pattern. Rejected alternative: deleting the whole directory, which
+    /// would remove foreign files. Accepted residual risk: a user's own <c>fields/*.parquet</c> files in the chosen
+    /// directory are removed; the Parquet README documents this as the re-export behaviour.
+    /// </remarks>
+    private static void _ClearPriorArtifacts(string rootDirectory)
+    {
+        foreach (string name in (string[])
+                 [
+                     "packets.parquet",
+                     "packet_buffers.parquet",
+                     "topology.parquet",
+                     "catalog.parquet",
+                     "protocols.parquet",
+                     "export_info.parquet"
+                 ])
+        {
+            string path = Path.Combine(rootDirectory, name);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+
+        string fieldsDirectory = Path.Combine(rootDirectory, "fields");
+        if (!Directory.Exists(fieldsDirectory))
+        {
+            return;
+        }
+
+        foreach (string file in Directory.EnumerateFiles(fieldsDirectory, "*.parquet"))
+        {
+            File.Delete(file);
+        }
     }
 
     #endregion
@@ -480,18 +699,26 @@ internal sealed class ParquetBatchSink : IColumnarBatchSink, IDisposable
 /// </summary>
 internal sealed class ParquetFileWriter : IDisposable
 {
+    /// <summary>The file stream of the table; owned by this instance and closed by <see cref="Dispose"/>.</summary>
     private readonly FileStream _Stream;
+
+    /// <summary>The Parquet.Net writer over <see cref="_Stream"/>; disposing it writes the footer.</summary>
     private readonly ParquetWriter _Writer;
 
     /// <summary>Creates the file and opens a Parquet writer against it with the given schema.</summary>
     /// <param name="path">Target file path; an existing file is truncated.</param>
     /// <param name="schema">Schema of the file; fixed for the lifetime of the writer.</param>
-    internal ParquetFileWriter(string path, ParquetSchema schema)
+    /// <param name="options">
+    /// The writer options (codec and level) of the dataset. Required, with no default, so a new writer of the dataset cannot be
+    /// created without choosing its compression: Parquet.Net would otherwise fall back to its own default.
+    /// </param>
+    internal ParquetFileWriter(string path, ParquetSchema schema, ParquetOptions options)
     {
         _Stream = File.Create(path);
         try
         {
-            _Writer = Block(ParquetWriter.CreateAsync(schema, _Stream));
+            // Compression is always explicit: the dataset must not change when Parquet.Net changes its default.
+            _Writer = Block(ParquetWriter.CreateAsync(schema, _Stream, options));
         }
         catch
         {
@@ -507,12 +734,13 @@ internal sealed class ParquetFileWriter : IDisposable
     internal static void Block(System.Threading.Tasks.Task task)
     {
         // Parquet.Net exposes only async writers; the IPacketListener contract is synchronous. Approved sync-over-async
-        // (rule "no .Result/.Wait", reason: no sync API, scope: this method, user approved). Callers must not run the
-        // exporter on a thread with a SynchronizationContext.
+        // (rule "no .Result/.Wait", reason: no sync API, scope: this method, user approved).
+        // In ExportWriteMode.Background every row-group write runs on the exporter's own writer thread, which has no
+        // SynchronizationContext, so the blocking wait cannot deadlock there. Residual risk only in Synchronous mode (and for the
+        // file creation and catalog writes, which run on the caller's thread): a caller thread with a SynchronizationContext that
+        // the task needs. Mitigation: the documented caller contract.
         // GetAwaiter().GetResult() is used instead of Wait() so the original exception is rethrown directly rather
-        // than wrapped in an AggregateException. The deadlock risk (blocking a thread that owns a
-        // SynchronizationContext while the task needs that context to complete) is the accepted residual risk,
-        // mitigated only by the documented caller contract.
+        // than wrapped in an AggregateException.
         task.ConfigureAwait(false).GetAwaiter().GetResult();
     }
 
@@ -564,7 +792,7 @@ internal sealed class ParquetFileWriter : IDisposable
 /// <summary>
 /// Per-field Parquet writer state: the lazily-created <c>fields/field_{id}.parquet</c> writer
 /// and its schema (fixed once the field's <see cref="FieldType"/> and the export's
-/// <see cref="ColumnarDetailFlags"/> are known). String columns are written as plain
+/// <see cref="ExportContent"/> are known). String columns are written as plain
 /// <c>DataField&lt;string&gt;</c> columns.
 /// <para>
 /// <b>Thread safety:</b> Not thread-safe; owned by one <see cref="ParquetBatchSink"/> and used from its single caller thread.
@@ -572,35 +800,61 @@ internal sealed class ParquetFileWriter : IDisposable
 /// </summary>
 internal sealed class FieldWriterState : IDisposable
 {
-    #region Fields
+    #region Schema
 
+    /// <summary>The field ID; names the file <c>field_{id}.parquet</c>.</summary>
     private readonly int _FieldIdValue;
+
+    /// <summary>The field's value type; fixed for the file and selects the <c>value</c> column and the typed write.</summary>
     private readonly FieldType _FieldType;
 
+    /// <summary>The <c>packet_id</c> key column.</summary>
     private readonly DataField _PacketIdField = new DataField<int>("packet_id");
-    private readonly DataField _NodeIdField = new DataField<int>("node_id");
+
+    /// <summary>The position key column: <c>node_id</c> (hierarchy shape) or <c>occurrence</c> (flat shapes).</summary>
+    private readonly DataField _PositionField;
+
+    /// <summary>
+    /// The typed <c>value</c> column (named <c>value_timestamp_ns</c> for timestamps); <see langword="null"/> for the 128-bit types,
+    /// which have the two columns below instead.
+    /// </summary>
     private readonly DataField? _ValueField;
+
+    /// <summary>The <c>value_hi</c> column of an IPv6 or UUID file: the high 64 bits; <see langword="null"/> for every other type.</summary>
+    private readonly DataField? _HighField;
+
+    /// <summary>The <c>value_lo</c> column of an IPv6 or UUID file: the low 64 bits; <see langword="null"/> for every other type.</summary>
+    private readonly DataField? _LowField;
+
+    /// <summary>The optional <c>custom_repr</c> column.</summary>
     private readonly DataField _CustomReprField = new DataField<string?>("custom_repr");
+
+    /// <summary>The optional <c>custom_text</c> column.</summary>
     private readonly DataField _CustomTextField = new DataField<string?>("custom_text");
 
+    /// <summary>Writer of the field file; <see langword="null"/> until the first row group and after <see cref="Complete"/>.</summary>
     private ParquetFileWriter? _Writer;
 
-    #endregion
-
-    #region Constructor
+    /// <summary>The writer options (codec and level) of the dataset; the sink's object, read-only, passed to the file writer.</summary>
+    private readonly ParquetOptions _Options;
 
     /// <summary>Creates the writer state for one field, deriving its Parquet schema from <paramref name="fieldType"/>.</summary>
     /// <param name="fieldIdValue">The field ID; names the file <c>field_{id}.parquet</c>.</param>
     /// <param name="fieldType">The field's value type; selects the Parquet type of the <c>value</c> column.</param>
-    internal FieldWriterState(int fieldIdValue, FieldType fieldType)
+    /// <param name="positionColumn"><c>node_id</c> in the hierarchy shape, <c>occurrence</c> in the flat shapes.</param>
+    /// <param name="options">The writer options (codec and level) of the dataset; every field file uses them.</param>
+    internal FieldWriterState(int fieldIdValue, FieldType fieldType, string positionColumn, ParquetOptions options)
     {
         _FieldIdValue = fieldIdValue;
         _FieldType = fieldType;
+        _Options = options;
+        _PositionField = new DataField<int>(positionColumn);
 
         // One native Parquet column type per FieldType, so consumers get typed values without parsing. Timestamp is
         // plain INT64 nanoseconds since the Unix epoch (no Parquet logical timestamp type), hence the column name
-        // value_timestamp_ns. The default case stores raw bytes: FieldType.Bytes and the fixed-size address types
-        // (MAC, IPv4, IPv6, EUI-64, UUID) as their binary form. _WriteTypedValue must stay in sync with this switch.
+        // value_timestamp_ns. The addresses are unsigned integers whose numeric order is the address order: IPv4 UINT32, MAC and
+        // EUI-64 UINT64. The default case stores FieldType.Bytes as a byte array. _WriteTypedValue must stay in sync with this
+        // switch. Sync: Parquet/README.md § Directory Layout (field files) and EXPORTER_GUIDE.md § Rebuilding the display line.
         _ValueField = fieldType switch
         {
             FieldType.Bool => new DataField<bool>("value"),
@@ -609,115 +863,274 @@ internal sealed class FieldWriterState : IDisposable
             FieldType.F64 => new DataField<double>("value"),
             FieldType.Timestamp => new DataField<long>("value_timestamp_ns"),
             FieldType.String => new DataField<string?>("value"),
-            _ => new DataField<byte[]>("value"), // Bytes + fixed-size address types
+            FieldType.IPv4Address => new DataField<uint>("value"),
+            FieldType.MacAddress or FieldType.Eui64 => new DataField<ulong>("value"),
+
+            // 128-bit values have no single column: Parquet has no 128-bit integer type, and Parquet.Net 6.1 writes no raw
+            // fixed-length byte array (its only 16-byte column is a Guid with the UUID logical type, whose byte order a reader
+            // cannot rely on, and which would be wrong for an IPv6 address anyway). So the value is two UINT64 halves, high
+            // first, the big-endian order of the address. A reader needs both: value_hi alone is the /64 prefix of an IPv6
+            // address. Rejected: BYTE_ARRAY (larger, not an integer).
+            FieldType.IPv6Address or FieldType.Uuid => null,
+            _ => new DataField<byte[]>("value"), // Bytes
         };
-    }
-
-    #endregion
-
-    #region Internal API
-
-    /// <summary>Writes one row group for this field from a single flushed batch's <see cref="FieldColumnBag"/>.</summary>
-    /// <param name="fieldsDirectory">Directory that holds the per-field files.</param>
-    /// <param name="bag">The batch's rows for this field; must be non-empty.</param>
-    /// <param name="flags">Detail flags of the export; decide which optional columns exist in the file.</param>
-    internal void WriteRowGroup(string fieldsDirectory, FieldColumnBag bag, ColumnarDetailFlags flags)
-    {
-        // The file is created on the first batch that has rows for this field, with a schema derived from the
-        // flags; later batches must write the same columns, which holds because the flags never change.
-        _Writer ??= new ParquetFileWriter(
-            Path.Combine(fieldsDirectory, $"field_{_FieldIdValue}.parquet"), _BuildSchema(flags));
-
-        _Writer.WriteRowGroup(rowGroup =>
+        if (_ValueField is null)
         {
-            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_PacketIdField, ParquetBatchSink.ToArray(bag.PacketIds)));
-            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_NodeIdField, ParquetBatchSink.ToArray(bag.NodeIds)));
-
-            _WriteTypedValue(rowGroup, bag);
-
-            if ((flags & ColumnarDetailFlags.IncludeCustomRepresentation) != 0)
-            {
-                ParquetFileWriter.Block(rowGroup.WriteAsync(_CustomReprField, _ToNullableStringArray(bag.CustomRepresentations)));
-            }
-            if ((flags & ColumnarDetailFlags.IncludeCustomText) != 0)
-            {
-                ParquetFileWriter.Block(rowGroup.WriteAsync(_CustomTextField, _ToNullableStringArray(bag.CustomTexts)));
-            }
-        });
+            _HighField = new DataField<ulong>("value_hi");
+            _LowField = new DataField<ulong>("value_lo");
+        }
     }
-
-    /// <summary>Closes the field's data file (writes its footer).</summary>
-    internal void Complete()
-    {
-        _Writer?.Dispose();
-        _Writer = null;
-    }
-
-    /// <inheritdoc/>
-    public void Dispose()
-    {
-        _Writer?.Dispose();
-        _Writer = null;
-    }
-
-    #endregion
-
-    #region Private Helpers
 
     /// <summary>Builds the schema of the field file; column order here is the order in which row groups must write them.</summary>
-    private ParquetSchema _BuildSchema(ColumnarDetailFlags flags)
+    /// <param name="content">Content of the export; decides which optional columns the file has.</param>
+    /// <returns>The schema of <c>field_{id}.parquet</c>.</returns>
+    private ParquetSchema _BuildSchema(ExportContent content)
     {
-        List<DataField> fields = [_PacketIdField, _NodeIdField];
+        List<DataField> fields = [_PacketIdField, _PositionField];
         if (_ValueField is not null)
         {
             fields.Add(_ValueField);
         }
-        if ((flags & ColumnarDetailFlags.IncludeCustomRepresentation) != 0)
+        else
+        {
+            fields.Add(_HighField!); // Invariant: a field type without a value column has both halves (set together in the constructor).
+            fields.Add(_LowField!); // Invariant: same as _HighField.
+        }
+        if (content.CustomRepresentation)
         {
             fields.Add(_CustomReprField);
         }
-        if ((flags & ColumnarDetailFlags.IncludeCustomText) != 0)
+        if (content.CustomText)
         {
             fields.Add(_CustomTextField);
         }
         return new ParquetSchema(fields);
     }
 
+    #endregion
+
+    #region Row group writing
+
+    /// <summary>Writes one row group for this field from a single flushed batch's <see cref="FieldColumnBag"/>.</summary>
+    /// <param name="fieldsDirectory">Directory that holds the per-field files.</param>
+    /// <param name="bag">The batch's rows for this field; must be non-empty.</param>
+    /// <param name="content">Content of the export; decides which optional columns exist in the file.</param>
+    internal void WriteRowGroup(string fieldsDirectory, FieldColumnBag bag, ExportContent content)
+    {
+        // The file is created on the first batch that has rows for this field, with a schema derived from the
+        // content; later batches must write the same columns, which holds because the content never changes.
+        _Writer ??= new ParquetFileWriter(
+            Path.Combine(fieldsDirectory, $"field_{_FieldIdValue}.parquet"), _BuildSchema(content), _Options);
+
+        // Pooled copies of the two key columns (see PooledColumn); one closure per row group, not per value.
+        using PooledColumn<int> packetIds = PooledColumn<int>.CopyOf(bag.PacketIdSpan);
+        using PooledColumn<int> positions = PooledColumn<int>.CopyOf(bag.PositionSpan);
+        _Writer.WriteRowGroup(rowGroup =>
+        {
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_PacketIdField, packetIds.Memory));
+            ParquetFileWriter.Block(rowGroup.WriteAsync<int>(_PositionField, positions.Memory));
+
+            _WriteTypedValue(rowGroup, bag);
+
+            if (content.CustomRepresentation)
+            {
+                ParquetFileWriter.Block(rowGroup.WriteAsync(_CustomReprField, _ToNullableStringArray(bag.CustomRepresentations)));
+            }
+            if (content.CustomText)
+            {
+                ParquetFileWriter.Block(rowGroup.WriteAsync(_CustomTextField, _ToNullableStringArray(bag.CustomTexts)));
+            }
+        });
+    }
+
     /// <summary>Writes the <c>value</c> column from the bag list that matches the field type (the only list the bag fills).</summary>
+    /// <param name="rowGroup">The row group being written; the <c>value</c> column is its third column.</param>
+    /// <param name="bag">The batch's rows for this field.</param>
     private void _WriteTypedValue(ParquetRowGroupWriter rowGroup, FieldColumnBag bag)
     {
         switch (_FieldType)
         {
+            // Value-type columns: copied into a pooled array that goes back to the pool right after the awaited write (see
+            // PooledColumn); each case has its own scope so the rented array lives exactly as long as its write.
             case FieldType.Bool:
-                ParquetFileWriter.Block(rowGroup.WriteAsync<bool>(_ValueField!, ParquetBatchSink.ToArray(bag.BoolValues)));
+            {
+                using PooledColumn<bool> values = PooledColumn<bool>.CopyOf(bag.BoolSpan);
+                ParquetFileWriter.Block(rowGroup.WriteAsync<bool>(_ValueField!, values.Memory));
                 break;
+            }
+
             case FieldType.I64:
-                ParquetFileWriter.Block(rowGroup.WriteAsync<long>(_ValueField!, ParquetBatchSink.ToArray(bag.I64Values)));
+            {
+                using PooledColumn<long> values = PooledColumn<long>.CopyOf(bag.I64Span);
+                ParquetFileWriter.Block(rowGroup.WriteAsync<long>(_ValueField!, values.Memory));
                 break;
+            }
+
             case FieldType.U64:
-                ParquetFileWriter.Block(rowGroup.WriteAsync<ulong>(_ValueField!, ParquetBatchSink.ToArray(bag.U64Values)));
+            {
+                using PooledColumn<ulong> values = PooledColumn<ulong>.CopyOf(bag.U64Span);
+                ParquetFileWriter.Block(rowGroup.WriteAsync<ulong>(_ValueField!, values.Memory));
                 break;
+            }
+
             case FieldType.F64:
-                ParquetFileWriter.Block(rowGroup.WriteAsync<double>(_ValueField!, ParquetBatchSink.ToArray(bag.F64Values)));
+            {
+                using PooledColumn<double> values = PooledColumn<double>.CopyOf(bag.F64Span);
+                ParquetFileWriter.Block(rowGroup.WriteAsync<double>(_ValueField!, values.Memory));
                 break;
+            }
+
             case FieldType.Timestamp:
-                ParquetFileWriter.Block(rowGroup.WriteAsync<long>(_ValueField!, ParquetBatchSink.ToArray(bag.TimestampValues)));
+            {
+                using PooledColumn<long> values = PooledColumn<long>.CopyOf(bag.TimestampSpan);
+                ParquetFileWriter.Block(rowGroup.WriteAsync<long>(_ValueField!, values.Memory));
                 break;
+            }
+
             case FieldType.String:
                 ParquetFileWriter.Block(rowGroup.WriteAsync(_ValueField!, _ToNullableStringArray(bag.StringValues)));
                 break;
+
+            // The address types: the integer of every row is read from the bag's inline values into a pooled column (the same
+            // copy the numeric columns above make, one pass per column, no array per value). The typed accessor cannot fail
+            // for a bag of its own type; a false is a broken invariant, reported from a cold helper.
+            case FieldType.IPv4Address:
+            {
+                using PooledColumn<uint> values = PooledColumn<uint>.Rent(bag.FixedValueSpan.Length);
+                _FillIPv4(bag, values.WritableSpan);
+                ParquetFileWriter.Block(rowGroup.WriteAsync<uint>(_ValueField!, values.Memory));
+                break;
+            }
+
+            case FieldType.MacAddress:
+            case FieldType.Eui64:
+            {
+                using PooledColumn<ulong> values = PooledColumn<ulong>.Rent(bag.FixedValueSpan.Length);
+                _FillIdentifiers(bag, values.WritableSpan);
+                ParquetFileWriter.Block(rowGroup.WriteAsync<ulong>(_ValueField!, values.Memory));
+                break;
+            }
+
+            case FieldType.IPv6Address:
+            case FieldType.Uuid:
+            {
+                // Two pooled columns, filled in one pass over the rows, then written in schema order (high, then low).
+                using PooledColumn<ulong> high = PooledColumn<ulong>.Rent(bag.FixedValueSpan.Length);
+                using PooledColumn<ulong> low = PooledColumn<ulong>.Rent(bag.FixedValueSpan.Length);
+                _FillHalves(bag, high.WritableSpan, low.WritableSpan);
+                ParquetFileWriter.Block(rowGroup.WriteAsync<ulong>(_HighField!, high.Memory)); // Invariant: the halves exist for these two types.
+                ParquetFileWriter.Block(rowGroup.WriteAsync<ulong>(_LowField!, low.Memory)); // Invariant: same as _HighField.
+                break;
+            }
+
             default:
-                // Reading BytesValues is what turns the bag's deferred fixed-size address payloads into byte[]:
-                // the per-value arrays are allocated here, once per flush, instead of per value while accumulating.
+                // Bytes: reading BytesValues builds one array per row from the batch's byte arena, once per flush, instead of per
+                // value while accumulating.
                 ParquetFileWriter.Block(rowGroup.WriteAsync(_ValueField!, bag.BytesValues));
                 break;
         }
     }
 
+    /// <summary>Copies the 32-bit integer of every row of an IPv4 bag into <paramref name="destination"/>.</summary>
+    /// <param name="bag">An IPv4 bag.</param>
+    /// <param name="destination">One entry per row of the bag.</param>
+    /// <exception cref="InvalidOperationException">A row is no IPv4 value (a broken invariant).</exception>
+    private static void _FillIPv4(FieldColumnBag bag, Span<uint> destination)
+    {
+        ReadOnlySpan<FieldValueData> values = bag.FixedValueSpan;
+        for (int row = 0; row < values.Length; row++)
+        {
+            if (!values[row].TryGetAsIPv4(out IPv4Address address))
+            {
+                FieldColumnBag.ThrowBrokenColumnType(bag.FieldIdValue, FieldType.IPv4Address, values[row].Type);
+            }
+
+            destination[row] = address.RawValue;
+        }
+    }
+
+    /// <summary>
+    /// Copies the 64-bit integer of every row of a MAC (48 bits used) or EUI-64 bag into <paramref name="destination"/>. The two
+    /// loops are separate because the accessor differs per type and a per-row type switch would cost a branch per value.
+    /// </summary>
+    /// <param name="bag">A MAC or EUI-64 bag.</param>
+    /// <param name="destination">One entry per row of the bag.</param>
+    /// <exception cref="InvalidOperationException">A row does not hold the bag's type (a broken invariant).</exception>
+    private static void _FillIdentifiers(FieldColumnBag bag, Span<ulong> destination)
+    {
+        ReadOnlySpan<FieldValueData> values = bag.FixedValueSpan;
+        if (bag.FieldType == FieldType.MacAddress)
+        {
+            for (int row = 0; row < values.Length; row++)
+            {
+                if (!values[row].TryGetAsMacAddress(out MacAddress mac))
+                {
+                    FieldColumnBag.ThrowBrokenColumnType(bag.FieldIdValue, FieldType.MacAddress, values[row].Type);
+                }
+
+                destination[row] = mac.RawValue;
+            }
+
+            return;
+        }
+
+        for (int row = 0; row < values.Length; row++)
+        {
+            if (!values[row].TryGetAsEui64(out Eui64 identifier))
+            {
+                FieldColumnBag.ThrowBrokenColumnType(bag.FieldIdValue, FieldType.Eui64, values[row].Type);
+            }
+
+            destination[row] = identifier.RawValue;
+        }
+    }
+
+    /// <summary>
+    /// Copies the high and the low 64 bits of every row of an IPv6 or UUID bag into the two destinations, in one pass.
+    /// </summary>
+    /// <param name="bag">An IPv6 or UUID bag.</param>
+    /// <param name="high">One entry per row: the high 64 bits (the first eight bytes of the address in network order).</param>
+    /// <param name="low">One entry per row: the low 64 bits.</param>
+    /// <exception cref="InvalidOperationException">A row does not hold the bag's type (a broken invariant).</exception>
+    private static void _FillHalves(FieldColumnBag bag, Span<ulong> high, Span<ulong> low)
+    {
+        ReadOnlySpan<FieldValueData> values = bag.FixedValueSpan;
+        if (bag.FieldType == FieldType.IPv6Address)
+        {
+            for (int row = 0; row < values.Length; row++)
+            {
+                if (!values[row].TryGetAsIPv6(out IPv6Address address))
+                {
+                    FieldColumnBag.ThrowBrokenColumnType(bag.FieldIdValue, FieldType.IPv6Address, values[row].Type);
+                }
+
+                high[row] = address.High;
+                low[row] = address.Low;
+            }
+
+            return;
+        }
+
+        for (int row = 0; row < values.Length; row++)
+        {
+            if (!values[row].TryGetAsUuid(out Uuid uuid))
+            {
+                FieldColumnBag.ThrowBrokenColumnType(bag.FieldIdValue, FieldType.Uuid, values[row].Type);
+            }
+
+            high[row] = uuid.High;
+            low[row] = uuid.Low;
+        }
+    }
+
     /// <summary>
     /// Materializes a nullable string list, preserving <see langword="null"/> entries so Parquet
-    /// matches DuckDB null semantics for absent custom text / string values.
+    /// matches DuckDB null semantics for absent custom text / string values: an absent text is a null entry (a null in the
+    /// column), a set but empty text is the empty string. Nothing here may replace a null by an empty string.
+    /// Sync: <see cref="OptionalTextReader"/> (null = absent) and EXPORTER_GUIDE.md § Rebuilding the display line.
     /// </summary>
+    /// <param name="source">The bag's string list.</param>
+    /// <returns>The entries in order: <paramref name="source"/> itself when it already is an array, otherwise a copy.</returns>
     private static string?[] _ToNullableStringArray(IReadOnlyList<string?> source)
     {
         if (source is string?[] array)
@@ -736,6 +1149,24 @@ internal sealed class FieldWriterState : IDisposable
             result[i] = source[i];
         }
         return result;
+    }
+
+    #endregion
+
+    #region Completion
+
+    /// <summary>Closes the field's data file (writes its footer).</summary>
+    internal void Complete()
+    {
+        _Writer?.Dispose();
+        _Writer = null;
+    }
+
+    /// <inheritdoc/>
+    public void Dispose()
+    {
+        _Writer?.Dispose();
+        _Writer = null;
     }
 
     #endregion

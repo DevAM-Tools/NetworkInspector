@@ -264,13 +264,13 @@ internal sealed class StackTests
         {
             byte[] payload = [0x01];
             Frame frame = Frame.Create(
-                new FrameId(1),
+                1,
                 Timestamp.FromSecs(0),
                 payload,
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            Packet packet = new(new PacketId(1), stack, frame);
+            Packet packet = new(1, stack, frame);
             bool success;
             bool isError;
             {

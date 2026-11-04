@@ -168,8 +168,8 @@ internal sealed class SomeIpSdTests
         Packet subscribe = s.Parse(new SomeIpSdBuilder().Subscribe(0xF232, 1, 2, 3, 1).BuildFrame());
         Packet unknown = s.Parse(new SomeIpSdBuilder().Offer(0x2222, 1, 1, 0, 3).Ipv4Option(_Ipv4, _Udp, 1).BuildFrame());
 
-        await ProtocolTestHelper.AssertDisplayText(s.Stack, offer, "someip_sd.entry.serviceid", "0xF232 (ClimateControl)");
-        await Assert.That(s.Strings(offer, "someip_sd.entry.service.name")).IsEquivalentTo(_Items("ClimateControl"));
+        await ProtocolTestHelper.AssertDisplayText(s.Stack, offer, "someip_sd.entry.serviceid", "0xF232 (Climate Control)");
+        await Assert.That(s.Strings(offer, "someip_sd.entry.service.name")).IsEquivalentTo(_Items("Climate Control"));
         await ProtocolTestHelper.AssertDisplayText(s.Stack, subscribe, "someip_sd.entry.eventgroupid", "0x0001 (ClimateEvents)");
         await Assert.That(s.Strings(subscribe, "someip_sd.entry.eventgroup.name")).IsEquivalentTo(_Items("ClimateEvents"));
         await ProtocolTestHelper.AssertDisplayText(s.Stack, unknown, "someip_sd.entry.serviceid", "0x2222 (unknown)");

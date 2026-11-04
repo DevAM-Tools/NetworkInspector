@@ -16,7 +16,7 @@ namespace NetworkInspector.Core.Fields;
 /// </para>
 /// <para><b>Thread-safety:</b> stack-only value for the thread that iterates; no synchronization of its own.</para>
 /// </summary>
-public ref struct MutFieldChildEnumerable
+public readonly ref struct MutFieldChildEnumerable
 {
     private readonly Packet _Packet;
     private readonly ushort _ParentIndex;

@@ -42,7 +42,7 @@ internal sealed class PostParserTests
     /// <summary>Wraps raw bytes into a <see cref="Frame"/> using the given stack's registry.</summary>
     private static Frame _MakeFrame(Stack stack, byte[]? data = null, int frameId = 1) =>
         Frame.Create(
-            new FrameId(frameId),
+            frameId,
             Timestamp.FromSecs(frameId),
             data ?? _BuildEthernetFrame(),
             LinkType.Ethernet,
@@ -92,7 +92,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -185,7 +185,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -294,7 +294,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -340,7 +340,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -384,7 +384,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new(firstProtocol: frameId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -430,7 +430,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new(firstProtocol: frameId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -485,7 +485,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -542,7 +542,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -585,7 +585,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -629,7 +629,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -648,7 +648,7 @@ internal sealed class PostParserTests
             ParseOptions options = new();
             if (!Packet.TryParse(
                 packet,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -689,7 +689,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -709,7 +709,7 @@ internal sealed class PostParserTests
             ParseOptions options = new();
             errorParsed = Packet.TryParse(
                 packet,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -746,7 +746,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new(firstProtocol: stubId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -788,7 +788,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -829,7 +829,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -849,7 +849,7 @@ internal sealed class PostParserTests
             ParseOptions options = new(index: index);
             errorParsed = Packet.TryParse(
                 packet,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -891,7 +891,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -906,7 +906,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -956,7 +956,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -998,7 +998,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 nonIndexed,
                 in options,
@@ -1013,7 +1013,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new(index: index);
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 indexed,
                 in options,
@@ -1057,7 +1057,7 @@ internal sealed class PostParserTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,

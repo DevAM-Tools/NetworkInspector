@@ -176,7 +176,7 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
         {
             for (int i = fromIndex; i < toIndexExclusive; i++)
             {
-                if (!session.TryGetPacket(new PacketId(i), _Recycle, out Packet? packet, out _) || packet is null)
+                if (!session.TryGetPacket(i, _Recycle, out Packet? packet, out _) || packet is null)
                 {
                     continue;
                 }

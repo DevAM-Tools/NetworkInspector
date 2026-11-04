@@ -25,7 +25,7 @@ namespace NetworkInspector.Filter;
 /// Do not pass one mutable instance into two overlapping parses.
 /// </para>
 /// </remarks>
-public sealed class FilterObserver : IFieldObserver
+public sealed class FilterObserver : IFieldObserver, IParseDemandSource
 {
     #region Fields
 
@@ -39,6 +39,8 @@ public sealed class FilterObserver : IFieldObserver
     private readonly bool[] _FlankByFieldId;
     private readonly int[] _SlotByFieldId;
 
+    private FieldWatch? _ExtractionWatch;
+    private ParseDemand? _ParseDemand;
     private FilterError? _Failure;
     private bool _SampleTaken;
     private bool _FlankCommitted;
@@ -228,6 +230,13 @@ public sealed class FilterObserver : IFieldObserver
         }
     }
 
+    /// <inheritdoc />
+    public void EndPacket(PacketId id, bool complete)
+    {
+        // Why empty: the verdict is latched during OnField and committed by the first TryReadMatch or the next BeginPacket,
+        // so the end of the packet has no staged state to close here. The complete flag does not change the verdict.
+    }
+
     /// <summary>
     /// Reads the verdict of the whole boolean tree for the current frame, or a stored regex failure.
     /// For an observer without a flank this agrees with <see cref="IsMatch"/>. With a flank, the first call
@@ -263,21 +272,61 @@ public sealed class FilterObserver : IFieldObserver
 
     #endregion
 
-    #region Internal API
+    #region Public API
 
     /// <summary>
-    /// The watch a parse without field tree needs so that this observer sees every value the field-tree filter of the
-    /// same expression sees: the observed fields plus every field of their owning protocols.
+    /// The watch a parse without field tree needs so that this observer sees every value the field-tree filter of the same
+    /// expression sees: <see cref="FieldWatch.ForExtraction"/> over the observed fields (the observed fields plus every field
+    /// of their owning protocols).
     /// <para>
     /// A field-tree lookup that misses materializes every pending lazy container of the target field's protocol
-    /// (<c>Packet.TryGetNextField</c> with <c>materialize: true</c>). Without a tree, a lazy container expands during the
-    /// parse only when the watch accepts the container or a field of its index group. Accepting all fields of the owning
-    /// protocols makes the parse expand exactly those protocols' containers, so a container outside an index group cannot
-    /// hide a field from this observer. Extra fields reach <see cref="OnField"/> and are ignored there.
+    /// (<c>Packet.TryGetNextField</c> with <c>materialize: true</c>). Without a tree, a lazy container expands during the parse
+    /// only when the watch accepts the container or a field of its index group. Accepting all fields of the owning protocols
+    /// makes the parse expand exactly those protocols' containers, so a container outside an index group cannot hide a field
+    /// from this observer. Extra fields reach <see cref="OnField"/> and are ignored there.
+    /// </para>
+    /// <para>
+    /// Built once on first read and kept. The field is filled on the compiling or first-reading thread; a filter observer is
+    /// single-threaded per parse, and a race could only build two equal watches (accepted, no lock for a one-time value).
     /// </para>
     /// </summary>
-    /// <returns><see cref="FieldWatch.None"/> for an observer that watches nothing.</returns>
-    internal FieldWatch CreateOwnerExpandingWatch()
+    /// <value><see cref="FieldWatch.None"/> for an observer that watches nothing.</value>
+    public FieldWatch ExtractionWatch
+    {
+        get
+        {
+            _ExtractionWatch ??= _CreateExtractionWatch();
+            return _ExtractionWatch.Value;
+        }
+    }
+
+    /// <summary>
+    /// The parse need of this filter: a parse without field tree (depth Packet) that delivers the observed fields through
+    /// <see cref="ExtractionWatch"/>. An always-match filter watches nothing and demands nothing
+    /// (<see cref="ParseDemand.FramesOnly"/>), so it adds no parse work. Place the demand first in a plan, so that this
+    /// observer's verdict exists when the exporter's packet is committed. Built once on first read (same single-thread rule as
+    /// <see cref="ExtractionWatch"/>).
+    /// </summary>
+    public ParseDemand ParseDemand
+    {
+        get
+        {
+            if (_ParseDemand is null)
+            {
+                _ParseDemand = ExtractionWatch.IsNone
+                    ? ParseDemand.FramesOnly
+                    : ParseDemand.Fields(new ParseObserver { Observer = this, Watch = ExtractionWatch });
+            }
+
+            return _ParseDemand.Value;
+        }
+    }
+
+    #endregion
+
+    #region Helpers
+
+    private FieldWatch _CreateExtractionWatch()
     {
         IStack? stack = Stack;
         if (stack is null || IsAlwaysMatch)
@@ -285,38 +334,21 @@ public sealed class FilterObserver : IFieldObserver
             return FieldWatch.None;
         }
 
-        // Owning protocols of every observed field.
-        ReadOnlySpan<FieldInfo> fields = stack.Fields.Span;
-        HashSet<ProtocolId> owners = [];
-        for (int raw = 0; raw < _SlotByFieldId.Length && raw < fields.Length; raw++)
+        // The observed fields: every field id that owns a leaf slot. The bound by the stack's field count keeps a slot table
+        // that is longer than the stack (never the case for a compiled filter) from reaching the field-table lookup.
+        List<FieldId> observed = [];
+        for (int raw = 0; raw < _SlotByFieldId.Length && raw < stack.FieldCount; raw++)
         {
             if (_SlotByFieldId[raw] >= 0)
             {
-                _ = owners.Add(fields[raw].ProtocolId);
+                observed.Add(new FieldId(raw));
             }
         }
 
-        if (owners.Count == 0)
-        {
-            return FieldWatch.None;
-        }
-
-        // Every field those protocols registered, containers included.
-        List<FieldId> ids = [];
-        for (int raw = 0; raw < fields.Length; raw++)
-        {
-            if (owners.Contains(fields[raw].ProtocolId))
-            {
-                ids.Add(fields[raw].Id);
-            }
-        }
-
-        return FieldWatch.Only(stack, [.. ids]);
+        return observed.Count == 0
+            ? FieldWatch.None
+            : FieldWatch.ForExtraction(stack, [.. observed]);
     }
-
-    #endregion
-
-    #region Helpers
 
     private void _ClearFrame()
     {

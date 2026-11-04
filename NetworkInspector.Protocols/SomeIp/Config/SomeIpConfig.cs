@@ -65,9 +65,16 @@ public sealed class SomeIpServiceConfig
     [JsonPropertyName("major_version")]
     public int MajorVersion { get; set; }
 
-    /// <summary>The display name of the service.</summary>
+    /// <summary>
+    /// The name of the service; used unchanged as one segment of every filter name of the service (a letter or underscore,
+    /// then letters, digits and underscores; no dot).
+    /// </summary>
     [JsonPropertyName("name")]
     public string Name { get; set; } = "";
+
+    /// <summary>The display name of the service; null, or a name that is not valid display text, shows <see cref="Name"/>.</summary>
+    [JsonPropertyName("ui_name")]
+    public string? UiName { get; set; }
 
     /// <summary>The members: methods, events, fields, and eventgroups.</summary>
     [JsonPropertyName("methods")]
@@ -86,9 +93,13 @@ public sealed class SomeIpServiceConfig
 [JsonDerivedType(typeof(SomeIpEventGroupConfig), "event_group")]
 public abstract class SomeIpMemberConfig
 {
-    /// <summary>The display name of the member.</summary>
+    /// <summary>The name of the member; used unchanged as one segment of the filter names of the member (same rule as the service).</summary>
     [JsonPropertyName("name")]
     public string Name { get; set; } = "";
+
+    /// <summary>The display name of the member; null, or a name that is not valid display text, shows <see cref="Name"/>.</summary>
+    [JsonPropertyName("ui_name")]
+    public string? UiName { get; set; }
 }
 
 /// <summary>A method call with input and output parameter lists.</summary>
@@ -190,13 +201,10 @@ public sealed class SomeIpParameterListConfig
 /// </summary>
 public sealed class SomeIpUsageSiteConfig
 {
-    /// <summary>The parameter name and path token; defaults to the referenced type's name.</summary>
+    /// <summary>The name; used unchanged as one segment of the filter name. Defaults to the referenced type's name.</summary>
     public string? Name { get; set; }
 
-    /// <summary>The registered field name (filter string) override.</summary>
-    public string? FilterName { get; set; }
-
-    /// <summary>The display name override.</summary>
+    /// <summary>The display name; null shows the name.</summary>
     public string? UiName { get; set; }
 
     /// <summary>The referenced type: a wire primitive or a type of the same service.</summary>
@@ -361,15 +369,11 @@ public sealed class SomeIpBitfieldTypeConfig : SomeIpDataTypeConfig
 /// <summary>One named bit of a bitfield.</summary>
 public sealed class SomeIpBitMemberConfig
 {
-    /// <summary>The bit name and path token.</summary>
+    /// <summary>The bit name; used unchanged as one segment of the filter name.</summary>
     [JsonPropertyName("name")]
     public string Name { get; set; } = "";
 
-    /// <summary>The registered field name (filter string) override.</summary>
-    [JsonPropertyName("filter_name")]
-    public string? FilterName { get; set; }
-
-    /// <summary>The display name override.</summary>
+    /// <summary>The display name; null shows the name.</summary>
     [JsonPropertyName("ui_name")]
     public string? UiName { get; set; }
 }

@@ -90,7 +90,7 @@ internal sealed class PcapngRandomAccessEquivalenceTests
                 List<Frame> frames = RandomAccessEquivalence.StartAndReadAll(source);
                 foreach (int id in ids)
                 {
-                    Frame? actual = source.FrameById(new FrameId(id));
+                    Frame? actual = source.FrameById(id);
                     if (actual is null || !RandomAccessEquivalence.SameFrame(frames[id], actual.Value))
                     {
                         mismatches.Add(Invariant($"id {id}, {(budget is null ? "mapped" : "preload")}, {mode}"));
@@ -116,8 +116,8 @@ internal sealed class PcapngRandomAccessEquivalenceTests
         for (int read = 0; read < 150; read++)
         {
             sequential.Add(source.NextFrame()!.Value);
-            Frame? newest = source.FrameById(new FrameId(read));
-            Frame? first = source.FrameById(new FrameId(0));
+            Frame? newest = source.FrameById(read);
+            Frame? first = source.FrameById(0);
             if (newest is null || !RandomAccessEquivalence.SameFrame(sequential[read], newest.Value))
             {
                 mismatches.Add(Invariant($"newest id {read}"));
@@ -141,7 +141,7 @@ internal sealed class PcapngRandomAccessEquivalenceTests
 
         await Assert.That(frames.Count).IsEqualTo(2);
         await Assert.That(source.SkippedFrameCount).IsEqualTo(1);
-        await Assert.That(source.FrameById(new FrameId(2))).IsNull();
+        await Assert.That(source.FrameById(2)).IsNull();
     }
 
     #endregion
@@ -163,8 +163,8 @@ internal sealed class PcapngRandomAccessEquivalenceTests
         BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(blocks[43] + 20), 4096);
 
         // Assert
-        await Assert.That(source.FrameById(new FrameId(42))).IsNull();
-        await Assert.That(source.FrameById(new FrameId(43))).IsNull();
+        await Assert.That(source.FrameById(42)).IsNull();
+        await Assert.That(source.FrameById(43)).IsNull();
         for (int id = 0; id < frames.Count; id++)
         {
             if (id is 42 or 43)
@@ -172,7 +172,7 @@ internal sealed class PcapngRandomAccessEquivalenceTests
                 continue;
             }
 
-            Frame? frame = source.FrameById(new FrameId(id));
+            Frame? frame = source.FrameById(id);
             await Assert.That(frame is not null && frame.Value.Data.Span.SequenceEqual(originals[id])).IsTrue();
         }
     }
@@ -213,7 +213,7 @@ internal sealed class PcapngRandomAccessEquivalenceTests
                     }
 
                     int id = random.Next(limit);
-                    Frame? frame = source.FrameById(new FrameId(id));
+                    Frame? frame = source.FrameById(id);
                     if (frame is null || !RandomAccessEquivalence.SameFrame(expected[id], frame.Value))
                     {
                         Interlocked.Increment(ref failures);

@@ -8,7 +8,7 @@ internal sealed class PacketToFrameMapTests
     [Test]
     public async Task PackFrameMapping_Roundtrip_PreservesIds()
     {
-        FrameId frameId = new(10);
+        FrameId frameId = 10;
         FrameSourceId sourceId = new(2);
 
         long packed = Session.PackFrameMapping(frameId, sourceId);
@@ -35,7 +35,7 @@ internal sealed class PacketToFrameMapTests
         using Session session = new(stack);
 
         await Assert
-            .That(() => session.RecordPacketFrame(PacketId.Invalid, new FrameId(1), new FrameSourceId(0)))
+            .That(() => session.RecordPacketFrame(PacketId.Invalid, 1, new FrameSourceId(0)))
             .Throws<InvalidOperationException>();
     }
 
@@ -46,7 +46,7 @@ internal sealed class PacketToFrameMapTests
         using Session session = new(stack);
 
         await Assert
-            .That(() => session.RecordPacketFrame(new PacketId(5), new FrameId(1), new FrameSourceId(0)))
+            .That(() => session.RecordPacketFrame(5, 1, new FrameSourceId(0)))
             .Throws<InvalidOperationException>();
     }
 
@@ -60,11 +60,11 @@ internal sealed class PacketToFrameMapTests
         session.TryStart(out _);
         session.WaitForCompletion();
 
-        await Assert.That(session.TryGetFrame(new PacketId(0), out Frame first, out _)).IsTrue();
-        await Assert.That(session.TryGetFrame(new PacketId(2), out Frame last, out _)).IsTrue();
+        await Assert.That(session.TryGetFrame(0, out Frame first, out _)).IsTrue();
+        await Assert.That(session.TryGetFrame(2, out Frame last, out _)).IsTrue();
         await Assert.That(first.IsValid).IsTrue();
         await Assert.That(last.IsValid).IsTrue();
-        await Assert.That(last.Id).IsEqualTo(new FrameId(2));
+        await Assert.That(last.Id).IsEqualTo(2);
 
         session.Shutdown();
     }

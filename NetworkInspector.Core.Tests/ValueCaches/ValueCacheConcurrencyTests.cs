@@ -28,7 +28,7 @@ internal sealed class ValueCacheConcurrencyTests
         for (int i = 0; i < packetCount; i++)
         {
             Frame frame = Frame.Create(
-                new FrameId(i),
+                i,
                 Timestamp.FromSecs(i + 1),
                 new byte[16],
                 LinkType.Ethernet,
@@ -38,7 +38,7 @@ internal sealed class ValueCacheConcurrencyTests
             {
                 ParseOptions options = new(firstProtocol: protoId);
                 if (!Packet.TryParse(
-                    new PacketId(i),
+                    i,
                     stack,
                     frame,
                     in options,
@@ -112,7 +112,7 @@ internal sealed class ValueCacheConcurrencyTests
         for (int i = 0; i < packetCount; i++)
         {
             Frame frame = Frame.Create(
-                new FrameId(i),
+                i,
                 Timestamp.FromSecs(i + 1),
                 new byte[16],
                 LinkType.Ethernet,
@@ -122,7 +122,7 @@ internal sealed class ValueCacheConcurrencyTests
             {
                 ParseOptions options = new(firstProtocol: protoId);
                 if (!Packet.TryParse(
-                    new PacketId(i),
+                    i,
                     stack,
                     frame,
                     in options,
@@ -210,7 +210,7 @@ internal sealed class ValueCacheConcurrencyTests
         using Stack stack = builder.Build();
 
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(1),
             new byte[16],
             LinkType.Ethernet,
@@ -218,7 +218,7 @@ internal sealed class ValueCacheConcurrencyTests
             stack.FrameInterfaceRegistry).Value;
         proto.ResetParseState();
         ParseOptions options = new(firstProtocol: protoId);
-        if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure) || packet is null)
+        if (!Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure) || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());
         }

@@ -23,7 +23,7 @@ internal sealed class CanProtocolXlTests
         Stack stack = builder.Build();
 
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             frameData,
             LinkType.CanSocketcan,
@@ -34,7 +34,7 @@ internal sealed class CanProtocolXlTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -372,7 +372,7 @@ internal sealed class CanProtocolXlTests
             NetworkInspector.Core.Index.PacketIndex index = new(stack);
 
             Frame frame = Frame.Create(
-                new FrameId(0),
+                0,
                 Timestamp.FromSecs(0),
                 frameData,
                 LinkType.CanSocketcan,
@@ -382,7 +382,7 @@ internal sealed class CanProtocolXlTests
             {
                 ParseOptions options = new(index: index);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -488,12 +488,12 @@ internal sealed class CanProtocolXlTests
 
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(priority: 42, payload: [0x01, 0x02, 0x03]);
         Frame frame = Frame.Create(
-            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            0, Timestamp.FromSecs(0), frameData,
             LinkType.CanSocketcan, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -527,12 +527,12 @@ internal sealed class CanProtocolXlTests
 
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(acceptanceField: 0xDEADBEEF, payload: [0xAA, 0xBB]);
         Frame frame = Frame.Create(
-            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            0, Timestamp.FromSecs(0), frameData,
             LinkType.CanSocketcan, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -563,12 +563,12 @@ internal sealed class CanProtocolXlTests
 
         byte[] frameData = FrameBuilders.GenerateCanXlFrame(acceptanceField: 0xDEADBEEF, payload: [0xAA, 0xBB]);
         Frame frame = Frame.Create(
-            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            0, Timestamp.FromSecs(0), frameData,
             LinkType.CanSocketcan, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,

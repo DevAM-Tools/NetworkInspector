@@ -18,7 +18,7 @@ internal sealed class FlexRayProtocolTests
         Stack stack = builder.Build();
 
         Frame frame = Frame.Create(
-            new FrameId(0),
+            0,
             Timestamp.FromSecs(0),
             frameData,
             LinkType.Flexray,
@@ -29,7 +29,7 @@ internal sealed class FlexRayProtocolTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -466,7 +466,7 @@ internal sealed class FlexRayProtocolTests
             NetworkInspector.Core.Index.PacketIndex index = new(stack);
 
             Frame frame = Frame.Create(
-                new FrameId(0),
+                0,
                 Timestamp.FromSecs(0),
                 frameData,
                 LinkType.Flexray,
@@ -476,7 +476,7 @@ internal sealed class FlexRayProtocolTests
             {
                 ParseOptions options = new(index: index);
                 if (!Packet.TryParse(
-                    new PacketId(0),
+                    0,
                     stack,
                     frame,
                     in options,
@@ -544,7 +544,7 @@ internal sealed class FlexRayProtocolTests
             using (stack)
             {
                 Frame frame = Frame.Create(
-                    new FrameId(0),
+                    0,
                     Timestamp.FromSecs(0),
                     frameData,
                     LinkType.Flexray,
@@ -555,7 +555,7 @@ internal sealed class FlexRayProtocolTests
                 {
                     ParseOptions options = new();
                     if (!Packet.TryParse(
-                        new PacketId(0),
+                        0,
                         stack,
                         frame,
                         in options,
@@ -609,12 +609,12 @@ internal sealed class FlexRayProtocolTests
         Stack stack = builder.Build();
 
         Frame frame = Frame.Create(
-            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            0, Timestamp.FromSecs(0), frameData,
             LinkType.Flexray, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -655,12 +655,12 @@ internal sealed class FlexRayProtocolTests
         Stack stack = builder.Build();
 
         Frame frame = Frame.Create(
-            new FrameId(0), Timestamp.FromSecs(0), frameData,
+            0, Timestamp.FromSecs(0), frameData,
             LinkType.Flexray, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,

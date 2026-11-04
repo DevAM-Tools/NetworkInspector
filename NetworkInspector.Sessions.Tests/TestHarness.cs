@@ -177,7 +177,7 @@ internal static class TestHarness
         ArgumentNullException.ThrowIfNull(stack);
 
         Frame frame = Frame.Create(
-            new FrameId(packetId),
+            packetId,
             Timestamp.FromNanos(packetId * 1_000_000L),
             frameData,
             LinkType.Ethernet,
@@ -185,7 +185,7 @@ internal static class TestHarness
             stack.FrameInterfaceRegistry).Value;
 
         ParseOptions options = new();
-        PacketId id = new(packetId);
+        PacketId id = packetId;
         if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {

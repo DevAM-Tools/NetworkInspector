@@ -245,7 +245,7 @@ internal sealed class RandomOptionsRangeTests
         Frame? first = source.NextFrame();
         Frame? second = source.NextFrame();
         Frame? third = source.NextFrame();
-        Frame? byId = source.FrameById(new FrameId(2));
+        Frame? byId = source.FrameById(2);
 
         await Assert.That(first!.Value.Timestamp.AsNanos).IsEqualTo(long.MaxValue - 1_500);
         await Assert.That(second!.Value.Timestamp.AsNanos).IsEqualTo(long.MaxValue - 500);
@@ -287,7 +287,7 @@ internal sealed class RandomOptionsRangeTests
         for (int i = 0; i < 50; i++)
         {
             Frame sequential = source.NextFrame()!.Value;
-            Frame random = source.FrameById(new FrameId(i))!.Value;
+            Frame random = source.FrameById(i)!.Value;
 
             await Assert.That(random.Data.Span.SequenceEqual(sequential.Data.Span)).IsTrue();
         }
@@ -305,7 +305,7 @@ internal sealed class RandomOptionsRangeTests
         source.Dispose();
 
         await Assert.That(() => source.NextFrame()).Throws<ObjectDisposedException>();
-        await Assert.That(() => source.FrameById(new FrameId(0))).Throws<ObjectDisposedException>();
+        await Assert.That(() => source.FrameById(0)).Throws<ObjectDisposedException>();
     }
 
     #endregion

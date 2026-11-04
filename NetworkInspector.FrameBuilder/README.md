@@ -97,7 +97,7 @@ for (int i = 0; i < 100; i++)
     while (frames.MoveNext(buffer, out int written))
     {
         Frame frame = Frame.Create(
-            new FrameId(i), Timestamp.FromMillis(i), buffer.AsSpan(0, written).ToArray(),
+            i, Timestamp.FromMillis(i), buffer.AsSpan(0, written).ToArray(),
             LinkType.Ethernet, FrameInterfaceId.Invalid, registry).Value;
         exporter.OnFrame(frame);
     }

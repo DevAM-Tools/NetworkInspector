@@ -88,7 +88,7 @@ internal sealed class SampleGeneratorSourceTests
         IRandomAccessFrameSource random = (IRandomAccessFrameSource)source;
         List<Frame> sequential = _ReadAll(source);
 
-        Frame? fourth = random.FrameById(new FrameId(3));
+        Frame? fourth = random.FrameById(3);
 
         await Assert.That(fourth).IsNotNull();
         await Assert.That(Expect.NotNull(fourth).Data.Span.SequenceEqual(sequential[3].Data.Span)).IsTrue();
@@ -101,8 +101,8 @@ internal sealed class SampleGeneratorSourceTests
         using IFrameSource source = _Start(static options => OptionManager.Set(options, "count", SettingValue.I64(5)), out _);
         IRandomAccessFrameSource random = (IRandomAccessFrameSource)source;
 
-        await Assert.That(random.FrameById(new FrameId(5))).IsNull();
-        await Assert.That(random.FrameById(new FrameId(-1))).IsNull();
+        await Assert.That(random.FrameById(5)).IsNull();
+        await Assert.That(random.FrameById(FrameId.Invalid)).IsNull();
     }
 
     [Test]
@@ -227,7 +227,7 @@ internal sealed class SampleGeneratorSourceTests
                         2 => (step * 7) % 1000,
                         _ => (step * 3) % 1000,
                     };
-                    Frame? frame = random.FrameById(new FrameId(id));
+                    Frame? frame = random.FrameById(id);
                     if (frame is null
                         || !frame.Value.Data.Span.SequenceEqual(sequential[id].Data.Span)
                         || frame.Value.Timestamp != sequential[id].Timestamp)

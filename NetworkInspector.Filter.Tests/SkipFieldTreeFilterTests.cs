@@ -12,7 +12,7 @@ internal sealed class SkipFieldTreeFilterTests
     private static Packet _ParseSkip(Stack stack, byte[] frameData, int packetId = 0)
     {
         Frame frame = Frame.Create(
-            new FrameId(packetId),
+            packetId,
             Timestamp.FromNanos(0),
             frameData,
             LinkType.Ethernet,
@@ -20,7 +20,7 @@ internal sealed class SkipFieldTreeFilterTests
             stack.FrameInterfaceRegistry).Value;
 
         ParseOptions options = new(FieldTreeMode.Skip);
-        PacketId id = new(packetId);
+        PacketId id = packetId;
         if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {

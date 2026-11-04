@@ -13,8 +13,11 @@ internal abstract class SomeIpPayloadKit
     /// <summary>The service id of the test service (16385).</summary>
     protected const ushort ServiceId = 0x4001;
 
-    /// <summary>The registered-name prefix of the test service (service "Svc", major version 1).</summary>
-    protected const string Prefix = "someip.payload.svc.v1.";
+    /// <summary>The filter-name prefix of the test service (service "Svc", major version 1).</summary>
+    protected const string Prefix = "Svc.v1.";
+
+    /// <summary>The index-group-name prefix of the test service; groups always start with <c>someip.payload.</c>.</summary>
+    protected const string GroupPrefix = "someip.payload.Svc.v1.";
 
     #region Description helpers
 
@@ -48,9 +51,9 @@ internal abstract class SomeIpPayloadKit
     protected static byte[] UdpFrame(byte[] payload, ushort methodId = 1, byte messageType = 0x00) =>
         FrameBuilderTestExtensions.WrapRawUdp(SomeIpBytes.Message(ServiceId, methodId, payload, messageType: messageType), 40000, 30490);
 
-    protected static string InName(string method, string parameter) => string.Concat(Prefix, method, ".in.", parameter);
+    protected static string InName(string method, string parameter) => string.Concat(Prefix, method, ".req.", parameter);
 
-    protected static string OutName(string method, string parameter) => string.Concat(Prefix, method, ".out.", parameter);
+    protected static string OutName(string method, string parameter) => string.Concat(Prefix, method, ".resp.", parameter);
 
     #endregion
 

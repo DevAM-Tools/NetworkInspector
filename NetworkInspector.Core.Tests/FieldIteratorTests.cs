@@ -36,7 +36,7 @@ internal sealed class FieldIteratorTests
     private static Packet _ParseFrame(Stack stack, byte[] data, ProtocolId firstProtocolId)
     {
         Frame frame = Frame.Create(
-            new FrameId(1),
+            1,
             Timestamp.FromSecs(1000),
             data,
             LinkType.Ethernet,
@@ -46,7 +46,7 @@ internal sealed class FieldIteratorTests
         {
             ParseOptions options = new(firstProtocol: firstProtocolId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,

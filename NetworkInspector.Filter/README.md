@@ -61,11 +61,11 @@ byte[] raw = Convert.FromHexString(
     "001122334455" + "66778899AABB" + "0800" +
     "4500001C" + "12344000" + "4011A549" + "C0A80101" + "C0A80102" +
     "30390035" + "00080000");
-Frame frame = Frame.Create(new FrameId(0), Timestamp.FromSecs(0), raw,
+Frame frame = Frame.Create(0, Timestamp.FromSecs(0), raw,
     LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
 
 ParseOptions options = new(); // filters evaluate the field tree
-if (!Packet.TryParse(new PacketId(0), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+if (!Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure)
     || packet is null)
 {
     throw new InvalidOperationException(failure.ToString());

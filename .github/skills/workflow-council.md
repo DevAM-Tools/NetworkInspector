@@ -8,7 +8,7 @@ Five named views, not job titles. Same agent writes every view, then chairs. Rul
 
 ## When
 
-**Run:** architecture, public API, security vs performance, irreversible choice, genuine multi-option fork. Closing Exam after `/implement` Stage 5 (standalone) or complex-task loop success.
+**Run:** architecture, public API, security vs performance, irreversible choice, genuine multi-option fork. Exam when the user asks for it, after the `/implement` Closing Review is Ready.
 
 **Skip:** lookups, post-choice how-to, `/review` (Skeptic + Outsider sweep still runs inside review; Exam is not a review substitute), casual should-I, write-X. Explicit trigger on a validation-only ask: still run; do not rubber-stamp.
 
@@ -21,7 +21,7 @@ Vague question → one clarifier, then proceed.
 | **Sweep** | `/plan` Stage 2, `/review` Stage 4 | Same agent. No file. | none |
 | **Lite** | Plan Decision Loop default; user says `quick`/`lite` | 5 views + chairman | `councils/council_<slug>[_<n>].md` |
 | **Full** | `/council` default; security, public API, irreversible | 5 views (longer) + chairman | same |
-| **Exam** | `/implement` Stage 5; complex-task after Error-clean loop; user says `exam` | Full unless user says `quick`/`lite`. Skeptic uses Exam addendum. | `councils/council_<slug>-exam[_<n>].md` |
+| **Exam** | User says `exam` / `with exam` / `/council exam`; `/implement` Stage 5 runs it after the Closing Review is Ready | Full unless user says `quick`/`lite`. Skeptic uses Exam addendum. | `councils/council_<slug>-exam[_<n>].md` |
 
 No anonymous peer-review round. Chairman **Blind spots** = what all five views missed.
 
@@ -43,9 +43,9 @@ Outsider gets the framed question only — no Constraint Block, no tech-skill du
 
 ## Exam
 
-Target is the **built result**, not a decision fork. Frame: "Does this implementation hold against the plan requirement IDs, test IDs, and in-scope code?" Include plan path, requirements path, every requirement ID with Done-when and every
+Target is the **built result**, not a decision fork. The Closing Review already hunted defects; the Exam adds five independent views on whether the whole holds. Frame: "Does this implementation hold against the plan requirement IDs, test IDs, and in-scope code?" Include plan path, requirements path, every requirement ID with Done-when and every
 test ID, briefing path, Implementation Status Table, in-scope paths, latest
-Step `{n}R` review paths. Open briefing card links. Break each **How it serves** clause. No steering toward Holds. Do not rubber-stamp.
+Step `{n}R` and Closing Review paths. Open briefing card links. Break each **How it serves** clause. A Closing Review **Ready** is not evidence. No steering toward Holds. Do not rubber-stamp.
 
 Follow Lite/Full stages with these overlays. Do not edit code.
 
@@ -119,7 +119,7 @@ and Outsider only (`workflow-review.md`).
 
 ## Grill Me ↔ Council
 
-Grill Me = user facts. Council = pressure-test a choice. Loop until blocking ambiguity is gone. Exam is not a choice council — do not skip it because the plan already chose.
+Grill Me = user facts (Section 4.16 question form). Council = pressure-test a choice. Loop until blocking ambiguity is gone. Exam is not a choice council — when requested, do not skip it because the plan already chose.
 
 | From → To | When |
 |-----------|------|
@@ -136,7 +136,7 @@ Do not council a how-to after the choice. Do not Grill Me a rubber-stamp.
 
 Same agent throughout. No subagent or delegation tool. No parallel advisors.
 
-1. **Context** — User text, attachments, plan/review/ADR, in-scope code. Read attached docs **in full**. Tech Load when code is in scope; pass **constraints**, not full skill text. Reuse prior `councils/council_<slug>*` on the same fork unless new evidence. Outsider context stays thin. Exam: built files, tests, `Verify`, plan requirement IDs and test IDs, latest reviews, briefing.
+1. **Context** — User text, attachments, plan/review/decision record, architecture and domain docs, in-scope code. Read attached docs **in full**. Tech Load when code is in scope; pass **constraints**, not full skill text. Reuse prior `councils/council_<slug>*` on the same fork unless new evidence. Outsider context stays thin. Exam: built files, tests, `Verify`, plan requirement IDs and test IDs, latest reviews, briefing.
 2. **Frame** — One neutral prompt: decision, user context, repo constraints/paths, stakes, Constraint Block (omit for Outsider). No steering. Save in artifact. Exam: use the Holds question in **Exam**.
 3. **Advisors** — Write views in this order: Skeptic → Problem-First → Upside → Outsider → Builder. Lean into each angle. Do not hedge. Exam: attach Skeptic Exam addendum to Skeptic only.
    - Schema Lite: 2–5 bullets per view.

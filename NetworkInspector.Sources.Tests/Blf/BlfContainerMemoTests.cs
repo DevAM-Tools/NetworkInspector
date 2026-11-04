@@ -41,8 +41,8 @@ internal sealed class BlfContainerMemoTests
             for (int n = 0; n < firstFrames.Count; n++)
             {
                 int id = round % 2 == 0 ? n : firstFrames.Count - 1 - n;
-                Frame? a = first.FrameById(new FrameId(id));
-                Frame? b = second.FrameById(new FrameId(id));
+                Frame? a = first.FrameById(id);
+                Frame? b = second.FrameById(id);
                 if (a is null || !RandomAccessEquivalence.SameFrame(firstFrames[id], a.Value))
                 {
                     mismatches.Add(Invariant($"first source, id {id}"));
@@ -75,7 +75,7 @@ internal sealed class BlfContainerMemoTests
             int id = random.Next(frames.Count);
             for (int repeat = 0; repeat < 2; repeat++)
             {
-                Frame? frame = source.FrameById(new FrameId(id));
+                Frame? frame = source.FrameById(id);
                 if (frame is null || !RandomAccessEquivalence.SameFrame(frames[id], frame.Value))
                 {
                     mismatches.Add(Invariant($"id {id}"));
@@ -93,15 +93,15 @@ internal sealed class BlfContainerMemoTests
         using TempCaptureFile file = new(_Build(variant: 4), ".blf");
         BlfSource first = BlfSource.Open(file.Path, new BlfSourceOptions { PreloadBudget = null });
         List<Frame> firstFrames = RandomAccessEquivalence.StartAndReadAll(first);
-        _ = first.FrameById(new FrameId(3));
+        _ = first.FrameById(3);
         first.Dispose();
         using TempCaptureFile otherFile = new(_Build(variant: 5), ".blf");
         using BlfSource second = BlfSource.Open(otherFile.Path, new BlfSourceOptions { PreloadBudget = null });
         List<Frame> secondFrames = RandomAccessEquivalence.StartAndReadAll(second);
 
-        Frame? frame = second.FrameById(new FrameId(3));
+        Frame? frame = second.FrameById(3);
 
-        await Assert.That(() => first.FrameById(new FrameId(3))).Throws<ObjectDisposedException>();
+        await Assert.That(() => first.FrameById(3)).Throws<ObjectDisposedException>();
         await Assert.That(frame is not null && RandomAccessEquivalence.SameFrame(secondFrames[3], frame.Value)).IsTrue();
         await Assert.That(RandomAccessEquivalence.SameFrame(firstFrames[3], secondFrames[3])).IsFalse();
     }

@@ -114,6 +114,11 @@ public sealed class Packet
     private ReadOnlyMemory<byte>[]? _AdditionalBuffers;
     private int _AdditionalBufferCount;
 
+    // Sum of the lengths of the additional buffers above (see AdditionalBufferBytes). One counter and no owner: the packet
+    // does not know which protocol bound what, a protocol applies its own per-packet total against this sum. Perf: one add per
+    // bound buffer, nothing per packet that binds nothing. Single writer until Seal, like the buffer table above.
+    private ulong _AdditionalBufferBytes;
+
     // LazyPopulator storage: slab-backed like FieldBody. Published as one object so
     // concurrent nested AppendLazy cannot tear (array, offset) on growth.
     private volatile LazyPopulatorTable? _LazyTable;
@@ -323,6 +328,10 @@ public sealed class Packet
             Array.Clear(_AdditionalBuffers, 0, _AdditionalBufferCount);
             _AdditionalBufferCount = 0;
         }
+
+        // The byte counter describes the buffers just dropped, so a reparse of the same packet starts at 0 and a protocol that
+        // applies its own total reaches the same decisions as the first parse (they depend only on the bound bytes and their order).
+        _AdditionalBufferBytes = 0;
 
         _HasFieldTree = fieldTree == FieldTreeMode.Build;
         if (_SkipScratchDepth > 0 && _SkipScratchStack is not null)
@@ -570,7 +579,8 @@ public sealed class Packet
     /// Adds an additional data buffer (e.g., reassembled data). Returns the 1-based buffer index of the stored buffer.
     /// After <see cref="Seal"/> or when the table of 255 buffers is full, nothing is stored and the unchanged count is
     /// returned, so a caller detects the miss by comparing <see cref="BufferCount"/> before and after (see
-    /// <see cref="BindParseBuffer"/>). Not thread-safe: one writer until Seal.
+    /// <see cref="TryBindBuffer"/>, the checked entry for protocols). The only place that stores a buffer: it also adds the
+    /// length to <see cref="AdditionalBufferBytes"/>. Not thread-safe: one writer until Seal.
     /// </summary>
     internal int AddBuffer(ReadOnlyMemory<byte> buffer)
     {
@@ -597,45 +607,72 @@ public sealed class Packet
         }
         _AdditionalBuffers[_AdditionalBufferCount] = buffer;
         _AdditionalBufferCount++;
+
+        // Invariant: _AdditionalBufferBytes is the sum of the stored lengths. No overflow check: at most 255 buffers of at most
+        // int.MaxValue bytes each stay far below ulong.MaxValue.
+        _AdditionalBufferBytes += (ulong)buffer.Length;
         return _AdditionalBufferCount;
     }
 
     /// <summary>
-    /// Stores <paramref name="buffer"/> as an additional packet buffer and returns that stored slice.
-    /// Nested <see cref="IProtocol.Parse"/> calls must use this slice so
-    /// <see cref="TryGetEffectLayerKey"/> can identify the layer.
-    /// The additional-buffer cap is a constant, not a setting: 255, because the effect-layer key
-    /// uses bits 31–24 (index 0 is the frame, 1..255 are additional). A full table returns
-    /// <see cref="ReadOnlyMemory{T}.Empty"/> and does not store.
-    /// Reparse of the same packet must bind the same recorded bytes once on the new packet
-    /// (recycle clears additional buffers).
-    /// After <see cref="Seal"/> additional buffers are frozen: this method returns
-    /// <see cref="ReadOnlyMemory{T}.Empty"/> and does not store.
-    /// Thread-safety follows the packet parse contract: one writer until Seal.
+    /// Sum of the lengths of all additional buffers stored so far, whichever protocol stored them; 0 for a packet without
+    /// additional buffers and again 0 after the packet is recycled. A protocol that derives bytes from untrusted input reads it
+    /// to apply its own per-packet total (see <see cref="TryBindBuffer"/>).
     /// </summary>
-    /// <param name="buffer">Reassembled or otherwise owned bytes that outlive this parse.</param>
-    /// <returns>
-    /// The stored slice, suitable as the <c>data</c> argument of a nested parse;
-    /// empty after Seal or when the 255 additional-buffer table is full.
-    /// </returns>
-    internal ReadOnlyMemory<byte> BindParseBuffer(ReadOnlyMemory<byte> buffer)
+    /// <remarks>Thread-safety follows the packet parse contract: one writer until <see cref="Seal"/>; reading is cheap.</remarks>
+    internal ulong AdditionalBufferBytes => _AdditionalBufferBytes;
+
+    /// <summary>
+    /// Stores <paramref name="buffer"/> as an additional packet buffer and returns that stored slice, or names why it could not.
+    /// Nested <see cref="IProtocol.Parse"/> calls must use the returned slice so <see cref="TryGetEffectLayerKey"/> can
+    /// identify the layer.
+    /// </summary>
+    /// <param name="buffer">Reassembled, decoded, or otherwise owned bytes that outlive this parse (not a pooled or stack buffer).</param>
+    /// <param name="bound">
+    /// The stored slice (the same memory as <paramref name="buffer"/>, no copy), suitable as the <c>data</c> argument of a nested
+    /// parse; empty when the method returns <see langword="false"/>.
+    /// </param>
+    /// <param name="failure">
+    /// <see cref="BufferBindFailure.Sealed"/> after <see cref="Seal"/>, <see cref="BufferBindFailure.TableFull"/> when 255
+    /// buffers are stored, else <see cref="BufferBindFailure.None"/>.
+    /// </param>
+    /// <returns><see langword="true"/> when the buffer was stored; a refused bind changes nothing.</returns>
+    /// <remarks>
+    /// <para><b>What the packet decides.</b> Only whether a slot is free. The cap of 255 is a constant, not a setting: the
+    /// effect-layer key packs the buffer index in bits 31–24 (index 0 is the frame, 1..255 are additional). The packet knows no
+    /// protocol and has no byte limit; a protocol that derives bytes from untrusted input applies its own per-packet total by
+    /// reading <see cref="AdditionalBufferBytes"/> before it binds (the bytes of every protocol are counted together).</para>
+    /// <para><b>Replay.</b> A reparse of the same packet binds the same bytes in the same order on the new packet (recycle clears
+    /// the table and the byte counter), so buffer indices and layer keys repeat. An empty buffer is stored like any other, so
+    /// the indices of later buffers do not shift.</para>
+    /// <para>Thread-safety follows the packet parse contract: one writer until <see cref="Seal"/>. Cost: one array store; the
+    /// table is allocated on the first bound buffer of a packet object and reused when the packet is recycled.</para>
+    /// </remarks>
+    /// <seealso cref="AdditionalBufferBytes"/>
+    /// <seealso cref="BufferBindFailure"/>
+    internal bool TryBindBuffer(ReadOnlyMemory<byte> buffer, out ReadOnlyMemory<byte> bound, out BufferBindFailure failure)
     {
+        bound = ReadOnlyMemory<byte>.Empty;
+
+        // Sealed first: after Seal the table is frozen whatever it holds.
         if (_Finalized != 0)
         {
-            return ReadOnlyMemory<byte>.Empty;
+            failure = BufferBindFailure.Sealed;
+            return false;
         }
 
-        // 255 additional buffers is the effect-key limit (index 1..255). AddBuffer
-        // returns the current count and does not store past that. Empty tells the
-        // caller the slice is not a packet buffer.
-        int before = _AdditionalBufferCount;
-        _ = AddBuffer(buffer);
-        if (_AdditionalBufferCount == before)
+        // Effect-layer keys pack the buffer index in 8 bits (0 = frame, 1..255 = additional); AddBuffer would refuse as well,
+        // the explicit check names the failure.
+        if (_AdditionalBufferCount >= 255)
         {
-            return ReadOnlyMemory<byte>.Empty;
+            failure = BufferBindFailure.TableFull;
+            return false;
         }
 
-        return buffer;
+        _ = AddBuffer(buffer);
+        bound = buffer;
+        failure = BufferBindFailure.None;
+        return true;
     }
 
     /// <summary>
@@ -669,13 +706,13 @@ public sealed class Packet
     /// buffers into an effect-store layer key (buffer index in bits 31–24, byte offset in bits 23–0).
     /// <para>
     /// <paramref name="data"/> must be a slice of <see cref="Frame.Data"/> or of a memory previously
-    /// passed to <see cref="BindParseBuffer"/> — the <c>data</c> argument of
+    /// passed to <see cref="TryBindBuffer"/> — the <c>data</c> argument of
     /// <see cref="IProtocol.Parse"/>, not a heap copy.
     /// Buffers are scanned from index 0 (the frame) upward; the first match wins.
     /// A slice of <see cref="Frame.Data"/> that was also passed to
-    /// <see cref="BindParseBuffer"/> therefore packs as the frame, not as that additional buffer.
+    /// <see cref="TryBindBuffer"/> therefore packs as the frame, not as that additional buffer.
     /// Nested parsers of reassembled bytes must see a memory that is not a frame slice
-    /// (pass an owned copy into <see cref="BindParseBuffer"/>).
+    /// (pass an owned copy into <see cref="TryBindBuffer"/>).
     /// A zero-length slice of a packet buffer is
     /// valid and packs that cursor; <see cref="ReadOnlyMemory{T}.Empty"/> is not a packet slice.
     /// Location is resolved from the shared array segment or memory manager of the two memories
@@ -1346,6 +1383,24 @@ public sealed class Packet
     private ReadOnlyMemory<ParseObserver> _Observers;
     private bool _ObserverFailed;
 
+    // Number of leading entries of _Observers whose BeginPacket was attempted (ran or threw). EndPacket goes to exactly these
+    // (minus the None watches, which never get BeginPacket), so every Begin has one End. An int instead of a per-observer flag
+    // array: BeginPacket runs in order and stops at the first throw, so a prefix length describes the set without allocating.
+    // Parse-thread only, reset per parse.
+    private int _ObserversBegun;
+
+    // True when any observer of this parse has a DisplayText watch. Computed once per parse so WantsCustomText pays one bool
+    // test when no observer wants texts (the common case). Parse-thread only.
+    private bool _ObserversWantDisplayText;
+
+    // Custom texts the active value cache records but cannot take yet. A deferred text can be completed later in the same parse
+    // (SOME/IP variable arrays learn their count after the elements), and the cache evaluates a text when it records it. Once one
+    // text is kept, every later text the cache records is kept too, so the texts of one field reach the cache in append and
+    // change order (FirstOccurrence keeps the first record of a packet). An entry holds a copy: it shares the one build with the
+    // slot (the deferred object remembers its string), and re-reading the slot would record a replaced text twice. Created on
+    // first use because most parses keep none; parse-thread only; recorded by _RecordDeferredCacheTexts when the parse ended.
+    private List<(FieldId FieldId, LazyString Text)>? _DeferredCacheTexts;
+
     // True while a value cache or an observer may be active for this parse (set and cleared only by _ParseAndSeal,
     // the only writer of _ActiveValueCache and _Observers besides RecordCaughtError's temporary cache swap). False for
     // most parses, so inserts skip both hook checks with one test. Parse-thread only, like the hooks themselves.
@@ -1353,13 +1408,50 @@ public sealed class Packet
 
     /// <summary>
     /// Whether custom display text should be built for <paramref name="fieldId"/>.
-    /// True when a field tree will store it, or when the attached value cache asks for display text of this field.
-    /// Callers use it to skip building text nobody reads (a Skip parse without a display-text cache).
+    /// True when a field tree will store it, when the attached value cache asks for display text of this field, or when an
+    /// observer's <see cref="ParseObserver.DisplayText"/> watch accepts the field.
+    /// Callers use it to skip building text nobody reads (a Skip parse without a display-text cache or observer).
     /// </summary>
+    /// <remarks>
+    /// The observer test is last and guarded by one bool, so a parse without display-text observers (the common case) pays
+    /// one extra predictable branch. After the parse <c>_Observers</c> is cleared, so a lazy populator that runs after seal
+    /// answers as before (a tree packet: true).
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool WantsCustomText(FieldId fieldId)
         => _HasFieldTree
-            || (_ActiveValueCache is { } cache && cache.WantsDisplayText(fieldId));
+            || (_ActiveValueCache?.WantsDisplayText(fieldId) == true)
+            || (_ObserversWantDisplayText && _ObserverWantsDisplayText(fieldId));
+
+    /// <summary>Slow part of <see cref="WantsCustomText"/>: scans the observers' DisplayText watches (only when one exists).</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool _ObserverWantsDisplayText(FieldId fieldId)
+    {
+        ReadOnlySpan<ParseObserver> observers = _Observers.Span;
+        for (int i = 0; i < observers.Length; i++)
+        {
+            if (observers[i].DisplayText.Accepts(fieldId))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether any observer asks for display text; computed once per parse.</summary>
+    private static bool _AnyDisplayText(ReadOnlySpan<ParseObserver> observers)
+    {
+        for (int i = 0; i < observers.Length; i++)
+        {
+            if (!observers[i].DisplayText.IsNone)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Constructor guard for an undefined <see cref="FieldTreeMode"/> value. <c>TryParse</c> reports the same condition
@@ -1417,8 +1509,9 @@ public sealed class Packet
 
     /// <summary>
     /// Searches the flat field array for a field with the given ID and returns its value.
-    /// Convenience wrapper over <see cref="TryGetNextFieldValue"/> that always starts
-    /// from the beginning of the field array (first occurrence wins).
+    /// Convenience wrapper over <see cref="TryGetNextField"/> that always starts
+    /// from the beginning of the field array (first occurrence wins). Copies the value (32 bytes); to read a value
+    /// repeatedly or to see custom text, use <see cref="TryGetNextField"/> and read <c>field.Value</c> by reference.
     /// </summary>
     /// <param name="fieldId">The field ID to search for.</param>
     /// <param name="value">Receives the field value if found.</param>
@@ -1431,18 +1524,48 @@ public sealed class Packet
     public bool TryGetFieldValue(FieldId fieldId, out FieldValue value, bool materialize)
     {
         FieldLookupCookie cookie = FieldLookupCookie.Start;
-        return TryGetNextFieldValue(fieldId, ref cookie, out value, materialize);
+        if (!TryGetNextField(fieldId, ref cookie, out Field field, materialize))
+        {
+            value = FieldValue.None;
+            return false;
+        }
+
+        value = field.Value;
+        return true;
     }
 
     /// <summary>
-    /// Searches the flat field array for the next occurrence of a field with the given ID,
-    /// starting from the position encoded in <paramref name="cookie"/>.
-    /// Same scan as <see cref="TryGetNextFieldValue"/>; returns a <see cref="Field"/> so
-    /// custom text is readable.
+    /// Searches the flat field array for the next occurrence of a field with the given ID, starting from the position encoded in
+    /// <paramref name="cookie"/>, and returns it as a <see cref="Field"/>: its value (<c>field.Value</c>, a reference to the
+    /// field's own storage) and its custom text are readable. Returns each occurrence on successive calls, enabling iteration over
+    /// multi-occurrence fields (e.g., tunneled packets with inner and outer IP headers, repeated options).
     /// </summary>
+    /// <remarks>
+    /// <para><b>Cookie semantics:</b> The cookie is an opaque continuation token. Use <see cref="FieldLookupCookie.Start"/> for the
+    /// first call. After each successful call it is updated so that the next call continues after the found field; after an
+    /// unsuccessful call it is parked at the end of the searched range.</para>
+    /// <para><b>Usage pattern:</b></para>
+    /// <code>
+    /// FieldLookupCookie cookie = FieldLookupCookie.Start;
+    /// while (packet.TryGetNextField(ipSrcFieldId, ref cookie, out Field field, materialize: false))
+    /// {
+    ///     ref readonly FieldValue value = ref field.Value; // no 32-byte copy; process each occurrence of ip.src
+    /// }
+    /// // Pass materialize: true when the lookup must wait for lazy containers.
+    /// </code>
+    /// <para><b>Lazy materialization (when <c>materialize</c> is true):</b> If the field is not found among eagerly-populated
+    /// fields and lazy containers exist, only the owning protocol's lazy containers are materialized, not all pending lazy fields,
+    /// so the common case (found eagerly) costs nothing extra. Materialization appends new fields at the end of the flat array, so
+    /// after the first scan only the newly appended fields are scanned after each step. A populator may register further lazy
+    /// containers of the same protocol (FrameProtocol creates a lazy interface container inside its lazy frame container); the
+    /// loop handles them until the field is found, no matching container is left, or <see cref="_MaxMaterializationDepth"/> is
+    /// reached.</para>
+    /// </remarks>
+    /// <seealso cref="TryGetFieldValue"/>
+    /// <seealso cref="FieldLookupCookie"/>
     /// <param name="fieldId">The field ID to search for.</param>
     /// <param name="cookie">
-    /// Opaque continuation token. Use <see cref="FieldLookupCookie.Start"/> for the first call.
+    /// Opaque continuation token. Use <see cref="FieldLookupCookie.Start"/> for the first call; do not modify it between calls.
     /// </param>
     /// <param name="field">Receives the field wrapper if found.</param>
     /// <param name="materialize">
@@ -1532,84 +1655,6 @@ public sealed class Packet
         cookie.Position = searchedUpTo;
         field = default;
         return false;
-    }
-
-    /// <summary>
-    /// Searches the flat field array for the next occurrence of a field with the given ID,
-    /// starting from the position encoded in <paramref name="cookie"/>.
-    /// Returns each occurrence on successive calls, enabling iteration over multi-occurrence
-    /// fields (e.g., tunneled packets with inner and outer IP headers, repeated options).
-    ///
-    /// <para><b>Cookie semantics:</b> The cookie is an opaque continuation token.
-    /// Use <see cref="FieldLookupCookie.Start"/> for the first call. After each successful
-    /// call, the cookie is updated so that the next call continues searching after the
-    /// found field. After an unsuccessful call, the cookie is parked at the end of the
-    /// searched range.</para>
-    ///
-    /// <para><b>Usage pattern:</b></para>
-    /// <code>
-    /// FieldLookupCookie cookie = FieldLookupCookie.Start;
-    /// while (packet.TryGetNextFieldValue(ipSrcFieldId, ref cookie, out FieldValue value, materialize: false))
-    /// {
-    ///     // Process each occurrence of ip.src (e.g., outer and inner tunnel headers)
-    /// }
-    /// // Pass materialize: true when the lookup must wait for lazy containers.
-    /// </code>
-    ///
-    /// <para><b>Lazy materialization (when <paramref name="materialize"/> is true):</b>
-    /// If the field is not found among eagerly-populated fields and lazy containers
-    /// exist, performs targeted lazy materialization: only the owning protocol's lazy
-    /// containers are materialized rather than all pending lazy fields. This makes the
-    /// common case (field found eagerly) zero-overhead while still supporting lazy fields
-    /// transparently.</para>
-    ///
-    /// <para><b>Materialization optimization:</b> Materialization always appends new fields
-    /// at the end of the flat array. After the initial scan covers positions 0..N, the
-    /// method tracks the searched boundary and only scans newly-appended fields after each
-    /// materialization step, avoiding redundant re-scans from the beginning.</para>
-    ///
-    /// <para><b>Recursive lazy support:</b> Lazy populators may register new lazy containers
-    /// (e.g., FrameProtocol creates a lazy interface container inside its lazy frame container).
-    /// This method handles the recursive case by iterating: after materializing a container,
-    /// it re-scans the (now potentially larger) field array for newly-created lazy containers
-    /// belonging to the same protocol, continuing until the field is found or no more
-    /// matching containers exist.</para>
-    ///
-    /// <para><b>Algorithm (materialization path):</b></para>
-    /// <list type="number">
-    ///   <item>Linear scan from cookie position through existing fields.</item>
-    ///   <item>If missed: check whether any lazy fields remain (O(1) via pending count).</item>
-    ///   <item>Resolve the target FieldId's owning ProtocolId via the stack registry.</item>
-    ///   <item>Iteratively scan the field array for a lazy container (LazyIndex &gt; 0)
-    ///         belonging to the same protocol, materialize it, and scan only the
-    ///         newly-appended fields (searchedUpTo..newCount).</item>
-    ///   <item>Stop when the field is found, no more matching containers exist, or the
-    ///         safety limit (<see cref="_MaxMaterializationDepth"/>) is reached.</item>
-    /// </list>
-    /// </summary>
-    /// <param name="fieldId">The field ID to search for.</param>
-    /// <param name="cookie">
-    /// Opaque continuation token. Use <see cref="FieldLookupCookie.Start"/> for the first call.
-    /// Updated on return to the position after the found field (on success) or the end of
-    /// the searched range (on failure). Do not modify between successive calls.
-    /// </param>
-    /// <param name="value">Receives the field value if found.</param>
-    /// <param name="materialize">
-    /// When <see langword="true"/>, triggers targeted lazy materialization if the
-    /// field is not found in eagerly-populated fields.
-    /// When <see langword="false"/>, only searches already-materialized fields.
-    /// </param>
-    /// <returns><see langword="true"/> if a (next) occurrence was found; otherwise <see langword="false"/>.</returns>
-    public bool TryGetNextFieldValue(FieldId fieldId, ref FieldLookupCookie cookie, out FieldValue value, bool materialize)
-    {
-        if (!TryGetNextField(fieldId, ref cookie, out Field field, materialize))
-        {
-            value = FieldValue.None;
-            return false;
-        }
-
-        value = field.Value;
-        return true;
     }
 
     #endregion
@@ -1765,8 +1810,9 @@ public sealed class Packet
         {
             if (_HasParseHooks)
             {
-                _RecordValueCache(fieldId, in value, customText);
-                _ObserveProducedField(fieldId, in value, FieldBody.SkipStorageIndex, hasField: false);
+                _RecordValueCache(fieldId, in value, in customText);
+                // No slab slot exists in a tree-free parse; the argument is the only location of the text.
+                _ObserveProducedField(fieldId, in value, in customText, FieldBody.SkipStorageIndex, hasField: false);
             }
 
             return FieldBody.SkipStorageIndex;
@@ -1849,17 +1895,21 @@ public sealed class Packet
 
             parent.IncrementChildCount();
 
-            // Cache before publish, observers after publish (they may read the published field).
+            // Cache before publish, observers after publish (they may read the published field). Both get the slab slot of the
+            // value and the text, not the argument copies: a deferred representation or text that the cache or an observer
+            // evaluates through them caches its string where the tree, the exporters, and every later reader look. A text the
+            // cache keeps for the end of the parse is a copy of the slot's text (see _TryKeepCacheText).
+            // Invariant: created refers into a slab chunk, and chunks never move, so it is still this field's slot here.
             if (_HasParseHooks)
             {
-                _RecordValueCache(fieldId, in value, customText);
+                _RecordValueCache(fieldId, in created.Value, in created.CustomText);
             }
 
             _PublishFieldCount(reservedIndex + 1, postSeal);
             published = true;
             if (_HasParseHooks)
             {
-                _ObserveProducedField(fieldId, in value, newIndex, hasField: true);
+                _ObserveProducedField(fieldId, in created.Value, in created.CustomText, newIndex, hasField: true);
             }
 
             return newIndex;
@@ -1939,16 +1989,71 @@ public sealed class Packet
 
         if (count == 1)
         {
+            _ObserversBegun = 1;
             _BeginOne(observers[0]);
             return;
         }
 
         for (int i = 0; i < count; i++)
         {
+            // Counted before the call: an observer whose BeginPacket throws has begun and gets EndPacket(complete: false).
+            _ObserversBegun = i + 1;
             _BeginOne(observers[i]);
             if (_ObserverFailed)
             {
                 return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Calls <c>EndPacket</c> on every observer whose <c>BeginPacket</c> was attempted, in order, before the packet is sealed.
+    /// <c>complete</c> is false when the observers were muted or the parse aborted. A throwing <c>EndPacket</c> is recorded like
+    /// any observer failure and does not stop the remaining end calls: every begun observer must be able to close what it
+    /// staged. Observers with a None watch never got <c>BeginPacket</c> and get no end call either. Observers are detached
+    /// before the first end call, so fields an end call expands reach the tree and the cache but no observer.
+    /// <para>
+    /// <b>Why before the seal:</b> observers may still read the packet (the cursor of a tree parse) and evaluate deferred
+    /// custom texts while the packet is private to the parse thread; after the seal other threads may read it. <b>Why after
+    /// the parse also on failure:</b> a consumer that staged fields needs the end call to discard them; skipping it would leave
+    /// a half-staged packet that the next <c>BeginPacket</c> would have to guess about.
+    /// </para>
+    /// </summary>
+    private void _EndObservers()
+    {
+        if (_ObserversBegun == 0)
+        {
+            return;
+        }
+
+        // Detach the observers before the first end call. An end call may expand lazy fields (a tree read with
+        // materialize: true); those appends must not reach OnField of an observer whose packet ended or is ending. The local span
+        // keeps the end calls going; _ParseAndSeal resets the fields afterwards as before.
+        ReadOnlySpan<ParseObserver> observers = _Observers.Span;
+        int begun = _ObserversBegun;
+        _Observers = default;
+        _ObserversWantDisplayText = false;
+
+        // The flag is read once: a failure inside an end call must not turn the remaining observers' packets "incomplete".
+        bool complete = !_ObserverFailed;
+        for (int i = 0; i < begun && i < observers.Length; i++)
+        {
+            ref readonly ParseObserver entry = ref observers[i];
+            if (entry.Watch.IsNone)
+            {
+                continue;
+            }
+
+            try
+            {
+                entry.Observer!.EndPacket(Id, complete); // Invariant: _ThrowIfNullObserver rejected null observers before the parse.
+            }
+            catch (Exception ex)
+            {
+                // Mute first: the error field recorded below is a produced field and must not be reported to observers that
+                // are about to end their packet.
+                _ObserverFailed = true;
+                RecordCaughtError(0, BuildCaughtExceptionText(ex, Stack.IncludeExceptionStackTrace));
             }
         }
     }
@@ -1981,7 +2086,8 @@ public sealed class Packet
     /// A throw is stored on the packet and later fields of this packet are not reported.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _ObserveProducedField(FieldId fieldId, in FieldValue value, ushort storageIndex, bool hasField)
+    private void _ObserveProducedField(
+        FieldId fieldId, in FieldValue value, in LazyString customText, ushort storageIndex, bool hasField)
     {
         ReadOnlySpan<ParseObserver> observers = _Observers.Span;
         int count = observers.Length;
@@ -1992,13 +2098,13 @@ public sealed class Packet
 
         if (count == 1)
         {
-            _ObserveOne(observers[0], fieldId, in value, storageIndex, hasField);
+            _ObserveOne(observers[0], fieldId, in value, in customText, storageIndex, hasField);
             return;
         }
 
         for (int i = 0; i < count; i++)
         {
-            _ObserveOne(observers[i], fieldId, in value, storageIndex, hasField);
+            _ObserveOne(observers[i], fieldId, in value, in customText, storageIndex, hasField);
             if (_ObserverFailed)
             {
                 return;
@@ -2015,6 +2121,7 @@ public sealed class Packet
         in ParseObserver entry,
         FieldId fieldId,
         in FieldValue value,
+        in LazyString customText,
         ushort storageIndex,
         bool hasField)
     {
@@ -2024,7 +2131,7 @@ public sealed class Packet
         }
 
         Field cursor = hasField ? new Field(this, storageIndex, fieldId) : default;
-        FieldVisit visit = new(Id, fieldId, in value, cursor, hasField);
+        FieldVisit visit = new(Id, fieldId, in value, in customText, cursor, hasField);
         try
         {
             entry.Observer!.OnField(in visit);
@@ -2038,63 +2145,194 @@ public sealed class Packet
 
     /// <summary>Records a produced field into the active value cache, if any. Parse-thread only.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _RecordValueCache(FieldId fieldId, in FieldValue value, LazyString customText)
+    private void _RecordValueCache(FieldId fieldId, in FieldValue value, in LazyString customText)
     {
         // Unrecorded parse: predicted not-taken. The slow stub is NoInlining so Record / slot
         // probe cannot inflate AppendChild native size (I-cache and inline budget).
         ValueCache? cache = _ActiveValueCache;
         if (cache is not null)
         {
-            _RecordValueCacheSlow(this, cache, fieldId, in value, customText);
+            _RecordValueCacheSlow(this, cache, fieldId, in value, in customText);
         }
     }
 
+    /// <summary>
+    /// Records the value of a produced field now and its custom text now or, when <see cref="_TryKeepCacheText"/> keeps it,
+    /// when the parse ended.
+    /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void _RecordValueCacheSlow(
-        Packet packet, ValueCache cache, FieldId fieldId, in FieldValue value, LazyString customText) =>
-        cache.Record(packet.Id.Value, packet.Timestamp.AsNanos, fieldId, in value, customText);
+    private static void _RecordValueCacheSlow(Packet packet, ValueCache cache, FieldId fieldId, in FieldValue value, in LazyString customText)
+    {
+        // A kept text reaches the cache later; the value goes in now with an absent text, which the cache ignores.
+        if (packet._TryKeepCacheText(cache, fieldId, in customText))
+        {
+            LazyString absent = default;
+            cache.Record(packet.Id.Value, packet.Timestamp.AsNanos, fieldId, in value, in absent);
+            return;
+        }
+
+        cache.Record(packet.Id.Value, packet.Timestamp.AsNanos, fieldId, in value, in customText);
+    }
+
+    /// <summary>
+    /// Keeps a copy of <paramref name="customText"/> for <see cref="_RecordDeferredCacheTexts"/> when the cache records display
+    /// text of <paramref name="fieldId"/> and the text is deferred or an earlier text of this parse is kept already.
+    /// Parse-thread only.
+    /// </summary>
+    /// <param name="cache">The cache of the parse.</param>
+    /// <param name="fieldId">The field the text belongs to.</param>
+    /// <param name="customText">The text at the append or change; an absent text is never kept (the cache ignores it).</param>
+    /// <returns><see langword="true"/> when the text was kept; the caller then must not record it now.</returns>
+    /// <remarks>
+    /// Perf: the <see cref="ValueCache.WantsDisplayText"/> probe runs last, only for a present text that would be kept, so a field
+    /// the cache does not record never enters the list. The list is reused by a recycled packet; no allocation once warm.
+    /// </remarks>
+    private bool _TryKeepCacheText(ValueCache cache, FieldId fieldId, in LazyString customText)
+    {
+        List<(FieldId FieldId, LazyString Text)>? kept = _DeferredCacheTexts;
+        if (customText.IsNull
+            || (customText.RawValue is string && (kept is null || kept.Count == 0))
+            || !cache.WantsDisplayText(fieldId))
+        {
+            return false;
+        }
+
+        if (kept is null)
+        {
+            kept = new(4);
+            _DeferredCacheTexts = kept;
+        }
+
+        kept.Add((fieldId, customText));
+        return true;
+    }
+
+    /// <summary>
+    /// Records the texts kept by <see cref="_TryKeepCacheText"/>, in the order they were kept, now that the parse completed them.
+    /// A text whose formatter throws is recorded as <c>packet.error</c> and skipped; the other texts, the index entry, and the
+    /// observers' <c>complete</c> flag are kept.
+    /// </summary>
+    /// <param name="cache">The cache of the parse.</param>
+    private void _RecordDeferredCacheTexts(ValueCache cache)
+    {
+        List<(FieldId FieldId, LazyString Text)>? kept = _DeferredCacheTexts;
+        if (kept is null || kept.Count == 0)
+        {
+            return;
+        }
+
+        // Invariant: RecordCaughtError below appends a field without custom text, so it never adds to this list while the loop
+        // runs (_TryKeepCacheText keeps only present texts); the span therefore stays the list's backing store.
+        Span<(FieldId FieldId, LazyString Text)> entries = CollectionsMarshal.AsSpan(kept);
+        for (int i = 0; i < entries.Length; i++)
+        {
+            // A restart evicts the cache from another thread; every later record would throw the same way, so stop.
+            if (cache.IsAbandoned)
+            {
+                break;
+            }
+
+            // The formatter is dissector code. Its throw is contained per text, like a throw at append is contained by the
+            // dispatch boundary of PacketProtocol. Rejected: letting it reach _ParseAndSeal's catch, which rolls back the index
+            // entry and ends every observer incomplete because of one faulty display text.
+            try
+            {
+                cache.RecordCustomText(Id.Value, Timestamp.AsNanos, entries[i].FieldId, in entries[i].Text);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                RecordCaughtError(0, BuildCaughtExceptionText(ex, Stack.IncludeExceptionStackTrace));
+            }
+        }
+
+        kept.Clear();
+    }
 
     /// <summary>
     /// Records a custom-text change into the active value cache, if any. Same inline-stub plus out-of-line-slow-path split
     /// as <see cref="_RecordValueCache"/>, so the unrecorded common case costs one null test.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _RecordValueCacheCustomText(FieldId fieldId, LazyString customText)
+    private void _RecordValueCacheCustomText(FieldId fieldId, in LazyString customText)
     {
         ValueCache? cache = _ActiveValueCache;
         if (cache is not null)
         {
-            _RecordValueCacheCustomTextSlow(this, cache, fieldId, customText);
+            _RecordValueCacheCustomTextSlow(this, cache, fieldId, in customText);
         }
     }
 
+    /// <summary>Records a custom-text change now or, when <see cref="_TryKeepCacheText"/> keeps it, when the parse ended.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void _RecordValueCacheCustomTextSlow(
-        Packet packet, ValueCache cache, FieldId fieldId, LazyString customText) =>
-        cache.RecordCustomText(packet.Id.Value, packet.Timestamp.AsNanos, fieldId, customText);
+    private static void _RecordValueCacheCustomTextSlow(Packet packet, ValueCache cache, FieldId fieldId, in LazyString customText)
+    {
+        // A change follows the same rule as an append, so it lands after the append's text of the same field.
+        if (packet._TryKeepCacheText(cache, fieldId, in customText))
+        {
+            return;
+        }
 
-    /// <summary>Sets custom display text and records it when a value cache is attached.</summary>
+        cache.RecordCustomText(packet.Id.Value, packet.Timestamp.AsNanos, fieldId, in customText);
+    }
+
+    // Custom text is final at append (rule for all three methods below). Field observers and value caches receive a field when
+    // it is appended and are not told about a later text change, so a tree-free export would show the text of the append while the
+    // field tree shows the changed one. After seal the rule is enforced: a sealed packet is read by other threads, and the text
+    // store is a plain, unsynchronized write into the field slab, so a change would race with those readers. Rejected alternative:
+    // an interlocked store, which would make every text read pay for a rare, discouraged write. A change BEFORE seal stays
+    // possible (a value cache records it as before), because refusing it would break dissectors that are correct today; it is
+    // only discouraged.
+
+    /// <summary>
+    /// Sets custom display text and records it when a value cache is attached. Discouraged: text should be final at append.
+    /// Refused after seal.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The packet is sealed.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetFieldCustomText(ushort index, FieldId fieldId, LazyString text)
     {
+        // One volatile read; the throw helper keeps the cold path out of this inlined method.
+        if (_Finalized != 0)
+        {
+            ThrowHelpers.ThrowCustomTextAfterSeal(fieldId);
+        }
+
         GetFieldRef(index).SetCustomText(text);
-        _RecordValueCacheCustomText(fieldId, text);
+        _RecordValueCacheCustomText(fieldId, in GetFieldRef(index).CustomText);
     }
 
-    /// <summary>Clears custom display text and records the null text when a value cache is attached.</summary>
+    /// <summary>
+    /// Clears custom display text and records the null text when a value cache is attached. Discouraged: text should be final
+    /// at append. Refused after seal.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The packet is sealed.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void ClearFieldCustomText(ushort index, FieldId fieldId)
     {
+        if (_Finalized != 0)
+        {
+            ThrowHelpers.ThrowCustomTextAfterSeal(fieldId);
+        }
+
         GetFieldRef(index).ClearCustomText();
-        _RecordValueCacheCustomText(fieldId, default);
+        _RecordValueCacheCustomText(fieldId, in GetFieldRef(index).CustomText);
     }
 
-    /// <summary>Appends to custom display text and records the combined text when a value cache is attached.</summary>
+    /// <summary>
+    /// Appends to custom display text and records the combined text when a value cache is attached. Discouraged: text should be
+    /// final at append. Refused after seal.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The packet is sealed.</exception>
     internal void AppendFieldCustomText(ushort index, FieldId fieldId, LazyString suffix)
     {
+        if (_Finalized != 0)
+        {
+            ThrowHelpers.ThrowCustomTextAfterSeal(fieldId);
+        }
+
         ref FieldBody body = ref GetFieldRef(index);
         body.AppendCustomText(suffix);
-        _RecordValueCacheCustomText(fieldId, body.CustomText);
+        _RecordValueCacheCustomText(fieldId, in body.CustomText);
     }
 
     #endregion
@@ -2373,6 +2611,8 @@ public sealed class Packet
 
         packet._Observers = observers;
         packet._ObserverFailed = false;
+        packet._ObserversBegun = 0;
+        packet._ObserversWantDisplayText = _AnyDisplayText(observers.Span);
         bool replay = false;
         bool indexing = false;
         try
@@ -2396,6 +2636,9 @@ public sealed class Packet
             ParseContext context = indexing
                 ? new ParseContext(index!, packet.Stack, skipFieldTree: !packet.HasFieldTree)
                 : new ParseContext(packet.Stack, skipFieldTree: !packet.HasFieldTree);
+
+            // True once the completed parse recorded its deferred texts; the end calls may keep more (see the finally).
+            bool recordedTexts = false;
             try
             {
                 packet._BeginObservers();
@@ -2407,6 +2650,8 @@ public sealed class Packet
                 if (recording)
                 {
                     cache!.EnsureMaterialized(packet);
+                    packet._RecordDeferredCacheTexts(cache);
+                    recordedTexts = true;
                 }
             }
             catch (Exception ex)
@@ -2420,15 +2665,34 @@ public sealed class Packet
             }
             finally
             {
-                packet._ActiveValueCache = null;
-                if (indexing)
+                try
                 {
-                    index!.EndPacket();
-                }
+                    // End calls first: the cache is still attached, so a failing end call is recorded where an OnField failure
+                    // would be. _BeginObservers runs inside this try, so every begun observer passes through here; observers may
+                    // still read the packet (cursor) and evaluate deferred texts while it is private to the parse thread.
+                    packet._EndObservers();
 
-                if (!replay)
+                    // An end call that expanded lazy fields may have kept new texts for the cache; record them like the others.
+                    // Only after a completed parse: a failed parse records no deferred texts (see the outer finally).
+                    if (recordedTexts)
+                    {
+                        packet._RecordDeferredCacheTexts(cache!);
+                    }
+                }
+                finally
                 {
-                    packet.Stack.CompleteFirstParse(packet.Id);
+                    // Invariant: the cache is detached, the index packet is ended, and the first parse is completed on every
+                    // path, also if an end call let an unexpected exception through; the next parse of the stack relies on it.
+                    packet._ActiveValueCache = null;
+                    if (indexing)
+                    {
+                        index!.EndPacket();
+                    }
+
+                    if (!replay)
+                    {
+                        packet.Stack.CompleteFirstParse(packet.Id);
+                    }
                 }
             }
         }
@@ -2436,6 +2700,12 @@ public sealed class Packet
         {
             packet._Observers = default;
             packet._ObserverFailed = false;
+            packet._ObserversBegun = 0;
+            packet._ObserversWantDisplayText = false;
+            // A parse that failed (its catch above ran) records none of the texts it kept for the cache: its packet is an error
+            // packet and the texts may be incomplete. Its values were recorded at append. Clearing also drops the kept copies, so
+            // a recycled packet does not retain their deferred objects.
+            packet._DeferredCacheTexts?.Clear();
             packet._HasParseHooks = false;
             packet.Seal();
         }

@@ -21,7 +21,7 @@ internal sealed class FilterLazyMaterializeTests
     private static Packet _Parse(Stack stack, ProtocolId firstProtocol, int packetId)
     {
         Frame frame = Frame.Create(
-            new FrameId(packetId),
+            packetId,
             Timestamp.FromNanos(packetId),
             new byte[4],
             LinkType.Ethernet,
@@ -29,7 +29,7 @@ internal sealed class FilterLazyMaterializeTests
             stack.FrameInterfaceRegistry).Value;
         ParseOptions options = new(FieldTreeMode.Build, firstProtocol: firstProtocol);
         bool parsed = Packet.TryParse(
-            new PacketId(packetId),
+            packetId,
             stack,
             frame,
             in options,
@@ -136,7 +136,7 @@ internal sealed class FilterLazyMaterializeTests
             bool treeMatched = FilterTestHelper.MatchOrThrow(filter, _Parse(stack, id, 0));
 
             // Id 0 is first-parsed above, so this skip parse is a replay; id 1 is a first parse in skip mode.
-            FieldWatch watch = observer!.CreateOwnerExpandingWatch();
+            FieldWatch watch = observer!.ExtractionWatch;
             bool replayRead = _Observe(stack, id, 0, observer, watch, out bool replayMatched);
             bool firstRead = _Observe(stack, id, 1, observer, watch, out bool firstMatched);
 
@@ -149,7 +149,7 @@ internal sealed class FilterLazyMaterializeTests
     }
 
     /// <summary>
-    /// Why the pre-check needs the owner-expanding watch: with only the observer's own watch, a lazy container outside an
+    /// Why the pre-check needs the extraction watch: with only the observer's own watch, a lazy container outside an
     /// index group stays closed in a parse without field tree, so the observer never sees the matching value.
     /// </summary>
     [Test]
@@ -165,7 +165,7 @@ internal sealed class FilterLazyMaterializeTests
 
             await Assert.That(read).IsTrue();
             await Assert.That(matched).IsFalse();
-            await Assert.That(observer.CreateOwnerExpandingWatch() == observer.Watch).IsFalse();
+            await Assert.That(observer.ExtractionWatch == observer.Watch).IsFalse();
         }
     }
 
@@ -173,7 +173,7 @@ internal sealed class FilterLazyMaterializeTests
         Stack stack, ProtocolId firstProtocol, int packetId, FilterObserver observer, FieldWatch watch, out bool matched)
     {
         Frame frame = Frame.Create(
-            new FrameId(packetId),
+            packetId,
             Timestamp.FromNanos(packetId),
             new byte[4],
             LinkType.Ethernet,
@@ -181,7 +181,7 @@ internal sealed class FilterLazyMaterializeTests
             stack.FrameInterfaceRegistry).Value;
         ParseObserver[] observers = [new() { Observer = observer, Watch = watch }];
         ParseOptions options = new(FieldTreeMode.Skip, firstProtocol: firstProtocol, observers: observers);
-        if (!Packet.TryParse(new PacketId(packetId), stack, frame, in options, out _, out ParseFailure failure))
+        if (!Packet.TryParse(packetId, stack, frame, in options, out _, out ParseFailure failure))
         {
             throw new InvalidOperationException(failure.ToString());
         }

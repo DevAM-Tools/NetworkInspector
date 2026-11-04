@@ -19,7 +19,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     {
         string methods = Method(
             1,
-            "Base",
+            "base",
             Sites(
                 Site("u8", "uint8"), Site("i8", "int8"), Site("u16", "uint16"), Site("i16", "int16"), Site("u32", "uint32"),
                 Site("i32", "int32"), Site("u64", "uint64"), Site("i64", "int64"), Site("f32", "float"), Site("f64", "double"),
@@ -56,7 +56,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task LittleEndianTypesReadTheirBytesInReverse()
     {
-        string methods = Method(1, "Order", Sites(Site("le", "u16_le"), Site("be", "uint16"), Site("d", "double_le")), "[]");
+        string methods = Method(1, "order", Sites(Site("le", "u16_le"), Site("be", "uint16"), Site("d", "double_le")), "[]");
         string types = Join(BaseType("u16_le", "uint16", ",\"byte_order\":\"little_endian\""), BaseType("double_le", "double", ",\"byte_order\":\"little_endian\""));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
         byte[] doubleLe = new byte[8];
@@ -73,7 +73,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task LookupNamesAreShownForKnownValuesOnly()
     {
-        string methods = Method(1, "Look", Sites(Site("state", "state_t"), Site("other", "state_t"), Site("sign", "sign_t")), "[]");
+        string methods = Method(1, "look", Sites(Site("state", "state_t"), Site("other", "state_t"), Site("sign", "sign_t")), "[]");
         string types = Join(
             BaseType("state_t", "uint8", ",\"lookup_values\":{\"1\":\"Idle\",\"2\":\"Active\"}"),
             BaseType("sign_t", "int8", ",\"lookup_values\":{\"-1\":\"Minus\"}"));
@@ -97,7 +97,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Arguments(4)]
     public async Task AStringReadsItsLengthFieldOfTheConfiguredSize(int lengthSize)
     {
-        string methods = Method(1, "Text", Sites(Site("t", "string")), "[]", Transform(stringLength: lengthSize));
+        string methods = Method(1, "text", Sites(Site("t", "string")), "[]", Transform(stringLength: lengthSize));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
         SomeIpBytes payload = new();
         _ = lengthSize switch
@@ -118,7 +118,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task AFixedLengthStringConsumesExactlyItsBytesAndNoLengthField()
     {
-        string methods = Method(1, "Fixed", Sites(Site("t", "code8"), Site("after", "uint8")), "[]");
+        string methods = Method(1, "fixed", Sites(Site("t", "code8"), Site("after", "uint8")), "[]");
         string types = BaseType("code8", "string", ",\"fixed_length\":8");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -132,7 +132,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task AZeroLengthStringIsEmptyWithByteCountZero()
     {
-        string methods = Method(1, "Empty", Sites(Site("t", "string"), Site("after", "uint8")), "[]");
+        string methods = Method(1, "empty", Sites(Site("t", "string"), Site("after", "uint8")), "[]");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
 
         Packet packet = s.Parse(UdpFrame(new SomeIpBytes().U32(0).U8(9).ToArray()));
@@ -146,10 +146,10 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     public async Task EachEncodingDecodesItsBytesAndEscapesWhatIsNotText()
     {
         string methods = Join(
-            Method(1, "Utf8", Sites(Site("t", "string")), "[]"),
-            Method(2, "Be", Sites(Site("t", "s_be")), "[]"),
-            Method(3, "Le", Sites(Site("t", "s_le")), "[]"),
-            Method(4, "Ascii", Sites(Site("t", "s_ascii")), "[]"));
+            Method(1, "utf8", Sites(Site("t", "string")), "[]"),
+            Method(2, "be", Sites(Site("t", "s_be")), "[]"),
+            Method(3, "le", Sites(Site("t", "s_le")), "[]"),
+            Method(4, "ascii", Sites(Site("t", "s_ascii")), "[]"));
         string types = Join(
             BaseType("s_be", "string", ",\"encoding\":\"utf-16be\""),
             BaseType("s_le", "string", ",\"encoding\":\"utf-16le\""),
@@ -174,7 +174,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task ATypeLengthSizeBeatsTheMethodAndTheMethodBeatsTheDefault()
     {
-        string methods = Method(1, "Mix", Sites(Site("short_note", "note_t"), Site("plain", "string")), "[]", Transform(stringLength: 4));
+        string methods = Method(1, "mix", Sites(Site("short_note", "note_t"), Site("plain", "string")), "[]", Transform(stringLength: 4));
         string types = BaseType("note_t", "string", ",\"size_of_length\":1");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -189,8 +189,8 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     public async Task TwoMethodsShareOneStringTypeWithTheirOwnLengthSizes()
     {
         string methods = Join(
-            Method(1, "Two", Sites(Site("z", "zone")), "[]", Transform(stringLength: 2)),
-            Method(2, "Four", Sites(Site("z", "zone")), "[]", Transform(stringLength: 4)));
+            Method(1, "two", Sites(Site("z", "zone")), "[]", Transform(stringLength: 2)),
+            Method(2, "four", Sites(Site("z", "zone")), "[]", Transform(stringLength: 4)));
         string types = BaseType("zone", "string");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -233,7 +233,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task APaddedValueMovesTheNextParameterToTheAlignedOffset()
     {
-        string methods = Method(1, "Pad", Sites(Site("t", "padded"), Site("after", "uint32")), "[]");
+        string methods = Method(1, "pad", Sites(Site("t", "padded"), Site("after", "uint32")), "[]");
         string types = BaseType("padded", "string", ",\"pad_to\":4");
         byte[] payload = new SomeIpBytes().U32(2).Utf8("ab").U8(0xEE).U8(0xEE).U32(0xCAFEBABE).ToArray();
 
@@ -257,7 +257,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task AVariableArrayShowsIndexedElementsUnderOneField()
     {
-        string methods = Method(1, "Arr", Sites(Site("values", "bytes_t")), "[]");
+        string methods = Method(1, "arr", Sites(Site("values", "bytes_t")), "[]");
         string types = ArrayType("bytes_t", "uint8");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -276,7 +276,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task AnArrayThatDeclaresMoreBytesThanThereAreDecodesWhatFitsAndSaysSo()
     {
-        string methods = Method(1, "Arr", Sites(Site("values", "words_t")), "[]");
+        string methods = Method(1, "arr", Sites(Site("values", "words_t")), "[]");
         string types = ArrayType("words_t", "uint16");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -291,7 +291,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task AFixedArrayHasNoLengthFieldAndConsumesExactlyItsElements()
     {
-        string methods = Method(1, "Fix", Sites(Site("triple", "triple_t"), Site("after", "uint8")), "[]");
+        string methods = Method(1, "fix", Sites(Site("triple", "triple_t"), Site("after", "uint8")), "[]");
         string types = ArrayType("triple_t", "uint16", ",\"size\":3");
         byte[] payload = new SomeIpBytes().U16(1).U16(2).U16(3).U8(99).ToArray();
 
@@ -312,7 +312,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task ElementBoundsOutsideTheDescriptionAreReportedAndTheElementsStayVisible()
     {
-        string methods = Method(1, "Lim", Sites(Site("v", "bounded")), "[]");
+        string methods = Method(1, "lim", Sites(Site("v", "bounded")), "[]");
         string types = ArrayType("bounded", "uint8", ",\"min_elements\":2,\"max_elements\":2");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -331,7 +331,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task NestedArraysDecodeIntoRowsWithDerivedItemItemNames()
     {
-        string methods = Method(1, "Mat", Sites(Site("matrix", "matrix_t")), "[]");
+        string methods = Method(1, "mat", Sites(Site("matrix", "matrix_t")), "[]");
         string types = Join(
             ArrayType("row_t", "int16", ",\"size\":3"),
             ArrayType("matrix_t", "row_t", ",\"max_elements\":2"));
@@ -355,8 +355,8 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     public async Task AStructureConsumesItsLengthFieldAndMembersOrOnlyTheMembersWithoutOne()
     {
         string methods = Join(
-            Method(1, "WithLen", Sites(Site("p", "pair"), Site("after", "uint8")), "[]"),
-            Method(2, "NoLen", Sites(Site("p", "pair"), Site("after", "uint8")), "[]", Transform(structLength: 0)));
+            Method(1, "withlen", Sites(Site("p", "pair"), Site("after", "uint8")), "[]"),
+            Method(2, "nolen", Sites(Site("p", "pair"), Site("after", "uint8")), "[]", Transform(structLength: 0)));
         string types = StructType("pair", Site("a", "uint16"), Site("b", "uint8"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -374,7 +374,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task AStructureLengthShorterThanItsMembersReportsTheMissingMemberAndTheNextParameterStartsBehindIt()
     {
-        string methods = Method(1, "Short", Sites(Site("p", "pair"), Site("after", "uint8")), "[]");
+        string methods = Method(1, "short", Sites(Site("p", "pair"), Site("after", "uint8")), "[]");
         string types = StructType("pair", Site("a", "uint16"), Site("b", "uint8"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -391,7 +391,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task AliasesDecodeLikeTheirTargetAndKeepTheirOwnName()
     {
-        string methods = Method(1, "Als", Sites(Site("v", "speed"), Site("p", "pair_alias"), Site("w", "speed_alias")), "[]");
+        string methods = Method(1, "als", Sites(Site("v", "speed"), Site("p", "pair_alias"), Site("w", "speed_alias")), "[]");
         string types = Join(
             BaseType("speed_base", "uint16"),
             """{"category":"alias","name":"speed","type_reference":"speed_base"}""",
@@ -411,7 +411,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task AMemberWithAMissingTypeShowsTheMarkerAndTheMembersAroundItDecode()
     {
-        string methods = Method(1, "Ref", Sites(Site("p", "broken")), "[]");
+        string methods = Method(1, "ref", Sites(Site("p", "broken")), "[]");
         string types = StructType("broken", Site("a", "uint8"), Site("b", "no_such_type"), Site("c", "uint8"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -431,7 +431,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task ARequestDecodesTheInputListAndAResponseTheOutputList()
     {
-        string methods = Method(1, "Dir", Sites(Site("a", "uint8"), Site("b", "uint16")), Sites(Site("r", "uint32")));
+        string methods = Method(1, "dir", Sites(Site("a", "uint8"), Site("b", "uint16")), Sites(Site("r", "uint32")));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
         byte[] payload = [1, 0, 2];
 
@@ -451,7 +451,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task AnErrorMessageShowsRawBytesAndNoParametersOrDiagnostics()
     {
-        string methods = Method(1, "Err", Sites(Site("a", "uint8")), Sites(Site("r", "uint32")));
+        string methods = Method(1, "err", Sites(Site("a", "uint8")), Sites(Site("r", "uint32")));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
 
         Packet error = s.Parse(UdpFrame([0xDE, 0xAD], messageType: 0x81, methodId: 1));
@@ -466,8 +466,8 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     public async Task EventsAndTheAccessorsOfAFieldDecodeTheirType()
     {
         string methods = Join(
-            """{"kind":"event","id":2,"name":"Evt","type_reference":"uint16"}""",
-            """{"kind":"field","name":"Fan","get_id":10,"set_id":11,"notifier_id":12,"type_reference":"uint8"}""");
+            """{"kind":"event","id":2,"name":"evt","type_reference":"uint16"}""",
+            """{"kind":"field","name":"fan","get_id":10,"set_id":11,"notifier_id":12,"type_reference":"uint8"}""");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
 
         Packet notification = s.Parse(UdpFrame([0x01, 0x02], methodId: 2, messageType: 0x02));
@@ -479,16 +479,16 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
 
         await Assert.That(s.U64s(notification, Prefix + "evt.uint16")).IsEquivalentTo(One(258UL));
         await Assert.That(s.Count(getRequest, "someip.payload.error")).IsEqualTo(0);
-        await Assert.That(s.U64s(getResponse, Prefix + "fan_get.out.uint8")).IsEquivalentTo(One(7UL));
-        await Assert.That(s.U64s(setRequest, Prefix + "fan_set.in.uint8")).IsEquivalentTo(One(8UL));
-        await Assert.That(s.U64s(setResponse, Prefix + "fan_set.out.uint8")).IsEquivalentTo(One(9UL));
+        await Assert.That(s.U64s(getResponse, Prefix + "fan_get.resp.uint8")).IsEquivalentTo(One(7UL));
+        await Assert.That(s.U64s(setRequest, Prefix + "fan_set.req.uint8")).IsEquivalentTo(One(8UL));
+        await Assert.That(s.U64s(setResponse, Prefix + "fan_set.resp.uint8")).IsEquivalentTo(One(9UL));
         await Assert.That(s.U64s(fieldNotification, Prefix + "fan_notifier.uint8")).IsEquivalentTo(One(10UL));
     }
 
     [Test]
     public async Task AMethodTheModelDoesNotDefineKeepsRawBytesAndTheUnknownMarker()
     {
-        string methods = Method(1, "Known", Sites(Site("a", "uint8")), "[]");
+        string methods = Method(1, "known", Sites(Site("a", "uint8")), "[]");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
 
         Packet packet = s.ParseIndexed(UdpFrame([1, 2, 3], methodId: 99), out PacketIndex index);
@@ -496,7 +496,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
         await Assert.That(s.ByteLengths(packet, "someip.payload")).IsEquivalentTo(One(3));
         await Assert.That(s.Count(packet, InName("known", "a"))).IsEqualTo(0);
         await ProtocolTestHelper.AssertDisplayText(s.Stack, packet, "someip.methodid", "0x0063 (unknown)");
-        await Assert.That(s.HasGroup(index, packet, "someip.payload.svc.v1.known.in")).IsFalse();
+        await Assert.That(s.HasGroup(index, packet, GroupPrefix + "known.req")).IsFalse();
     }
 
     #endregion
@@ -506,7 +506,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task BytesBehindTheLastParameterAreShownAsUnparsedWithOneDiagnostic()
     {
-        string methods = Method(1, "Rest", Sites(Site("a", "uint8")), "[]");
+        string methods = Method(1, "rest", Sites(Site("a", "uint8")), "[]");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
 
         Packet packet = s.Parse(UdpFrame([1, 2, 3]));
@@ -521,7 +521,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task DecodingSwitchedOffShowsRawBytesTheMarkerAndNoMemberGroup()
     {
-        string methods = Method(1, "Off", Sites(Site("a", "uint8")), "[]");
+        string methods = Method(1, "off", Sites(Site("a", "uint8")), "[]");
         string json = Json(methods);
         byte[] frame = UdpFrame([5]);
 
@@ -531,23 +531,23 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
             await Assert.That(off.ByteLengths(packet, "someip.payload")).IsEquivalentTo(One(1));
             await Assert.That(off.Count(packet, "someip.payload.disabled")).IsEqualTo(1);
             await Assert.That(off.Count(packet, InName("off", "a"))).IsEqualTo(0);
-            await Assert.That(off.HasGroup(index, packet, "someip.payload.svc.v1.off.in")).IsFalse();
+            await Assert.That(off.HasGroup(index, packet, GroupPrefix + "off.req")).IsFalse();
         }
 
         using SomeIpTestStack on = SomeIpTestStack.Create(json);
         Packet decoded = on.ParseIndexed(frame, out PacketIndex onIndex);
         await Assert.That(on.U64s(decoded, InName("off", "a"))).IsEquivalentTo(One(5UL));
         await Assert.That(on.Count(decoded, "someip.payload.disabled")).IsEqualTo(0);
-        await Assert.That(on.HasGroup(onIndex, decoded, "someip.payload.svc.v1.off.in")).IsTrue();
+        await Assert.That(on.HasGroup(onIndex, decoded, GroupPrefix + "off.req")).IsTrue();
     }
 
     [Test]
     public async Task TruncatedPayloadsDecodeWhatFitsAndNeverThrow()
     {
         string methods = Join(
-            Method(1, "Arr", Sites(Site("v", "bytes_t"), Site("after", "uint8")), "[]"),
-            Method(2, "Txt", Sites(Site("t", "string"), Site("after", "uint8")), "[]"),
-            Method(3, "Nop", Sites(Site("a", "uint8")), "[]"));
+            Method(1, "arr", Sites(Site("v", "bytes_t"), Site("after", "uint8")), "[]"),
+            Method(2, "txt", Sites(Site("t", "string"), Site("after", "uint8")), "[]"),
+            Method(3, "nop", Sites(Site("a", "uint8")), "[]"));
         string types = ArrayType("bytes_t", "uint8");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -568,7 +568,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task EveryPrefixOfAMessageDecodesWithDiagnosticsOnly()
     {
-        string methods = Method(1, "Cut", Sites(Site("p", "rec"), Site("v", "words_t"), Site("t", "string")), "[]");
+        string methods = Method(1, "cut", Sites(Site("p", "rec"), Site("v", "words_t"), Site("t", "string")), "[]");
         string types = Join(StructType("rec", Site("a", "uint16"), Site("b", "double")), ArrayType("words_t", "uint16"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
         byte[] full = new SomeIpBytes().U32(10).U16(1).F64(2.5).U32(4).U16(5).U16(6).U32(2).Utf8("hi").ToArray();
@@ -588,7 +588,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task TheMetadataViewAddsTypeLengthAndCountNodesWithoutChangingAnyValue()
     {
-        string methods = Method(1, "Meta", Sites(Site("p", "pair"), Site("v", "bytes_t")), "[]");
+        string methods = Method(1, "meta", Sites(Site("p", "pair"), Site("v", "bytes_t")), "[]");
         string types = Join(StructType("pair", Site("a", "uint16")), ArrayType("bytes_t", "uint8"));
         byte[] payload = new SomeIpBytes().U32(2).U16(7).U32(2).U8(1).U8(2).ToArray();
 
@@ -615,7 +615,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task ParsingDecodesNothingAndMaterializingDecodesExactlyThatPacket()
     {
-        string methods = Method(1, "Lazy", Sites(Site("a", "uint8")), "[]");
+        string methods = Method(1, "lazy", Sites(Site("a", "uint8")), "[]");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
         List<Packet> packets = [];
         for (int i = 0; i < 100; i++)
@@ -623,7 +623,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
             packets.Add(s.Parse(UdpFrame([(byte)i])));
         }
 
-        FieldId payloadId = s.Stack.GetFieldId("someip.payload")!.Value;
+        FieldId payloadId = s.Stack.GetFieldId(Prefix + "lazy")!.Value; // the method node holds the lazy decoded values
         foreach (Packet packet in packets)
         {
             Field container = packet.IterFieldsDfs(materialize: false).First(f => f.FieldId == payloadId);
@@ -640,7 +640,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task AReparseGivesTheIdenticalMaterializedTree()
     {
-        string methods = Method(1, "Rep", Sites(Site("p", "rec"), Site("v", "bytes_t")), "[]");
+        string methods = Method(1, "rep", Sites(Site("p", "rec"), Site("v", "bytes_t")), "[]");
         string types = Join(StructType("rec", Site("a", "uint16"), Site("t", "string")), ArrayType("bytes_t", "uint8"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types), ("someip.show_type_metadata", SettingValue.Bool(true)));
         byte[][] frames =
@@ -663,7 +663,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task ConcurrentMaterializationOfOnePacketGivesIdenticalValues()
     {
-        string methods = Method(1, "Par", Sites(Site("v", "bytes_t")), "[]");
+        string methods = Method(1, "par", Sites(Site("v", "bytes_t")), "[]");
         string types = ArrayType("bytes_t", "uint8");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
         Packet packet = s.Parse(UdpFrame(new SomeIpBytes().U32(64).Fill(3, 64).ToArray()));
@@ -681,7 +681,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task ADeepTypeChainIsCutAtTheDepthLimitAndTheSettingNamesIt()
     {
-        string methods = Method(1, "Deep", Sites(Site("top", "level1")), "[]", Transform(structLength: 0));
+        string methods = Method(1, "deep", Sites(Site("top", "level1")), "[]", Transform(structLength: 0));
         List<string> types = [];
         for (int i = 1; i < 70; i++)
         {
@@ -695,7 +695,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
         using (SomeIpTestStack defaults = SomeIpTestStack.Create(json))
         {
             Packet packet = defaults.Parse(frame);
-            int nodes = _CountContainers(defaults, packet, Prefix + "deep.in");
+            int nodes = _CountContainers(defaults, packet, Prefix + "deep.req");
             await Assert.That(nodes).IsEqualTo(64);
             List<string> errors = Errors(defaults, packet);
             await Assert.That(errors.Count).IsEqualTo(1);
@@ -705,20 +705,20 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
         using (SomeIpTestStack raised = SomeIpTestStack.Create(json, ("someip.max_type_depth", SettingValue.U64(128))))
         {
             Packet packet = raised.Parse(frame);
-            await Assert.That(_CountContainers(raised, packet, Prefix + "deep.in")).IsEqualTo(70);
+            await Assert.That(_CountContainers(raised, packet, Prefix + "deep.req")).IsEqualTo(70);
             await Assert.That(Errors(raised, packet)).IsEmpty();
         }
 
         using SomeIpTestStack one = SomeIpTestStack.Create(json, ("someip.max_type_depth", SettingValue.U64(1)));
         Packet shallow = one.Parse(frame);
-        await Assert.That(_CountContainers(one, shallow, Prefix + "deep.in")).IsEqualTo(1);
+        await Assert.That(_CountContainers(one, shallow, Prefix + "deep.req")).IsEqualTo(1);
         await Assert.That(Errors(one, shallow).Count).IsEqualTo(1);
     }
 
     [Test]
     public async Task ALargeArrayIsCutAtTheNodeLimitAndTheSettingNamesIt()
     {
-        string methods = Method(1, "Big", Sites(Site("v", "bytes_t")), "[]");
+        string methods = Method(1, "big", Sites(Site("v", "bytes_t")), "[]");
         string types = ArrayType("bytes_t", "uint8");
         string json = Json(methods, types);
         byte[] datagram = new SomeIpBytes().U32(20000).Fill(1, 20000).ToArray();
@@ -775,32 +775,120 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     #region Names
 
     [Test]
-    public async Task ADerivedNameAndAConfiguredFilterNameSelectTheSameValue()
+    public async Task AValueIsFilterableUnderTheNamesOfTheDescriptionExactlyAsWritten()
     {
-        string methods = Method(
-            1, "SetTemp", Sites(Site("request", "req_t")), "[]");
-        string types = Join(
-            StructType("req_t", Site("target_c", "int16", ",\"filter_name\":\"climate.settemp.target_c\"")));
+        string methods = Method(1, "SetTemp", Sites(Site("request", "req_t")), "[]");
+        string types = StructType("req_t", Site("Target_C", "int16"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
         Packet packet = s.Parse(UdpFrame(new SomeIpBytes().U32(2).I16(21).ToArray()));
 
-        await Assert.That(I64s(s, packet, "climate.settemp.target_c")).IsEquivalentTo(One(21L));
+        await Assert.That(I64s(s, packet, InName("SetTemp", "request.Target_C"))).IsEquivalentTo(One(21L));
         await Assert.That(s.Stack.GetFieldId(InName("settemp", "request.target_c"))).IsNull();
-        await Assert.That(s.Stack.GetFieldId(InName("settemp", "request"))).IsNotNull();
+        await Assert.That(s.Stack.GetFieldId(InName("SetTemp", "request"))).IsNotNull();
         await Assert.That(s.Warnings).IsEmpty();
     }
 
     [Test]
-    public async Task AFilterNameThatEqualsABuiltInFieldFallsBackToTheGenericFieldWithAWarning()
+    public async Task TheFieldPrefixSettingPutsTextInFrontOfEveryFilterNameButNotOfTheGroupNames()
     {
-        string methods = Method(1, "Clash", Sites(Site("a", "uint8", ",\"filter_name\":\"someip.payload.error\"")), "[]");
-        using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
+        string methods = Method(1, "m", Sites(Site("a", "uint8")), "[]");
+        using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods), (SomeIpRegistration.FieldPrefixSetting, SettingValue.String("acme.car")));
 
-        Packet packet = s.Parse(UdpFrame([5]));
+        Packet packet = s.Parse(UdpFrame([4]));
 
-        await Assert.That(s.U64s(packet, "someip.payload.value.u64")).IsEquivalentTo(One(5UL));
-        await Assert.That(s.Warnings.Any(static w => w.Message.Contains("someip.payload.error", StringComparison.Ordinal))).IsTrue();
+        FieldId prefixed = s.Stack.GetFieldId("acme.car." + InName("m", "a"))!.Value;
+        await Assert.That(s.Stack.GetFieldId(InName("m", "a"))).IsNull();
+        await Assert.That(s.U64s(packet, "acme.car." + InName("m", "a"))).IsEquivalentTo(One(4UL));
+        await Assert.That(s.Stack.GetIndexGroup(s.Stack.GetFieldIndexGroup(prefixed))?.Name).IsEqualTo(GroupPrefix + "m.req");
+        await Assert.That(s.Warnings).IsEmpty();
+    }
+
+    [Test]
+    [Arguments("1acme")]
+    [Arguments("acme..x")]
+    [Arguments(".acme")]
+    [Arguments("ac me")]
+    public async Task AnInvalidFieldPrefixWarnsOnceAndTheNamesCarryNoPrefix(string prefix)
+    {
+        string methods = Method(1, "m", Sites(Site("a", "uint8")), "[]");
+        using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods), (SomeIpRegistration.FieldPrefixSetting, SettingValue.String(prefix)));
+
+        await Assert.That(s.Warnings.Count(static w => w.SettingName == SomeIpRegistration.FieldPrefixSetting)).IsEqualTo(1);
+        await Assert.That(s.Stack.GetFieldId(InName("m", "a"))).IsNotNull();
+        await Assert.That(s.Stack.GetFieldId(prefix + "." + InName("m", "a"))).IsNull();
+    }
+
+    [Test]
+    public async Task ARequestAndAResponseMayUseTheSameNameWithDifferentTypes()
+    {
+        string methods = Method(1, "Query", Sites(Site("status", "uint8")), Sites(Site("status", "reply_t")), Transform(structLength: 0));
+        string types = StructType("reply_t", Site("code", "uint16"));
+        using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
+
+        Packet request = s.Parse(UdpFrame([5]));
+        Packet response = s.Parse(UdpFrame([0x00, 0x07], messageType: 0x80));
+
+        FieldInfo requestStatus = s.Stack.GetField(s.Stack.GetFieldId(InName("Query", "status"))!.Value)!;
+        FieldInfo responseStatus = s.Stack.GetField(s.Stack.GetFieldId(OutName("Query", "status"))!.Value)!;
+        await Assert.That(requestStatus.FieldType).IsEqualTo(FieldType.U64);
+        await Assert.That(responseStatus.FieldType).IsEqualTo(FieldType.None);
+        await Assert.That(s.U64s(request, InName("Query", "status"))).IsEquivalentTo(One(5UL));
+        await Assert.That(s.U64s(response, OutName("Query", "status.code"))).IsEquivalentTo(One(7UL));
+        await Assert.That(s.Count(request, OutName("Query", "status.code"))).IsEqualTo(0);
+        await Assert.That(s.Warnings).IsEmpty();
+    }
+
+    [Test]
+    public async Task AStructureMemberWithAnInvalidNameStopsTheDecodeAtItsPosition()
+    {
+        string methods = Join(
+            Method(1, "m1", Sites(Site("p", "bad_t")), "[]", Transform(structLength: 0)),
+            Method(2, "m2", Sites(Site("q", "bad_t")), "[]", Transform(structLength: 0)));
+        string types = StructType("bad_t", Site("a", "uint8"), Site("zone-id", "uint8"), Site("c", "uint8"));
+        using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
+
+        Packet packet = s.Parse(UdpFrame([1, 2, 3]));
+
+        // One warning although two methods use the type; it names the entry, the type and the rule.
+        await Assert.That(s.Warnings.Count).IsEqualTo(1);
+        await Assert.That(s.Warnings[0].Message).Contains("zone-id").And.Contains("bad_t").And.Contains("not a valid name");
+        await Assert.That(s.U64s(packet, InName("m1", "p.a"))).IsEquivalentTo(One(1UL));
+        await Assert.That(s.Count(packet, InName("m1", "p.c"))).IsEqualTo(0);
+        await Assert.That(s.ByteLengths(packet, "someip.payload.unparsed")).IsEquivalentTo(One(2));
+        await Assert.That(Errors(s, packet).Count(static e => e.Contains("zone-id", StringComparison.Ordinal))).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ATlvMemberWithAnInvalidNameStopsTheWalkAtItsTag()
+    {
+        const string Tlv = """{"1":{"name":"a","type_reference":"uint8"},"2":{"name":"zone-id","type_reference":"uint8"},"3":{"name":"c","type_reference":"uint8"}}""";
+        using SomeIpTestStack s = SomeIpTestStack.Create(Json(Method(1, "tlv", Tlv, "[]")));
+
+        // Tags: wire type 0 (one value byte) for the ids 1, 2 and 3.
+        Packet packet = s.Parse(UdpFrame([0x00, 0x01, 0x05, 0x00, 0x02, 0x07, 0x00, 0x03, 0x09]));
+
+        await Assert.That(s.U64s(packet, InName("tlv", "a"))).IsEquivalentTo(One(5UL));
+        await Assert.That(s.Count(packet, InName("tlv", "c"))).IsEqualTo(0);
+        await Assert.That(s.ByteLengths(packet, "someip.payload.unparsed")).IsEquivalentTo(One(6));
+        await Assert.That(Errors(s, packet).Count(static e => e.Contains("zone-id", StringComparison.Ordinal))).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ABitWithAnInvalidNameIsLeftOutAndTheOthersDecode()
+    {
+        string methods = Method(1, "bits", Sites(Site("flags", "flags_t")), "[]");
+        string types = """{"category":"bitfield","name":"flags_t","bits":8,"members":{"0":{"name":"ready"},"1":{"name":"is-ok"},"3":{"name":"fault"}}}""";
+        using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
+
+        Packet packet = s.Parse(UdpFrame([0x09]));
+
+        await Assert.That(s.Warnings.Count).IsEqualTo(1);
+        await Assert.That(s.Warnings[0].Message).Contains("is-ok");
+        await Assert.That(s.U64s(packet, InName("bits", "flags"))).IsEquivalentTo(One(9UL));
+        await Assert.That(Bools(s, packet, InName("bits", "flags.ready"))).IsEquivalentTo(One(true));
+        await Assert.That(Bools(s, packet, InName("bits", "flags.fault"))).IsEquivalentTo(One(true));
+        await Assert.That(s.Stack.Fields.ToArray().Count(static f => f.Name.EndsWith("is-ok", StringComparison.Ordinal))).IsEqualTo(0);
     }
 
     #endregion
@@ -811,8 +899,8 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     public async Task TheSameTypeUnderTwoMethodsRegistersTwoFieldsAndOnlyTheDecodedOneIsInThePacket()
     {
         string methods = Join(
-            Method(1, "A", Sites(Site("p", "holder")), "[]"),
-            Method(2, "B", Sites(Site("p", "holder")), "[]"));
+            Method(1, "a", Sites(Site("p", "holder")), "[]"),
+            Method(2, "b", Sites(Site("p", "holder")), "[]"));
         string types = StructType("holder", Site("x", "uint8"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -828,22 +916,22 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     }
 
     [Test]
-    public async Task AFilterNameAndADisplayNameAreRegisteredExactlyAndDefaultsFollowTheMemberName()
+    public async Task ADisplayNameIsRegisteredExactlyAndDefaultsFollowTheName()
     {
-        string methods = Method(1, "Name", Sites(Site("request", "req_t")), "[]");
+        string methods = Method(1, "name", Sites(Site("request", "req_t")), "[]");
         string types = StructType(
             "req_t",
-            Site("target_c", "int16", ",\"filter_name\":\"climate.settemp.target_c\",\"ui_name\":\"Target Temperature (Celsius)\""),
+            Site("target_c", "int16", ",\"ui_name\":\"Target Temperature (Celsius)\""),
             Site("zone", "uint8"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
-        FieldInfo? overridden = s.Stack.GetField(s.Stack.GetFieldId("climate.settemp.target_c")!.Value);
-        FieldInfo? derived = s.Stack.GetField(s.Stack.GetFieldId(InName("name", "request.zone"))!.Value);
+        FieldInfo? shown = s.Stack.GetField(s.Stack.GetFieldId(InName("name", "request.target_c"))!.Value);
+        FieldInfo? plain = s.Stack.GetField(s.Stack.GetFieldId(InName("name", "request.zone"))!.Value);
 
-        await Assert.That(overridden!.UiName).IsEqualTo("Target Temperature (Celsius)");
-        await Assert.That(derived!.UiName).IsEqualTo("zone");
-        await Assert.That(derived.Name).IsEqualTo(InName("name", "request.zone"));
-        await Assert.That(s.Stack.GetIndexGroup(s.Stack.GetFieldIndexGroup(derived.Id))?.Name).IsEqualTo(Prefix + "name.in");
+        await Assert.That(shown!.UiName).IsEqualTo("Target Temperature (Celsius)");
+        await Assert.That(plain!.UiName).IsEqualTo("zone");
+        await Assert.That(plain.Name).IsEqualTo(InName("name", "request.zone"));
+        await Assert.That(s.Stack.GetIndexGroup(s.Stack.GetFieldIndexGroup(plain.Id))?.Name).IsEqualTo(GroupPrefix + "name.req");
     }
 
     [Test]
@@ -851,19 +939,19 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     {
         using SomeIpTestStack s = SomeIpTestStack.Create(File.ReadAllText(ShippedConfigFixture.ExamplePath("someip", "full_service.json")));
 
-        FieldId target = s.Stack.GetFieldId("climate.settemp.target_c")!.Value;
-        FieldId zone = s.Stack.GetFieldId("someip.payload.climatecontrol.v2.settemperature.in.request.zone")!.Value;
-        FieldId result = s.Stack.GetFieldId("someip.payload.climatecontrol.v2.settemperature.out.ack_result")!.Value;
-        FieldId fan = s.Stack.GetFieldId("someip.payload.climatecontrol.v2.fanspeed_notifier.fan_speed")!.Value;
+        FieldId target = s.Stack.GetFieldId("ClimateControl.v2.SetTemperature.req.request.target_c")!.Value;
+        FieldId zone = s.Stack.GetFieldId("ClimateControl.v2.SetTemperature.req.request.zone")!.Value;
+        FieldId result = s.Stack.GetFieldId("ClimateControl.v2.SetTemperature.resp.ack_result")!.Value;
+        FieldId fan = s.Stack.GetFieldId("ClimateControl.v2.FanSpeed_notifier.fan_speed")!.Value;
 
         await Assert.That(s.Stack.GetIndexGroup(s.Stack.GetFieldIndexGroup(target))?.Name)
-            .IsEqualTo("someip.payload.climatecontrol.v2.settemperature.in");
+            .IsEqualTo("someip.payload.ClimateControl.v2.SetTemperature.req");
         await Assert.That(s.Stack.GetIndexGroup(s.Stack.GetFieldIndexGroup(zone))?.Name)
-            .IsEqualTo("someip.payload.climatecontrol.v2.settemperature.in");
+            .IsEqualTo("someip.payload.ClimateControl.v2.SetTemperature.req");
         await Assert.That(s.Stack.GetIndexGroup(s.Stack.GetFieldIndexGroup(result))?.Name)
-            .IsEqualTo("someip.payload.climatecontrol.v2.settemperature.out");
+            .IsEqualTo("someip.payload.ClimateControl.v2.SetTemperature.resp");
         await Assert.That(s.Stack.GetIndexGroup(s.Stack.GetFieldIndexGroup(fan))?.Name)
-            .IsEqualTo("someip.payload.climatecontrol.v2.fanspeed_notifier");
+            .IsEqualTo("someip.payload.ClimateControl.v2.FanSpeed_notifier");
         await Assert.That(s.Stack.GetField(target)!.FieldType).IsEqualTo(FieldType.I64);
         await Assert.That(s.Stack.GetField(zone)!.FieldType).IsEqualTo(FieldType.String);
     }
@@ -875,15 +963,15 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task TheMemberDirectionGroupIsRecordedForADecodedMessageAndTheIndexStaysExact()
     {
-        string methods = Method(1, "Idx", Sites(Site("a", "uint8"), Site("b", "uint8")), Sites(Site("r", "uint8")));
+        string methods = Method(1, "idx", Sites(Site("a", "uint8"), Site("b", "uint8")), Sites(Site("r", "uint8")));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
 
         Packet request = s.ParseIndexed(UdpFrame([1, 2]), out PacketIndex requestIndex);
         Packet response = s.ParseIndexed(UdpFrame([3], messageType: 0x80), out PacketIndex responseIndex);
 
-        await Assert.That(s.HasGroup(requestIndex, request, "someip.payload.svc.v1.idx.in")).IsTrue();
-        await Assert.That(s.HasGroup(requestIndex, request, "someip.payload.svc.v1.idx.out")).IsFalse();
-        await Assert.That(s.HasGroup(responseIndex, response, "someip.payload.svc.v1.idx.out")).IsTrue();
+        await Assert.That(s.HasGroup(requestIndex, request, GroupPrefix + "idx.req")).IsTrue();
+        await Assert.That(s.HasGroup(requestIndex, request, GroupPrefix + "idx.resp")).IsFalse();
+        await Assert.That(s.HasGroup(responseIndex, response, GroupPrefix + "idx.resp")).IsTrue();
         await s.AssertIndexExact(requestIndex, request);
         await s.AssertIndexExact(responseIndex, response);
     }
@@ -892,7 +980,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task TheIndexStaysExactForEveryShapeOfDecodedPayload()
     {
-        string methods = Method(1, "Shape", Sites(Site("p", "rec"), Site("v", "words_t"), Site("t", "string")), "[]");
+        string methods = Method(1, "shape", Sites(Site("p", "rec"), Site("v", "words_t"), Site("t", "string")), "[]");
         string types = Join(StructType("rec", Site("a", "uint16"), Site("b", "uint8")), ArrayType("words_t", "uint16"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
         byte[][] payloads =
@@ -912,7 +1000,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
     [Test]
     public async Task TheMemberGroupIsASupersetWhenNoParameterSurvivesAndTheTreeStaysTheJudge()
     {
-        string methods = Method(1, "Sup", Sites(Site("p", "rec")), "[]");
+        string methods = Method(1, "sup", Sites(Site("p", "rec")), "[]");
         string types = StructType("rec", Site("a", "uint16"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -920,7 +1008,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
         // this member, so the index offers it as a candidate and the filter finds no field on the tree.
         Packet packet = s.ParseIndexed(UdpFrame([1, 2]), out PacketIndex index);
 
-        await Assert.That(s.HasGroup(index, packet, Prefix + "sup.in")).IsTrue();
+        await Assert.That(s.HasGroup(index, packet, GroupPrefix + "sup.req")).IsTrue();
         await Assert.That(s.Count(packet, InName("sup", "p.a"))).IsEqualTo(0);
         await Assert.That(Errors(s, packet).Count).IsEqualTo(1);
     }

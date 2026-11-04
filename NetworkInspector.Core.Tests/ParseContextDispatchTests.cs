@@ -54,7 +54,7 @@ internal sealed class ParseContextDispatchTests
         // 1-byte payload: dispatch key 0x99
         byte[] data = [0x99];
         Frame frame = Frame.Create(
-            new FrameId(1),
+            1,
             Timestamp.FromSecs(0),
             data,
             LinkType.Ethernet,
@@ -64,7 +64,7 @@ internal sealed class ParseContextDispatchTests
         {
             ParseOptions options = new(firstProtocol: firstProtocolId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -125,13 +125,13 @@ internal sealed class ParseContextDispatchTests
         {
             byte[] data = [0x99];
             Frame frame = Frame.Create(
-                new FrameId(1),
+                1,
                 Timestamp.FromSecs(0),
                 data,
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            Packet packet = new(new PacketId(0), stack, frame);
+            Packet packet = new(0, stack, frame);
 
             ProtocolId firstSelf;
             ProtocolId secondSelf;
@@ -157,13 +157,13 @@ internal sealed class ParseContextDispatchTests
         {
             byte[] data = [0x99];
             Frame frame = Frame.Create(
-                new FrameId(1),
+                1,
                 Timestamp.FromSecs(0),
                 data,
                 LinkType.Ethernet,
                 FrameInterfaceId.Invalid,
                 stack.FrameInterfaceRegistry).Value;
-            Packet packet = new(new PacketId(0), stack, frame);
+            Packet packet = new(0, stack, frame);
 
             ProtocolId rawSelf;
             ProtocolId afterCallSelf;
@@ -192,7 +192,7 @@ internal sealed class ParseContextDispatchTests
 
             byte[] data = [0x99];
             Frame frame = Frame.Create(
-                new FrameId(2),
+                2,
                 Timestamp.FromSecs(1),
                 data,
                 LinkType.Ethernet,
@@ -202,7 +202,7 @@ internal sealed class ParseContextDispatchTests
                 ParseOptions options = new(firstProtocol: parentId);
                 if (!Packet.TryParse(
                     packet,
-                    new PacketId(1),
+                    1,
                     stack,
                     frame,
                     in options,
@@ -277,14 +277,14 @@ internal sealed class ParseContextDispatchTests
 
         byte[] data = [0x01];
         Frame frame = Frame.Create(
-            new FrameId(1), Timestamp.FromSecs(0), data,
+            1, Timestamp.FromSecs(0), data,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
 
         // Parse via parent1 — child must see parent1Id as caller
         {
             ParseOptions options = new(firstProtocol: parent1Id);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -300,7 +300,7 @@ internal sealed class ParseContextDispatchTests
         {
             ParseOptions options = new(firstProtocol: parent2Id);
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 frame,
                 in options,

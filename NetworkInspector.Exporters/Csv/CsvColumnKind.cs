@@ -22,6 +22,21 @@ public enum CsvColumnKind
     /// <summary>The frame length in bytes.</summary>
     FrameLength,
 
-    /// <summary>A specific protocol field value.</summary>
-    Field,
+    /// <summary>
+    /// The raw frame bytes as upper-case hexadecimal digits without separators (two digits per byte, no prefix); an empty frame is an
+    /// empty cell. Valid in the packet-rows layout and in the selected-fields (wide) layout only: the all-fields and hierarchy
+    /// layouts repeat the packet columns on every field row, so the frame would be written once per field.
+    /// </summary>
+    /// <remarks>Sync: the CSV README § Frame bytes and the message of <c>CsvExporter.Builder.Build</c>.</remarks>
+    FrameBytes,
+
+    /// <summary>
+    /// The additional packet buffers (index 1 to 255: reassembled datagrams, TCP PDUs, decoded bodies) as one cell of records
+    /// <c>&lt;index&gt;:&lt;HEX&gt;</c> joined by <c>;</c> in ascending index order, for example <c>1:0A0B;2:</c> (a bound empty buffer is a record
+    /// with no digits); a packet without additional buffers has an empty cell. The hex is upper case without separators, as for
+    /// <see cref="FrameBytes"/>. Valid in the packet-rows layout and in the selected-fields (wide) layout only, for the same reason as
+    /// <see cref="FrameBytes"/>. A cell is quoted when the delimiter could split it (a digit, a hex letter, <c>:</c>, or <c>;</c>).
+    /// </summary>
+    /// <remarks>Sync: the CSV README § Buffers and the message of <c>CsvExporter.Builder.Build</c>.</remarks>
+    Buffers,
 }

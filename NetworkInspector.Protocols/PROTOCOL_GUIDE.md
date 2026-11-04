@@ -193,7 +193,7 @@ do not depend on that stamp.
 
 **Mechanism — layer key.** Effects are keyed by `(PacketId, packed buffer location)`.
 `MutField.TryGetEffectLayerKey(data, out int key)` packs the buffer index (`0` = `Frame.Data`,
-`1…` = buffers stored by `MutField.BindParseBuffer`) into bits 31–24 and the byte offset of
+`1…` = buffers stored by `MutField.TryBindBuffer`) into bits 31–24 and the byte offset of
 the `Parse` `data` slice into bits 23–0. On false the slice is not a packet buffer. The
 argument must be the slice passed into `Parse`, not a heap copy. First parse
 and reparse of the same frame see the same key because the bytes and additional buffers are
@@ -202,8 +202,8 @@ stable. Do not key on remaining length (`data.Length`) or any walk ordinal. Effe
 search on replay, nested layers chained when the tail entry already belongs to the same
 packet id. Without the packed location, the inner layer of a tunnel (or a defragmented
 datagram in an additional buffer) would collide with an outer layer and replay the wrong
-values. Reassembled payloads must be attached with `MutField.BindParseBuffer` before the
-nested `Parse` so the inner slice is a packet buffer, not a heap copy.
+values. Reassembled, decoded, unmasked, and inflated payloads must be attached with `MutField.TryBindBuffer` before the
+nested `Parse` so the inner slice is a packet buffer, not a heap copy (§22.4).
 
 `Stack.ProtocolCount` is how many protocols are registered. There is no
 packet walk ordinal. `ProtocolId` is assigned at `RegisterProtocol` time.
@@ -1673,11 +1673,17 @@ of physically appending a duplicate field (`eth.addr` appended as a child of bot
 - **No physical duplicate field is registered or appended** for any-match names.
   Do **not** declare `[MacField("eth.addr") private FieldId _AddrFieldId;` —
   this is the breaking change locked by Step 4 of the alias plan.
-- **Alias names and canonical field names live in independent namespaces.**
-  `stack.GetFieldId("eth.addr")` returns `null` by design. Always use
-  `stack.GetFieldAliasGroupId("eth.addr")` to resolve alias names. The
-  separation keeps indexing and per-packet field-lookup paths
-  on canonical fields only.
+- **Alias names are resolved separately, but never share a name with a
+  protocol or a field.** `stack.GetFieldId("eth.addr")` returns `null` by
+  design. Always use `stack.GetFieldAliasGroupId("eth.addr")` to resolve alias
+  names. The separate lookup keeps indexing and per-packet field-lookup paths
+  on canonical fields only. The *names* of protocols, fields and aliases form
+  one conflict namespace: the first registration keeps a name, and a later
+  `RegisterProtocol`, `RegisterField` or `RegisterFieldAliasGroup` with the same
+  name throws a `DuplicateNameRegistrationException` whose `HolderKind` is
+  `RegistrationHolderKind.Protocol`, `.Field` or `.FieldAliasGroup`. The one exception is the
+  container field of a protocol, which may carry the protocol's own name
+  (protocol `someip`, field `someip`).
 - **Alias members may have mixed `FieldType` values.** The registry stores
   member `FieldId`s only; consumers query each member by its own type.
 
@@ -1712,8 +1718,9 @@ public sealed partial class EthernetProtocol : IProtocol
 The same pattern applies to `ip.addr` (→ `{ ip.src, ip.dst }`), `ipv6.addr`,
 `udp.port` (→ `{ udp.srcport, udp.dstport }`), `tcp.port`, and any future
 any-match name. Note that the alias name `udp.port` is **independent** of the
-protocol-table name `udp.port` (UDP demux) — alias, field, and table namespaces
-are three separate registries.
+protocol-table name `udp.port` (UDP demux) — protocol tables keep their own
+registry, while protocol, field and alias names are one conflict namespace (see
+13a.1).
 
 ### 13a.3 Consumer Pattern (Enumeration via Alias)
 
@@ -1726,9 +1733,9 @@ if (aliasId is { } id)
     {
         FieldLookupCookie cookie = FieldLookupCookie.Start;
         // materialize: true — consumer enumeration must see lazy member fields too
-        while (packet.TryGetNextFieldValue(memberId, ref cookie, out FieldValue value, materialize: true))
+        while (packet.TryGetNextField(memberId, ref cookie, out Field memberField, materialize: true))
         {
-            // process value per member type
+            ref readonly FieldValue value = ref memberField.Value; // process value per member type
         }
     }
 }
@@ -1771,7 +1778,7 @@ container — there is no nested `*.hdr` intermediate container.
 | `tcp`    | —             | ports, checksum, seq/ack, hdr_len, flags (+ sub-flags), window, urgent ptr, options, len, payload |
 | `tls`    | —             | per record: `tls.record` (content_type, version, length) followed by handshake/alert as siblings |
 | `dtls`   | —             | per record: `dtls.record` (content_type, version, epoch, seq, length) followed by handshake as siblings; the handshake header is decoded only for epoch 0, and a connection ID record (type 25) has no `length` field and ends the walk |
-| `someip` | the message tree: container, the ten header fields, `msgtype` children, names, diagnostics and the raw payload of an unconfigured message (the packet index must see every group at parse time, and the fields are cheap); for a discovery message the eager scan of its payload | `someip_sd` (flags, entries, options, their diagnostics), expanded from the stored payload bytes; the scan and the population are two visitors of one walk, so the groups the scan records equal the fields the population appends. `someip.payload` of a configured member (typed parameters, array elements, TLV members, unions, bits, diagnostics), decoded from the stored payload bytes by the populator of its member direction; the group of the member direction is a superset (13c.3) |
+| `someip` | the message tree: container, the ten header fields, `msgtype` children, names, diagnostics, the service node and the method node (filter names from the description; exact groups) and the raw `someip.payload` of every payload no other parser took (the packet index must see every group at parse time, and the fields are cheap); for a discovery message the eager scan of its payload | `someip_sd` (flags, entries, options, their diagnostics), expanded from the stored payload bytes; the scan and the population are two visitors of one walk, so the groups the scan records equal the fields the population appends. the method node of a configured member (typed parameters, array elements, TLV members, unions, bits, diagnostics), decoded from the stored payload bytes by the populator of its member direction; the group of the member direction is a superset (13c.3) |
 | signal message (`SignalMessageProtocol`) | — | static signals (physical F64); mux container + `.value` + matching mux-group signals; optional `.raw` / `.enum` |
 
 ### 13b.2 Implementation Sketch
@@ -1847,14 +1854,18 @@ A field that is declared but **never emitted** (dead field) must **not** have it
 group recorded — doing so would be a false positive.
 
 **One documented deviation: the SOME/IP payload groups are supersets.** A SOME/IP message of a configured member records the
-index group of its member direction (`someip.payload.<service>.v<major>.<member>[.in|.out]`) although the parameters are
+index group of its member direction (`someip.payload.<service>.v<major>.<member>[.req|.resp]`) although the parameters are
 decoded only when the payload container is read. Deciding exactly which parameters exist would mean running the whole
 decoder in `Parse()`, which is the cost the lazy container exists to avoid. Two cases leave a recorded group without a field:
 a TLV member that the message does not carry, and a payload cut off before its parameters. **There is no false negative**
 (a message that holds a parameter is always in the group), and the false positives are verified on the tree by the filter,
 exactly as a filter verifies every candidate. The generic payload fields share the group `someip.payload`, which is recorded
 for every message that has a payload container. The index tests of SOME/IP assert exactness for fully decodable messages and
-assert the superset explicitly for the two cases above.
+assert the superset explicitly for the two cases above. The service node and the method node are the exception to the
+exception: both are appended eagerly on every path of a message whose header resolves them, and their groups
+(`someip.payload.<service>.v<major>` and `someip.payload.<service>.v<major>.<member>`) are recorded exactly when the nodes are
+appended, so a filter on a service or a method is answered by the index without materializing any payload. The decoded values
+hang lazily below the method node, and the group names always start with `someip.payload.`, whatever field prefix the user sets.
 
 ### 13c.4 Prefer eager fields; defer only with enough candidates
 
@@ -1989,6 +2000,32 @@ caches into the copy; read through the stored field, array element, or the `Fiel
 
 Use `AppendWithCustomText` when you need a human-readable label that differs from
 the raw value representation (e.g., `"TCP (6)"` instead of just `"6"`).
+
+**A custom text is the whole display line.** The default line of a field (`Field.ToString()`, `MutField.ToString()`) is the
+custom text alone when one is set, even an empty one; a protocol that wants the label on the line must put it into the text
+(`"Maximum Segment Size: "`, then the value), because a custom text without a label is shown as a bare line in the Text export
+and in `Field.ToString()`. A
+field without a custom text shows its UI name for a container (value `None`) and `UI name: value` for every other field. A
+custom representation (§ 14.6) replaces only the value part: `UI name: representation`. A representation on a value of type
+`None` is not part of the line (the field has no value part); give such a field a custom text instead.
+
+**Custom text is final at append.** Field observers and value caches receive a field when it is appended; they never see a
+later change. Changing the text afterwards (`SetCustomText`, `AppendCustomText`, `ClearCustomText`) is therefore
+discouraged: a tree-free export would show the old text while the field tree shows the new one. After the packet is sealed
+the three methods throw `InvalidOperationException` — a sealed packet is read by other threads, and the text store is not
+synchronized (a lazy populator that decodes a payload when a reader asks for it runs after the seal, so it is covered too).
+A change *before* the seal still works, but observers do not see it. When the text depends on data decoded later (an element
+count), append a deferred text over a small state object and complete the object before the parse returns:
+
+```csharp
+ArrayText text = new(element);                                   // sealed class: Count property, ToString() = the text
+MutField node = parent.AppendWithCustomText(id, FieldValue.None, text);   // formatted with ToString() on first read
+// … decode the elements …
+text.Count = count;                                              // final before the populator returns
+```
+
+When the text depends on a value that is cheap to read first (a union selector), read it before the append and append the
+final text. Both patterns are used by the SOME/IP payload decoder.
 
 ### 14.6 WithCustomRepresentation
 
@@ -2200,6 +2237,11 @@ else
     // Ok, including Ok(0) when consumed == 0
 }
 ```
+
+A dispatch method whose key type differs from the key type of the table (`TryCallNextProtocolString` on a numeric table, for
+example) is a configuration fault, not a key miss: it returns an error result of kind `ProtocolTableMissing` whose text names the
+table, the key type it has, and the key type of the method, so `TryPropagateError` hands it to the packet and the fault is seen
+at once instead of reading as "no protocol for this key".
 
 ---
 
@@ -2538,13 +2580,19 @@ Decompression limits (secure by default, range 1 KiB to 128 GiB, default 64 MiB;
 - `http.max_decompressed_bytes` (group `http`) — a gzip, deflate or br body that inflates beyond it is left undecoded (never truncated) and `http.error.decompress_limit` names the setting.
 - `ws.max_decompressed_bytes` (group `ws`) — the same for permessage-deflate frames; `websocket.payload.decompressed.limit` names the setting.
 
+Total per packet (secure by default but relaxed: default 256 MiB, four times the per-item default; range 2 KiB to 128 GiB, because the TCP PDU of a message counts too; the SOME/IP-TP total is 64 MiB with a range of 2 KiB to 16 GiB). The decoded, unmasked, inflated or reassembled bytes that a protocol binds to one packet stay alive as long as the packet, and one packet can complete many messages, so each protocol also bounds their sum against the bytes bound to the packet in all (§22.4):
+
+- `http.max_derived_bytes_per_packet` (group `http`) — all bytes bound to one packet when HTTP binds a decoded (dechunked or inflated) body, the bytes of every protocol and the TCP PDUs included; the body that would pass it is not parsed and `packet.error` names the setting.
+- `ws.max_derived_bytes_per_packet` (group `ws`) — the same for unmasked and inflated WebSocket payloads; same behavior.
+- `someip.tp_max_derived_bytes_per_packet` (group `someip`) — the same for reassembled SOME/IP-TP messages; same behavior. Its default equals `someip.tp_max_buffered_bytes`, because a packet can only complete messages that the open sessions already hold.
+
 HTTP/1 also reports the fixed header limits (256 header lines, 8192 bytes per line) as `http.error.header_limit` instead of silently showing the remaining lines as payload.
 
 Fixed limits of the other application and bus protocols (constants, not settings; each is reported, never applied silently):
 
 - DNS over TCP: the reassembly accepts a PDU of up to 65537 bytes, the largest legal message (65535 bytes) plus its 2-byte length prefix.
 - JSON: a key or string value longer than 65536 (bytes without escapes, characters with escapes) is cut, and `json.error.string_limit` follows the field and names the limit.
-- SOME/IP: the ten limits of the group `someip` (README, "SOME/IP configuration") are settings, not constants. A message above `someip.tcp_max_message_size` is never framed from a TCP stream; the drop is reported as `tcp.error.reassembly_limit`. A unit with more than `someip.max_messages_per_unit` messages shows the rest as raw trailing bytes under the last decoded message, with `someip.error.unit_limit`.
+- SOME/IP: the eleven limits of the group `someip` (README, "SOME/IP configuration") are settings, not constants. A message above `someip.tcp_max_message_size` is never framed from a TCP stream; the drop is reported as `tcp.error.reassembly_limit`. A unit with more than `someip.max_messages_per_unit` messages shows the rest as raw trailing bytes under the last decoded message, with `someip.error.unit_limit`.
 - Reassembled IPv4 or IPv6 datagrams and framed TCP messages are bound to the packet as additional buffers; a packet holds at most 255 of them, and a reassembly that would exceed it is reported as a parse error that names the limit.
 
 HTTP on TCP ports 80 and 8080 is reassembled with `Http1MessageDetector` before `HttpProtocol.Parse`. A port that has more than one registered protocol is not reassembled; every registered parser is still tried.
@@ -2747,6 +2795,86 @@ the current one, never a later one.
 
 `BufferedBytes` counts stored payload bytes. The pooled arrays behind them can be up to twice as large, because the pool
 rounds a rental up to a power of two.
+
+### 22.4 Derived bytes for a nested parse
+
+A reassembled datagram is not the only byte sequence that a protocol builds during `Parse` and hands to a nested protocol:
+an HTTP body after dechunking and inflating, a WebSocket payload after unmasking and inflating, and the plaintext of a
+decrypted record are fresh arrays too. The rule is the same for all of them: **bind once, before the nested parse, and hand on
+the bound slice.**
+
+```csharp
+// The packet decides only whether a slot is free; the total of this protocol is applied here, to the sum of all bound bytes.
+// Compare with the remaining budget (not "bound + length > limit"): the subtraction cannot wrap.
+ulong remaining = _MaxDerivedBytesPerPacket > container.BoundBytes
+    ? _MaxDerivedBytesPerPacket - container.BoundBytes
+    : 0;
+if ((ulong)derivedBytes.Length > remaining)
+{
+    // Name the setting; an empty slice would reach the next protocol as "no data" without any sign of why.
+    return ParseError.Custom(ProtocolName, "Decoded bodies cannot be parsed further: together they would pass the total of one packet (setting myproto.max_derived_bytes_per_packet)");
+}
+
+if (!container.TryBindBuffer(derivedBytes, out ReadOnlyMemory<byte> bound, out _))
+{
+    // The packet already holds 255 additional buffers (or is sealed). Name the limit.
+    return ParseError.Custom(ProtocolName, _BoundBufferLimitMessage);
+}
+
+ParseResult result = container.TryCallNextProtocolString(_TableId, key, bound, in context);
+```
+
+- **Why bind.** A stateful nested protocol keys its recorded effect on the location of its `data` slice and refuses a slice
+  that is not a packet buffer (`MutField.TryGetEffectLayerKey` returns false). A reader of the packet's buffers
+  (`Packet.BufferCount`, `Packet.Buffer(i)`) sees exactly the bound buffers, so unbound derived bytes are missing from it.
+- **Bind once, reuse the slice.** One message gets one buffer, however many dispatches follow (content-type table, built-in
+  fallback, upgrade table). Intermediate results are not bound: a gzip body inside a chunked body is decoded twice but only the
+  final bytes become a buffer.
+- **Bind only what is derived.** A payload that is already a slice of the `data` argument (a body without a transfer or content
+  coding, an unmasked and uncompressed frame) is dispatched as it is and takes no buffer.
+- **Empty derived bytes** (only the terminal chunk, an inflated empty message) have nothing to parse: do not bind and do not
+  dispatch.
+- **Full table.** The table holds at most 255 additional buffers (the effect key packs the index into 8 bits); the limit is a
+  constant, not a setting. Report it by name with `ParseError.Custom`, like the IPv4, IPv6, TCP, SOME/IP-TP, HTTP, and
+  WebSocket binders do. A test fills the table with a probe protocol and asserts the named error and that the nested protocol
+  was not called (`BoundBufferLimitTests`). A protocol that walks several payloads of one packet (WebSocket frames) keeps
+  walking after the error so the index groups of the later payloads are still recorded.
+- **Populator bytes stay field values.** A lazy populator runs after the packet is sealed, where `TryBindBuffer` refuses with
+  `BufferBindFailure.Sealed` and returns an empty slice. Bytes it derives (`http.payload.decoded`, `websocket.payload.decompressed`, the joined TLS handshake bytes) are
+  field values, not buffers.
+- **Cost.** One table entry per derived buffer, and the bytes stay alive for the lifetime of the packet. A packet with many masked
+  WebSocket frames can fill the table (the first frame that finds it full reports the limit; the frames after it are not
+  dispatched).
+- **Total size.** The derived buffers of one packet are bounded in sum, not only in count and not only per item, because
+  deflate reaches about 1000:1, one TCP segment can complete many messages, and 255 inflated payloads would otherwise stay
+  alive together. The packet itself decides only whether a slot is free (`MutField.TryBindBuffer`); it knows no protocol and
+  has no byte limit, but it keeps one sum of all bytes bound so far (`MutField.BoundBytes`, the bytes of every protocol and of
+  the transport together, restarting at 0 with every parse of a packet so a reparse reaches the same decisions). Every protocol
+  that binds bytes it allocated from untrusted input therefore applies **its own total** to that sum before it binds, with
+  the comparison above (the built-in protocols share it in the internal helper `DerivedBytesLimit.TryBind`; a refused buffer is not stored, so
+  the packet is unchanged after a failure). The total is a setting of the protocol, separate from its per-item limit, relaxed
+  by default and validated by the settings layer like every limit (§20). Because the sum counts every protocol, a total bounds
+  the memory the packet pins when that protocol binds, the TCP PDUs of the same packet included:
+
+  | Protocol | Per-item limit (default) | Total per packet (default) | Range of the total |
+  |----------|--------------------------|----------------------------|--------------------|
+  | HTTP | `http.max_decompressed_bytes` (64 MiB) | `http.max_derived_bytes_per_packet` (256 MiB) | 2 KiB to 128 GiB |
+  | WebSocket | `ws.max_decompressed_bytes` (64 MiB) | `ws.max_derived_bytes_per_packet` (256 MiB) | 2 KiB to 128 GiB |
+  | SOME/IP-TP | `someip.tp_max_message_size` (10 MiB) | `someip.tp_max_derived_bytes_per_packet` (64 MiB) | 2 KiB to 16 GiB |
+
+  The payload or message that would pass the total is not bound or parsed; the parse error names the setting, the total, and
+  that it is the total per packet (`DerivedBytesLimit.Text` writes the sentence, so the three protocols read alike), and the
+  later payloads of the packet are not dispatched (a protocol that walks several payloads, such as WebSocket frames, keeps
+  walking so the index groups of the later payloads are still recorded). The total is reported first when both apply; the
+  255-buffer failure keeps its own text. A payload that is neither masked nor inflated binds nothing and does not count. The two limits
+  are independent: a body that inflates above the per-item limit stays undecoded and is flagged by its own field, and the total
+  is not involved; a total below the per-item limit also limits a single item. Bytes that a bounded reassembly buffer already
+  held (a TCP PDU, an IPv4 or IPv6 datagram) are bound with `TryBindBuffer` alone and need no total of their own: the stream
+  buffer (`StreamReassemblyConfig.MaxBufferSize`) or the datagram length bounds their sum already (they still count in
+  `BoundBytes`, so they take part in the totals of the protocols above). A protocol that binds without applying a total is
+  bounded only by the 255 buffers of the table. A new protocol that binds derived
+  payloads declares its own total, with the Section 4.2 record (value, threat, constant or configurable, posture) at the
+  definition, and a decrypting protocol (see `PlaintextHandoff`) does the same for the plaintext it binds.
 
 ---
 

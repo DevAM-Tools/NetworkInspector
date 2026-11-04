@@ -52,7 +52,7 @@ internal sealed class SessionCoverageTests
         session.TryStart(out _);
         session.WaitForCompletion();
 
-        bool found = session.TryGetPacket(new PacketId(100), out Packet? packet, out _);
+        bool found = session.TryGetPacket(100, out Packet? packet, out _);
 
         await Assert.That(found).IsFalse();
         await Assert.That(packet).IsNull();
@@ -73,8 +73,8 @@ internal sealed class SessionCoverageTests
 
         for (int i = 0; i < 2; i++)
         {
-            bool gotFrame = session.TryGetFrame(new PacketId(i), out Frame frame, out _);
-            bool gotPacket = session.TryGetPacket(new PacketId(i), out Packet? packet, out _);
+            bool gotFrame = session.TryGetFrame(i, out Frame frame, out _);
+            bool gotPacket = session.TryGetPacket(i, out Packet? packet, out _);
             await Assert.That(gotFrame).IsTrue();
             await Assert.That(frame.IsValid).IsTrue();
             await Assert.That(gotPacket).IsTrue();
@@ -99,7 +99,7 @@ internal sealed class SessionCoverageTests
 
         _SetPacketIndex(session, null);
 
-        bool found = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
+        bool found = session.TryGetPacket(0, out Packet? packet, out _);
 
         await Assert.That(found).IsTrue();
         await Assert.That(packet).IsNotNull();
@@ -246,7 +246,7 @@ internal sealed class SessionCoverageTests
             int idx = _Next++;
             byte[] data = TestHarness.GenerateUdpFrame();
             return Frame.Create(
-                new FrameId(idx),
+                idx,
                 Timestamp.FromNanos(idx),
                 data,
                 LinkType.Ethernet,

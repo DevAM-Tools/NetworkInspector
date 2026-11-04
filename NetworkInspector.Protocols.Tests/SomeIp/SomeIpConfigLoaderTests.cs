@@ -148,7 +148,7 @@ internal sealed class SomeIpConfigLoaderTests
     {
         const string Json = """
             { "schema_version": "1.0", "services": [ { "service_id": 1, "major_version": 1, "name": "S", "methods": [
-              { "kind": "method", "id": 1, "name": "A", "in": [ "uint8", { "name": "x", "filter_name": "a.b", "ui_name": "X", "type_reference": "uint16", "pad_to": 4 } ], "out": { "1": "uint8", "2": { "type_reference": "uint16" } } }
+              { "kind": "method", "id": 1, "name": "A", "in": [ "uint8", { "name": "x", "ui_name": "X", "type_reference": "uint16", "pad_to": 4 } ], "out": { "1": "uint8", "2": { "type_reference": "uint16" } } }
             ] } ] }
             """;
         List<SettingsLoadWarning> warnings = [];
@@ -160,10 +160,32 @@ internal sealed class SomeIpConfigLoaderTests
         await Assert.That(method.In.Sequential!.Length).IsEqualTo(2);
         await Assert.That(method.In.Tlv).IsNull();
         await Assert.That(method.In.Sequential[0].TypeReference).IsEqualTo("uint8");
-        await Assert.That(method.In.Sequential[1].FilterName).IsEqualTo("a.b");
+        await Assert.That(method.In.Sequential[1].UiName).IsEqualTo("X");
         await Assert.That(method.In.Sequential[1].PadTo).IsEqualTo(4);
         await Assert.That(method.Out.Tlv!.Count).IsEqualTo(2);
         await Assert.That(method.Out.Sequential).IsNull();
+    }
+
+    [Test]
+    public async Task TheFilterNameOverrideIsGoneAndRefusedAsAnUnknownProperty()
+    {
+        const string WithOverride = """
+            { "schema_version": "1.0", "services": [ { "service_id": 1, "major_version": 1, "name": "S", "methods": [
+              { "kind": "method", "id": 1, "name": "A", "in": [ { "name": "x", "filter_name": "climate.settemp.target_c", "type_reference": "uint8" } ], "out": [] }
+            ] } ] }
+            """;
+        string without = WithOverride.Replace(" \"filter_name\": \"climate.settemp.target_c\",", string.Empty, StringComparison.Ordinal);
+        List<SettingsLoadWarning> refused = [];
+        List<SettingsLoadWarning> accepted = [];
+
+        SomeIpConfig? refusedConfig = _LoadText(WithOverride, refused);
+        SomeIpConfig? acceptedConfig = _LoadText(without, accepted);
+
+        await Assert.That(refusedConfig).IsNull();
+        await Assert.That(refused.Count).IsEqualTo(1);
+        await Assert.That(refused[0].Message).Contains("filter_name");
+        await Assert.That(acceptedConfig).IsNotNull();
+        await Assert.That(accepted.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -334,7 +356,7 @@ internal sealed class SomeIpConfigLoaderTests
     [Test]
     public async Task EveryLimitIsCompleteAndInRange()
     {
-        await Assert.That(SomeIpLimits.All.Count).IsEqualTo(10);
+        await Assert.That(SomeIpLimits.All.Count).IsEqualTo(11);
         foreach (SomeIpLimitDefinition limit in SomeIpLimits.All)
         {
             await Assert.That(limit.Key.StartsWith("someip.", StringComparison.Ordinal)).IsTrue();

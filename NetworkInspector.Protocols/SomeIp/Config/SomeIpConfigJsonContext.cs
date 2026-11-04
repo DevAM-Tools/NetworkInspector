@@ -132,9 +132,6 @@ internal sealed class SomeIpUsageSiteConverter : JsonConverter<SomeIpUsageSiteCo
                 case "name":
                     site.Name = _ReadString(ref reader, property);
                     break;
-                case "filter_name":
-                    site.FilterName = _ReadString(ref reader, property);
-                    break;
                 case "ui_name":
                     site.UiName = _ReadString(ref reader, property);
                     break;
@@ -192,7 +189,7 @@ internal sealed class SomeIpUsageSiteConverter : JsonConverter<SomeIpUsageSiteCo
     public override void Write(Utf8JsonWriter writer, SomeIpUsageSiteConfig value, JsonSerializerOptions options)
     {
         // A site that only names its type is written as the bare string, which is the shortest valid form.
-        if (value.Name is null && value.FilterName is null && value.UiName is null && value.PadTo is null)
+        if (value.Name is null && value.UiName is null && value.PadTo is null)
         {
             writer.WriteStringValue(value.TypeReference);
             return;
@@ -202,11 +199,6 @@ internal sealed class SomeIpUsageSiteConverter : JsonConverter<SomeIpUsageSiteCo
         if (value.Name is not null)
         {
             writer.WriteString("name", value.Name);
-        }
-
-        if (value.FilterName is not null)
-        {
-            writer.WriteString("filter_name", value.FilterName);
         }
 
         if (value.UiName is not null)

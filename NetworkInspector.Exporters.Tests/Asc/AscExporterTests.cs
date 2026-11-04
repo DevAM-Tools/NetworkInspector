@@ -13,14 +13,14 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task Builder_RequiresOutput()
+    public async Task BuilderRequiresOutput()
     {
         AscExporter.Builder builder = AscExporter.CreateBuilder();
         await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task Builder_TargetFrameCount_NegativeThrows()
+    public async Task BuilderTargetFrameCountNegativeThrows()
     {
         AscExporter.Builder builder = AscExporter.CreateBuilder();
         await Assert.That(() => builder.WithTargetFrameCount(-1)).Throws<ArgumentOutOfRangeException>();
@@ -31,13 +31,13 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task SingleCanFrame_WrittenCorrectly()
+    public async Task SingleCanFrameWrittenCorrectly()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
 
         byte[] canData = SocketCanGenerators.BuildCanClassic(0x123, [0x01, 0x02, 0x03, 0x04]);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, canData, LinkType.CanSocketcan);
+        Frame frame = TestHarness.CreateFrame(0, 1_000_000_000L, canData, LinkType.CanSocketcan);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -52,13 +52,13 @@ internal sealed class AscExporterTests
     }
 
     [Test]
-    public async Task CanExtendedId_HasXSuffix()
+    public async Task CanExtendedIdHasXSuffix()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
 
         byte[] canData = SocketCanGenerators.BuildCanClassic(0x1FFFFFFF, [0xDE, 0xAD], extended: true);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, canData, LinkType.CanSocketcan);
+        Frame frame = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -69,7 +69,7 @@ internal sealed class AscExporterTests
     }
 
     [Test]
-    public async Task CanRemoteFrame_HasRToken()
+    public async Task CanRemoteFrameHasRToken()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -84,7 +84,7 @@ internal sealed class AscExporterTests
         // bit30 → 0x40000000 → byte[0] = 0x40
         canData[0] |= 0x40;
 
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, canData, LinkType.CanSocketcan);
+        Frame frame = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -99,14 +99,14 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task SingleCanFdFrame_WrittenCorrectly()
+    public async Task SingleCanFdFrameWrittenCorrectly()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
 
         byte[] canData = SocketCanGenerators.BuildCanFd(
             0x456, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08], brs: true);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, canData, LinkType.CanSocketcan);
+        Frame frame = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -121,7 +121,7 @@ internal sealed class AscExporterTests
     }
 
     [Test]
-    public async Task CanFdFlags_BrsEsiPreserved()
+    public async Task CanFdFlagsBrsEsiPreserved()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -130,7 +130,7 @@ internal sealed class AscExporterTests
         // ESI flag is bit 1 of fd_flags (byte 5); set manually
         canData[5] |= 0x02;
 
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, canData, LinkType.CanSocketcan);
+        Frame frame = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -147,7 +147,7 @@ internal sealed class AscExporterTests
     [Arguments(12, 9)]   // DLC code 9 → 12 bytes
     [Arguments(16, 10)]  // DLC code 10 → 16 bytes
     [Arguments(64, 15)]  // DLC code 15 → 64 bytes
-    public async Task CanFdPayloadByteCount_MapsToCorrectAscDlcAndDlen(int payloadLen, int expectedDlc)
+    public async Task CanFdPayloadByteCountMapsToCorrectAscDlcAndDlen(int payloadLen, int expectedDlc)
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -159,7 +159,7 @@ internal sealed class AscExporterTests
         }
 
         byte[] canData = SocketCanGenerators.BuildCanFd(0x200, payload);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, canData, LinkType.CanSocketcan);
+        Frame frame = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -198,13 +198,13 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task SingleLinFrame_WrittenCorrectly()
+    public async Task SingleLinFrameWrittenCorrectly()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
 
         byte[] linData = LinGenerators.BuildLinFrame(0x3F, [0x11, 0x22, 0x33], checksum: 0x7A, checksumTypeBits: 2);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, linData, LinkType.Lin);
+        Frame frame = TestHarness.CreateFrame(0, 0L, linData, LinkType.Lin);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -228,7 +228,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task SingleFlexRayFrame_WrittenCorrectly()
+    public async Task SingleFlexRayFrameWrittenCorrectly()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -236,7 +236,7 @@ internal sealed class AscExporterTests
         byte[] frData = FlexRayGenerators.BuildFlexRayFrame(
             channel: 0, frameId: 0x000A, cycle: 3, headerCrc: 0x05A3,
             data: [0xDE, 0xAD, 0xBE, 0xEF]);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, frData, LinkType.Flexray);
+        Frame frame = TestHarness.CreateFrame(0, 0L, frData, LinkType.Flexray);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -259,7 +259,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task MultipleFrames_AllWritten()
+    public async Task MultipleFramesAllWritten()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -269,7 +269,7 @@ internal sealed class AscExporterTests
         {
             byte[] canData = SocketCanGenerators.BuildCanClassic((uint)(0x100 + i), [0xAA]);
             Frame frame = TestHarness.CreateFrame(
-                new FrameId(i), (long)(i + 1) * 1_000_000L, canData, LinkType.CanSocketcan);
+                i, (long)(i + 1) * 1_000_000L, canData, LinkType.CanSocketcan);
             exporter.OnFrame(frame);
         }
 
@@ -283,7 +283,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task EmptyExport_ProducesValidFile()
+    public async Task EmptyExportProducesValidFile()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -301,7 +301,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task WriteToFile_CreatesFile()
+    public async Task WriteToFileCreatesFile()
     {
         using TestDir dir = new("asc_file");
         string path = dir.FilePath("output.asc");
@@ -309,7 +309,7 @@ internal sealed class AscExporterTests
         using AscExporter exporter = AscExporter.CreateBuilder().ToFile(path).Build();
 
         byte[] canData = SocketCanGenerators.BuildCanClassic(0x123, [0x01]);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, canData, LinkType.CanSocketcan);
+        Frame frame = TestHarness.CreateFrame(0, 1_000_000_000L, canData, LinkType.CanSocketcan);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -319,13 +319,13 @@ internal sealed class AscExporterTests
     }
 
     [Test]
-    public async Task WriteToStream_VerifyContent()
+    public async Task WriteToStreamVerifyContent()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
 
         byte[] canData = SocketCanGenerators.BuildCanClassic(0x7FF, [0xAB, 0xCD]);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, canData, LinkType.CanSocketcan);
+        Frame frame = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
@@ -345,7 +345,8 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task Cancellation_StopsExport()
+    [Category("Slow")]
+    public async Task CancellationStopsExport()
     {
         using CancellationTokenSource cts = new();
         using MemoryStream ms = new();
@@ -355,9 +356,9 @@ internal sealed class AscExporterTests
             .Build();
 
         byte[] canData = SocketCanGenerators.BuildCanClassic(0x100, [0x01]);
-        Frame frame0 = TestHarness.CreateFrame(new FrameId(0), 0L, canData, LinkType.CanSocketcan);
-        Frame frame1 = TestHarness.CreateFrame(new FrameId(1), 1_000_000L, canData, LinkType.CanSocketcan);
-        Frame frame2 = TestHarness.CreateFrame(new FrameId(2), 2_000_000L, canData, LinkType.CanSocketcan);
+        Frame frame0 = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
+        Frame frame1 = TestHarness.CreateFrame(1, 1_000_000L, canData, LinkType.CanSocketcan);
+        Frame frame2 = TestHarness.CreateFrame(2, 2_000_000L, canData, LinkType.CanSocketcan);
 
         exporter.OnFrame(frame0);
         exporter.OnFrame(frame1);
@@ -369,7 +370,7 @@ internal sealed class AscExporterTests
     }
 
     [Test]
-    public async Task IsFinished_TrueAfterCancellation()
+    public async Task IsFinishedTrueAfterCancellation()
     {
         using CancellationTokenSource cts = new();
         using MemoryStream ms = new();
@@ -388,7 +389,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task TargetCount_StopsAtN()
+    public async Task TargetCountStopsAtN()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder()
@@ -400,7 +401,7 @@ internal sealed class AscExporterTests
         {
             byte[] canData = SocketCanGenerators.BuildCanClassic((uint)(0x100 + i), [0xAA]);
             Frame frame = TestHarness.CreateFrame(
-                new FrameId(i), (long)i * 1_000_000L, canData, LinkType.CanSocketcan);
+                i, (long)i * 1_000_000L, canData, LinkType.CanSocketcan);
             exporter.OnFrame(frame);
         }
 
@@ -410,7 +411,7 @@ internal sealed class AscExporterTests
     }
 
     [Test]
-    public async Task IsFinished_TrueAfterTargetReached()
+    public async Task IsFinishedTrueAfterTargetReached()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder()
@@ -422,7 +423,7 @@ internal sealed class AscExporterTests
         {
             byte[] canData = SocketCanGenerators.BuildCanClassic((uint)(0x100 + i), [0xBB]);
             Frame frame = TestHarness.CreateFrame(
-                new FrameId(i), (long)i * 1_000_000L, canData, LinkType.CanSocketcan);
+                i, (long)i * 1_000_000L, canData, LinkType.CanSocketcan);
             exporter.OnFrame(frame);
         }
 
@@ -435,7 +436,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task IsFinished_FalseBeforeOnFinish()
+    public async Task IsFinishedFalseBeforeOnFinish()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -444,7 +445,7 @@ internal sealed class AscExporterTests
     }
 
     [Test]
-    public async Task IsFinished_TrueAfterOnFinish()
+    public async Task IsFinishedTrueAfterOnFinish()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -455,7 +456,7 @@ internal sealed class AscExporterTests
     }
 
     [Test]
-    public async Task OnFrame_AfterFinish_ReturnsFalse()
+    public async Task OnFrameAfterFinishReturnsFalse()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -463,20 +464,20 @@ internal sealed class AscExporterTests
         exporter.OnFinish();
 
         byte[] canData = SocketCanGenerators.BuildCanClassic(0x200, [0x01]);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, canData, LinkType.CanSocketcan);
+        Frame frame = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
         bool accepted = exporter.OnFrame(frame);
 
         await Assert.That(accepted).IsFalse();
     }
 
     [Test]
-    public async Task DoubleFinish_IsIdempotent()
+    public async Task DoubleFinishIsIdempotent()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
 
         byte[] canData = SocketCanGenerators.BuildCanClassic(0x300, [0x02]);
-        Frame frame = TestHarness.CreateFrame(new FrameId(0), 0L, canData, LinkType.CanSocketcan);
+        Frame frame = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
         exporter.OnFrame(frame);
 
         exporter.OnFinish();
@@ -491,7 +492,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task Statistics_Correct()
+    public async Task StatisticsCorrect()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -502,7 +503,7 @@ internal sealed class AscExporterTests
         {
             byte[] canData = SocketCanGenerators.BuildCanClassic((uint)(0x100 + i), [0x01]);
             exporter.OnFrame(TestHarness.CreateFrame(
-                new FrameId(i), (long)i * 1_000_000L, canData, LinkType.CanSocketcan));
+                i, (long)i * 1_000_000L, canData, LinkType.CanSocketcan));
         }
 
         // 2 Ethernet frames are written, not skipped.
@@ -510,7 +511,7 @@ internal sealed class AscExporterTests
         {
             byte[] ethData = FrameGenerators.BuildEthernetIpv4UdpFrame(16);
             exporter.OnFrame(TestHarness.CreateFrame(
-                new FrameId(100 + i), (long)(10 + i) * 1_000_000L, ethData));
+                100 + i, (long)(10 + i) * 1_000_000L, ethData));
         }
 
         exporter.OnFinish();
@@ -528,7 +529,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task UiName_ReturnsDefault()
+    public async Task UiNameReturnsDefault()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -537,7 +538,7 @@ internal sealed class AscExporterTests
     }
 
     [Test]
-    public async Task UiName_Description_Preserved()
+    public async Task UiNameDescriptionPreserved()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder()
@@ -551,7 +552,7 @@ internal sealed class AscExporterTests
     }
 
     [Test]
-    public async Task Description_ReturnsNull_WhenNotSet()
+    public async Task DescriptionReturnsNullWhenNotSet()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -564,7 +565,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task UnsupportedLinkType_Skipped()
+    public async Task UnsupportedLinkTypeSkipped()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -580,7 +581,7 @@ internal sealed class AscExporterTests
         };
 
         // A link type with no ASC line is still skipped.
-        exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 0L, [0x01, 0x02], LinkType.Raw));
+        exporter.OnFrame(TestHarness.CreateFrame(0, 0L, [0x01, 0x02], LinkType.Raw));
         exporter.OnFinish();
 
         await Assert.That(exporter.SkippedCount).IsEqualTo(1);
@@ -595,7 +596,7 @@ internal sealed class AscExporterTests
 
         byte[] xlData = SocketCanGenerators.BuildCanXl(0x123, [0xAA, 0xBB, 0xCC, 0xDD], vcid: 0x01, sdt: 0x05);
         bool accepted = exporter.OnFrame(
-            TestHarness.CreateFrame(new FrameId(0), 1_000_000L, xlData, LinkType.CanSocketcan));
+            TestHarness.CreateFrame(0, 1_000_000L, xlData, LinkType.CanSocketcan));
         exporter.OnFinish();
 
         string text = Encoding.Latin1.GetString(ms.ToArray());
@@ -618,7 +619,7 @@ internal sealed class AscExporterTests
 
         byte[] ethData = new byte[60];
         ethData.AsSpan(0, 6).Fill(0xFF);
-        bool accepted = exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 0L, ethData));
+        bool accepted = exporter.OnFrame(TestHarness.CreateFrame(0, 0L, ethData));
         exporter.OnFinish();
 
         string text = Encoding.Latin1.GetString(ms.ToArray());
@@ -642,7 +643,7 @@ internal sealed class AscExporterTests
         byte[] truncated = new byte[8];
         truncated[4] = 0x80;
         bool accepted = exporter.OnFrame(
-            TestHarness.CreateFrame(new FrameId(0), 1_000_000L, truncated, LinkType.CanSocketcan));
+            TestHarness.CreateFrame(0, 1_000_000L, truncated, LinkType.CanSocketcan));
         exporter.OnFinish();
 
         await Assert.That(accepted).IsFalse();
@@ -655,7 +656,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task ErrorTolerance_TolerantFiresEvent()
+    public async Task ErrorToleranceTolerantFiresEvent()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -665,7 +666,7 @@ internal sealed class AscExporterTests
         exporter.ItemSkipped += (_, _) => Interlocked.Increment(ref skippedRaised);
 
         byte[] oversized = new byte[1519];
-        bool accepted = exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 0L, oversized));
+        bool accepted = exporter.OnFrame(TestHarness.CreateFrame(0, 0L, oversized));
 
         // Tolerant mode: OnFrame still returns true so the loop can continue
         await Assert.That(accepted).IsTrue();
@@ -675,14 +676,14 @@ internal sealed class AscExporterTests
     }
 
     [Test]
-    public async Task ErrorTolerance_StrictAbortsOnError()
+    public async Task ErrorToleranceStrictAbortsOnError()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
         exporter.ErrorTolerance = ErrorToleranceMode.Strict;
 
         byte[] oversized = new byte[1519];
-        bool accepted = exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 0L, oversized));
+        bool accepted = exporter.OnFrame(TestHarness.CreateFrame(0, 0L, oversized));
 
         await Assert.That(accepted).IsFalse();
         await Assert.That(exporter.HasErrors).IsTrue();
@@ -695,7 +696,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task MixedFrameTypes_AllWritten()
+    public async Task MixedFrameTypesAllWritten()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -703,23 +704,23 @@ internal sealed class AscExporterTests
         // CAN classic
         byte[] canData = SocketCanGenerators.BuildCanClassic(0x100, [0x01, 0x02]);
         exporter.OnFrame(TestHarness.CreateFrame(
-            new FrameId(0), 1_000_000L, canData, LinkType.CanSocketcan));
+            0, 1_000_000L, canData, LinkType.CanSocketcan));
 
         // CAN FD
         byte[] fdData = SocketCanGenerators.BuildCanFd(0x200, [0xAA, 0xBB, 0xCC, 0xDD]);
         exporter.OnFrame(TestHarness.CreateFrame(
-            new FrameId(1), 2_000_000L, fdData, LinkType.CanSocketcan));
+            1, 2_000_000L, fdData, LinkType.CanSocketcan));
 
         // LIN
         byte[] linData = LinGenerators.BuildLinFrame(0x05, [0x11, 0x22, 0x33], checksum: 0x42, checksumTypeBits: 2);
         exporter.OnFrame(TestHarness.CreateFrame(
-            new FrameId(2), 3_000_000L, linData, LinkType.Lin));
+            2, 3_000_000L, linData, LinkType.Lin));
 
         // FlexRay
         byte[] frData = FlexRayGenerators.BuildFlexRayFrame(
             0, 10, 5, 0x1234, [0xDE, 0xAD, 0xBE, 0xEF]);
         exporter.OnFrame(TestHarness.CreateFrame(
-            new FrameId(3), 4_000_000L, frData, LinkType.Flexray));
+            3, 4_000_000L, frData, LinkType.Flexray));
 
         exporter.OnFinish();
 
@@ -737,7 +738,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task LineEndings_AreCrLf()
+    public async Task LineEndingsAreCrLf()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -764,7 +765,7 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task Timestamp_RelativeToFirstFrame()
+    public async Task TimestampRelativeToFirstFrame()
     {
         using MemoryStream ms = new();
         using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
@@ -772,9 +773,9 @@ internal sealed class AscExporterTests
         // First frame at t=2s, second at t=3s → second frame should show 1.000000
         byte[] canData = SocketCanGenerators.BuildCanClassic(0x111, [0x01]);
         exporter.OnFrame(TestHarness.CreateFrame(
-            new FrameId(0), 2_000_000_000L, canData, LinkType.CanSocketcan));
+            0, 2_000_000_000L, canData, LinkType.CanSocketcan));
         exporter.OnFrame(TestHarness.CreateFrame(
-            new FrameId(1), 3_000_000_000L, canData, LinkType.CanSocketcan));
+            1, 3_000_000_000L, canData, LinkType.CanSocketcan));
         exporter.OnFinish();
 
         string content = Encoding.UTF8.GetString(ms.ToArray());

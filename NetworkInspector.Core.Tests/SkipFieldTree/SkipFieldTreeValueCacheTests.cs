@@ -33,7 +33,7 @@ internal sealed class SkipFieldTreeValueCacheTests
 
     private static Frame _Frame(Stack stack, byte[] data, int id = 1) =>
         Frame.Create(
-            new FrameId(id),
+            id,
             Timestamp.FromSecs(id),
             data,
             LinkType.Ethernet,
@@ -55,7 +55,7 @@ internal sealed class SkipFieldTreeValueCacheTests
         {
             ParseOptions options = new(FieldTreeMode.Build, build);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -71,7 +71,7 @@ internal sealed class SkipFieldTreeValueCacheTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, skip);
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 frame,
                 in options,
@@ -104,7 +104,7 @@ internal sealed class SkipFieldTreeValueCacheTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, skip);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -139,7 +139,7 @@ internal sealed class SkipFieldTreeValueCacheTests
         {
             ParseOptions options = new(FieldTreeMode.Build, build);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -154,7 +154,7 @@ internal sealed class SkipFieldTreeValueCacheTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, skip);
             if (!Packet.TryParse(
-                new PacketId(1),
+                1,
                 stack,
                 frame,
                 in options,
@@ -216,7 +216,7 @@ internal sealed class SkipFieldTreeValueCacheTests
         {
             ParseOptions options = new(FieldTreeMode.Skip);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -249,7 +249,7 @@ internal sealed class SkipFieldTreeValueCacheTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,

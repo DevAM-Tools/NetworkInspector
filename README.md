@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/github/license/DevAM-Tools/NetworkInspector)](LICENSE)
 
 Packet analysis for .NET 10: read network and automotive captures, dissect them into typed fields, filter them
-with Wireshark-style expressions, and export them to formats for tools, spreadsheets, and SQL. Use it as a
+with display-filter expressions, and export them to formats for tools, spreadsheets, and SQL. Use it as a
 library, or from the command line with `ni`.
 
 ```bash
@@ -28,13 +28,14 @@ ni export capture.pcapng -o packets.duckdb      # every packet, every field, que
 - **Fast.** Millions of frames per second from memory-mapped files and streams, allocation-aware parsing with
   packet recycling, skip-parse modes, and Roaring-bitmap presence indexes for filtering huge captures.
 - **Analytics built in.** Export to JSON, CSV, Text, PBF, Parquet, or a single DuckDB file with a field catalog
-  and native types; record selected fields into columnar RAM caches while parsing.
-- **Wireshark-style filters, compiled.** `tcp.port in {80, 443} && !tls`, checked against the stack at compile
+  and native types; export only the fields you name (an export of two fields builds no field tree, many times
+  faster than a full export); record selected fields into columnar RAM caches while parsing.
+- **Display-filter expressions, compiled.** `tcp.port in {80, 443} && !tls`, checked against the stack at compile
   time with "did you mean" hints, plus subtree scopes and edge detection across packets.
 - **Live sessions for applications.** Multi-source, multi-listener sessions with per-listener filters, background
   value caches, and hot protocol-stack swaps.
-- **Verified against Wireshark.** More than 5,000 tests; dissectors, readers, writers, and the frame builder are
-  cross-validated against `tshark` 4.6.
+- **Verified against a reference dissector.** More than 5,000 tests; dissectors, readers, writers, and the frame builder are
+  cross-validated against an independent reference implementation (version 4.6).
 - **Extensible with plugins.** Add protocols, capture sources, export formats, and settings as a plugin DLL that `ni`
   loads from a folder; the built-in protocols, sources, and formats use the same contract
   ([plugin guide](docs/plugins/guide.md)).
@@ -73,10 +74,11 @@ Details: [Sources README](NetworkInspector.Sources/README.md#open-very-large-cap
 ```bash
 dotnet tool install -g NetworkInspector.CLI
 
-ni convert capture.blf -o capture.pcapng                       # Vector BLF -> Wireshark
+ni convert capture.blf -o capture.pcapng                       # Vector BLF -> PCAPNG
 ni export capture.pcapng -o packets.json                       # parsed packets as JSON
 ni export capture.pcapng -o dns.json --filter "udp.port == 53" # only DNS
 ni export capture.pcapng -o out -f parquet                     # Parquet dataset for pandas, Polars, Spark
+ni export capture.pcapng -o ports.duckdb -f "duckdb:fields=udp.srcport;udp.dstport" --verbose  # two fields, no field tree
 ni settings set plugins.paths /opt/ni-plugins --scope application  # load your plugins
 ni plugins list                                                # what each plugin contributes
 ```
@@ -120,7 +122,7 @@ ParseOptions options = new();
 int nextId = 0; // first-parse ids are dense: 0, 1, 2, ...
 while (source.NextFrame() is { } frame)
 {
-    if (!Packet.TryParse(new PacketId(nextId), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+    if (!Packet.TryParse(nextId, stack, frame, in options, out Packet? packet, out ParseFailure failure)
         || packet is null)
     {
         Console.Error.WriteLine($"frame {frame.Id.Value}: {failure}");
@@ -264,12 +266,15 @@ turn the CSV into a Markdown table with a gate verdict through `--report <csv> -
 `--affinity 0x<mask>` to pin every child to a processor set (for example the performance cores of a hybrid CPU), and
 `--warmup <s>` / `--duration <s>` to shorten the phases of a series. `--write-filter-verdicts <dir> --out <file>` and
 `--write-session-digest <dir> --out <file>` write byte-comparable correctness oracles for filter and session changes
-over the captures in `<dir>` (for example the ones `--write-golden-inputs <dir>` writes).
+over the captures in `<dir>` (for example the ones `--write-golden-inputs <dir>` writes). To compare export file
+sizes, `--write-export-sizes <dir> --out <csv> [--frames <n>]` exports a fixed sample (20 000 frames by default) in every
+configuration and records the bytes of each, and `--compare-export-sizes <beforeCsv> <afterCsv> --out <md>` reports the change per configuration
+(exit 1 when one grew or is missing); run the first command with the baseline build and with the new build.
 
 ## Quality
 
 - More than 5,000 tests (TUnit on Microsoft.Testing.Platform), including round trips through every capture format.
-- Dissectors, capture readers and writers, and frame-builder output are cross-validated against `tshark` 4.6.
+- Dissectors, capture readers and writers, and frame-builder output are cross-validated against an independent reference implementation (version 4.6).
 - Warnings are errors; .NET analyzers and a style checker run on every build.
 - Untrusted-input hardening: bounded lengths, counts, and nesting; decompression-bomb limits; process-seeded
   connection hashing; linear-time regular expressions where possible.

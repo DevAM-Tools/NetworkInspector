@@ -97,13 +97,13 @@ internal sealed class DescribedFieldCapture : IDisposable
             for (int i = 0; i < packetCount; i++)
             {
                 Frame frame = Frame.Create(
-                    new FrameId(i + 1),
+                    i + 1,
                     Timestamp.FromNanos(1_000_000L * (i + 1)),
                     new byte[] { 0, 0, 0, 0 },
                     LinkType.Null,
                     interfaceId,
                     registry).Value;
-                if (!Packet.TryParse(new PacketId(i), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+                if (!Packet.TryParse(i, stack, frame, in options, out Packet? packet, out ParseFailure failure)
                     || packet is null)
                 {
                     throw new InvalidOperationException(failure.ToString());

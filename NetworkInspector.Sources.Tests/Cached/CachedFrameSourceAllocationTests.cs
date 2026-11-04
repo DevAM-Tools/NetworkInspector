@@ -78,6 +78,6 @@ internal sealed class CachedFrameSourceAllocationTests
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         await Assert.That(allocated).IsEqualTo(0L);
-        await Assert.That(cached.FrameById(new FrameId(count - 1))).IsNotNull();
+        await Assert.That(cached.FrameById(count - 1)).IsNotNull();
     }
 }

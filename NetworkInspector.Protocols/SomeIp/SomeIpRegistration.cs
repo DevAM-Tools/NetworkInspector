@@ -30,6 +30,9 @@ public static class SomeIpRegistration
     /// <summary>Setting: path of the SOME/IP service description file (may be empty; empty is not an error).</summary>
     public const string ConfigFileSetting = "someip.config_file";
 
+    /// <summary>Setting: text put in front of every filter name of the description; empty means none.</summary>
+    public const string FieldPrefixSetting = "someip.field_prefix";
+
     /// <summary>Setting: decode the payloads of configured methods into typed fields.</summary>
     public const string DecodePayloadSetting = "someip.decode_payload";
 
@@ -180,7 +183,8 @@ public static class SomeIpRegistration
         SomeIpCompiledModel model = SomeIpCompiledModel.Empty;
         if (config is not null && SomeIpConfigLoader.TryAccept(config, settings.ConfigMaxServices, settings.ConfigMaxTypes, warnings))
         {
-            model = SomeIpConfigCompiler.Compile(config, warnings);
+            string prefix = _ReadPrefix(builder.Settings, warnings);
+            model = SomeIpConfigCompiler.Compile(config, prefix, warnings);
         }
 
         SomeIpProtocol protocol = new(model, in settings);
@@ -336,6 +340,18 @@ public static class SomeIpRegistration
             ConfigFileSetting,
             warnings);
 
+        // Naming choice, not a trust-boundary limit: the value is validated as a host name when it is read (_ReadPrefix), so no
+        // range or size applies. Open by default in the sense that an empty prefix is the short form; a prefix is opt-in.
+        _Check(
+            registrar.RegisterStringSetting(
+                FieldPrefixSetting,
+                "Field Name Prefix",
+                GroupName,
+                defaultValue: string.Empty,
+                description: "Text put in front of every filter name the service description produces: 'acme' turns ClimateControl.v2.SetTemperature into acme.ClimateControl.v2.SetTemperature. Empty means the names start with the service name. Use it when a service name could meet the name of a protocol, a field or a plugin. Letters, digits and underscores; a part starts with a letter or underscore; parts are joined by dots. Takes effect when the stack is built again."),
+            FieldPrefixSetting,
+            warnings);
+
         _Check(
             registrar.RegisterBoolSetting(
                 DecodePayloadSetting,
@@ -481,6 +497,7 @@ public static class SomeIpRegistration
             _ReadInt(settings, SomeIpLimits.TpMaxSessions),
             _ReadInt(settings, SomeIpLimits.TpMaxMessageSize),
             _ReadLong(settings, SomeIpLimits.TpMaxBufferedBytes),
+            _ReadLong(settings, SomeIpLimits.TpMaxDerivedBytesPerPacket),
             _ReadInt(settings, SomeIpLimits.TcpMaxMessageSize),
             _ReadInt(settings, SomeIpLimits.ConfigMaxServices),
             _ReadInt(settings, SomeIpLimits.ConfigMaxTypes),
@@ -558,6 +575,28 @@ public static class SomeIpRegistration
                 CultureInfo.InvariantCulture,
                 $"Persisted value for '{settingName}' could not be applied ({result.LoadResult}). The value is ignored.");
         warnings.Add(_Warning(kind, settingName, text));
+    }
+
+    /// <summary>
+    /// Reads the field prefix. The value comes from the user's settings (an end user may change it) and becomes part of every
+    /// filter name, so it must be a valid dotted name; an invalid value is reported and not used, which keeps the description
+    /// loadable. Rejected: refusing the whole description for a bad prefix (the author of the file did nothing wrong).
+    /// </summary>
+    private static string _ReadPrefix(ReadOnlySettingsManagerView settings, List<SettingsLoadWarning> warnings)
+    {
+        string value = settings.GetStringSetting(FieldPrefixSetting) ?? "";
+        if (value.Length == 0 || SomeIpNameTokens.IsValidPrefix(value))
+        {
+            return value;
+        }
+
+        warnings.Add(_Warning(
+            SettingsLoadWarningKind.OutOfRange,
+            FieldPrefixSetting,
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"'{value}' is not a valid field prefix (parts of letters, digits and underscores, each starting with a letter or underscore, joined by dots); the names carry no prefix.")));
+        return "";
     }
 
     private static string _UnitSuffix(SomeIpLimitDefinition limit) => limit.Unit == SomeIpLimitUnit.Bytes

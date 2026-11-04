@@ -24,6 +24,34 @@ internal sealed class CustomFieldPacketFactory : IDisposable
         _Stack = builder.Build();
     }
 
+    /// <summary>The factory's own stack: a field selection for the factory's packets must be resolved against it.</summary>
+    internal Stack Stack => _Stack;
+
+    /// <summary>
+    /// The selected-fields content for the named fields of this factory's protocol, with the CSV defaults (no info, no frame
+    /// bytes) and without the text columns, so a CSV export of it has exactly one column per field.
+    /// </summary>
+    /// <param name="names">Field names, for example <c>tst.text</c>.</param>
+    /// <returns>The content.</returns>
+    internal ExportContent SelectFields(params string[] names)
+    {
+        FieldRequest[] requests = [.. names.Select(static name => new FieldRequest(name))];
+        if (!FieldSelection.TryCreate(_Stack, requests, Occurrences.All, out FieldSelection? selection, out FieldSelectionError error))
+        {
+            throw new InvalidOperationException(error.Message);
+        }
+
+        return new ExportContent
+        {
+            Shape = ExportShape.SelectedFields,
+            Fields = selection,
+            Info = false,
+            FrameBytes = false,
+            CustomText = false,
+            CustomRepresentation = false,
+        };
+    }
+
     /// <summary>Field id of the signed 64-bit number field.</summary>
     internal FieldId NumberFieldId => _Protocol.NumberFieldId;
 
@@ -44,22 +72,43 @@ internal sealed class CustomFieldPacketFactory : IDisposable
     /// When given, the frame carries exactly this array (not copied) and the packet gets a bytes field that references it
     /// without copying, like a parser that slices the frame. <see langword="null"/> uses 14 zero bytes and no bytes field.
     /// </param>
+    /// <param name="containerText">
+    /// Custom text of the <c>tst</c> container, which has no value; <see langword="null"/> gives the container no text.
+    /// </param>
+    /// <param name="numberCount">
+    /// How many times the number field occurs in the packet (values <paramref name="number"/>, +1, +2, ...); more than one
+    /// gives a repeated field.
+    /// </param>
+    /// <param name="faultyText">Whether the text field gets a custom text whose factory throws when it is read.</param>
+    /// <param name="faultyInfo">Whether the packet info is a deferred text whose factory throws a <see cref="FormatException"/> when read.</param>
     /// <returns>The parsed packet.</returns>
-    internal Packet Create(long number, string? text, string info = "", byte[]? frameData = null)
+    internal Packet Create(
+        long number,
+        string? text,
+        string info = "",
+        byte[]? frameData = null,
+        string? containerText = null,
+        int numberCount = 1,
+        bool faultyText = false,
+        bool faultyInfo = false)
     {
+        _Protocol.FaultyText = faultyText;
+        _Protocol.FaultyInfo = faultyInfo;
+        _Protocol.NumberCount = numberCount;
         _Protocol.Number = number;
         _Protocol.Text = text;
         _Protocol.Info = info;
+        _Protocol.ContainerText = containerText;
         _Protocol.IncludeBytes = frameData is not null;
         Frame frame = Frame.Create(
-            new FrameId(_NextPacketId),
+            _NextPacketId,
             Timestamp.FromNanos(1_000_000_000L + _NextPacketId),
             frameData ?? new byte[14],
             LinkType.Ethernet,
             FrameInterfaceId.Invalid,
             _Stack.FrameInterfaceRegistry).Value;
         ParseOptions options = new(firstProtocol: _ProtocolId);
-        if (!Packet.TryParse(new PacketId(_NextPacketId), _Stack, frame, in options, out Packet? packet, out ParseFailure failure)
+        if (!Packet.TryParse(_NextPacketId, _Stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
             throw new InvalidOperationException(failure.ToString());
@@ -94,6 +143,18 @@ internal sealed class CustomFieldPacketFactory : IDisposable
 
         /// <summary>Packet info set by the next parse; empty leaves the info unset.</summary>
         internal string Info { get; set; } = string.Empty;
+
+        /// <summary>How many times the next parse appends the number field.</summary>
+        internal int NumberCount { get; set; } = 1;
+
+        /// <summary>Custom text of the container set by the next parse; null leaves the container without text.</summary>
+        internal string? ContainerText { get; set; }
+
+        /// <summary>Whether the text field of the next parse gets a custom text whose factory throws when it is read.</summary>
+        internal bool FaultyText { get; set; }
+
+        /// <summary>Whether the packet info of the next parse is a deferred text that throws when it is read.</summary>
+        internal bool FaultyInfo { get; set; }
 
         /// <summary>Whether the next parse appends the bytes field.</summary>
         internal bool IncludeBytes
@@ -139,15 +200,33 @@ internal sealed class CustomFieldPacketFactory : IDisposable
             ReadOnlyMemory<byte> payload = data;
             FieldId numberFieldId = NumberFieldId;
             FieldId textFieldId = TextFieldId;
-            if (info.Length > 0)
+            if (FaultyInfo)
+            {
+                // A plugin dissector whose info formatter throws when the summary is first read.
+                parentField.SetPacketInfo(LazyString.Lazy(static () => throw new FormatException("info boom")));
+            }
+            else if (info.Length > 0)
             {
                 parentField.SetPacketInfo(new LazyString(info));
             }
 
-            parentField.AppendLazy(_ContainerFieldId, FieldValue.None, (in container) =>
+            string? containerText = ContainerText;
+            int numberCount = NumberCount;
+            bool faultyText = FaultyText;
+            LazyPopulator populator = (in container) =>
             {
-                container.Append(numberFieldId, FieldValue.NewI64(number));
-                if (text is not null)
+                for (int occurrence = 0; occurrence < numberCount; occurrence++)
+                {
+                    container.Append(numberFieldId, FieldValue.NewI64(number + occurrence));
+                }
+
+                if (text is not null && faultyText)
+                {
+                    // A plugin dissector whose text factory throws when the text is first read.
+                    LazyString faulty = LazyString.Lazy(static () => throw new InvalidOperationException("text boom"));
+                    container.AppendWithCustomText(textFieldId, FieldValue.NewString(text), faulty);
+                }
+                else if (text is not null)
                 {
                     container.Append(textFieldId, FieldValue.NewString(text));
                 }
@@ -158,7 +237,16 @@ internal sealed class CustomFieldPacketFactory : IDisposable
                 }
 
                 return 0;
-            });
+            };
+            if (containerText is null)
+            {
+                parentField.AppendLazy(_ContainerFieldId, FieldValue.None, populator);
+            }
+            else
+            {
+                parentField.AppendLazyWithCustomText(_ContainerFieldId, FieldValue.None, new LazyString(containerText), populator);
+            }
+
             return data.Length;
         }
     }

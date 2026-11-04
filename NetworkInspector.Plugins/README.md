@@ -51,7 +51,7 @@ public sealed class MyPlugin : IPlugin
 
 The entry class must be public, non-abstract, non-generic, have a public parameterless constructor, and list `IPlugin`
 in its own interface list (a class that only inherits the interface from a base class is not found). Build the plugin
-against the same or an older NetworkInspector version than the application that loads it. Register the folder with
+against the same minor NetworkInspector version as the application that loads it (before 1.0 a minor release may change the binary contract of Core). Register the folder with
 `ni settings set plugins.paths <folder> --scope application` and check the result with `ni plugins list`:
 
 ```text

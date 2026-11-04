@@ -327,13 +327,13 @@ internal sealed class RandomFrameSourceTests
         Frame? sequential = source.NextFrame();
         await Assert.That(sequential).IsNotNull();
 
-        Frame? byId0 = source.FrameById(new FrameId(0));
-        Frame? byId3 = source.FrameById(new FrameId(3));
+        Frame? byId0 = source.FrameById(0);
+        Frame? byId3 = source.FrameById(3);
         await Assert.That(byId0).IsNotNull();
         await Assert.That(byId3).IsNotNull();
         await Assert.That(byId0!.Value.Data.Span.SequenceEqual(sequential!.Value.Data.Span)).IsTrue();
 
-        Frame? missing = source.FrameById(new FrameId(count));
+        Frame? missing = source.FrameById(count);
         await Assert.That(missing).IsNull();
     }
 }

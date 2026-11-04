@@ -757,7 +757,7 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
         }
 
         ParseResult<Frame> result = Frame.Create(
-            new FrameId(frameId),
+            frameId,
             new Timestamp(packet.TimestampNanos),
             data,
             iface.LinkType,
@@ -1120,7 +1120,7 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
         // Zero-copy for in-memory captures; the mapped backend copies once, into the slab when slabs are on.
         ReadOnlyMemory<byte> data = _Backend.CopyFrameDataSequential(fileOffset, capturedLength, _Slabs);
         ParseResult<Frame> result = Frame.Create(
-            new FrameId(frameId),
+            frameId,
             new Timestamp(timestampNanos),
             data,
             iface.LinkType,

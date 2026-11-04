@@ -410,7 +410,7 @@ internal sealed class SessionApiTests
         await Assert.That(indexBefore).IsNotNull();
         await Assert.That(indexBefore!.Value.Source).IsNotNull();
 
-        bool found = session.TryGetPacket(new PacketId(0), out Packet? packet, out _);
+        bool found = session.TryGetPacket(0, out Packet? packet, out _);
 
         await Assert.That(found).IsTrue();
         await Assert.That(packet).IsNotNull();

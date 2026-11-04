@@ -89,7 +89,7 @@ internal sealed class GatedRandomAccessSource : IRandomAccessFrameSource
 
         int index = _NextIndex++;
         Frame frame = Frame.Create(
-            new FrameId(index),
+            index,
             Timestamp.FromNanos(index * 1_000_000L),
             TestHarness.GenerateUdpFrame(64),
             LinkType.Ethernet,

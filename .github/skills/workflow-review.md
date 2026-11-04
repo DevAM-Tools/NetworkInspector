@@ -22,6 +22,8 @@ Default **full review**. Enter **static review** only on an explicit reduced-sco
 
 **Static:** Read sources, tests, docs. Judge tests from source. Write **Test Execution:** `Not run — static review`. Do not run build, tests, Playwright, debugger, or the product.
 
+**Closing Review** (called by `workflow-implement.md` Stage 5): a full review of everything the run built, with the plan, requirements, briefing, and Step `{n}R` reviews in scope. It adds the **Closing** hunts (Stage 4). File: `reviews/review_<slug>-closing_<n>.md`. Record `Mode: full review · Closing Review` in **Scope**.
+
 ## Stage Order
 
 1. Define Scope
@@ -37,14 +39,15 @@ Default **full review**. Enter **static review** only on an explicit reduced-sco
 ## Stage 2 — Load Rules
 
 - Enumerate confirmed-scope files by extension and project path.
-- Run Tech Load Protocol (`copilot-instructions.md` Section 3). Load every skill the Section 3 table maps to those files. Also apply the extra Section 3 bullets (C# production APIs → `tech-tunit.md` + `tech-test.md`; product web UI; illustrations).
+- Run Tech Load Protocol (`copilot-instructions.md` Section 3). Load every skill the Section 3 table maps to those files. Also apply the extra Section 3 bullets (`tech-docs.md` always; C# production APIs → `tech-tunit.md` + `tech-test.md`; product web UI; illustrations).
 - Do not skip a matching trigger. Do not load a skill whose trigger is not in scope. When uncertain, load it. Unloaded skills do not apply.
 - Read `custom_instructions.md` when it exists at repo root.
-- Load **Skeptic** and **Outsider** from `workflow-council.md` (Views table). Do **not** run Problem-First, Upside, Builder, Lite, Full, or Exam as part of `/review`.
+- Load **Skeptic** and **Outsider** from `workflow-council.md` (Views table). Do **not** run Problem-First, Upside, Builder, Lite, Full, or Exam as part of `/review`. The Closing hunts borrow two questions; they are hunts, not a council.
 - Record `Loaded skills:` in Scope.
 
 ## Stage 3 — Gather Context
 
+- Read before acting (Section 4.6, `tech-docs.md` § Reading tiers); record what was read in Scope. Run the Impact search (`tech-docs.md` § Impact search); its doc and coupling hits are in scope for the Docs hunt.
 - Enumerate in-scope files and associated test projects / spec files. In the
   artifact, each path is a clickable relative Markdown link (Section 4.6).
 - Do not open `reviews/review_*.md` unless the user named that file.
@@ -77,7 +80,7 @@ Reminder of Section 4. Still walk the leading sources in full. Record finding ID
 
 - **Security:** OWASP Top 10; never trust caller parameters, URLs, bindings, payloads; injection; no secrets, credentials, tokens, or PII in logs; STRIDE mitigations for external input; trust-boundary limits per §4.2 (agreed, tied to a threat, posture labeled with why, host-dependent values configurable with a validated range, end-user settings explained, a hit limit is a named error, no silent truncation); every security decision commented where the code enforces it.
 - **Races:** no unsynchronized shared mutable state; race, TOCTOU, async interleaving, lock inversion, partial-state; document lock/atomic; concurrent tests for thread-safety claims.
-- **Docs:** English non-temp docs; why-comments; public API docs; comments, XML/docs, README, guides in sync with code.
+- **Docs:** English non-temp docs; Sync check and the `tech-docs.md` § Review severity list (contract doc comments with Related on every item, comment-only read, tags, no history, architecture kept or changed on purpose, learned knowledge captured, sections, `Sync:` pairs, links). Hunt below.
 - **Orphans:** unused types, objects, APIs, files; dead code; stale docs; deprecated patterns in active paths; internals leaked; least visibility.
 - **Correctness:** warnings as errors; no silent failure; validate trust-boundary input and parameters; no invalid state after errors; check returns; no tracking IDs in code; off-by-one; overflow; result/try APIs on expected and hot-path failures.
 - **API:** invalid states unrepresentable; try/result at public expected-failure boundaries; misuse/abuse analysis; public snippet matches the plan.
@@ -107,6 +110,22 @@ When a plan is in scope: walk every requirement ID that has Done-when from the *
 ### Design decisions
 
 Hunt encoded choices without a why: algorithm, data layout, lock/atomic, error policy, trust-boundary limit, security trade-off (threat, mitigation, rejected alternative, residual risk), fallback, compatibility shim, omitted validation. Section 4.6 (also 4.1, 4.2, 4.3) requires comments/docs for those. Undocumented choice = Error. "Obvious" is not documentation.
+
+### Docs
+
+Run the Sync check (`tech-docs.md` § Sync check) over the scope plus the Impact-search hits. Then walk the `tech-docs.md` § Review severity list. Do not sample.
+
+- **Docs code:** each in-scope type and member has a contract doc comment (`tech-docs.md` § Doc comments) with Related links that name meaning or dependency, not usages. Each non-trivial body passes the comment-only read. Optimizations, invariants, security decisions, traps, and couplings carry their tag with the required content. No history, no commented-out code, no stale parameter or branch, no file header that repeats the type doc.
+- **Docs project:** each claim about the scope in README, architecture, concepts, domain, guides, decision records, and package docs matches the code. The code keeps every documented boundary, dependency, flow, and invariant, or the architecture and a decision record changed with it; a silent break is an Error even when the code works. Concepts and domain facts the change relies on are in their homes. New or moved components and entries are in the architecture Overview; new non-compiler couplings of more than two parties are on the component’s **Easy to miss** line. Each fact sits in its home. Each non-compiler coupling has `Sync:` at both ends. Links, paths, symbols, and documented commands resolve.
+
+Doc ↔ code mismatches across artifacts are also Consistency findings; file each defect once and cite both hunts.
+
+### Closing (Closing Review only)
+
+- **Requirements end to end** (Problem-First question): walk every requirement ID with Done-when as its actor would, and run each executable Done-when. Holds per file but fails end to end = Error.
+- **Verify proves** (Builder question): for each step `Verify` and each test ID, name the command that must fail if the claim did not hold. A `Verify` or test that cannot fail = Error.
+- **Leftovers:** scaffolding, dead code, stale docs, or a temporary shape that an earlier step left behind = Error.
+- **Briefing claims:** each **How it serves** clause holds in its file.
 
 ### Performance
 
@@ -340,7 +359,8 @@ with paragraphs.
 | Races | {IDs or `none`} |
 | Correctness | {IDs or `none`} |
 | API | {IDs or `none`} |
-| Docs | {IDs or `none`} |
+| Docs code | {IDs or `none`} |
+| Docs project | {IDs or `none`} |
 | Design decisions | {IDs or `none`} |
 | Orphans | {IDs or `none`} |
 | Tests | {IDs or `none`} |
@@ -357,6 +377,8 @@ with paragraphs.
 | Skeptic parts | {IDs or `none`} |
 | Skeptic whole | {IDs or `none`} |
 | Outsider | {IDs or `none`} |
+| Closing requirements | {IDs, `none`, or `n/a — not a Closing Review`} |
+| Closing verify | {IDs, `none`, or `n/a — not a Closing Review`} |
 | Custom instructions | {`present` or `none`} |
 | Skills | {loaded skill names} |
 | Unloaded trigger | {`none` or Error ID} |
@@ -402,7 +424,7 @@ Assign exactly one bucket: Error · Cosmetic · Refactoring Opportunity · Perfo
 IDs: `E{n}` Error · `S{n}` Cosmetic (style) · `R{n}` Refactoring · `P{n}` Performance.
 Never use `C{n}`; it names recorded choices (Section 5.1).
 
-- **Error:** Severity (High/Medium/Low) in the status line; Problem/Fix in `How`; OWASP category for security; missing boundary/guard for validation gaps; skill/instruction property miss; undocumented design decision; test-content gap that leaves behavior unproven; race/TOCTOU; unused type or dead code in scope.
+- **Error:** Severity (High/Medium/Low) in the status line; Problem/Fix in `How`; OWASP category for security; missing boundary/guard for validation gaps; skill/instruction property miss; undocumented design decision; doc or comment defect on the `tech-docs.md` § Review severity list; test-content gap that leaves behavior unproven; race/TOCTOU; unused type or dead code in scope.
 - **Cosmetic:** exact style rule in `How`; Problem/Fix in `How`.
 - **Refactoring:** unchanged behavior in `Why`; extract/move/split in `How`; Problem/Fix in `How`.
 - **Performance:** Severity (High/Medium/Low) in the status line. **High** =

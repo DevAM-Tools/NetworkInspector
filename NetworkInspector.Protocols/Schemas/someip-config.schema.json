@@ -54,7 +54,12 @@
           "maximum": 255
         },
         "name": {
-          "description": "Display name of the service. The derived registered field names use the token form of this name (lower-case ASCII letters, digits and underscores; every other character becomes an underscore).",
+          "description": "Name of the service. It is used unchanged as the first segment of every filter name of the service (the filter name of the service itself is <name>.v<major_version>, with the optional prefix of the someip.field_prefix setting in front): a letter or underscore, then letters, digits and underscores; no dot. A service with another name is reported and not registered; a second service with the same name and major version is refused.",
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "ui_name": {
+          "description": "Display name of the service; defaults to 'name'. An empty value or one with a control character is reported and the name is shown.",
           "type": "string",
           "minLength": 1
         },
@@ -86,7 +91,8 @@
       "properties": {
         "kind": { "const": "method" },
         "id": { "description": "16-bit method ID.", "type": "integer", "minimum": 0, "maximum": 65535 },
-        "name": { "type": "string", "minLength": 1 },
+        "name": { "description": "Method name; used unchanged as one segment of the filter name (same rule as the service name).", "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "ui_name": { "description": "Display name; defaults to 'name'.", "type": "string", "minLength": 1 },
         "in": { "$ref": "#/$defs/parameter_list" },
         "out": { "$ref": "#/$defs/parameter_list" },
         "e2e_profile": { "$ref": "#/$defs/e2e_profile" },
@@ -100,7 +106,8 @@
       "properties": {
         "kind": { "const": "event" },
         "id": { "description": "16-bit event ID.", "type": "integer", "minimum": 0, "maximum": 65535 },
-        "name": { "type": "string", "minLength": 1 },
+        "name": { "description": "Event name; used unchanged as one segment of the filter name (same rule as the service name).", "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "ui_name": { "description": "Display name; defaults to 'name'.", "type": "string", "minLength": 1 },
         "type_reference": { "$ref": "#/$defs/type_reference" },
         "e2e_profile": { "$ref": "#/$defs/e2e_profile" },
         "transformation_properties": { "$ref": "#/$defs/transformation_properties" }
@@ -118,7 +125,8 @@
       ],
       "properties": {
         "kind": { "const": "field" },
-        "name": { "type": "string", "minLength": 1 },
+        "name": { "description": "Field name; used unchanged as one segment of the filter name. The accessors are the members <name>_get, <name>_set and <name>_notifier.", "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "ui_name": { "description": "Display name; defaults to 'name'.", "type": "string", "minLength": 1 },
         "get_id": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "set_id": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "notifier_id": { "type": "integer", "minimum": 0, "maximum": 65535 },
@@ -135,7 +143,8 @@
       "properties": {
         "kind": { "const": "event_group" },
         "id": { "description": "16-bit eventgroup ID.", "type": "integer", "minimum": 0, "maximum": 65535 },
-        "name": { "type": "string", "minLength": 1 }
+        "name": { "description": "Eventgroup name shown for service discovery entries; display text, not a filter name.", "type": "string", "minLength": 1 },
+        "ui_name": { "description": "Display name; defaults to 'name'.", "type": "string", "minLength": 1 }
       }
     },
     "parameter_list": {
@@ -153,7 +162,7 @@
       ]
     },
     "usage_site": {
-      "description": "One usage of a data type. A bare string is the type reference; an object adds a parameter name and optional overrides. 'name' is the parameter's display name and the source of its path token (defaults to the referenced type's name); 'filter_name' overrides the registered field name (filter string) and must be a dotted identifier the host accepts; 'ui_name' overrides the display name. The default registered name is the path-derived identity someip.payload.<service>.v<major>.<member>[.in|.out].<path>.",
+      "description": "One usage of a data type. A bare string is the type reference; an object adds a parameter name and optional overrides. 'name' is used unchanged as one segment of the filter name (a letter or underscore, then letters, digits and underscores; no dot) and defaults to the referenced type's name; 'ui_name' is the display name. The filter name is [prefix.]<service>.v<major>.<member>[.req|.resp].<path>.",
       "oneOf": [
         { "$ref": "#/$defs/type_reference" },
         {
@@ -161,9 +170,8 @@
           "additionalProperties": false,
           "required": [ "type_reference" ],
           "properties": {
-            "name": { "description": "Parameter name; defaults to the referenced type's name.", "type": "string", "minLength": 1 },
-            "filter_name": { "description": "Registered field name (filter string) override.", "type": "string", "minLength": 1, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
-            "ui_name": { "description": "Display name override; defaults to 'name'.", "type": "string", "minLength": 1 },
+            "name": { "description": "Parameter name; used unchanged as one segment of the filter name. Defaults to the referenced type's name.", "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+            "ui_name": { "description": "Display name; defaults to 'name'. An empty value or one with a control character is reported and the name is shown.", "type": "string", "minLength": 1 },
             "type_reference": { "$ref": "#/$defs/type_reference" }
           }
         }
@@ -311,14 +319,13 @@
       }
     },
     "structure_member": {
-      "description": "One member of a plain structure. 'name' is the member's display name and the source of its path token; 'filter_name' overrides the registered field name (filter string); 'ui_name' overrides the display name.",
+      "description": "One member of a plain structure. 'name' is used unchanged as one segment of the filter name and defaults to the referenced type's name; 'ui_name' is the display name.",
       "type": "object",
       "additionalProperties": false,
       "required": [ "type_reference" ],
       "properties": {
-        "name": { "description": "Member name; defaults to the referenced type's name.", "type": "string", "minLength": 1 },
-        "filter_name": { "description": "Registered field name (filter string) override.", "type": "string", "minLength": 1, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
-        "ui_name": { "description": "Display name override; defaults to 'name'.", "type": "string", "minLength": 1 },
+        "name": { "description": "Member name; used unchanged as one segment of the filter name. Defaults to the referenced type's name.", "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "ui_name": { "description": "Display name; defaults to 'name'. An empty value or one with a control character is reported and the name is shown.", "type": "string", "minLength": 1 },
         "type_reference": { "$ref": "#/$defs/type_reference" },
         "pad_to": { "$ref": "#/$defs/pad_to" }
       }
@@ -340,14 +347,13 @@
       }
     },
     "tlv_member": {
-      "description": "One member of a TLV structure or one alternative of a union. 'name' is the member's display name and path token; 'filter_name' overrides the registered field name (filter string); 'ui_name' overrides the display name.",
+      "description": "One member of a TLV structure or one alternative of a union. 'name' is used unchanged as one segment of the filter name and defaults to 'member_<id>' (TLV) or the referenced type's name (union); 'ui_name' is the display name.",
       "type": "object",
       "additionalProperties": false,
       "required": [ "type_reference" ],
       "properties": {
-        "name": { "description": "Member name; defaults to 'member_<id>'.", "type": "string", "minLength": 1 },
-        "filter_name": { "description": "Registered field name (filter string) override.", "type": "string", "minLength": 1, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
-        "ui_name": { "description": "Display name override; defaults to 'name'.", "type": "string", "minLength": 1 },
+        "name": { "description": "Member name; used unchanged as one segment of the filter name. Defaults to 'member_<id>'.", "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "ui_name": { "description": "Display name; defaults to 'name'. An empty value or one with a control character is reported and the name is shown.", "type": "string", "minLength": 1 },
         "type_reference": { "$ref": "#/$defs/type_reference" }
       }
     },
@@ -406,9 +412,8 @@
       "additionalProperties": false,
       "required": [ "name" ],
       "properties": {
-        "name": { "description": "Bit name; also the source of its path token.", "type": "string", "minLength": 1 },
-        "filter_name": { "description": "Registered field name (filter string) override.", "type": "string", "minLength": 1, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
-        "ui_name": { "description": "Display name override; defaults to 'name'.", "type": "string", "minLength": 1 }
+        "name": { "description": "Bit name; used unchanged as one segment of the filter name.", "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "ui_name": { "description": "Display name; defaults to 'name'. An empty value or one with a control character is reported and the name is shown.", "type": "string", "minLength": 1 }
       }
     },
     "alias_type": {

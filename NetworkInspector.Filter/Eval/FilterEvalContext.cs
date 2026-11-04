@@ -302,8 +302,9 @@ internal sealed class FilterEvalContext
         foreach (FieldId fieldId in accessor.Fields)
         {
             FieldLookupCookie cookie = FieldLookupCookie.Start;
-            while (packet.TryGetNextFieldValue(fieldId, ref cookie, out FieldValue value, materialize: true))
+            while (packet.TryGetNextField(fieldId, ref cookie, out Field valueField, materialize: true))
             {
+                ref readonly FieldValue value = ref valueField.Value;
                 if (accessor.TryTransform(value.Data, out FieldValueData transformed)
                     && predicate.Test(transformed))
                 {

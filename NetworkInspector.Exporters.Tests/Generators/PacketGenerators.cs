@@ -28,7 +28,7 @@ internal static class PacketGenerators
         }
 
         Frame frame = TestHarness.CreateFrame(
-            new FrameId(frameId), timestampNanos, frameData, linkType);
+            frameId, timestampNanos, frameData, linkType);
 
         return TestHarness.ParseFrame(frame);
     }
@@ -80,7 +80,47 @@ internal static class PacketGenerators
         {
             byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(payloadSize);
             frames[i] = TestHarness.CreateFrame(
-                new FrameId(i), (long)i * 1_000_000, frameData);
+                i, (long)i * 1_000_000, frameData);
+        }
+
+        return frames;
+    }
+
+    /// <summary>
+    /// Creates an IPv4-in-IPv4 UDP frame: two <c>ip.src</c> values, outer 10.0.0.1 first and inner 192.168.0.1 second.
+    /// </summary>
+    /// <param name="id">Frame id; the timestamp is one millisecond per id.</param>
+    internal static Frame CreateTunnelFrame(int id = 0) =>
+        TestHarness.CreateFrame(
+            id, (long)id * 1_000_000, FrameGenerators.BuildIpInIpUdpFrame(0x0A000001, 0xC0A80001));
+
+    /// <summary>Creates a classic SocketCAN frame (id 0x123, 8 data bytes): a packet without any <c>ip.src</c>.</summary>
+    /// <param name="id">Frame id; the timestamp is one millisecond per id.</param>
+    internal static Frame CreateCanFrame(int id = 0)
+    {
+        byte[] data = new byte[16];
+        BinaryPrimitives.WriteUInt32BigEndian(data, 0x123u);
+        data[4] = 8;
+        return TestHarness.CreateFrame(id, (long)id * 1_000_000, data, LinkType.CanSocketcan);
+    }
+
+    /// <summary>
+    /// Creates frames in the fixed order UDP, tunnel, CAN (repeated) for tree-free parses: plain packets, a packet with two values
+    /// of the same field, and a packet of another protocol family.
+    /// </summary>
+    /// <param name="count">Number of frames.</param>
+    internal static Frame[] CreateMixedFrames(int count)
+    {
+        Frame[] frames = new Frame[count];
+        for (int i = 0; i < count; i++)
+        {
+            frames[i] = (i % 3) switch
+            {
+                0 => TestHarness.CreateFrame(
+                    i, (long)i * 1_000_000, FrameGenerators.BuildEthernetIpv4UdpFrame(32)),
+                1 => CreateTunnelFrame(i),
+                _ => CreateCanFrame(i),
+            };
         }
 
         return frames;

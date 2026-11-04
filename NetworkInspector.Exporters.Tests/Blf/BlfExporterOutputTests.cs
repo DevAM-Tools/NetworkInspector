@@ -25,7 +25,7 @@ internal sealed class BlfExporterOutputTests
             .Build())
         {
             byte[] canData = SocketCanGenerators.BuildCanClassic(0x123, [0x01, 0x02]);
-            exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, canData, LinkType.CanSocketcan));
+            exporter.OnFrame(TestHarness.CreateFrame(0, 1_000_000_000L, canData, LinkType.CanSocketcan));
             exporter.OnFinish();
         }
 
@@ -48,7 +48,7 @@ internal sealed class BlfExporterOutputTests
             .Build())
         {
             byte[] canData = SocketCanGenerators.BuildCanClassic(0x123, [0x01, 0x02]);
-            exporter.OnFrame(TestHarness.CreateFrame(new FrameId(0), 1_000_000_000L, canData, LinkType.CanSocketcan));
+            exporter.OnFrame(TestHarness.CreateFrame(0, 1_000_000_000L, canData, LinkType.CanSocketcan));
             exporter.OnFinish();
         }
 

@@ -24,6 +24,10 @@ namespace NetworkInspector.Core.Fields;
 /// observer should be paired with the narrowest watch it needs.
 /// </para>
 /// <para>
+/// <b>Replays:</b> observers are called on every parse of a frame, including replays; the value cache and the index record only on
+/// the first parse unless <see cref="ParseOptions.RecordOnReplay"/> is set.
+/// </para>
+/// <para>
 /// <b>Thread-safety:</b> the parse calls one observer from the thread that called
 /// <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>.
 /// Do not pass one instance into two overlapping parses.
@@ -39,8 +43,30 @@ public interface IFieldObserver
     void BeginPacket(PacketId id, Timestamp timestamp);
 
     /// <summary>One produced field. Not called for the synthetic packet root.</summary>
-    /// <param name="visit">Identity, value, and, when a tree was kept, a cursor. Valid only for this call.</param>
+    /// <param name="visit">Identity, value, custom text, and, when a tree was kept, a cursor. Valid only for this call.</param>
     void OnField(in FieldVisit visit);
+
+    /// <summary>
+    /// The parse of this frame ended — also when the dissectors recorded parse errors (those are fields) — and the packet is
+    /// not sealed yet. Called exactly once for every <see cref="BeginPacket"/> that ran, on the parse thread.
+    /// </summary>
+    /// <param name="id">The packet id of the matching <see cref="BeginPacket"/>.</param>
+    /// <param name="complete">
+    /// <see langword="false"/> when the observers of this packet were muted (an observer threw in BeginPacket or OnField) or
+    /// the parse aborted; the observer then did not receive every field and must not treat the packet as complete.
+    /// </param>
+    /// <remarks>
+    /// <b>Why:</b> a consumer that collects fields during the parse (a tree-free export) needs a point where the packet's
+    /// fields are complete, to close or discard what it staged and to evaluate deferred custom texts — a deferred text may
+    /// be completed by the dissector after the field was appended, but always before this call. Every observer implements
+    /// it: the member is required, so an observer that forgets it fails to compile instead of leaking staged state. An
+    /// observer with no per-packet state leaves the body empty. An exception thrown here is recorded like the other observer
+    /// failures: as a <c>packet.error</c> field when the parse keeps a tree, and in an attached value cache that records
+    /// <c>packet.error</c>; a parse without tree and without such a cache keeps no trace. The remaining observers still get their
+    /// call. Fields that an end call expands (a tree read with <c>materialize: true</c>) reach the tree and the cache, but no
+    /// observer: the observers are detached before the first end call.
+    /// </remarks>
+    void EndPacket(PacketId id, bool complete);
 
     #endregion
 }

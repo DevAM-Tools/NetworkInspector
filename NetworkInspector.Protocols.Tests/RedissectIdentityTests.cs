@@ -85,7 +85,7 @@ internal sealed class RedissectIdentityTests
 
         ParseOptions options = new();
         bool jumped = Packet.TryParse(
-            new PacketId(2),
+            2,
             stack,
             _CreateFrame(stack, _BuildUdpFrame(srcPort: 2000), 2),
             in options,
@@ -119,7 +119,7 @@ internal sealed class RedissectIdentityTests
 
         Packet recycled = _ParseExpected(stack, frame0, 0);
         ParseOptions options = new();
-        bool recycledOk = Packet.TryParse(recycled, new PacketId(1), stack, frame1, in options, out ParseFailure failure);
+        bool recycledOk = Packet.TryParse(recycled, 1, stack, frame1, in options, out ParseFailure failure);
         await Assert.That(recycledOk).IsTrue();
         await Assert.That(failure).IsEqualTo(ParseFailure.None);
 
@@ -348,7 +348,7 @@ internal sealed class RedissectIdentityTests
     private static Packet _ParseExpected(Stack stack, Frame frame, int packetId, ProtocolId? firstProtocol = null)
     {
         ParseOptions options = new(firstProtocol: firstProtocol);
-        PacketId id = new(packetId);
+        PacketId id = packetId;
         if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
@@ -425,7 +425,7 @@ internal sealed class RedissectIdentityTests
 
     private static Frame _CreateFrameAt(Stack stack, byte[] frameData, int index, Timestamp timestamp) =>
         Frame.Create(
-            new FrameId(index),
+            index,
             timestamp,
             frameData,
             LinkType.Ethernet,

@@ -50,7 +50,11 @@ internal sealed class PcapNgFormatConcurrencyTests
             readers[r] = new Thread(() =>
             {
                 System.Random random = new(seed);
-                while (Volatile.Read(ref done) == 0)
+
+                // The file is tiny, so on a loaded machine the scan can end before a reader thread has started. Keep looking up
+                // until one lookup was made at all: after the scan every section is published, so the checks stay valid and the
+                // assertion on the lookup count cannot fail by timing.
+                while (Volatile.Read(ref done) == 0 || Volatile.Read(ref lookups) == 0)
                 {
                     int published = format.SectionCount;
                     int s = random.Next(published);

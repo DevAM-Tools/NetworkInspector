@@ -3,8 +3,9 @@
 namespace NetworkInspector.Core.Tests;
 
 /// <summary>
-/// The contract of <see cref="LazyString"/>: built only on first read, built once per storage location, one string for
-/// concurrent first readers, a copy caches into the copy, a faulting factory caches empty, and absent versus empty.
+/// The contract of <see cref="LazyString"/>: built only on first read, built once however many copies exist, one string for
+/// concurrent first readers (of one location or of different copies), a copy keeps the deferred object, a faulting factory
+/// caches empty, and absent versus empty.
 /// </summary>
 internal sealed class LazyStringSemanticsTests
 {
@@ -112,7 +113,7 @@ internal sealed class LazyStringSemanticsTests
     }
 
     [Test]
-    public async Task EvaluatingACopyDoesNotCacheIntoTheOriginal()
+    public async Task EvaluatingACopyKeepsTheOriginalDeferredButBuildsTheStringOnlyOnce()
     {
         int calls = 0;
         LazyString[] storage = [LazyString.Lazy(() =>
@@ -128,8 +129,80 @@ internal sealed class LazyStringSemanticsTests
 
         await Assert.That(fromCopy).IsEqualTo("copy");
         await Assert.That(originalStillLazy).IsTrue();
-        await Assert.That(fromOriginal).IsEqualTo("copy");
-        await Assert.That(calls).IsEqualTo(2);
+        await Assert.That(ReferenceEquals(fromCopy, fromOriginal)).IsTrue();
+        await Assert.That(calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task EveryCopyOfAFormatLazyTextSharesOneBuild()
+    {
+        int[] calls = new int[1];
+        LazyString original = LazyString.FormatLazy(
+            calls,
+            static counter =>
+            {
+                Interlocked.Increment(ref counter[0]);
+                return new string('f', 5);
+            });
+        LazyString copyA = original;
+        LazyString copyB = original;
+
+        string fromB = copyB.AsString;
+        string fromA = copyA.AsString;
+        string fromOriginal = original.AsString;
+
+        await Assert.That(calls[0]).IsEqualTo(1);
+        await Assert.That(ReferenceEquals(fromA, fromB)).IsTrue();
+        await Assert.That(ReferenceEquals(fromA, fromOriginal)).IsTrue();
+    }
+
+    [Test]
+    public async Task ConcurrentFirstReadersOfDifferentCopiesSeeOneString()
+    {
+        int[] calls = new int[1];
+        LazyString original = LazyString.FormatLazy(
+            calls,
+            static counter =>
+            {
+                Interlocked.Increment(ref counter[0]);
+                return new string('c', 16);
+            });
+
+        // Each reader owns its copy, so the only shared thing is the deferred object: the memo there must hand every thread
+        // the same instance. Dedicated threads for the barrier, as in EightConcurrentFirstReadersSeeOneString.
+        const int readerCount = 8;
+        using Barrier barrier = new(readerCount);
+        string[] results = new string[readerCount];
+        Thread[] readers = new Thread[readerCount];
+        for (int i = 0; i < readers.Length; i++)
+        {
+            int slot = i;
+            LazyString copy = original;
+            readers[i] = new Thread(() =>
+            {
+                barrier.SignalAndWait();
+                results[slot] = copy.AsString;
+            })
+            {
+                IsBackground = true,
+                Name = "LazyStringCopyReader" + slot.ToString(CultureInfo.InvariantCulture),
+            };
+            readers[i].Start();
+        }
+
+        foreach (Thread reader in readers)
+        {
+            reader.Join();
+        }
+
+        await Assert.That(calls[0]).IsGreaterThanOrEqualTo(1);
+        await Assert.That(calls[0]).IsLessThanOrEqualTo(readerCount);
+        foreach (string result in results)
+        {
+            await Assert.That(ReferenceEquals(result, results[0])).IsTrue();
+        }
+
+        await Assert.That(ReferenceEquals(original.AsString, results[0])).IsTrue();
     }
 
     [Test]

@@ -9,28 +9,28 @@ namespace NetworkInspector.Exporters.Tests.Pbf;
 internal sealed class PbfExporterTests
 {
     [Test]
-    public async Task Builder_RequiresOutput()
+    public async Task BuilderRequiresOutput()
     {
         PbfExporter.Builder builder = PbfExporter.CreateBuilder();
         await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task Builder_MaxPacketsPerBlock_RejectsZero()
+    public async Task BuilderMaxPacketsPerBlockRejectsZero()
     {
         PbfExporter.Builder builder = PbfExporter.CreateBuilder();
         await Assert.That(() => builder.WithMaxPacketsPerBlock(0)).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
-    public async Task Builder_MaxPacketsPerBlock_RejectsNegative()
+    public async Task BuilderMaxPacketsPerBlockRejectsNegative()
     {
         PbfExporter.Builder builder = PbfExporter.CreateBuilder();
         await Assert.That(() => builder.WithMaxPacketsPerBlock(-1)).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
-    public async Task StandardFormat_ProducesValidPbf()
+    public async Task StandardFormatProducesValidPbf()
     {
         using TestDir dir = new("pbf_standard");
         string path = dir.FilePath("output.pbf");
@@ -55,7 +55,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task ColumnarFormat_ProducesValidPbf()
+    public async Task ColumnarFormatProducesValidPbf()
     {
         using TestDir dir = new("pbf_columnar");
         string path = dir.FilePath("output.pbf");
@@ -80,7 +80,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task CompressedFormat_ProducesValidPbf()
+    public async Task CompressedFormatProducesValidPbf()
     {
         using TestDir dir = new("pbf_compressed");
         string path = dir.FilePath("output.pbf");
@@ -106,7 +106,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task StreamOutput_ProducesValidPbf()
+    public async Task StreamOutputProducesValidPbf()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -142,7 +142,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task BlockBoundary_RespectedBySmallLimit()
+    public async Task BlockBoundaryRespectedBySmallLimit()
     {
         using TestDir dir = new("pbf_block_boundary");
         string path = dir.FilePath("output.pbf");
@@ -171,7 +171,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task EmptyExport_ProducesValidMagicWrappers()
+    public async Task EmptyExportProducesValidMagicWrappers()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -202,7 +202,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task DefaultUiName_IsPbfExporter()
+    public async Task DefaultUiNameIsPbfExporter()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -213,7 +213,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task WithUiName_OverridesDefault()
+    public async Task WithUiNameOverridesDefault()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -229,7 +229,8 @@ internal sealed class PbfExporterTests
     // ========================================================================
 
     [Test]
-    public async Task Cancellation_StopsExport()
+    [Category("Slow")]
+    public async Task CancellationStopsExport()
     {
         using CancellationTokenSource cts = new();
         using MemoryStream ms = new();
@@ -253,7 +254,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task IsFinished_TrueAfterCancellation()
+    public async Task IsFinishedTrueAfterCancellation()
     {
         using CancellationTokenSource cts = new();
         using MemoryStream ms = new();
@@ -273,7 +274,8 @@ internal sealed class PbfExporterTests
     // ========================================================================
 
     [Test]
-    public async Task TargetPacketCount_LimitsExport()
+    [Category("Slow")]
+    public async Task TargetPacketCountLimitsExport()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -294,7 +296,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task IsFinished_TrueAfterTargetReached()
+    public async Task IsFinishedTrueAfterTargetReached()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -318,7 +320,7 @@ internal sealed class PbfExporterTests
     // ========================================================================
 
     [Test]
-    public async Task IsFinished_FalseBeforeOnFinish()
+    public async Task IsFinishedFalseBeforeOnFinish()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -330,7 +332,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task IsFinished_TrueAfterOnFinish()
+    public async Task IsFinishedTrueAfterOnFinish()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -344,7 +346,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task OnPacket_AfterFinish_ReturnsFalse()
+    public async Task OnPacketAfterFinishReturnsFalse()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -361,7 +363,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task DoubleFinish_IsIdempotent()
+    public async Task DoubleFinishIsIdempotent()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -385,7 +387,7 @@ internal sealed class PbfExporterTests
     // ========================================================================
 
     [Test]
-    public async Task Statistics_TracksWrittenCount()
+    public async Task StatisticsTracksWrittenCount()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -414,7 +416,7 @@ internal sealed class PbfExporterTests
     // ========================================================================
 
     [Test]
-    public async Task Description_ReturnsNull_WhenNotSet()
+    public async Task DescriptionReturnsNullWhenNotSet()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -426,7 +428,7 @@ internal sealed class PbfExporterTests
     }
 
     [Test]
-    public async Task Description_ReturnsConfiguredValue()
+    public async Task DescriptionReturnsConfiguredValue()
     {
         using MemoryStream ms = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
@@ -536,7 +538,7 @@ internal sealed class PbfExporterTests
     /// </list>
     /// </summary>
     [Test]
-    public async Task BlockIndex_Consistency_FailedBlockWrite_NotCountedInBlockIndex()
+    public async Task BlockIndexConsistencyFailedBlockWriteNotCountedInBlockIndex()
     {
         // Create all packets once so the same already-parsed field IDs are used in
         // both the probe measurement phase and the actual export phase.  Reusing the
@@ -557,6 +559,7 @@ internal sealed class PbfExporterTests
                 .ToStream(probe)
                 .WithCompressed(false)
                 .WithMaxPacketsPerBlock(1)
+                .WithWriteMode(ExportWriteMode.Synchronous) // the byte measurement below needs the block written inside OnPacket
                 .WithTrailerIndex(true)
                 .Build();
 
@@ -584,6 +587,7 @@ internal sealed class PbfExporterTests
             .ToStream(failing)
             .WithCompressed(false)
             .WithMaxPacketsPerBlock(1)
+            .WithWriteMode(ExportWriteMode.Synchronous)
             .WithTrailerIndex(true)
             .Build();
         exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;

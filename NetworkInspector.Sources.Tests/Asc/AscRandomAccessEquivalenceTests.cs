@@ -135,7 +135,7 @@ internal sealed class AscRandomAccessEquivalenceTests
             {
                 for (int s = 0; s < sourceCount && mismatch is null; s++)
                 {
-                    Frame? actual = sources[s].FrameById(new FrameId(id));
+                    Frame? actual = sources[s].FrameById(id);
                     if (actual is null || !RandomAccessEquivalence.SameFrame(expected[s][id], actual.Value))
                     {
                         mismatch = Invariant($"source {s}, id {id}");
@@ -535,7 +535,7 @@ internal sealed class AscRandomAccessEquivalenceTests
     {
         foreach (int id in ids)
         {
-            Frame? actual = source.FrameById(new FrameId(id));
+            Frame? actual = source.FrameById(id);
             if (actual is null || !RandomAccessEquivalence.SameFrame(sequential[id], actual.Value))
             {
                 return Invariant($"{label}: FrameById({id}) differs from the sequential frame.");

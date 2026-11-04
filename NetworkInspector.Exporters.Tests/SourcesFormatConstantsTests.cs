@@ -9,7 +9,7 @@ namespace NetworkInspector.Exporters.Tests;
 internal sealed class SourcesFormatConstantsTests
 {
     [Test]
-    public async Task BlfConstants_FileMagicBytes_MatchesExpectedValue()
+    public async Task BlfConstantsFileMagicBytesMatchesExpectedValue()
     {
         byte[] magic = BlfConstants.FileMagicBytes.ToArray();
 
@@ -21,7 +21,7 @@ internal sealed class SourcesFormatConstantsTests
     }
 
     [Test]
-    public async Task BlfConstants_ObjectMagicBytes_MatchesExpectedValue()
+    public async Task BlfConstantsObjectMagicBytesMatchesExpectedValue()
     {
         byte[] magic = BlfConstants.ObjectMagicBytes.ToArray();
 
@@ -33,7 +33,7 @@ internal sealed class SourcesFormatConstantsTests
     }
 
     [Test]
-    public async Task BlfConstants_CanFdPayloadLengthToDlc_TableIsPopulated()
+    public async Task BlfConstantsCanFdPayloadLengthToDlcTableIsPopulated()
     {
         byte[] table = BlfConstants.CanFdPayloadLengthToDlc.ToArray();
 
@@ -49,7 +49,7 @@ internal sealed class SourcesFormatConstantsTests
     [Arguments(BlfConstants.ObjTypeCanXlChannelFrame, true)]
     [Arguments(BlfConstants.ObjTypeCanXlChannelErrorFrame, false)]
     [Arguments(0xFFFFFFFFu, false)]
-    public async Task BlfConstants_IsFrameProducingType_ClassifiesObjectTypes(uint objectType, bool expected)
+    public async Task BlfConstantsIsFrameProducingTypeClassifiesObjectTypes(uint objectType, bool expected)
     {
         await Assert.That(BlfConstants.IsFrameProducingType(objectType)).IsEqualTo(expected);
     }
@@ -58,7 +58,7 @@ internal sealed class SourcesFormatConstantsTests
     [Arguments(PcapConstants.BlockTypeSHB, true)]
     [Arguments(PcapConstants.BlockTypeEPB, true)]
     [Arguments(0xDEADBEEFu, false)]
-    public async Task PcapConstants_IsKnownBlockType_ClassifiesBlockTypes(uint blockType, bool expected)
+    public async Task PcapConstantsIsKnownBlockTypeClassifiesBlockTypes(uint blockType, bool expected)
     {
         await Assert.That(PcapConstants.IsKnownBlockType(blockType)).IsEqualTo(expected);
     }
@@ -68,7 +68,7 @@ internal sealed class SourcesFormatConstantsTests
     [Arguments(PcapConstants.BlockTypeSPB, true)]
     [Arguments(PcapConstants.BlockTypePB, true)]
     [Arguments(PcapConstants.BlockTypeSHB, false)]
-    public async Task PcapConstants_IsPacketBlock_ClassifiesPacketBlocks(uint blockType, bool expected)
+    public async Task PcapConstantsIsPacketBlockClassifiesPacketBlocks(uint blockType, bool expected)
     {
         await Assert.That(PcapConstants.IsPacketBlock(blockType)).IsEqualTo(expected);
     }
@@ -87,7 +87,7 @@ internal sealed class SourcesFormatConstantsTests
     [Arguments(PcapConstants.BlockTypeCBCopy, "Custom Block (copyable)")]
     [Arguments(PcapConstants.BlockTypeCBNoCopy, "Custom Block (non-copyable)")]
     [Arguments(0x12345678u, "Unknown Block (0x12345678)")]
-    public async Task PcapConstants_BlockTypeName_ReturnsReadableName(uint blockType, string expected)
+    public async Task PcapConstantsBlockTypeNameReturnsReadableName(uint blockType, string expected)
     {
         await Assert.That(PcapConstants.BlockTypeName(blockType)).IsEqualTo(expected);
     }
@@ -96,13 +96,13 @@ internal sealed class SourcesFormatConstantsTests
     [Arguments(0, 4)]
     [Arguments(1, 8)]
     [Arguments(5, 12)]
-    public async Task PcapPadding_OptionSize_ComputesTlvSize(int valueLength, int expected)
+    public async Task PcapPaddingOptionSizeComputesTlvSize(int valueLength, int expected)
     {
         await Assert.That(PcapPadding.OptionSize(valueLength)).IsEqualTo(expected);
     }
 
     [Test]
-    public async Task PcapPadding_OptionSize_NegativeLength_ThrowsArgumentOutOfRangeException()
+    public async Task PcapPaddingOptionSizeNegativeLengthThrowsArgumentOutOfRangeException()
     {
         await Assert.That(() => PcapPadding.OptionSize(-1)).Throws<ArgumentOutOfRangeException>();
     }

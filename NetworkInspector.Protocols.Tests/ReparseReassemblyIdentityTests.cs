@@ -113,7 +113,7 @@ internal sealed class ReparseReassemblyIdentityTests
     private static Packet _ParseExpected(Stack stack, Frame frame, int packetId)
     {
         ParseOptions options = new();
-        PacketId id = new(packetId);
+        PacketId id = packetId;
         if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
@@ -236,7 +236,7 @@ internal sealed class ReparseReassemblyIdentityTests
 
     private static Frame _CreateFrame(Stack stack, byte[] frameData, int index) =>
         Frame.Create(
-            new FrameId(index),
+            index,
             Timestamp.FromSecs(index),
             frameData,
             LinkType.Ethernet,

@@ -35,6 +35,10 @@ namespace NetworkInspector.Protocols.SomeIp;
 /// <param name="TpMaxSessions">Open segmented-message sessions (<c>someip.tp_max_sessions</c>).</param>
 /// <param name="TpMaxMessageSize">Size of one segmented message in bytes (<c>someip.tp_max_message_size</c>).</param>
 /// <param name="TpMaxBufferedBytes">Bytes held by all open sessions (<c>someip.tp_max_buffered_bytes</c>).</param>
+/// <param name="TpMaxDerivedBytesPerPacket">
+/// Bytes of reassembled messages that one packet binds in total (<c>someip.tp_max_derived_bytes_per_packet</c>). A negative value
+/// counts as 0 (every message is refused), never as unlimited.
+/// </param>
 /// <param name="TcpMaxMessageSize">Size of one message of a TCP stream in bytes (<c>someip.tcp_max_message_size</c>).</param>
 /// <param name="ConfigMaxServices">Services accepted from a configuration file (<c>someip.config_max_services</c>).</param>
 /// <param name="ConfigMaxTypes">Types accepted from a configuration file (<c>someip.config_max_types</c>).</param>
@@ -56,6 +60,7 @@ public readonly record struct SomeIpSettings(
     int TpMaxSessions,
     int TpMaxMessageSize,
     long TpMaxBufferedBytes,
+    long TpMaxDerivedBytesPerPacket,
     int TcpMaxMessageSize,
     int ConfigMaxServices,
     int ConfigMaxTypes,
@@ -83,6 +88,7 @@ public readonly record struct SomeIpSettings(
         TpMaxSessions: (int)SomeIpLimits.TpMaxSessions.Default,
         TpMaxMessageSize: (int)SomeIpLimits.TpMaxMessageSize.Default,
         TpMaxBufferedBytes: (long)SomeIpLimits.TpMaxBufferedBytes.Default,
+        TpMaxDerivedBytesPerPacket: (long)SomeIpLimits.TpMaxDerivedBytesPerPacket.Default,
         TcpMaxMessageSize: (int)SomeIpLimits.TcpMaxMessageSize.Default,
         ConfigMaxServices: (int)SomeIpLimits.ConfigMaxServices.Default,
         ConfigMaxTypes: (int)SomeIpLimits.ConfigMaxTypes.Default,

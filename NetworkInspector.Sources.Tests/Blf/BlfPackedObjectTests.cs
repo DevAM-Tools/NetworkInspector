@@ -97,7 +97,7 @@ internal sealed class BlfPackedObjectTests
         await Assert.That(fileFrames[0].Data.Span.SequenceEqual(ethernet)).IsTrue();
         await Assert.That(streamFrames[0].Data.Span.SequenceEqual(ethernet)).IsTrue();
 
-        Frame? byId = fileSource.FrameById(new FrameId(0));
+        Frame? byId = fileSource.FrameById(0);
         await Assert.That(byId).IsNotNull();
         await Assert.That(byId!.Value.Data.Span.SequenceEqual(ethernet)).IsTrue();
     }

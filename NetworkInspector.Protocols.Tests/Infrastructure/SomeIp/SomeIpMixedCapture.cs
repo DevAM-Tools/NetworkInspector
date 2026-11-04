@@ -66,10 +66,10 @@ internal sealed class SomeIpMixedCapture : SomeIpPayloadKit
 
     private static string _BuildConfig() => Json(
         Join(
-            Method(1, "Seq", Sites(Site("a", "uint8"), Site("b", "i16le"), Site("c", "state_t"), Site("d", "words_t"), Site("e", "rec"), Site("f", "string")), Sites(Site("r", "uint8"))),
-            Method(2, "Tlv", "[]", "{\"1\":{\"name\":\"t1\",\"type_reference\":\"uint8\"},\"2\":{\"name\":\"t2\",\"type_reference\":\"string\"},\"3\":{\"name\":\"t3\",\"type_reference\":\"uint16\"}}"),
-            Method(3, "Uni", "[]", Sites(Site("u", "union_t"), Site("flags", "flags_t"))),
-            Method(5, "Prot", Sites(Site("a", "uint8"), Site("b", "uint16")), "[]", ",\"e2e_profile\":\"04\""),
+            Method(1, "seq", Sites(Site("a", "uint8"), Site("b", "i16le"), Site("c", "state_t"), Site("d", "words_t"), Site("e", "rec"), Site("f", "string")), Sites(Site("r", "uint8"))),
+            Method(2, "tlv", "[]", "{\"1\":{\"name\":\"t1\",\"type_reference\":\"uint8\"},\"2\":{\"name\":\"t2\",\"type_reference\":\"string\"},\"3\":{\"name\":\"t3\",\"type_reference\":\"uint16\"}}"),
+            Method(3, "uni", "[]", Sites(Site("u", "union_t"), Site("flags", "flags_t"))),
+            Method(5, "prot", Sites(Site("a", "uint8"), Site("b", "uint16")), "[]", ",\"e2e_profile\":\"04\""),
             "{\"kind\":\"event\",\"id\":4,\"name\":\"Ev\",\"type_reference\":\"flags_t\"}"),
         Join(
             "{\"category\":\"base_type\",\"name\":\"i16le\",\"type_reference\":\"int16\",\"byte_order\":\"little_endian\"}",

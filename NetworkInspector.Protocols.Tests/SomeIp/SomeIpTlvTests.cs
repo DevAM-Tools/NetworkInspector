@@ -58,7 +58,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task TheMetadataViewShowsTheTagWithItsThreeParts()
     {
-        string methods = Method(1, "Tag", "[]", _Tlv((7, "speed", "uint32"), (0xABC, "flag", "uint8")));
+        string methods = Method(1, "tag", "[]", _Tlv((7, "speed", "uint32"), (0xABC, "flag", "uint8")));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods), ("someip.show_type_metadata", SettingValue.Bool(true)));
         byte[] payload = _WithTag(_WithTag(new(), 2, 7).U32(500), 0, 0xABC, reserved: true).U8(1).ToArray();
 
@@ -78,7 +78,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task WireTypesZeroToThreeConsumeOneTwoFourAndEightValueBytes()
     {
-        string methods = Method(1, "Fixed", "[]", _Tlv((1, "a", "uint8"), (2, "b", "uint16"), (3, "c", "uint32"), (4, "d", "uint64")));
+        string methods = Method(1, "fixed", "[]", _Tlv((1, "a", "uint8"), (2, "b", "uint16"), (3, "c", "uint32"), (4, "d", "uint64")));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
         SomeIpBytes payload = new();
         _ = _WithTag(payload, 0, 1).U8(0xAA);
@@ -99,7 +99,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task WireTypesFiveToSevenReadAOneTwoOrFourByteLengthField()
     {
-        string methods = Method(1, "Sized", "[]", _Tlv((5, "s5", "string"), (6, "s6", "string"), (7, "s7", "string")));
+        string methods = Method(1, "sized", "[]", _Tlv((5, "s5", "string"), (6, "s6", "string"), (7, "s7", "string")));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
         SomeIpBytes payload = new();
         _ = _WithTag(payload, 5, 5).U8(2).Utf8("ab");
@@ -118,7 +118,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     public async Task WireTypeFourReadsTheLengthFieldOfTheMembersTypeFromTheTypeOrTheMethod()
     {
         string methods = Method(
-            1, "Four", "[]", _Tlv((8, "p", "pair"), (9, "t", "string")), Transform(stringLength: 1, structLength: 2));
+            1, "four", "[]", _Tlv((8, "p", "pair"), (9, "t", "string")), Transform(stringLength: 1, structLength: 2));
         string types = StructType("pair", Site("a", "uint8"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
         SomeIpBytes payload = new();
@@ -135,7 +135,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task WireTypeFourOnATypeWithoutALengthFieldStopsTheWalkWithOneDiagnostic()
     {
-        string methods = Method(1, "Bad", "[]", _Tlv((1, "n", "uint16"), (2, "m", "uint8")));
+        string methods = Method(1, "bad", "[]", _Tlv((1, "n", "uint16"), (2, "m", "uint8")));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
         SomeIpBytes payload = new();
         _ = _WithTag(payload, 4, 1).U16(5);
@@ -157,7 +157,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task MembersComeInAnyOrderAbsentOnesAreNoAnomalyAndARepeatedIdIsAnotherNode()
     {
-        string methods = Method(1, "Any", "[]", _Tlv((1, "a", "uint8"), (2, "t", "string"), (3, "c", "uint16")));
+        string methods = Method(1, "any", "[]", _Tlv((1, "a", "uint8"), (2, "t", "string"), (3, "c", "uint16")));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
         SomeIpBytes reordered = new();
         _ = _WithTag(reordered, 1, 3).U16(0x0102);
@@ -179,7 +179,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task AnUnknownDataIdIsShownAsRawBytesAndTheWalkGoesOn()
     {
-        string methods = Method(1, "Unk", "[]", _Tlv((1, "a", "uint8")));
+        string methods = Method(1, "unk", "[]", _Tlv((1, "a", "uint8")));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
         SomeIpBytes payload = new();
         _ = _WithTag(payload, 2, 9).U32(0xDEADBEEF);
@@ -197,7 +197,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task TheTagLengthReplacesTheInlineLengthOfAStringAStructureAndAnArray()
     {
-        string methods = Method(1, "Supply", Sites(Site("direct", "string")), _Tlv((1, "t", "string"), (2, "p", "pair"), (3, "v", "bytes_t")));
+        string methods = Method(1, "supply", Sites(Site("direct", "string")), _Tlv((1, "t", "string"), (2, "p", "pair"), (3, "v", "bytes_t")));
         string types = Join(StructType("pair", Site("a", "uint8"), Site("b", "uint8")), ArrayType("bytes_t", "uint8"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
         SomeIpBytes payload = new();
@@ -219,7 +219,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task AZeroLengthValueIsAnEmptyNodeAndTheNextTagDecodes()
     {
-        string methods = Method(1, "Zero", "[]", _Tlv((1, "t", "string"), (2, "v", "bytes_t"), (3, "n", "uint32"), (4, "after", "uint8")));
+        string methods = Method(1, "zero", "[]", _Tlv((1, "t", "string"), (2, "v", "bytes_t"), (3, "n", "uint32"), (4, "after", "uint8")));
         string types = ArrayType("bytes_t", "uint8");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
         SomeIpBytes payload = new();
@@ -240,7 +240,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task ATlvStructureDecodesItsTaggedMembersInsideAPlainList()
     {
-        string methods = Method(1, "Nest", Sites(Site("rec", "status"), Site("after", "uint8")), "[]");
+        string methods = Method(1, "nest", Sites(Site("rec", "status"), Site("after", "uint8")), "[]");
         string types = """{"category":"tlv_structure","name":"status","members":{"1":{"name":"a","type_reference":"uint8"},"2":{"name":"b","type_reference":"uint16"}}}""";
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
         SomeIpBytes body = new();
@@ -260,7 +260,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task ATlvMemberAbsentFromAMessageIsInTheGroupOfItsMemberButNotOnTheTree()
     {
-        string methods = Method(1, "Lazy", "[]", _Tlv((1, "a", "uint8"), (3, "c", "uint8")));
+        string methods = Method(1, "lazy", "[]", _Tlv((1, "a", "uint8"), (3, "c", "uint8")));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods));
         byte[] both = _WithTag(_WithTag(new(), 0, 1).U8(1), 0, 3).U8(3).ToArray();
         byte[] onlyThird = _WithTag(new(), 0, 3).U8(3).ToArray();
@@ -269,7 +269,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
         Packet b = s.ParseIndexed(UdpFrame(onlyThird, messageType: 0x80), out PacketIndex indexB);
         Packet c = s.ParseIndexed(UdpFrame(onlyThird, methodId: 77, messageType: 0x80), out PacketIndex indexC);
 
-        string group = Prefix + "lazy.out";
+        string group = GroupPrefix + "lazy.resp";
         await Assert.That(s.HasGroup(indexA, a, group)).IsTrue();
         await Assert.That(s.HasGroup(indexB, b, group)).IsTrue();
         await Assert.That(s.HasGroup(indexC, c, group)).IsFalse();
@@ -289,7 +289,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
         + "{\"category\":\"union\",\"name\":\"record_value\",\"members\":{\"1\":{\"name\":\"odometer\",\"type_reference\":\"u32_le\"},"
         + "\"2\":{\"name\":\"vin\",\"type_reference\":\"vin_t\"},\"3\":{\"name\":\"note\",\"type_reference\":\"note_t\"}}}";
 
-    private static string _RecordMethod() => Method(1, "Rec", Sites(Site("value", "record_value"), Site("after", "uint8")), "[]");
+    private static string _RecordMethod() => Method(1, "rec", Sites(Site("value", "record_value"), Site("after", "uint8")), "[]");
 
     [Test]
     public async Task AUnionDecodesTheAlternativeThatItsSelectorNames()
@@ -346,7 +346,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task AUnionWithSmallerLengthAndSelectorFieldsDecodesAccordingly()
     {
-        string methods = Method(1, "Small", Sites(Site("value", "small_union")), "[]");
+        string methods = Method(1, "small", Sites(Site("value", "small_union")), "[]");
         string types = Join(
             _Union("small_union", """{"1":{"name":"x","type_reference":"uint8"}}""", ",\"size_of_length\":2,\"size_of_type\":1"));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
@@ -364,7 +364,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task ABitfieldShowsTheRawWordAndOneBooleanPerNamedBit()
     {
-        string methods = Method(1, "Flags", "[]", Sites(Site("status", "status_flags")));
+        string methods = Method(1, "flags", "[]", Sites(Site("status", "status_flags")));
         string types = _Bitfield("status_flags", 16, """{"0":{"name":"ready"},"3":{"name":"fault"},"15":{"name":"test_mode"}}""");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types));
 
@@ -383,7 +383,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task ASixtyFourBitBitfieldAndALittleEndianBitfieldDecode()
     {
-        string methods = Method(1, "Wide", "[]", Sites(Site("wide", "wide_t"), Site("le", "le_t")));
+        string methods = Method(1, "wide", "[]", Sites(Site("wide", "wide_t"), Site("le", "le_t")));
         string types = Join(
             _Bitfield("wide_t", 64, """{"63":{"name":"top"},"0":{"name":"bottom"}}"""),
             _Bitfield("le_t", 16, """{"15":{"name":"high"}}""", ",\"byte_order\":\"little_endian\""));
@@ -405,7 +405,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     public async Task EveryPrefixOfATlvUnionAndBitfieldMessageDecodesWithDiagnosticsOnly()
     {
         string methods = Method(
-            1, "Cut", Sites(Site("value", "record_value"), Site("flags", "status_flags")), _Tlv((1, "a", "uint8"), (2, "t", "string"), (3, "n", "uint32")));
+            1, "cut", Sites(Site("value", "record_value"), Site("flags", "status_flags")), _Tlv((1, "a", "uint8"), (2, "t", "string"), (3, "n", "uint32")));
         string types = _RecordTypes + "," + _Bitfield("status_flags", 16, """{"0":{"name":"ready"}}""");
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, types), ("someip.show_type_metadata", SettingValue.Bool(true)));
         SomeIpBytes tlv = new();
@@ -518,7 +518,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     {
         // 60,000 nodes is the largest allowed limit; with the metadata view every element also carries a type node, so the tree
         // would exceed the 65,533 fields a packet may hold. The host must report that instead of throwing.
-        string methods = Method(1, "Huge", "[]", Sites(Site("v", "bytes_t")));
+        string methods = Method(1, "huge", "[]", Sites(Site("v", "bytes_t")));
         string types = ArrayType("bytes_t", "uint8");
         using SomeIpTestStack s = SomeIpTestStack.Create(
             Json(methods, types), ("someip.max_payload_nodes", SettingValue.U64(60_000)), ("someip.show_type_metadata", SettingValue.Bool(true)));
@@ -548,7 +548,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
         }
 
         types.Add(StructType("level1000", Site("leaf", "uint8")));
-        string methods = Method(1, "Deep", Sites(Site("top", "level1")), "[]", Transform(structLength: 0));
+        string methods = Method(1, "deep", Sites(Site("top", "level1")), "[]", Transform(structLength: 0));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, string.Join(",", types)), ("someip.max_type_depth", SettingValue.U64(1024)));
         byte[] frame = UdpFrame([42]);
 
@@ -556,7 +556,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
         {
             Packet packet = s.Parse(frame);
             packet.MaterializeAll();
-            return s.U64s(packet, Prefix + "deep.in.top.next.next.next".Replace(".next.next.next", string.Concat(Enumerable.Repeat(".next", 999)) + ".leaf")).Count;
+            return s.U64s(packet, Prefix + "deep.req.top.next.next.next".Replace(".next.next.next", string.Concat(Enumerable.Repeat(".next", 999)) + ".leaf")).Count;
         }).ConfigureAwait(false);
 
         await Assert.That(nodes).IsEqualTo(1);
@@ -565,7 +565,7 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task ManyUnknownTagsAreBoundedByTheNodeLimit()
     {
-        string methods = Method(1, "Flood", "[]", _Tlv((1, "a", "uint8")));
+        string methods = Method(1, "flood", "[]", _Tlv((1, "a", "uint8")));
         using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods), ("someip.max_payload_nodes", SettingValue.U64(16)));
         SomeIpBytes payload = new();
         for (int i = 0; i < 100; i++)

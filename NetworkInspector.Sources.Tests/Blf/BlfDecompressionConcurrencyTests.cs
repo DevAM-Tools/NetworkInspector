@@ -95,7 +95,7 @@ internal sealed class BlfDecompressionConcurrencyTests
         Frame?[] baseline = new Frame?[framesPerContainer];
         for (int i = 0; i < framesPerContainer; i++)
         {
-            baseline[i] = source.FrameById(new FrameId(i));
+            baseline[i] = source.FrameById(i);
             await Assert.That(baseline[i]).IsNotNull();
         }
 
@@ -105,7 +105,7 @@ internal sealed class BlfDecompressionConcurrencyTests
         Parallel.For(0, rounds * framesPerContainer, idx =>
         {
             int frameIndex = idx % framesPerContainer;
-            Frame? f = source.FrameById(new FrameId(frameIndex));
+            Frame? f = source.FrameById(frameIndex);
             bool match = f.HasValue && f.Value.Data.Span.SequenceEqual(baseline[frameIndex]!.Value.Data.Span);
             results.Add(match);
         });
@@ -145,7 +145,7 @@ internal sealed class BlfDecompressionConcurrencyTests
         Frame?[] baseline = new Frame?[total];
         for (int i = 0; i < total; i++)
         {
-            baseline[i] = source.FrameById(new FrameId(i));
+            baseline[i] = source.FrameById(i);
             await Assert.That(baseline[i]).IsNotNull();
         }
 
@@ -153,7 +153,7 @@ internal sealed class BlfDecompressionConcurrencyTests
         ConcurrentBag<bool> results = [];
         Parallel.For(0, total, i =>
         {
-            Frame? f = source.FrameById(new FrameId(i));
+            Frame? f = source.FrameById(i);
             bool match = f.HasValue && f.Value.Data.Span.SequenceEqual(baseline[i]!.Value.Data.Span);
             results.Add(match);
         });
@@ -184,7 +184,7 @@ internal sealed class BlfDecompressionConcurrencyTests
         using BlfSource source = _CreateSource(blf, new BlfSourceOptions { ScanMode = ScanMode.Full });
         SourceTestFixture.InitializeAndStartSource(source);
 
-        Parallel.For(0, total * 4, idx => source.FrameById(new FrameId(idx % total)));
+        Parallel.For(0, total * 4, idx => source.FrameById(idx % total));
 
         await Assert.That(source.RandomAccessFailureCount).IsEqualTo(0L);
     }
@@ -231,7 +231,7 @@ internal sealed class BlfDecompressionConcurrencyTests
         Frame?[] rawFrames = new Frame?[framesPerContainer];
         for (int i = 0; i < framesPerContainer; i++)
         {
-            rawFrames[i] = source.FrameById(new FrameId(i));
+            rawFrames[i] = source.FrameById(i);
         }
 
         // The raw frames (non-container) must all be readable.
@@ -265,7 +265,7 @@ internal sealed class BlfDecompressionConcurrencyTests
         {
             try
             {
-                _ = source.FrameById(new FrameId(i));
+                _ = source.FrameById(i);
             }
             catch (Exception ex)
             {

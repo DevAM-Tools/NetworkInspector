@@ -129,7 +129,7 @@ public sealed class SomeIpCompiledModel
     {
         if (_FirstServiceById.TryGetValue(serviceId, out int index))
         {
-            name = Services.Span[index].Name;
+            name = Services.Span[index].UiName;
             return true;
         }
 

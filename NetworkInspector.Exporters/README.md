@@ -11,7 +11,8 @@ Write captured frames back to capture files, or parsed packets to analysis forma
 builder pattern and one lifecycle:
 
 - **Frame exporters** (`IFrameListener`) convert captures without parsing: PCAPNG, BLF, ASC.
-- **Packet exporters** (`IPacketListener`) serialize parsed field trees: JSON, CSV, Text, PBF, Parquet.
+- **Packet exporters** (`IPacketListener`) write parsed packets: JSON, CSV, Text, PBF, Parquet. They write selected fields, all
+  fields, or all fields with hierarchy (see Choose What To Export); only the hierarchy needs a field tree.
 - **DuckDB** lives in the add-on package
   [`NetworkInspector.Exporters.DuckDb`](../NetworkInspector.Exporters.DuckDb/README.md).
 
@@ -20,7 +21,7 @@ builder pattern and one lifecycle:
 - **One API for every format.** `CreateBuilder()` → `To…()` → `With…()` → `Build()` → `OnFrame` / `OnPacket` →
   `OnFinish()`. Switching formats is a one-line change.
 - **Round trips you can trust.** PCAPNG interface options, BLF channel names, CAN DLC 9–15, the LIN protected id,
-  and the LIN checksum model survive read → write → read. The round-trip tests are cross-validated with `tshark` 4.6.
+  and the LIN checksum model survive read → write → read. The round-trip tests are cross-validated with an independent reference reader.
 - **Analytics-ready columnar output.** Parquet, DuckDB, and PBF Columnar share one batch model with native
   unsigned 64-bit columns and a field catalog.
 - **No stray files.** Output is opened lazily on the first item, so a filter that matches nothing writes nothing.
@@ -73,13 +74,13 @@ using JsonExporter exporter = JsonExporter.CreateBuilder()
     .Build();
 exporter.ItemSkipped += (_, e) => Console.Error.WriteLine($"#{e.ItemIndex} {e.Kind}: {e.Message}");
 
-// Packet exporters need a field tree: the default ParseOptions builds one.
+// The default ParseOptions builds a field tree, which every packet exporter accepts. Selected-fields exports can skip it (see Choose What To Export).
 // First-parse ids must be dense (0, 1, 2, ...): advance only on success.
 ParseOptions options = new();
 int nextId = 0;
 while (source.NextFrame() is { } frame)
 {
-    if (!Packet.TryParse(new PacketId(nextId), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+    if (!Packet.TryParse(nextId, stack, frame, in options, out Packet? packet, out ParseFailure failure)
         || packet is null)
     {
         Console.Error.WriteLine($"frame {frame.Id.Value}: {failure}");
@@ -127,11 +128,68 @@ while (source.NextFrame() is { } frame)
 exporter.OnFinish();
 ```
 
+## Choose What To Export
+
+Every field exporter (CSV, JSON, Text, PBF, Parquet, DuckDB) takes an `ExportContent` through `WithContent(…)` that says
+**what** to write. The choice also decides **how much parse work** the pipeline has to do:
+
+| Shape | Writes | Parse work |
+| --- | --- | --- |
+| `SelectedFields` | the fields you name, numbered by occurrence | parse without field tree (the exporter watches the fields) |
+| `AllFields` | every field that has a value, numbered by occurrence | parse without field tree (the exporter watches every field) |
+| `Hierarchy` | every node with parent and sibling order | parse with field tree |
+
+The field tree is the leading content of every export. The members of `ExportContent` beyond the shape are additional:
+`Info` (the packet summary line), `CustomText` and `CustomRepresentation` (written only where a dissector set one), and
+`FrameBytes`, which is **off by default**: the tree already holds the parsed bytes of every layer, so a copy of every frame is
+written only on request (`ExportContent.FrameBytes = true`, CLI `frames=true`). Every packet exporter can write it; the
+[exporter guide](EXPORTER_GUIDE.md#14-export-shapes-and-content) lists the form per format (CSV takes it as the
+column `CsvColumnKind.FrameBytes`). `Buffers` is **off by default** too: protocols attach bytes to a packet that the tree shows only
+as parsed values (the datagram a fragment completes, a TCP PDU, a decoded HTTP body, an unmasked WebSocket payload), and with
+`ExportContent.Buffers = true` (CLI `buffers=true`) every packet exporter writes each of them with its index (CSV: the column
+`CsvColumnKind.Buffers`). The frame exporters (PCAPNG, BLF, ASC) have no such option. Both members never change a field row.
+
+```csharp
+// Two fields, first occurrence of each, written to DuckDB. No field tree is built for the export.
+FieldRequest[] requests = [new("ip.src", Occurrences.First), new("udp.dstport", Occurrences.First)];
+if (!FieldSelection.TryCreate(stack, requests, Occurrences.All, out FieldSelection? selection, out FieldSelectionError error))
+{
+    throw new InvalidOperationException(error.Message);
+}
+
+using DuckDbExporter exporter = DuckDbExporter.CreateBuilder()
+    .ToFile("flows.duckdb")
+    .WithContent(new ExportContent { Shape = ExportShape.SelectedFields, Fields = selection })
+    .Build();
+
+// The exporter tells the pipeline what it needs; the plan combines it with the needs of other consumers (a filter, a value cache).
+ParseDemand[] demands = [exporter.ParseDemand];
+if (!ParsePlan.TryCreate(stack, demands, out ParsePlan? plan, out ParsePlanError planError))
+{
+    throw new InvalidOperationException(planError.Message);
+}
+
+ParseOptions options = plan.Options;   // fields only, no tree (2 fields, 1 observer)
+// ... Packet.TryParse(id, stack, frame, in options, ...) then exporter.OnPacket(packet) for every packet, then OnFinish().
+```
+
+- **Occurrences.** A field can appear more than once in a packet (an address in a tunnel). `Occurrences.All` writes every
+  appearance (nothing is dropped silently), `First` and `Last` write one. The occurrence number counts appearances of that field
+  in the packet; it is not a position in the tree.
+- **The same values in every shape.** A selected-fields, an all-fields, and a hierarchy export of one packet carry the same
+  values, types, and custom texts, whether the exporter was fed by a parse without tree or by a walk of the field tree.
+- **A filter costs no tree either.** `FilterObserver.ParseDemand` is the demand of a compiled filter; list it first in the
+  plan and read `TryReadMatch` before you commit the packet. The [exporter guide](EXPORTER_GUIDE.md) (§14, §15) explains the
+  shapes, the demand, and the commit rule in full.
+- **Defaults.** An exporter without `WithContent` writes its `DefaultContent` (the hierarchy shape for the field formats).
+  The other exporters keep `DefaultContent` as the content written without `WithContent`; CSV writes packet rows without it,
+  and its `ContentTemplate` is the starting point for `WithContent`.
+
 ## Choose A Format
 
 | Exporter | Kind | Output | Best for |
 | --- | --- | --- | --- |
-| [`PcapngExporter`](Pcapng/README.md) | Frames | `.pcapng` | Wireshark and capture exchange |
+| [`PcapngExporter`](Pcapng/README.md) | Frames | `.pcapng` | Capture exchange with any PCAPNG reader |
 | [`BlfExporter`](Blf/README.md) | Frames | `.blf` | Vector and automotive toolchains |
 | [`AscExporter`](Asc/README.md) | Frames | `.asc` | Readable bus traces |
 | [`JsonExporter`](Json/README.md) | Packets | `.json` | Scripts and log pipelines |
@@ -159,7 +217,10 @@ keeps the stream open and owns it) and `ToStdout` (the exporter closes stdout wh
   `ItemSkipped` and `HasErrors`; every buffer and the output are still released. If releasing fails,
   `OnFinish()` throws one `AggregateException` after every step ran.
 - Each builder also offers `WithTargetFrameCount` / `WithTargetPacketCount` and `WithCancellationToken`.
-- Packet exporters skip packets parsed with `FieldTreeMode.Skip`.
+- A packet parsed without a field tree is written when the exporter staged its fields through its own observer (selected or
+  all fields) or when it writes packet-level data only (CSV packet rows); an exporter that needs the tree (the hierarchy shape)
+  skips such a packet and raises `ItemSkipped` with `ExportErrorKind.SerializationError` and the message
+  `Skip packets cannot be exported (HasFieldTree is false).` (the same in every exporter with a hierarchy shape).
 
 ## Round Trips
 
@@ -172,12 +233,15 @@ Frames read by `NetworkInspector.Sources` and written back keep their bus fields
 - PCAPNG writes `if_name`, `if_description`, and the `if.*` interface options back, and passes unknown DLT
   values through.
 - BLF start dates use UTC on both sides by default (`BlfExporter.Builder.WithTimestampTimeZone`). Use
-  `TimeZoneInfo.Local` for files that Vector tools or `tshark` will read.
+  `TimeZoneInfo.Local` for files that Vector tools or other readers that assume local time will read.
 - ASC timestamps carry 6 to 9 fraction digits (`AscExporter.Builder.WithTimestampDecimals`, default 6, rounded).
 
 ## Limits And Thread-Safety Notes
 
-- Exporter instances are single-threaded: call `OnFrame` / `OnPacket` / `OnFinish` from one thread.
+- Exporter instances are single-threaded: call `OnFrame` / `OnPacket` / `OnFinish` from one thread. DuckDB, Parquet, PBF,
+  and BLF additionally write full batches on a writer thread of their own (`WithWriteMode(ExportWriteMode.Background)`, the
+  default); a stream passed to them must not be used until `OnFinish` returned. `ExportWriteMode.Synchronous` keeps every
+  write on the calling thread. See the [exporter guide](EXPORTER_GUIDE.md) §9.5.
 - File targets do not create missing parent directories (Parquet creates its own directory) and overwrite
   existing files.
 - Exporters do not validate upstream trust assumptions; validate and bound input at the source and parse boundary.

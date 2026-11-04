@@ -91,7 +91,7 @@ ParseOptions options = new();
 int nextId = 0;
 while (source.NextFrame() is { } frame)
 {
-    if (!Packet.TryParse(new PacketId(nextId), stack, frame, in options, out Packet? packet, out ParseFailure failure)
+    if (!Packet.TryParse(nextId, stack, frame, in options, out Packet? packet, out ParseFailure failure)
         || packet is null)
     {
         Console.Error.WriteLine($"frame {frame.Id.Value}: {failure}");
@@ -150,7 +150,7 @@ index and file in order and request the bytes of the next frames early; every ot
 IRandomAccessFrameSource source = PcapngSource.Open("capture.pcapng");
 // … Start and read as usual …
 Frame?[] frames = new Frame?[64];
-int found = source.FramesById(new FrameId(1_000), frames);   // ids 1 000 … 1 063
+int found = source.FramesById(1_000, frames);   // ids 1 000 … 1 063
 for (int i = 0; i < frames.Length; i++)
 {
     if (frames[i] is Frame frame)

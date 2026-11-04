@@ -278,7 +278,7 @@ internal sealed class FilterOptionTests
         source.Start(registry.RegisterSource(source), registry);
         Frame frame = source.NextFrame()!.Value;
         ParseOptions options = new();
-        PacketId id = new(packetId);
+        PacketId id = packetId;
         if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {
@@ -296,7 +296,7 @@ internal sealed class FilterOptionTests
         source.Start(registry.RegisterSource(source), registry);
         Frame frame = source.NextFrame()!.Value;
         ParseOptions options = new(index: index);
-        PacketId id = new(packetId);
+        PacketId id = packetId;
         if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure)
             || packet is null)
         {

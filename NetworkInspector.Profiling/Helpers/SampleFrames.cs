@@ -123,7 +123,7 @@ internal static class SampleFrames
 
             byte[] frameData = GenerateStaticUdpIpv6Frame(udpSrcPort: srcPort);
             ParseResult<Frame> result = Frame.Create(
-                new FrameId(i),
+                i,
                 Timestamp.FromSecs(i),
                 frameData,
                 LinkType.Ethernet,
@@ -159,7 +159,7 @@ internal static class SampleFrames
         for (int i = 0; i < count; i++)
         {
             ParseResult<Frame> result = Frame.Create(
-                new FrameId(i),
+                i,
                 Timestamp.FromSecs(i),
                 sharedMemory,
                 LinkType.Ethernet,
@@ -323,6 +323,60 @@ internal static class SampleFrames
         return frames;
     }
 
+    /// <summary>Source port of the export-mix UDP frames that the filtered export scenarios match.</summary>
+    internal const ushort ExportMixMatchPort = 53;
+
+    /// <summary>Filter expression of the filtered export scenarios; it matches 2 of every 8 export-mix frames (25 %).</summary>
+    internal const string ExportMixFilter = "udp.srcport == 53";
+
+    /// <summary>
+    /// The export workload of the exporter-rework scenarios: a fixed repeating group of 8 frames — Ethernet/IPv6/UDP of 64 bytes
+    /// (port 12345), 594 bytes (port 53), 1518 bytes (port 12345), 64 bytes (port 53), three SocketCAN classic frames and one
+    /// SocketCAN FD frame. It mixes small and large frames and two link types so the scenarios cover tree size, frame copy cost,
+    /// and dispatch to two protocol families. SOME/IP is not part of the mix: it needs a service description, which would
+    /// make the workload depend on configuration files.
+    /// </summary>
+    /// <remarks>
+    /// The group is fixed (index modulo 8), so every run is byte-identical and the filtered scenarios always match exactly
+    /// <see cref="ExportMixFilter"/> on frames 1 and 5 of each group. Payload arrays exist once per kind and are shared by all
+    /// frames of that kind: Setup allocates a handful of arrays instead of one array per frame, and the measured iterations see
+    /// the same memory layout on every run.
+    /// </remarks>
+    /// <param name="count">Number of frames.</param>
+    /// <param name="stack">Full stack (<see cref="StackHelper.CreateFullStack"/>).</param>
+    internal static Frame[] CreateExportMix(int count, Stack stack)
+    {
+        ReadOnlyMemory<byte> udpSmall = GenerateStaticUdpIpv6Frame(64, udpSrcPort: 12345);
+        ReadOnlyMemory<byte> udpMedium = GenerateStaticUdpIpv6Frame(594, ExportMixMatchPort);
+        ReadOnlyMemory<byte> udpLarge = GenerateStaticUdpIpv6Frame(1518, udpSrcPort: 12345);
+        ReadOnlyMemory<byte> udpSmallMatch = GenerateStaticUdpIpv6Frame(64, ExportMixMatchPort);
+        byte[] can = new byte[_SocketCanSize];
+        BinaryPrimitives.WriteUInt32BigEndian(can, 0x123u);
+        can[4] = 8;
+        byte[] canFd = new byte[_SocketCanFdSize];
+        BinaryPrimitives.WriteUInt32BigEndian(canFd, 0x124u);
+        canFd[4] = 64;
+        canFd[5] = _CanFdFlags;
+
+        Frame[] frames = new Frame[count];
+        for (int i = 0; i < count; i++)
+        {
+            frames[i] = (i % 8) switch
+            {
+                0 => _CreateFrame(i, udpSmall, LinkType.Ethernet, stack),
+                1 => _CreateFrame(i, udpMedium, LinkType.Ethernet, stack),
+                2 => _CreateFrame(i, can, LinkType.CanSocketcan, stack),
+                3 => _CreateFrame(i, udpLarge, LinkType.Ethernet, stack),
+                4 => _CreateFrame(i, can, LinkType.CanSocketcan, stack),
+                5 => _CreateFrame(i, udpSmallMatch, LinkType.Ethernet, stack),
+                6 => _CreateFrame(i, canFd, LinkType.CanSocketcan, stack),
+                _ => _CreateFrame(i, can, LinkType.CanSocketcan, stack),
+            };
+        }
+
+        return frames;
+    }
+
     /// <summary>
     /// Parses each frame in the array into a <see cref="Packet"/> and calls
     /// <see cref="Packet.MaterializeAll"/> to pre-materialise all fields.
@@ -335,7 +389,7 @@ internal static class SampleFrames
         ParseOptions options = new();
         for (int i = 0; i < frames.Length; i++)
         {
-            PacketId id = new(i);
+            PacketId id = i;
             if (!Packet.TryParse(id, stack, frames[i], in options, out Packet? packet, out ParseFailure failure))
             {
                 throw new InvalidOperationException(failure.ToString());
@@ -356,7 +410,7 @@ internal static class SampleFrames
     private static Frame _CreateFrame(int index, ReadOnlyMemory<byte> data, LinkType linkType, Stack stack)
     {
         ParseResult<Frame> result = Frame.Create(
-            new FrameId(index),
+            index,
             new Timestamp(TimestampNanos(index)),
             data,
             linkType,

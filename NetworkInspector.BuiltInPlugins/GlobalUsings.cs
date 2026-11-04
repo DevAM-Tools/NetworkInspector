@@ -35,6 +35,7 @@ global using NetworkInspector.Sources.Random;
 #endregion
 
 #region NetworkInspector.Exporters
+global using NetworkInspector.Exporters;
 global using NetworkInspector.Exporters.Asc;
 global using NetworkInspector.Exporters.Blf;
 global using NetworkInspector.Exporters.Csv;

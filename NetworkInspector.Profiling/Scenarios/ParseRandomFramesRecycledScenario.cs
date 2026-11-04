@@ -88,7 +88,7 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
         // Create the initial seed packet that will be recycled throughout all iterations.
         // This is the only Packet heap allocation in the entire scenario.
         ParseOptions seedOptions = new();
-        PacketId seedId = new(0);
+        PacketId seedId = 0;
         if (!Packet.TryParse(seedId, _Stack, _Frames[0], in seedOptions, out Packet? seeded, out ParseFailure seedFailure))
         {
             throw new InvalidOperationException(seedFailure.ToString());
@@ -115,7 +115,7 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
         {
             for (int i = 0; i < _BatchSize; i++)
             {
-                PacketId id = new(counter + i);
+                PacketId id = counter + i;
                 if (!Packet.TryParse(recycle, id, stack, frames[i], in options, out ParseFailure failure))
                 {
                     throw new InvalidOperationException(failure.ToString());
@@ -128,7 +128,7 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
         {
             for (int i = 0; i < _BatchSize; i++)
             {
-                PacketId id = new(counter + i);
+                PacketId id = counter + i;
                 if (!Packet.TryParse(recycle, id, stack, frames[i], in options, out ParseFailure failure))
                 {
                     throw new InvalidOperationException(failure.ToString());

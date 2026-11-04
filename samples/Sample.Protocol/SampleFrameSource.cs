@@ -187,7 +187,7 @@ internal sealed class SampleFrameSource : IRandomAccessFrameSource, IFrameSource
         FrameInterfaceRegistry registry = _Registry
             ?? throw new InvalidOperationException("SampleFrameSource is not started.");
         Timestamp timestamp = new((_BaseSeconds * 1_000_000_000L) + (index * _NanosPerMilli));
-        ParseResult<Frame> result = Frame.Create(new FrameId(index), timestamp, bytes, LinkType.Ethernet, _InterfaceId, registry);
+        ParseResult<Frame> result = Frame.Create(index, timestamp, bytes, LinkType.Ethernet, _InterfaceId, registry);
 
         // The bytes are always a valid Ethernet frame, so a failure here is a bug in this source.
         return result.IsSuccess

@@ -19,29 +19,34 @@ namespace NetworkInspector.Exporters;
 /// unexpected ID is still compared correctly instead of failing.
 /// </para>
 /// <para>
-/// <b>Thread safety:</b> Not thread-safe; owned by one block builder and used from the exporter's single caller thread.
+/// <b>Thread safety:</b> Not thread-safe; owned by one block builder and so by one thread at a time: the caller's thread compares
+/// and updates it while it fills the block, and in background mode the writer thread resets it after the hand-off (see
+/// <see cref="IExportBatch"/>).
 /// </para>
 /// </summary>
 internal sealed class PreviousFieldValueStore
 {
-    #region Constants
+    #region Configuration and state
 
-    // Largest field count for which the dense array is used. Value 2048; constant. The dense array holds one
-    // Snapshot per field ID for the whole export, so its size grows with the ID space, while the dictionary only
-    // holds IDs that actually occurred. The reason for this particular number is not recorded. Note that
-    // StandardBlockBuilder passes 32 768 (the PBF field ID limit), so in the PBF exporter the dictionary path is
-    // the one that runs.
+    // Largest field count for which the dense array is used: 2048, a constant sizing choice, not a limit. Perf: the dense
+    // array holds one Snapshot (a few tens of bytes) per field ID for the whole export, so 2048 entries cost on the order of
+    // 100 KiB and give one array load per comparison; beyond that the dictionary holds only the IDs that occurred. The caller
+    // passes the field count of its stack, so the dense path runs for every stack up to this size.
+    // PreviousFieldStore uses the same value.
     private const int _DenseThreshold = 2048;
 
-    #endregion
-
-    #region Nested Types
-
-    // Last occurrence of a field. The FieldValueData is kept by value. A string payload is an immutable object, so
-    // sharing it with the packet is safe. A bytes payload is not: it references the array the parser sliced, which may
-    // belong to a buffer the producer reuses once OnPacket has returned, and the snapshot lives until the block ends.
-    // For bytes the snapshot therefore points into OwnedBytes, a private copy that the next occurrence of the same
-    // field overwrites in place when it fits (no allocation in the steady state).
+    /// <summary>
+    /// Last occurrence of a field. The <see cref="FieldValueData"/> is kept by value. A string payload is an immutable object,
+    /// so sharing it with the packet is safe. A bytes payload is not: it references the array the parser sliced, which may
+    /// belong to a buffer the producer reuses once <c>OnPacket</c> has returned, and the snapshot lives until the block ends.
+    /// For bytes the snapshot therefore points into <see cref="OwnedBytes"/>, a private copy that the next occurrence of the
+    /// same field overwrites in place when it fits (no allocation in the steady state).
+    /// </summary>
+    /// <param name="Data">The payload of the occurrence.</param>
+    /// <param name="CustomRepresentation">The custom representation, or null when absent.</param>
+    /// <param name="CustomText">The custom text, or null when absent.</param>
+    /// <param name="HasValue">Whether the occurrence carried a value (false for a container field).</param>
+    /// <param name="OwnedBytes">The private copy a bytes payload points into, or null for every other payload type.</param>
     private readonly record struct Snapshot(
         FieldValueData Data,
         string? CustomRepresentation,
@@ -49,35 +54,35 @@ internal sealed class PreviousFieldValueStore
         bool HasValue,
         byte[]? OwnedBytes)
     {
-        #region Construction
-
+        /// <summary>Creates the snapshot of an occurrence that carried a value.</summary>
+        /// <param name="data">The payload of the occurrence.</param>
+        /// <param name="customRepresentation">The custom representation, or null when absent.</param>
+        /// <param name="customText">The custom text, or null when absent.</param>
+        /// <param name="ownedBytes">The private copy a bytes payload points into, or null.</param>
         internal Snapshot(FieldValueData data, string? customRepresentation, string? customText, byte[]? ownedBytes)
             : this(data, customRepresentation, customText, HasValue: true, ownedBytes)
         {
         }
-
-        #endregion
     }
 
-    #endregion
-
-    #region Fields
-
+    /// <summary>Dense representation: the snapshot per field id; null with the dictionary representation.</summary>
     private readonly Snapshot[]? _DenseValues;
+
+    /// <summary>Dictionary representation: the snapshot per field id; null with the dense representation.</summary>
     private readonly Dictionary<int, Snapshot>? _SparseValues;
+
+    /// <summary>Overflow of the dense representation: snapshots of field ids outside the dense array; created on first use.</summary>
     private Dictionary<int, Snapshot>? _OverflowValues;
-
-    #endregion
-
-    #region Constructor
 
     /// <summary>Creates a store optimized for the given field count.</summary>
     /// <param name="fieldCount">
     /// Number of field IDs expected (IDs <c>0</c> to <c>fieldCount - 1</c>); must not be negative. Selects the dense
     /// or the dictionary representation.
     /// </param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="fieldCount"/> is negative.</exception>
     internal PreviousFieldValueStore(int fieldCount)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(fieldCount);
         if (fieldCount <= _DenseThreshold)
         {
             _DenseValues = new Snapshot[fieldCount];
@@ -90,7 +95,7 @@ internal sealed class PreviousFieldValueStore
 
     #endregion
 
-    #region Public API
+    #region Comparison and update
 
     /// <summary>
     /// Computes same-as-previous flags and updates the stored snapshot.
@@ -154,6 +159,11 @@ internal sealed class PreviousFieldValueStore
     /// previous snapshot of the same field (reused when it is large enough), so the stored value no longer depends on the
     /// buffer the packet came from; every other payload type is self-contained and stored as it is.
     /// </summary>
+    /// <param name="previous">The previous snapshot of the same field; its private byte array is reused.</param>
+    /// <param name="data">The payload of the current occurrence.</param>
+    /// <param name="customRepresentation">Custom representation text, or <see langword="null"/> when absent.</param>
+    /// <param name="customText">Custom text, or <see langword="null"/> when absent.</param>
+    /// <returns>The snapshot to store for the current occurrence.</returns>
     private static Snapshot _Capture(
         Snapshot previous, in FieldValueData data, string? customRepresentation, string? customText)
     {
@@ -177,26 +187,9 @@ internal sealed class PreviousFieldValueStore
             owned);
     }
 
-    /// <summary>Resets all stored previous values (for block boundary resets).</summary>
-    internal void Reset()
-    {
-        // Also drops the references held by the snapshots, so payloads of the finished block can be collected.
-        if (_DenseValues is not null)
-        {
-            Array.Clear(_DenseValues);
-            _OverflowValues?.Clear();
-        }
-        else
-        {
-            _SparseValues!.Clear();
-        }
-    }
-
-    #endregion
-
-    #region Private Helpers
-
     /// <summary>Returns the stored snapshot for a field ID, or an empty one (<c>HasValue</c> false) when none exists.</summary>
+    /// <param name="fieldIdValue">The field ID.</param>
+    /// <returns>The snapshot of the last occurrence, or the default snapshot when the field was not seen.</returns>
     private Snapshot _GetPrevious(int fieldIdValue)
     {
         if (_DenseValues is not null)
@@ -223,6 +216,8 @@ internal sealed class PreviousFieldValueStore
     /// Stores the snapshot for a field ID. IDs outside the dense array (including negative ones) go to the overflow
     /// dictionary, which is created lazily because it is normally never needed.
     /// </summary>
+    /// <param name="fieldIdValue">The field ID.</param>
+    /// <param name="current">The snapshot of the occurrence just written; the default snapshot for a container field.</param>
     private void _SetPrevious(int fieldIdValue, Snapshot current)
     {
         if (_DenseValues is not null)
@@ -239,6 +234,25 @@ internal sealed class PreviousFieldValueStore
         }
 
         _SparseValues![fieldIdValue] = current;
+    }
+
+    #endregion
+
+    #region Reset
+
+    /// <summary>Resets all stored previous values (for block boundary resets).</summary>
+    internal void Reset()
+    {
+        // Also drops the references held by the snapshots, so payloads of the finished block can be collected.
+        if (_DenseValues is not null)
+        {
+            Array.Clear(_DenseValues);
+            _OverflowValues?.Clear();
+        }
+        else
+        {
+            _SparseValues!.Clear();
+        }
     }
 
     #endregion

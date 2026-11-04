@@ -20,13 +20,13 @@ internal sealed class PacketProtocolTests
         using Stack stack = builder.Build();
 
         Frame frameData = Frame.Create(
-            new FrameId(1), Timestamp.FromSecs(0), new byte[42],
+            1, Timestamp.FromSecs(0), new byte[42],
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         Packet packet;
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frameData,
                 in options,
@@ -39,8 +39,7 @@ internal sealed class PacketProtocolTests
             packet = parsed;
         }
 
-        FieldLookupCookie cookie = FieldLookupCookie.Start;
-        bool found = packet.TryGetNextFieldValue(stack.PacketErrorFieldId, ref cookie, out FieldValue err, materialize: true); // materialize: true — need complete field tree for assertion
+        bool found = packet.TryGetFieldValue(stack.PacketErrorFieldId, out FieldValue err, materialize: true); // materialize: true — need complete field tree for assertion
         err.Data.TryGetAsString(out string msg);
 
         await Assert.That(found).IsTrue();
@@ -59,13 +58,13 @@ internal sealed class PacketProtocolTests
 
         byte[] payload = [1, 2, 3, 4, 5, 6, 7, 8];
         Frame frameData = Frame.Create(
-            new FrameId(1), Timestamp.FromSecs(0), payload,
+            1, Timestamp.FromSecs(0), payload,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         Packet packet;
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frameData,
                 in options,
@@ -96,13 +95,13 @@ internal sealed class PacketProtocolTests
 
         byte[] payload = [1, 2, 3, 4];
         Frame frameData = Frame.Create(
-            new FrameId(1), Timestamp.FromSecs(0), payload,
+            1, Timestamp.FromSecs(0), payload,
             LinkType.Ethernet, FrameInterfaceId.Invalid, stack.FrameInterfaceRegistry).Value;
         Packet packet;
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frameData,
                 in options,

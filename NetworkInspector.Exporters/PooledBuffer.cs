@@ -32,6 +32,8 @@ namespace NetworkInspector.Exporters;
 /// </summary>
 internal sealed class PooledBuffer
 {
+    #region Configuration and state
+
     /// <summary>
     /// Sentinel for the "returned" state. A zero-length array means the next
     /// write needs to rent a fresh array — never call <see cref="ArrayPool{T}.Return"/>
@@ -54,7 +56,9 @@ internal sealed class PooledBuffer
     internal PooledBuffer(int capacity)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(capacity);
-        _Array = capacity == 0 ? _EmptySentinel : ArrayPool<byte>.Shared.Rent(capacity);
+        _Array = capacity == 0
+            ? _EmptySentinel
+            : ArrayPool<byte>.Shared.Rent(capacity);
         Length = 0;
     }
 
@@ -71,6 +75,10 @@ internal sealed class PooledBuffer
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => _Array.Length;
     }
+
+    #endregion
+
+    #region Appending
 
     /// <summary>
     /// Appends data to the buffer, growing if necessary. The data must not alias this buffer's own array,
@@ -127,6 +135,10 @@ internal sealed class PooledBuffer
         return span;
     }
 
+    #endregion
+
+    #region Truncating and releasing
+
     /// <summary>
     /// Discards the bytes after the first <paramref name="length"/> bytes, so the buffer holds exactly what it held when
     /// <see cref="Length"/> was <paramref name="length"/>. Used to undo a partly written item. The array is kept.
@@ -167,11 +179,17 @@ internal sealed class PooledBuffer
         Length = 0;
     }
 
+    #endregion
+
+    #region Growing
+
     /// <summary>
     /// Grows the internal buffer to accommodate at least <paramref name="required"/>
     /// bytes. Rents a new array from the pool, copies the existing content over,
     /// and returns the previous array to the pool.
     /// </summary>
+    /// <param name="required">The total number of bytes the buffer must hold; negative when the caller's sum wrapped.</param>
+    /// <exception cref="InvalidOperationException"><paramref name="required"/> is negative or beyond <see cref="Array.MaxLength"/>.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _Grow(int required)
     {
@@ -218,4 +236,6 @@ internal sealed class PooledBuffer
         }
         _Array = newArray;
     }
+
+    #endregion
 }

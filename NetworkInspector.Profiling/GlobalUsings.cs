@@ -33,6 +33,7 @@ global using NetworkInspector.Values;
 
 #region NetworkInspector.Exporters
 global using NetworkInspector.Exporters;
+global using NetworkInspector.Exporters.Writing;
 #endregion
 
 #region NetworkInspector.Filter

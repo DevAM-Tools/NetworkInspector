@@ -113,7 +113,8 @@ ni convert <input> [<input2> ...] --output <path> [options]
 | `--overwrite` | Replace an existing output (without it an existing output is an error) |
 | `-n`, `--max-frames <N>` | Maximum frames to write |
 | `--split-size <MiB>` / `--split-count <N>` | Split the output by size or frame count |
-| `--filter <expr>` | Keep frames whose packet matches (parses each frame) |
+| `--filter <expr>` | Keep frames whose packet matches (parses each frame, without a field tree when the expression allows) |
+| `--verbose` | Print one line `parse: …` with the parse work chosen (`parse: none` without a filter) |
 | `--progress <N>` | Report progress every N frames on stderr |
 | `--tolerant` | Skip unreadable records instead of aborting; a source that fails again before it delivered a frame is dropped |
 | `--blf-cache-size <MiB>` | BLF container cache budget (max 2047) |
@@ -163,23 +164,24 @@ ni export <input> [<input2> ...] --output <path> [--format <spec>] [options]
 | `--split-count <N>` | Split every N packets |
 | `--filter <expr>` | Export only matching packets |
 | `--progress <N>`, `--tolerant`, `--blf-cache-size <MiB>` | As for `convert` |
+| `--verbose` | Print one line `parse: …` before the first frame that says which parse work the run chose (see Choosing what to export) |
 | `--profile <name>`, `--settings-path <dir>`, `--settings-max-*` | Protocol settings |
 
 Export formats:
 
 | Spec | Variants | Inferred from |
 | --- | --- | --- |
-| `csv` | `csv:delimiter=;`, `header=false`, `bom=false`, `columns=ip.src;udp.dstport`, `neutralizeFormulas=false` | `.csv` |
+| `csv` | `csv:delimiter=;`, `header=false`, `bom=false`, `fields=ip.src;udp.dstport`, `separator=#` (between several occurrences in one cell, default `\|`), `neutralizeFormulas=false` | `.csv` |
 | `json` | `json:style=compact` (default), `pretty`, `array` | `.json` |
 | `text` | `text:level=summary\|standard\|full`, `text:truncate=<N>` (default 256, `0` = no limit) | `.txt` |
 | `pbf` | `pbf:format=standard\|columnar`, `compressed` (default) or `nocompress` | `.pbf` |
-| `parquet` | directory dataset; splits become `base_00001`, … | — (use `-f parquet`) |
+| `parquet` | directory dataset; `parquet:compression=none\|snappy\|gzip\|brotli\|lz4\|zstd`, `compressionLevel=fastest\|optimal\|smallest`; splits become `base_00001`, … | — (use `-f parquet`) |
 | `duckdb` | one file; splits become `base_00001.duckdb`, … | `.duckdb` |
 
 Parameters combine with commas: `text:level=full,truncate=0`, `pbf:format=columnar,nocompress`. Any other
-extension needs `-f`. CSV writes a UTF-8 byte order mark and a header row by default; without `columns` it writes
-the number, time, info, and length of each packet. The delimiter is one ASCII character other than NUL, CR, LF, and the
-double quote (a tab is allowed). Packet formats of plugins work the same way
+extension needs `-f`. CSV writes a UTF-8 byte order mark and a header row by default; without `fields` or `shape` it writes
+the number, time, info, and length of each packet. The delimiter is one ASCII character other than NUL, CR, LF, the
+double quote, an ASCII letter or digit, and `-+.:` (a tab is allowed, and so is `;`). Packet formats of plugins work the same way
 (`-f SampleText:includeHeader=false`).
 
 **CSV and spreadsheets.** Text from a capture is chosen by whoever sent the traffic, and a spreadsheet runs a cell that
@@ -190,9 +192,6 @@ a file written that way is unsafe to open in a spreadsheet.
 
 The options `timestampSorted` of `pbf` and `parquet` only declare that the packets arrive in timestamp order; nothing is
 sorted and the written bytes do not change.
-
-> **Known issue in 0.16.0:** `text` with the default level `standard` (and `summary`) omits the protocol
-> containers and prints little more than the packet header. Use `text:level=full`.
 
 ```bash
 # Pretty JSON
@@ -206,7 +205,63 @@ ni export capture.pcapng -o out_parquet -f parquet --split-count 50000
 
 # Only port 443, tolerant of damaged records, progress every 50 000 packets
 ni export unknown.blf -o tls.json --filter "tcp.port == 443" --tolerant --progress 50000
+
+# Two fields, first occurrence, as a DuckDB database (no field tree is built)
+ni export capture.pcapng -o dns.duckdb -f "duckdb:fields=ip.src;dns.qry.name,occurrence=first"
+
+# Every field without hierarchy, CSV long layout
+ni export capture.pcapng -o all.csv -f "csv:shape=all"
+
+# Parquet dataset with Snappy instead of the default Zstandard (for a tool that predates Zstandard)
+ni export capture.pcapng -o out_snappy -f parquet:compression=snappy
+
+# Add the raw frame of every packet (off by default; the field tree already holds the parsed bytes)
+ni export capture.pcapng -o frames.json -f json:frames=true
+
+# Add the additional buffers of every packet: the reassembled datagram, TCP PDU, decoded HTTP body (off by default)
+ni export capture.pcapng -o out.duckdb -f duckdb:buffers=true
+
+# A DuckDB file that DuckDB 1.2 can open (the default v1.5.0 needs DuckDB 1.5 or later)
+ni export capture.pcapng -o old.duckdb -f duckdb:storageVersion=v1.2.0
+
+# Show which parse work the run chose
+ni export capture.pcapng -o out_parquet -f "parquet:fields=ip.src;udp.dstport" --verbose
 ```
+
+### Choosing What To Export
+
+Every field format (`csv`, `json`, `text`, `pbf`, `parquet`, `duckdb`) takes the same options, so `duckdb:fields=…` and
+`csv:fields=…` behave alike. An option a format does not have (for example `separator` for `json`) is refused with a message that names it.
+
+| Option | Meaning | Default |
+| --- | --- | --- |
+| `fields=a;b:first;c:last` | The fields to write, separated by `;` (a comma would end the option). `:all`, `:first`, `:last` after a name picks the occurrence | none |
+| `occurrence=all\|first\|last` | Occurrence of the fields without their own choice | `all` |
+| `shape=auto\|fields\|all\|hierarchy` | `fields`: only the listed fields; `all`: every field, flat; `hierarchy`: every field with parent and order. `auto` is `fields` when `fields` is set, else the format default (CSV also knows `packets`: one row per packet) | `auto` |
+| `info` | Write the packet info string (DuckDB, Parquet, PBF, JSON; CSV has the `Info` column in the packet rows, Text shows it as a field line) | `true` |
+| `frames` | Write the raw frame bytes of every packet, in every packet format: a `frame_bytes` column (DuckDB, Parquet, PBF columnar, CSV), a packet field (PBF standard), a Base64 key (JSON), a hex dump after the packet (Text). Off by default: the field tree already holds the parsed bytes. CSV adds the column last and only for packet rows and `shape=fields`; `shape=all` and `shape=hierarchy` refuse it | `false` |
+| `buffers` | Write the additional buffers of every packet (reassembled IPv4 or IPv6 datagrams, TCP PDUs, decoded HTTP bodies, unmasked or inflated WebSocket payloads) with their index, in every packet format: a `packet_buffers` table (DuckDB) or file (Parquet), a block field (PBF columnar), a packet field (PBF standard), a `buffers` key of Base64 records (JSON), a `buffers` column of `<index>:<HEX>` records (CSV), a hex dump per buffer after the packet (Text). Off by default. A buffer can hold decoded content that the frame does not show in clear and can be much larger than the frames. CSV adds the column after the frame column, only for packet rows and `shape=fields`; `shape=all` and `shape=hierarchy` refuse it. The frame formats (`pcapng`, `pcap`, `blf`, `asc`) have no such option | `false` |
+| `text`, `repr` | Write the custom text / custom representation of a field, only where a dissector set one (an absent text is NULL, a missing key, or an empty cell; see the [exporter guide](../NetworkInspector.Exporters/EXPORTER_GUIDE.md#123-rebuilding-the-display-line)). Off writes none | `true` |
+| `writeMode=background\|sync` | DuckDB, Parquet, PBF, BLF: write full batches on a writer thread while the next fills, or inline | `background` |
+| `batchPackets=<N>`, `batchBytes=<N>` | DuckDB, Parquet, PBF: packets (1 – 2 147 483 647) and estimated bytes (≥ 1) per batch. A batch is held in memory until it is written; the defaults are secure | 50 000 / 16 MiB |
+| `containerSize=<bytes>` | BLF: size of one log container (65 536 – 67 108 864) | 10 MiB |
+| `compression=none\|snappy\|gzip\|brotli\|lz4\|zstd` | Parquet: the codec of every column chunk of every file of the dataset. `zstd` gives small files and is read by current tools; `snappy` is fast and supported by the common tools; `gzip` is smaller than `snappy` but slower; `brotli` is small and slow and not every tool reads it; `lz4` is written as `LZ4_RAW` (older tools may not read it); `none` writes no compression. Any other value is refused with the allowed values and no dataset is created | `zstd` |
+| `compressionLevel=fastest\|optimal\|smallest` | Parquet: how hard the codec works (quickest write and largest files, balance, smallest files and slowest write). `none` and `snappy` ignore it | `optimal` |
+| `storageVersion=v1.0.0\|v1.1.0\|v1.2.0\|v1.3.0\|v1.4.0\|v1.5.0` | DuckDB: the storage format of the file, which decides the oldest DuckDB release that opens it (`v1.2.0` opens in DuckDB 1.2 and later). Newer versions allow newer encodings; the effect on the file size depends on the data. Any other value is refused with the allowed values and no file is created; there is no compaction option | `v1.5.0` |
+
+**Why the shape matters for speed:** an export of a few fields does not need the field tree, and building the tree costs more
+than the export itself. `ni export` therefore asks the exporter and the filter what they need and parses with exactly that. With
+`--verbose` the run prints which choice it made:
+
+```text
+parse: fields only, no tree (2 fields, 1 observer)           # fields=… and no filter, or a filter on plain fields
+parse: packet only, no tree                                   # CSV packet rows
+parse: field tree                                             # shape=hierarchy, json, text, pbf standard without fields
+parse: field tree — filter needs the field tree: <reason>    # a subtree scope or a protocol presence term in --filter
+```
+
+`ni convert` without `--filter` parses nothing at all (`parse: none`); with a filter it parses without field tree when the
+expression allows. A filter that needs the field tree makes the whole run build it, and `--verbose` says why.
 
 ### Filtering
 
@@ -351,8 +406,10 @@ The settings base is `NetworkInspector` in the application data folder of the us
 - **Information disclosure**: JSON, Text, and columnar outputs can contain payload secrets; protect them.
 - **Denial of service**: Use `--max-frames`, `--max-packets`, split options, and the settings size limits on
   untrusted input. The protocol settings bound the state that parsing keeps: `tcp.max_tracked_streams` and
-  `udp.max_tracked_streams` (default 10 000 streams each) and `http.max_decompressed_bytes` and
-  `ws.max_decompressed_bytes` (default 64 MiB); `ni settings list --scope profile` shows them with their ranges.
+  `udp.max_tracked_streams` (default 10 000 streams each), `http.max_decompressed_bytes` and
+  `ws.max_decompressed_bytes` (default 64 MiB), and the bytes that one packet keeps after decoding or reassembling
+  (`http.max_derived_bytes_per_packet` and `ws.max_derived_bytes_per_packet`, default 256 MiB, counted over all bytes bound to the packet;
+  `someip.tp_max_derived_bytes_per_packet`, default 64 MiB); `ni settings list --scope profile` shows them with their ranges.
 - **Elevation of privilege**: Run `ni` with least-required file-system permissions.
 
 ## Learn More

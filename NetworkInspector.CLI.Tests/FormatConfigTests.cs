@@ -110,8 +110,59 @@ internal sealed class FormatConfigTests
         await Assert.That(weirdCreated).IsFalse();
         await Assert.That(weirdError?.Message).StartsWith("style: allowed: compact, pretty, array");
         await Assert.That(unknownCreated).IsFalse();
-        await Assert.That(unknownError?.Message).IsEqualTo("Unknown option 'colour'; options: style, flushPerPacket.");
+        await Assert.That(unknownError?.Message).IsEqualTo(
+            "Unknown option 'colour'; options: style, shape, fields, occurrence, info, frames, buffers, text, repr, flushPerPacket.");
         await Assert.That(File.Exists(path)).IsFalse();
+    }
+
+    /// <summary>
+    /// A storage version outside the six is an option problem of the create step: the enum setting names the allowed values and the
+    /// DuckDB file is not created. A defined text creates the exporter (the file appears with the first packet).
+    /// </summary>
+    [Test]
+    public async Task AnUnknownDuckDbStorageVersionIsRefusedWithTheAllowedValuesAndNoFile()
+    {
+        using BuiltInRegistry registry = new();
+        using FrameBuilderStack stack = new();
+        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N") + ".duckdb");
+        PacketFormatConfig bad = PacketFormatConfig.Parse("duckdb:storageVersion=v9", registry.Registry);
+        PacketFormatConfig good = PacketFormatConfig.Parse("duckdb:storageVersion=v1.2.0", registry.Registry);
+
+        bool badCreated = bad.TryCreate(path, stack.Stack, CancellationToken.None, out _, out PluginError? badError);
+        bool goodCreated = good.TryCreate(path, stack.Stack, CancellationToken.None, out IPacketListener? listener, out PluginError? goodError);
+        (listener as IDisposable)?.Dispose();
+
+        await Assert.That(badCreated).IsFalse();
+        await Assert.That(badError?.Message).IsEqualTo("storageVersion: allowed: v1.0.0, v1.1.0, v1.2.0, v1.3.0, v1.4.0, v1.5.0");
+        await Assert.That(goodCreated).IsTrue();
+        await Assert.That(goodError).IsNull();
+        await Assert.That(File.Exists(path)).IsFalse();
+    }
+
+    /// <summary>
+    /// A codec or level outside the registered ones is an option problem of the create step: the enum setting names the allowed
+    /// values and no dataset directory is created. Defined values create the exporter (the directory appears with the first packet).
+    /// </summary>
+    [Test]
+    [Arguments("parquet:compression=lzma", "compression: allowed: none, snappy, gzip, brotli, lz4, zstd")]
+    [Arguments("parquet:compressionLevel=max", "compressionLevel: allowed: fastest, optimal, smallest")]
+    public async Task AnUnknownParquetCodecOrLevelIsRefusedWithTheAllowedValuesAndNoDirectory(string spec, string message)
+    {
+        using BuiltInRegistry registry = new();
+        using FrameBuilderStack stack = new();
+        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N"));
+        PacketFormatConfig bad = PacketFormatConfig.Parse(spec, registry.Registry);
+        PacketFormatConfig good = PacketFormatConfig.Parse("parquet:compression=snappy,compressionLevel=fastest", registry.Registry);
+
+        bool badCreated = bad.TryCreate(path, stack.Stack, CancellationToken.None, out _, out PluginError? badError);
+        bool goodCreated = good.TryCreate(path, stack.Stack, CancellationToken.None, out IPacketListener? listener, out PluginError? goodError);
+        (listener as IDisposable)?.Dispose();
+
+        await Assert.That(badCreated).IsFalse();
+        await Assert.That(badError?.Message).IsEqualTo(message);
+        await Assert.That(goodCreated).IsTrue();
+        await Assert.That(goodError).IsNull();
+        await Assert.That(Directory.Exists(path)).IsFalse();
     }
 
     #endregion
@@ -161,6 +212,30 @@ internal sealed class FormatConfigTests
 
         await Assert.That(created).IsFalse();
         await Assert.That(error?.Message).IsEqualTo("compression: allowed: none, fast, default, best");
+    }
+
+    /// <summary>
+    /// The additional buffers are packet content, so a frame format (which writes frames and nothing else) has no such option: the
+    /// option is refused as an unknown option with the list of the options the format does have, and no file is created.
+    /// </summary>
+    [Test]
+    [Arguments("pcapng:buffers=true", ".pcapng")]
+    [Arguments("pcap:buffers=true", ".pcapng")]
+    [Arguments("blf:buffers=true", ".blf")]
+    [Arguments("asc:buffers=true", ".asc")]
+    public async Task TheBuffersOptionIsAnUnknownOptionOfEveryFrameFormat(string spec, string extension)
+    {
+        using BuiltInRegistry registry = new();
+        using FrameBuilderStack stack = new();
+        FrameFormatConfig config = FrameFormatConfig.Parse(spec, registry.Registry);
+        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N") + extension);
+
+        bool created = config.TryCreate(path, stack.Stack, CancellationToken.None, out _, out PluginError? error);
+
+        await Assert.That(created).IsFalse();
+        await Assert.That(error?.Message).StartsWith("Unknown option 'buffers'; options: ");
+        await Assert.That(error!.Value.Message.Contains("frames", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(File.Exists(path)).IsFalse();
     }
 
     [Test]

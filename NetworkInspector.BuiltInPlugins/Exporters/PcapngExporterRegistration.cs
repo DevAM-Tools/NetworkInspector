@@ -51,7 +51,7 @@ internal static class PcapngExporterRegistration
     {
         // The builder accepts snap lengths up to int.MaxValue (its slicing path casts to int), so the setting stops there.
         options.RegisterU64Setting(_SnapLengthOption, "Snap length", "", 0, min: 0, max: int.MaxValue,
-            description: "Maximum bytes stored per packet; 0 uses the exporter default (no truncation).");
+            description: "Maximum bytes stored per packet; 0 uses the exporter default (262144 bytes). A longer frame is cut and reported once.");
         options.RegisterEnumSetting(_ResolutionOption, "Timestamp resolution", "", 0,
             EnumSettingMetadata.FromPairs([("nanoseconds", 0), ("microseconds", 1)]),
             description: "Resolution of the written timestamps: nanoseconds or microseconds.");
@@ -72,6 +72,16 @@ internal static class PcapngExporterRegistration
             ? _MicrosecondExponent
             : _NanosecondExponent;
         string comment = OptionValues.GetString(values, _CommentOption);
+
+        // The Core builder refuses a comment above the 16-bit option length of the format; checking here lets the error name
+        // the option (the shared build step cannot tell which option was at fault).
+        if (System.Text.Encoding.UTF8.GetByteCount(comment) > ushort.MaxValue)
+        {
+            listener = null;
+            error = new PluginError(PluginErrorCode.InvalidOption,
+                "The comment must be at most 65535 UTF-8 bytes (the 16-bit option length of PCAPNG).", _CommentOption);
+            return false;
+        }
 
         return ExporterBuild.TryBuild<IFrameListener>(
             () =>

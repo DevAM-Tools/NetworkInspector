@@ -97,7 +97,7 @@ internal sealed class ParseCanScenario : IProfilingScenario
 
         // The seed parse is the only Packet allocation of the recycled variant.
         ParseOptions seedOptions = new();
-        if (!Packet.TryParse(new PacketId(0), _Stack, _Frames[0], in seedOptions, out Packet? seeded, out ParseFailure seedFailure))
+        if (!Packet.TryParse(0, _Stack, _Frames[0], in seedOptions, out Packet? seeded, out ParseFailure seedFailure))
         {
             throw new InvalidOperationException(seedFailure.ToString());
         }
@@ -118,7 +118,7 @@ internal sealed class ParseCanScenario : IProfilingScenario
         ParseOptions options = new();
         for (int i = 0; i < _BatchSize; i++)
         {
-            PacketId id = new(counter + i);
+            PacketId id = counter + i;
             if (_Kind == ParseCanKind.Recycled)
             {
                 if (!Packet.TryParse(_Recycle!, id, stack, frames[i], in options, out ParseFailure recycleFailure))

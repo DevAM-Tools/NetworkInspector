@@ -58,7 +58,7 @@ internal sealed class PacketExitPointTests
 
     private static Frame _MakeFrame(Stack stack, byte[] data, int frameId, FrameInterfaceId interfaceId) =>
         Frame.Create(
-            new FrameId(frameId),
+            frameId,
             Timestamp.FromSecs(frameId),
             data,
             LinkType.Ethernet,
@@ -70,9 +70,9 @@ internal sealed class PacketExitPointTests
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
-        Packet packet = new(new PacketId(1), stack, frame);
+        Packet packet = new(1, stack, frame);
 
-        RecycleError? err = packet.PrepareForReuse(new PacketId(2), stack, frame, FieldTreeMode.Build);
+        RecycleError? err = packet.PrepareForReuse(2, stack, frame, FieldTreeMode.Build);
         await Assert.That(err).IsEqualTo(RecycleError.NotFinalized);
     }
 
@@ -86,7 +86,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame1,
                 in options,
@@ -100,7 +100,7 @@ internal sealed class PacketExitPointTests
         }
         Frame frame2 = _MakeFrame(otherStack, FrameBuilders.GenerateStaticUdpFrame(64), 2);
 
-        RecycleError? err = packet.PrepareForReuse(new PacketId(2), stack, frame2, FieldTreeMode.Build);
+        RecycleError? err = packet.PrepareForReuse(2, stack, frame2, FieldTreeMode.Build);
         await Assert.That(err).IsEqualTo(RecycleError.RegistryMismatch);
     }
 
@@ -111,7 +111,7 @@ internal sealed class PacketExitPointTests
         using Stack otherStack = _BuildStack();
         Frame frame = _MakeFrame(otherStack, FrameBuilders.GenerateStaticUdpFrame(64));
 
-        await Assert.That(() => new Packet(new PacketId(1), stack, frame))
+        await Assert.That(() => new Packet(1, stack, frame))
             .Throws<ArgumentException>();
     }
 
@@ -125,7 +125,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -153,7 +153,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -186,7 +186,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -222,7 +222,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -255,7 +255,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -288,7 +288,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -327,7 +327,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -378,7 +378,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -425,7 +425,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -476,7 +476,7 @@ internal sealed class PacketExitPointTests
     }
 
     [Test]
-    public async Task TryGetNextFieldValue_UnknownFieldId_ReturnsFalse()
+    public async Task TryGetFieldValue_UnknownFieldId_ReturnsFalse()
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
@@ -485,7 +485,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -498,9 +498,8 @@ internal sealed class PacketExitPointTests
             packet = parsed;
         }
 
-        FieldLookupCookie cookie = FieldLookupCookie.Start;
         FieldId unknown = stack.GetFieldId("does.not.exist") ?? new FieldId(999_999);
-        bool found = packet.TryGetNextFieldValue(unknown, ref cookie, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+        bool found = packet.TryGetFieldValue(unknown, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
 
         await Assert.That(found).IsFalse();
         await Assert.That(value.Type).IsEqualTo(FieldType.None);
@@ -516,7 +515,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -565,7 +564,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -598,7 +597,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -611,9 +610,8 @@ internal sealed class PacketExitPointTests
             packet = parsed;
         }
 
-        FieldLookupCookie cookie = FieldLookupCookie.Start;
-        bool found = packet.TryGetNextFieldValue(
-            stack.PacketErrorFieldId, ref cookie, out FieldValue err, materialize: true); // materialize: true — walk complete tree including lazy fields
+        bool found = packet.TryGetFieldValue(
+            stack.PacketErrorFieldId, out FieldValue err, materialize: true); // materialize: true — walk complete tree including lazy fields
         err.Data.TryGetAsString(out string msg);
 
         await Assert.That(found).IsTrue();
@@ -654,7 +652,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack1,
                 _MakeFrame(stack1, data),
                 in options,
@@ -674,7 +672,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new();
             errParsed = Packet.TryParse(
                 seed,
-                new PacketId(2),
+                2,
                 stack2,
                 frame2,
                 in options,
@@ -694,7 +692,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack1,
                 _MakeFrame(stack1, data),
                 in options,
@@ -715,7 +713,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(firstProtocol: eth);
             errParsed = Packet.TryParse(
                 seed,
-                new PacketId(2),
+                2,
                 stack2,
                 frame2,
                 in options,
@@ -735,7 +733,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack1,
                 _MakeFrame(stack1, data),
                 in options,
@@ -756,7 +754,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(index: index);
             errParsed = Packet.TryParse(
                 seed,
-                new PacketId(2),
+                2,
                 stack2,
                 frame2,
                 in options,
@@ -776,7 +774,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack1,
                 _MakeFrame(stack1, data),
                 in options,
@@ -798,7 +796,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(index: index, firstProtocol: eth);
             errParsed = Packet.TryParse(
                 seed,
-                new PacketId(2),
+                2,
                 stack2,
                 frame2,
                 in options,
@@ -817,7 +815,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, data),
                 in options,
@@ -838,7 +836,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(index: index, firstProtocol: eth);
             if (!Packet.TryParse(
                 seed,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -850,7 +848,7 @@ internal sealed class PacketExitPointTests
             recycled = seed;
         }
         await Assert.That(ReferenceEquals(seed, recycled)).IsTrue();
-        await Assert.That(recycled.Id).IsEqualTo(new PacketId(1));
+        await Assert.That(recycled.Id).IsEqualTo(1);
     }
 
     [Test]
@@ -863,7 +861,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -891,7 +889,7 @@ internal sealed class PacketExitPointTests
         using Stack stack = builder.Build();
 
         Frame frame = _MakeFrame(stack, new byte[14]);
-        Packet packet = new(new PacketId(1), stack, frame);
+        Packet packet = new(1, stack, frame);
         packet.RootFieldMut().Append(proto.LeafFieldId, FieldValue.NewU64(1));
 
         int count = packet.FieldCount(materialize: false); // materialize: false — current materialized count only
@@ -913,7 +911,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -951,7 +949,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1036,7 +1034,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1069,7 +1067,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1098,7 +1096,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1134,7 +1132,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1166,7 +1164,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1198,7 +1196,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1229,7 +1227,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1254,7 +1252,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, data),
                 in options,
@@ -1273,14 +1271,14 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new();
             errParsed = Packet.TryParse(
                 seed,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
                 out ParseFailure _);
         }
         await Assert.That(errParsed).IsTrue();
-        await Assert.That(seed.Id).IsEqualTo(new PacketId(1));
+        await Assert.That(seed.Id).IsEqualTo(1);
     }
 
     [Test]
@@ -1292,7 +1290,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, data),
                 in options,
@@ -1312,7 +1310,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(firstProtocol: eth);
             errParsed = Packet.TryParse(
                 seed,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -1330,7 +1328,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, data),
                 in options,
@@ -1350,7 +1348,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(index: index);
             errParsed = Packet.TryParse(
                 seed,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -1368,7 +1366,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, data),
                 in options,
@@ -1389,7 +1387,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(index: index, firstProtocol: eth);
             errParsed = Packet.TryParse(
                 seed,
-                new PacketId(1),
+                1,
                 stack,
                 frame2,
                 in options,
@@ -1413,7 +1411,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1461,7 +1459,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1509,7 +1507,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1543,7 +1541,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1580,7 +1578,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1602,7 +1600,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(FieldTreeMode.Build, foreign);
             errParsed = Packet.TryParse(
                 recycle,
-                new PacketId(1),
+                1,
                 stack,
                 frame,
                 in options,
@@ -1624,7 +1622,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1645,7 +1643,7 @@ internal sealed class PacketExitPointTests
                 (FieldTreeMode)42);
             errParsed = Packet.TryParse(
                 recycle,
-                new PacketId(1),
+                1,
                 stack,
                 frame,
                 in options,
@@ -1667,7 +1665,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new();
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1687,7 +1685,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new();
             errParsed = Packet.TryParse(
                 recycle,
-                new PacketId(5),
+                5,
                 stack,
                 frame,
                 in options,
@@ -1720,7 +1718,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1743,7 +1741,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(firstProtocol: protoId);
             errParsed = Packet.TryParse(
                 packet,
-                new PacketId(1),
+                1,
                 stack,
                 frame,
                 in options,
@@ -1758,7 +1756,7 @@ internal sealed class PacketExitPointTests
     }
 
     [Test]
-    public async Task Usage_TryGetNextFieldValue_Example_Compiles()
+    public async Task Usage_TryGetNextField_Example_Compiles()
     {
         using Stack stack = _BuildStack();
         Frame frame = _MakeFrame(stack, FrameBuilders.GenerateStaticUdpFrame(64));
@@ -1767,7 +1765,7 @@ internal sealed class PacketExitPointTests
             ParseOptions options = new(
                 firstProtocol: stack.GetProtocolId("eth")!.Value);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1783,7 +1781,7 @@ internal sealed class PacketExitPointTests
 
         FieldLookupCookie cookie = FieldLookupCookie.Start;
         int hits = 0;
-        while (packet.TryGetNextFieldValue(ipSrcFieldId, ref cookie, out FieldValue _, materialize: false))
+        while (packet.TryGetNextField(ipSrcFieldId, ref cookie, out Field _, materialize: false))
         {
             hits++;
         }
@@ -1809,7 +1807,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -1842,7 +1840,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, new byte[8]),
                 in options,
@@ -1874,7 +1872,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(FieldTreeMode.Skip, cache, firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, new byte[8]),
                 in options,
@@ -1906,7 +1904,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, new byte[14]),
                 in options,
@@ -1937,7 +1935,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, new byte[14]),
                 in options,
@@ -1970,7 +1968,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, new byte[14]),
                 in options,
@@ -2001,7 +1999,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, new byte[14]),
                 in options,
@@ -2033,7 +2031,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, new byte[14]),
                 in options,
@@ -2084,7 +2082,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, new byte[14]),
                 in options,
@@ -2134,7 +2132,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 _MakeFrame(stack, new byte[14]),
                 in options,
@@ -2184,7 +2182,7 @@ internal sealed class PacketExitPointTests
         // The failing record is caught at the parse boundary; recording that error into the abandoned cache
         // fails again, so the error is stored without the cache instead of escaping TryParse.
         bool parsed = Packet.TryParse(
-            new PacketId(0),
+            0,
             stack,
             _MakeFrame(stack, new byte[14]),
             in options,
@@ -2209,7 +2207,7 @@ internal sealed class PacketExitPointTests
         ParseOptions options = new(FieldTreeMode.Build, firstProtocol: protoId);
 
         bool parsed = Packet.TryParse(
-            new PacketId(0),
+            0,
             stack,
             _MakeFrame(stack, new byte[14]),
             in options,
@@ -2228,9 +2226,9 @@ internal sealed class PacketExitPointTests
     {
         System.Text.StringBuilder texts = new();
         FieldLookupCookie cookie = FieldLookupCookie.Start;
-        while (packet.TryGetNextFieldValue(stack.PacketErrorFieldId, ref cookie, out FieldValue error, materialize: false))
+        while (packet.TryGetNextField(stack.PacketErrorFieldId, ref cookie, out Field errorField, materialize: false))
         {
-            if (error.Data.TryGetAsString(out string text))
+            if (errorField.Value.Data.TryGetAsString(out string text))
             {
                 texts.Append(text).Append('|');
             }
@@ -2259,7 +2257,7 @@ internal sealed class PacketExitPointTests
         {
             ParseOptions options = new(firstProtocol: protoId);
             if (!Packet.TryParse(
-                new PacketId(0),
+                0,
                 stack,
                 frame,
                 in options,
@@ -2287,7 +2285,7 @@ internal sealed class PacketExitPointTests
                     ParseOptions options = new(firstProtocol: protoId);
                     recycleErrParsed = Packet.TryParse(
                         packet,
-                        new PacketId(1),
+                        1,
                         stack,
                         frame,
                         in options,

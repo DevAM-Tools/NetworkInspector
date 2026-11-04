@@ -27,29 +27,6 @@ internal sealed class BlfObjectPayloadsValidationTests
     [Arguments(255)]
     [Arguments(256)]
     [Arguments(300)]
-    public async Task CanFdMessagePayloadKeepsSixtyFourBytesWhenBufferIsLarger(int trailingBytes)
-    {
-        byte[] frame = _BuildFdFrameWithTrailingBytes(trailingBytes, 64);
-        PooledBuffer buffer = new(128);
-        try
-        {
-            bool built = BlfObjectPayloads.TryBuildCanFdMessagePayload(frame, 1, buffer);
-            byte validDataBytes = buffer.WrittenSpan[14];
-
-            await Assert.That(built).IsTrue();
-            await Assert.That(validDataBytes).IsEqualTo((byte)64);
-            await Assert.That(buffer.Length).IsEqualTo(20 + 64);
-        }
-        finally
-        {
-            buffer.Return();
-        }
-    }
-
-    [Test]
-    [Arguments(255)]
-    [Arguments(256)]
-    [Arguments(300)]
     public async Task CanFdMessage64PayloadKeepsSixtyFourBytesWhenBufferIsLarger(int trailingBytes)
     {
         byte[] frame = _BuildFdFrameWithTrailingBytes(trailingBytes, 64);
@@ -70,17 +47,83 @@ internal sealed class BlfObjectPayloadsValidationTests
     }
 
     [Test]
-    public async Task CanFdMessage64PayloadClampsDeclaredCountAboveSixtyFour()
+    [Arguments(65)]
+    [Arguments(200)]
+    [Arguments(255)]
+    public async Task AnFdPayloadCountAbove64IsRefused(int declaredCount)
     {
-        byte[] frame = _BuildFdFrameWithTrailingBytes(300, 200);
+        // The buffer holds enough bytes for the declared count, so only the count itself is wrong.
+        byte[] frame = _BuildFdFrameWithTrailingBytes(300, (byte)declaredCount);
         PooledBuffer buffer = new(128);
         try
         {
             bool built = BlfObjectPayloads.TryBuildCanFdMessage64Payload(frame, 1, buffer);
-            byte validDataBytes = buffer.WrittenSpan[2];
+
+            await Assert.That(built).IsFalse();
+        }
+        finally
+        {
+            buffer.Return();
+        }
+    }
+
+    [Test]
+    public async Task AnFdPayloadCountOfExactly64IsAccepted()
+    {
+        byte[] frame = _BuildFdFrameWithTrailingBytes(64, BlfObjectPayloads.MaxCanFdDataLength);
+        PooledBuffer buffer = new(128);
+        try
+        {
+            bool built = BlfObjectPayloads.TryBuildCanFdMessage64Payload(frame, 1, buffer);
 
             await Assert.That(built).IsTrue();
-            await Assert.That(validDataBytes).IsEqualTo((byte)64);
+            await Assert.That(buffer.WrittenSpan[2]).IsEqualTo((byte)64);
+        }
+        finally
+        {
+            buffer.Return();
+        }
+    }
+
+    [Test]
+    [Arguments(256)]
+    [Arguments(65535)]
+    public async Task FdAndXlObjectsRefuseAChannelAbove255(int channel)
+    {
+        byte[] fd = SocketCanGenerators.BuildCanFd(0x123, [0x01, 0x02]);
+        byte[] xl = SocketCanGenerators.BuildCanXl(0x01, [0xAA]);
+        PooledBuffer buffer = new(128);
+        try
+        {
+            bool fdBuilt = BlfObjectPayloads.TryBuildCanFdMessage64Payload(fd, (ushort)channel, buffer);
+            bool xlBuilt = BlfObjectPayloads.TryBuildCanXlChannelFramePayload(xl, (ushort)channel, buffer);
+
+            await Assert.That(fdBuilt).IsFalse();
+            await Assert.That(xlBuilt).IsFalse();
+        }
+        finally
+        {
+            buffer.Return();
+        }
+    }
+
+    [Test]
+    public async Task FdAndXlObjectsKeepChannel255()
+    {
+        byte[] fd = SocketCanGenerators.BuildCanFd(0x123, [0x01, 0x02]);
+        byte[] xl = SocketCanGenerators.BuildCanXl(0x01, [0xAA]);
+        PooledBuffer buffer = new(128);
+        try
+        {
+            bool fdBuilt = BlfObjectPayloads.TryBuildCanFdMessage64Payload(fd, 255, buffer);
+            byte fdChannel = buffer.WrittenSpan[0];
+            bool xlBuilt = BlfObjectPayloads.TryBuildCanXlChannelFramePayload(xl, 255, buffer);
+            byte xlChannel = buffer.WrittenSpan[0];
+
+            await Assert.That(fdBuilt).IsTrue();
+            await Assert.That(fdChannel).IsEqualTo((byte)255);
+            await Assert.That(xlBuilt).IsTrue();
+            await Assert.That(xlChannel).IsEqualTo((byte)255);
         }
         finally
         {

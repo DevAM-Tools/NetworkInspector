@@ -90,7 +90,7 @@ if (registry.TryGetSource("SampleGen", out SourceRegistration? kind, out string?
             int nextId = 0;
             while (source.NextFrame() is { } frame)
             {
-                if (Packet.TryParse(new PacketId(nextId++), stack, frame, in parse, out Packet? packet, out _) && packet is not null)
+                if (Packet.TryParse(nextId++, stack, frame, in parse, out Packet? packet, out _) && packet is not null)
                 {
                     Console.WriteLine(packet.Info);
                 }
@@ -121,10 +121,10 @@ sealed class ConsoleLog(string plugin) : IPluginLog
 With the [sample plugin](../samples/Sample.Protocol/README.md) in the folder the program prints:
 
 ```text
-NetworkInspector.StandardProtocols 0.19.0: Loaded
-NetworkInspector.FileSources 0.19.0: Loaded
-NetworkInspector.RandomSource 0.19.0: Loaded
-NetworkInspector.Exporters 0.19.0: Loaded
+NetworkInspector.StandardProtocols 0.20.0: Loaded
+NetworkInspector.FileSources 0.20.0: Loaded
+NetworkInspector.RandomSource 0.20.0: Loaded
+NetworkInspector.Exporters 0.20.0: Loaded
 Sample.Protocol 0.1.0: Loaded
 Info Sample.Protocol: started; greeting=Hello from Sample.Protocol
 Sample counter=0 gear=0 speed=254
@@ -157,7 +157,9 @@ Info Sample.Protocol: stopped
 - **Clear version refusals.** A plugin built against a newer version of an application assembly (the contract, Core, or the
   framework) cannot bind its references; the loader detects that from metadata before any plugin code runs and fails the
   plugin with a reason that names the assembly and both versions. The same or an older version runs with the application's
-  copy.
+  copy, as long as that assembly kept its binary contract. Before 1.0 a minor release may change it (0.20.0 changed public
+  Core signatures), and the loader does not detect that: rebuild a plugin against the minor version it runs on, or it fails
+  when the changed code runs.
 - **One plugin never breaks another.** A plugin that fails to load, configure, register, or start becomes a `Failed`
   record with a reason; its contributions are not published or are disabled, and the others continue. `Load` throws only
   for invalid arguments and cancellation.

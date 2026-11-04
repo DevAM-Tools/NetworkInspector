@@ -65,6 +65,19 @@ internal static class OptionValues
         options.GetEnumSetting(name)?.Name
         ?? throw _NotRegistered(name, "enumeration");
 
+    /// <summary>
+    /// Reads the registered number of the current value of an enumeration option. A registration whose pairs use the numbers of
+    /// a library enum (for example the DuckDB storage version) casts this number back to that enum, so the pairs and the enum
+    /// cannot drift apart silently: a number outside the enum is refused by the library builder, never mapped to a default.
+    /// </summary>
+    /// <param name="options">The applied option settings of the request.</param>
+    /// <param name="name">Option name as registered.</param>
+    /// <returns>The number of the selected value, as registered in the option's metadata.</returns>
+    /// <exception cref="InvalidOperationException">The option is not registered as an enumeration.</exception>
+    internal static ulong GetEnumNumber(ReadOnlySettingsManagerView options, string name) =>
+        options.GetEnumSetting(name)?.Value
+        ?? throw _NotRegistered(name, "enumeration");
+
     #endregion
 
     #region Private Helpers

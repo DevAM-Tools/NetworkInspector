@@ -229,8 +229,8 @@ internal sealed class ShippedConfigTests
             // so once per list. Nothing else may be reported.
             await Assert.That(warnings.Count).IsEqualTo(2);
             await Assert.That(warnings.All(static w => w.Message.Contains("do not decrypt", StringComparison.Ordinal))).IsTrue();
-            await ProtocolTestHelper.AssertStringField(stack, packet, "someip.service.name", "ClimateControl");
-            await ProtocolTestHelper.AssertStringField(stack, packet, "someip.method.name", "SetTemperature");
+            await ProtocolTestHelper.AssertStringField(stack, packet, "someip.service.name", "Climate Control");
+            await ProtocolTestHelper.AssertStringField(stack, packet, "someip.method.name", "Set Temperature");
             await ProtocolTestHelper.AssertStringField(stack, packet, "someip.client.name", "CockpitECU");
             await Assert.That(stack.Settings.GetU64Setting("someip.tp_max_message_size")).IsEqualTo(33554432UL);
         }
@@ -274,7 +274,7 @@ internal sealed class ShippedConfigTests
 
         await Assert.That(warnings.Count).IsEqualTo(expectedWarnings);
         await Assert.That(warnings.All(static w => w.Message.Contains("do not decrypt", StringComparison.Ordinal))).IsTrue();
-        await ProtocolTestHelper.AssertStringField(stack, packet, "someip.service.name", first.Name);
+        await ProtocolTestHelper.AssertStringField(stack, packet, "someip.service.name", first.UiName ?? first.Name);
     }
 
     public static IEnumerable<Func<string>> SomeIpExampleNames() =>

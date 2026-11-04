@@ -59,7 +59,7 @@ internal sealed class ParseMixedRecycledScenario : IProfilingScenario
 
         // The seed parse is the only Packet allocation of this scenario.
         ParseOptions seedOptions = new();
-        if (!Packet.TryParse(new PacketId(0), _Stack, _Frames[0], in seedOptions, out Packet? seeded, out ParseFailure seedFailure))
+        if (!Packet.TryParse(0, _Stack, _Frames[0], in seedOptions, out Packet? seeded, out ParseFailure seedFailure))
         {
             throw new InvalidOperationException(seedFailure.ToString());
         }
@@ -81,7 +81,7 @@ internal sealed class ParseMixedRecycledScenario : IProfilingScenario
         ParseOptions options = new();
         for (int i = 0; i < _BatchSize; i++)
         {
-            PacketId id = new(counter + i);
+            PacketId id = counter + i;
             if (!Packet.TryParse(recycle, id, stack, frames[i], in options, out ParseFailure failure))
             {
                 throw new InvalidOperationException(failure.ToString());

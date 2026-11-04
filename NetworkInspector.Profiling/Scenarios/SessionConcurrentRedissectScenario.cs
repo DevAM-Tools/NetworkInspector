@@ -135,7 +135,7 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario, I
         {
             for (int i = fromIndex; i < toIndexExclusive; i++)
             {
-                if (!session.TryGetPacket(new PacketId(i), _Recycle, out Packet? packet, out _) || packet is null)
+                if (!session.TryGetPacket(i, _Recycle, out Packet? packet, out _) || packet is null)
                 {
                     throw new InvalidOperationException(
                         FormattableString.Invariant($"Redissect miss for PacketId {i}."));

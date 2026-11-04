@@ -9,7 +9,7 @@ namespace NetworkInspector.Exporters.Tests.Json;
 internal sealed class FieldBitmaskTests
 {
     [Test]
-    public async Task Insert_NewFieldId_ReturnsTrue()
+    public async Task InsertNewFieldIdReturnsTrue()
     {
         FieldBitmask bitmask = new(64);
 
@@ -19,7 +19,7 @@ internal sealed class FieldBitmaskTests
     }
 
     [Test]
-    public async Task Insert_SameFieldId_ReturnsFalse()
+    public async Task InsertSameFieldIdReturnsFalse()
     {
         FieldBitmask bitmask = new(64);
         bitmask.Insert(5);
@@ -30,7 +30,7 @@ internal sealed class FieldBitmaskTests
     }
 
     [Test]
-    public async Task Insert_DifferentFieldIds_AllReturnTrue()
+    public async Task InsertDifferentFieldIdsAllReturnTrue()
     {
         FieldBitmask bitmask = new(64);
 
@@ -48,7 +48,7 @@ internal sealed class FieldBitmaskTests
     /// growth and still return <c>true</c> (first occurrence).
     /// </summary>
     [Test]
-    public async Task Insert_FieldIdBeyondInitialCapacity_Grows_AndReturnsTrue()
+    public async Task InsertFieldIdBeyondInitialCapacityGrowsAndReturnsTrue()
     {
         // Initial capacity covers only field IDs 0..63 (one 64-bit word).
         FieldBitmask bitmask = new(64);
@@ -60,7 +60,7 @@ internal sealed class FieldBitmaskTests
     }
 
     [Test]
-    public async Task Insert_FieldIdBeyondInitialCapacity_SecondTime_ReturnsFalse()
+    public async Task InsertFieldIdBeyondInitialCapacitySecondTimeReturnsFalse()
     {
         FieldBitmask bitmask = new(64);
         bitmask.Insert(200);  // forces growth
@@ -111,7 +111,7 @@ internal sealed class FieldBitmaskTests
     }
 
     [Test]
-    public async Task Insert_FieldIdZeroAndBeyondCapacity_IndependentBits()
+    public async Task InsertFieldIdZeroAndBeyondCapacityIndependentBits()
     {
         // Ensure that a write beyond capacity does not corrupt the low field IDs.
         FieldBitmask bitmask = new(64);

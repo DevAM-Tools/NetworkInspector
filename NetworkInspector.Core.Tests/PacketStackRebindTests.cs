@@ -62,7 +62,7 @@ internal sealed class PacketStackRebindTests
 
     private static Frame _MakeFrame(Stack stack, int frameId = 1) =>
         Frame.Create(
-            new FrameId(frameId),
+            frameId,
             Timestamp.FromSecs(frameId),
             FrameBuilders.GenerateStaticUdpFrame(64),
             LinkType.Ethernet,
@@ -101,12 +101,12 @@ internal sealed class PacketStackRebindTests
         using Stack stackA = _BuildStandard(registry);
         using Stack stackB = _BuildMarker(registry);
         ParseOptions firstOptions = new();
-        _ = _Parse(new PacketId(0), stackA, _MakeFrame(stackA, 1), in firstOptions); // first parses on a stack are dense: 0, 1, ...
-        Packet packet = _Parse(new PacketId(1), stackA, _MakeFrame(stackA, 2), in firstOptions);
+        _ = _Parse(0, stackA, _MakeFrame(stackA, 1), in firstOptions); // first parses on a stack are dense: 0, 1, ...
+        Packet packet = _Parse(1, stackA, _MakeFrame(stackA, 2), in firstOptions);
         string[] before = _FieldNames(packet, stackA);
 
         ParseOptions options = new();
-        bool recycled = Packet.TryParse(packet, new PacketId(0), stackB, _MakeFrame(stackB, 3), in options, out ParseFailure failure);
+        bool recycled = Packet.TryParse(packet, 0, stackB, _MakeFrame(stackB, 3), in options, out ParseFailure failure);
         string[] after = _FieldNames(packet, stackB);
 
         await Assert.That(recycled).IsTrue();
@@ -126,20 +126,20 @@ internal sealed class PacketStackRebindTests
         using Stack stackA = _BuildStandard(registry);
         using Stack stackB = _BuildMarker(registry);
         ParseOptions options = new();
-        Packet recycle = _Parse(new PacketId(0), stackA, _MakeFrame(stackA, 1), in options);
+        Packet recycle = _Parse(0, stackA, _MakeFrame(stackA, 1), in options);
         Frame frameB = _MakeFrame(stackB, 2);
 
         // Warm both paths once (JIT, first-use tables); the packet goes back and forth between the two stacks.
-        _ = Packet.TryParse(recycle, new PacketId(0), stackB, frameB, in options, out _);
-        _ = _Parse(new PacketId(0), stackB, frameB, in options);
+        _ = Packet.TryParse(recycle, 0, stackB, frameB, in options, out _);
+        _ = _Parse(0, stackB, frameB, in options);
 
         long before = GC.GetAllocatedBytesForCurrentThread();
-        _ = _Parse(new PacketId(0), stackB, frameB, in options);
+        _ = _Parse(0, stackB, frameB, in options);
         long freshBytes = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        _ = Packet.TryParse(recycle, new PacketId(0), stackA, _MakeFrame(stackA, 3), in options, out _);
+        _ = Packet.TryParse(recycle, 0, stackA, _MakeFrame(stackA, 3), in options, out _);
         before = GC.GetAllocatedBytesForCurrentThread();
-        bool recycled = Packet.TryParse(recycle, new PacketId(0), stackB, frameB, in options, out _);
+        bool recycled = Packet.TryParse(recycle, 0, stackB, frameB, in options, out _);
         long recycledBytes = GC.GetAllocatedBytesForCurrentThread() - before;
 
         await Assert.That(recycled).IsTrue();
@@ -152,12 +152,12 @@ internal sealed class PacketStackRebindTests
         using Stack stackA = _BuildStandard(new());
         using Stack otherRegistry = _BuildStandard(new());
         ParseOptions options = new();
-        _ = _Parse(new PacketId(0), stackA, _MakeFrame(stackA, 1), in options);
-        Packet packet = _Parse(new PacketId(1), stackA, _MakeFrame(stackA, 2), in options);
+        _ = _Parse(0, stackA, _MakeFrame(stackA, 1), in options);
+        Packet packet = _Parse(1, stackA, _MakeFrame(stackA, 2), in options);
         string[] before = _FieldNames(packet, stackA);
 
         bool recycled = Packet.TryParse(
-            packet, new PacketId(0), otherRegistry, _MakeFrame(otherRegistry, 3), in options, out ParseFailure failure);
+            packet, 0, otherRegistry, _MakeFrame(otherRegistry, 3), in options, out ParseFailure failure);
 
         await Assert.That(recycled).IsFalse();
         await Assert.That(failure).IsEqualTo(ParseFailure.StackMismatch);
@@ -172,9 +172,9 @@ internal sealed class PacketStackRebindTests
         using Stack stackA = _BuildStandard(new());
         using Stack other = _BuildStandard(new());
         ParseOptions options = new();
-        Packet packet = _Parse(new PacketId(0), stackA, _MakeFrame(stackA, 1), in options);
+        Packet packet = _Parse(0, stackA, _MakeFrame(stackA, 1), in options);
 
-        bool recycled = Packet.TryParse(packet, new PacketId(1), stackA, _MakeFrame(other, 2), in options, out ParseFailure failure);
+        bool recycled = Packet.TryParse(packet, 1, stackA, _MakeFrame(other, 2), in options, out ParseFailure failure);
 
         await Assert.That(recycled).IsFalse();
         await Assert.That(failure).IsEqualTo(ParseFailure.RegistryMismatch);

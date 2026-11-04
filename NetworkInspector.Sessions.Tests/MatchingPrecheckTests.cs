@@ -142,7 +142,7 @@ internal sealed class MatchingPrecheckTests
         await Assert.That(precheck.Options.FieldTree).IsEqualTo(FieldTreeMode.Skip);
         await Assert.That(precheck.Options.Observers.Length).IsEqualTo(1);
 
-        // The skip parse uses the owner-expanding watch, not the observer's own, so lazy containers open as for the
+        // The skip parse uses the extraction watch, not the observer's own, so lazy containers open as for the
         // field-tree filter (the watch itself is tested in FilterLazyMaterializeTests).
         await Assert.That(precheck.Options.Observers.Span[0].Watch == precheck.Observer.Watch).IsFalse();
     }

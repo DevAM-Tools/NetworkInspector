@@ -44,7 +44,7 @@ internal sealed class FrameSlabSharingTests
         await _AssertSharedArrays(frames, expectedShared: true);
 
         // FrameById runs on any thread and must not touch the sequential reader's allocator.
-        Frame? random = source.FrameById(new FrameId(1));
+        Frame? random = source.FrameById(1);
         await Assert.That(random).IsNotNull();
         await Assert.That(_ArrayOf(random!.Value)).IsNotSameReferenceAs(_ArrayOf(frames[0]));
         await Assert.That(random.Value.Data.Span.SequenceEqual(frames[1].Data.Span)).IsTrue();

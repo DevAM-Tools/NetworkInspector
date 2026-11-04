@@ -11,7 +11,7 @@ internal sealed class FieldBodyTests
         FieldId fieldId = new(7);
         FieldBody body = new(fieldId, FieldValue.NewU64(42));
 
-        body.Value = FieldValue.NewU64(99);
+        body.SetValue(FieldValue.NewU64(99));
         body.PrevIndex = 3;
         body.ChildCount = 2;
 
@@ -34,6 +34,33 @@ internal sealed class FieldBodyTests
 
         body.ClearCustomText();
         await Assert.That(body.CustomText.IsNull).IsTrue();
+    }
+
+    [Test]
+    public async Task FieldBodyCustomTextIsEvaluatedOnlyWhenTheStringIsReadAndOnlyOnce()
+    {
+        int calls = 0;
+        FieldBody body = new(new FieldId(3));
+        body.SetCustomText(LazyString.Lazy(() =>
+        {
+            calls++;
+            return "built";
+        }));
+
+        // Looking at the text (absence, laziness) must not build it.
+        bool isNull = body.CustomText.IsNull;
+        bool lazyBefore = body.CustomText.IsLazy;
+        int callsBeforeRead = calls;
+
+        string first = body.CustomText.AsString;
+        string second = body.CustomText.AsString;
+
+        await Assert.That(isNull).IsFalse();
+        await Assert.That(lazyBefore).IsTrue();
+        await Assert.That(callsBeforeRead).IsEqualTo(0);
+        await Assert.That(calls).IsEqualTo(1);
+        await Assert.That(ReferenceEquals(first, second)).IsTrue();
+        await Assert.That(body.CustomText.IsEvaluated).IsTrue();
     }
 
     [Test]
@@ -143,6 +170,10 @@ internal sealed class FieldBodyTests
                 {
                     Interlocked.Increment(ref attemptSuccesses);
                 }
+                else
+                {
+                    Interlocked.Increment(ref attemptFailures);
+                }
             });
             Task second = Task.Run(() =>
             {
@@ -163,8 +194,10 @@ internal sealed class FieldBodyTests
             casFailures += attemptFailures;
         }
 
-        await Assert.That(successes).IsGreaterThan(0);
-        await Assert.That(casFailures).IsGreaterThan(0);
+        // Exactly one of the two racing claims wins every attempt, whatever the scheduling is: a double claim (two successes in one
+        // attempt) would raise the successes above the attempts, and a lost claim (no winner) would lower them.
+        await Assert.That(successes).IsEqualTo(512);
+        await Assert.That(casFailures).IsEqualTo(512);
     }
 
     [Test]
@@ -174,24 +207,29 @@ internal sealed class FieldBodyTests
         {
             LazyIndex = 5,
         };
-        using ManualResetEventSlim gate = new(false);
+        using ManualResetEventSlim firstClaimed = new(false);
+        using ManualResetEventSlim secondTried = new(false);
         bool secondClaim = false;
 
+        // The first claim stays open until the second one has tried, so the second claim always runs while the first is in progress,
+        // however late the scheduler starts the second task (a fixed delay would test a finished claim on a loaded machine). The
+        // waits are bounded so a broken test cannot hang.
         Task first = Task.Run(() =>
         {
             bool claimed = body.TryClaimLazyMaterialization(out ushort index);
             if (claimed)
             {
-                gate.Set();
-                Thread.Sleep(50);
+                firstClaimed.Set();
+                _ = secondTried.Wait(TimeSpan.FromSeconds(30));
                 body.FinishLazyMaterialization();
             }
         });
 
         Task second = Task.Run(() =>
         {
-            gate.Wait();
+            _ = firstClaimed.Wait(TimeSpan.FromSeconds(30));
             secondClaim = body.TryClaimLazyMaterialization(out _);
+            secondTried.Set();
         });
 
         await Task.WhenAll(first, second);

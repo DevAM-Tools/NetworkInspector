@@ -321,7 +321,7 @@ internal sealed class PacketFrameMap
                 : lastFrames[slot] + 1 + (long)residuals[lane];
             seen |= 1UL << slot;
             lastFrames[slot] = frame;
-            target[lane] = Session.PackFrameMapping(new FrameId((int)frame), sourceId);
+            target[lane] = Session.PackFrameMapping((int)frame, sourceId);
         }
     }
 
@@ -347,7 +347,7 @@ internal sealed class PacketFrameMap
         ulong same = BitPlanes.EqualMask(slotPlanes, (ulong)slot) & BitPlanes.InclusivePrefixMask(lane);
         Session.UnpackFrameMapping(unchecked((long)words[slot]), out FrameId baseFrame, out FrameSourceId sourceId);
         long frame = baseFrame.Value + BitOperations.PopCount(same) - 1 + (long)BitPlanes.PrefixSum(residualPlanes, same);
-        return Session.PackFrameMapping(new FrameId((int)frame), sourceId);
+        return Session.PackFrameMapping((int)frame, sourceId);
     }
 
     #endregion

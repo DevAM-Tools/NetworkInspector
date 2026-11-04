@@ -6,8 +6,8 @@ namespace NetworkInspector.Protocols.SomeIp.Payload;
 /// Registers the fields of the configured payload types: one field per usage site, in one index group per member direction.
 /// <para>
 /// <b>Why one field per usage site:</b> a type is defined once per service but used at many places, and every place is its own
-/// filterable value (<c>request.target_c</c> and <c>response.target_c</c> are different questions). The compiler already derived a
-/// unique registered name for every site; this class turns the names into registered fields and writes the resulting
+/// filterable value (<c>req.request.target_c</c> and <c>resp.target_c</c> are different questions). The compiler already took a
+/// unique registered name for every site from the description; this class turns the names into registered fields and writes the resulting
 /// <see cref="FieldId"/> back to the site, so the decoder reads the id from the site and never looks a name up while decoding.
 /// </para>
 /// <para>
@@ -52,9 +52,10 @@ internal static class SomeIpPayloadFieldRegistry
         // the description is compiled again for each stack (every Register overload does).
         foreach (SomeIpServiceInfo registered in model.Services.Span)
         {
+            bool serviceRegistered = registered.FieldId.IsValid;
             foreach (SomeIpMemberInfo member in registered.Members.Span)
             {
-                if (member.PayloadSlot >= 0)
+                if (serviceRegistered || member.PayloadSlot >= 0)
                 {
                     throw new InvalidOperationException(
                         "The compiled SOME/IP model is already registered on a stack; compile the description again for another stack.");
@@ -67,25 +68,47 @@ internal static class SomeIpPayloadFieldRegistry
         for (int s = 0; s < services.Length; s++)
         {
             SomeIpServiceInfo service = services[s];
-            string servicePath = string.Concat(SomeIpNameTokens.Prefix, ".", service.Token);
+
+            // The smallest entry that contains a held name is skipped (the service, else the member), so nothing is half-registered:
+            // a member either has every field it decodes into, or none and no populator. A name is held when a protocol, a field or
+            // an alias of another component has it (the first registration keeps a name, see IStackBuilder). Rejected: the generic
+            // fallback field per value, which would hide the configured name behind a generic one.
+            if (_TryFindHolder(builder, service.Path, out string? serviceHolder))
+            {
+                warn(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"The service name '{service.Path}' is already registered as a {serviceHolder}; service '{service.UiName}' is not registered."));
+                continue;
+            }
+
+            service.Group = builder.GetOrCreateIndexGroup(service.GroupName);
+            service.FieldId = builder.RegisterFieldInGroup(protocolId, service.Path, service.UiName, FieldType.None, service.GroupName);
             ReadOnlySpan<SomeIpMemberInfo> members = service.Members.Span;
             for (int m = 0; m < members.Length; m++)
             {
                 SomeIpMemberInfo member = members[m];
-
-                // Getters, setters and methods have a request and a response and therefore two groups; events and notifiers have
-                // one direction, and both lists share the group so a lookup by direction needs no special case.
-                bool twoDirections = member.Kind is SomeIpMemberKind.Method or SomeIpMemberKind.FieldGetter or SomeIpMemberKind.FieldSetter;
-                string? inDirection = null;
-                string? outDirection = null;
-                if (twoDirections)
+                if (_TryFindHeldName(builder, model, member, out string? held, out string? holder))
                 {
-                    inDirection = "in";
-                    outDirection = "out";
+                    warn(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"The name '{held}' is already registered as a {holder}; member '{member.UiName}' of '{service.UiName}' is not registered."));
+                    continue;
                 }
 
-                string inGroup = SomeIpNameTokens.Member(servicePath, member.Token, inDirection);
-                string outGroup = SomeIpNameTokens.Member(servicePath, member.Token, outDirection);
+                // Getters, setters and methods have a request and a response and therefore two groups; events and notifiers have
+                // one direction, and both lists share the group so a lookup by direction needs no special case. The group names
+                // come from the model and never carry the field prefix, so they cannot meet the groups of other components.
+                bool twoDirections = member.Kind is SomeIpMemberKind.Method or SomeIpMemberKind.FieldGetter or SomeIpMemberKind.FieldSetter;
+                string inGroup = twoDirections
+                    ? SomeIpNameTokens.Child(member.GroupName, SomeIpNameTokens.Request)
+                    : member.GroupName;
+                string outGroup = twoDirections
+                    ? SomeIpNameTokens.Child(member.GroupName, SomeIpNameTokens.Response)
+                    : member.GroupName;
+
+                // The method node is registered first: its group is exact (every message of the member), unlike the value groups.
+                member.Group = builder.GetOrCreateIndexGroup(member.GroupName);
+                member.FieldId = builder.RegisterFieldInGroup(protocolId, member.Path, member.UiName, FieldType.Bytes, member.GroupName);
                 member.InGroup = builder.GetOrCreateIndexGroup(inGroup);
                 member.OutGroup = twoDirections
                     ? builder.GetOrCreateIndexGroup(outGroup)
@@ -99,6 +122,85 @@ internal static class SomeIpPayloadFieldRegistry
         }
 
         return slots;
+    }
+
+    #endregion
+
+    #region Name pre-check
+
+    /// <summary>Finds what holds a name in the stack: a protocol, a field or a field alias group (the conflict namespace of the builder).</summary>
+    private static bool _TryFindHolder(IStackBuilder builder, string name, [NotNullWhen(true)] out string? holder)
+    {
+        if (builder.GetProtocolId(name) is not null)
+        {
+            holder = "protocol";
+        }
+        else if (builder.GetFieldId(name) is not null)
+        {
+            holder = "field";
+        }
+        else if (builder.GetFieldAliasGroupId(name) is not null)
+        {
+            holder = "field alias group";
+        }
+        else
+        {
+            holder = null;
+        }
+
+        return holder is not null;
+    }
+
+    /// <summary>Checks the member name and every name of its value tree (both lists, recursively, defects excluded).</summary>
+    private static bool _TryFindHeldName(
+        IStackBuilder builder,
+        SomeIpCompiledModel model,
+        SomeIpMemberInfo member,
+        [NotNullWhen(true)] out string? held,
+        [NotNullWhen(true)] out string? holder)
+    {
+        if (_TryFindHolder(builder, member.Path, out holder))
+        {
+            held = member.Path;
+            return true;
+        }
+
+        return _TryFindHeldSite(builder, model, member.In.SitesStart, member.In.SitesCount, out held, out holder)
+            || _TryFindHeldSite(builder, model, member.Out.SitesStart, member.Out.SitesCount, out held, out holder);
+    }
+
+    private static bool _TryFindHeldSite(
+        IStackBuilder builder,
+        SomeIpCompiledModel model,
+        int start,
+        int count,
+        [NotNullWhen(true)] out string? held,
+        [NotNullWhen(true)] out string? holder)
+    {
+        ReadOnlySpan<SomeIpUsageSite> sites = model.Sites.Span;
+        for (int i = start; i < start + count; i++)
+        {
+            SomeIpUsageSite site = sites[i];
+            if (site.Defect.Length > 0)
+            {
+                continue;
+            }
+
+            if (_TryFindHolder(builder, site.RegisteredName, out holder))
+            {
+                held = site.RegisteredName;
+                return true;
+            }
+
+            if (site.ChildrenCount > 0 && _TryFindHeldSite(builder, model, site.ChildrenStart, site.ChildrenCount, out held, out holder))
+            {
+                return true;
+            }
+        }
+
+        held = null;
+        holder = null;
+        return false;
     }
 
     #endregion
@@ -121,6 +223,14 @@ internal static class SomeIpPayloadFieldRegistry
         for (int i = start; i < start + count; i++)
         {
             SomeIpUsageSite site = sites[i];
+
+            // A site whose entry is broken (invalid or repeated name) has no name to register under and no children; the decoder
+            // stops at it before it reads a field id.
+            if (site.Defect.Length > 0)
+            {
+                continue;
+            }
+
             FieldType fieldType = FieldTypeOf(model, site);
             string uiName = site.RegisteredName;
             if (site.UiName.Length > 0)

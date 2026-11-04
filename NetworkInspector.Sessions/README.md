@@ -162,7 +162,7 @@ Typical flow:
 | --- | --- |
 | `Session` | Lifecycle orchestration; packets are re-parsed on read |
 | `ISession` | Mutable API (`TryAddFrameSource`, `TryAddListener`, `TryAddJob`, `TryStart`, `TryRestart`, `Restarted`, `Shutdown`) |
-| `ISessionReader` | Read view for listeners (`PacketCount`, `Generation`, `CurrentStack`, `Fault`, `TryGetPacket`, `ReadPackets`, `TryReadPackets`) |
+| `ISessionReader` | Read view for listeners (`PacketCount`, `Generation`, `CurrentStack`, `Fault`, `TryGetPacket`, `ReadPackets`, `TryReadPackets`, `TryVisitPackets`) |
 | `StackView` | The current stack together with its generation, immutable (`IsCurrent`) |
 | `RestartOptions` / `RestartJobPolicy` | Caller choice for running jobs (`CancelNow`, `WaitThenCancel`, `Refuse`) and the wait bound |
 | `RestartReport` / `RestartNotification` | What a restart did; what `Restarted` delivers |
@@ -260,6 +260,37 @@ listener id returns `SessionErrorCode.ListenerNotFound`; disabled queries (resta
 The `Matching` scan can run past the window of the current `OnNewPackets` call. Keep a watermark (last returned
 id + 1) and start the next read at `max(watermark, fromIndex)`; see [`SESSION_GUIDE.md`](SESSION_GUIDE.md)
 section 7.3. Filtering never affects notifications: `OnNewPackets` always reports the unfiltered id window.
+
+### Export A Range
+
+`SessionExport.TryStart` exports a packet range as a background job by the pull principle: the job thread pulls the packets
+through `ISessionReader.TryVisitPackets`, parses only what the exporter and the filter need (an export of a few fields builds no
+field tree), and commits the matching packets to the exporter. Ingest keeps running; a restart ends the job and the output holds
+what was committed.
+
+```csharp
+if (SessionExport.TryStart(
+        session,
+        "export udp",
+        view => CsvExporter.CreateBuilder()
+            .ToFile(path)
+            .WithContent(SelectedFields(view.Stack, "ip.src", "udp.length"))
+            .Build(),
+        0,
+        session.PacketCount,
+        "udp.length >= 56",
+        out SessionExportJob? export,
+        out SessionFailure? failure,
+        out FilterError? filterError))
+{
+    export.Job.Join();                                  // or poll export.VisitedCount for a progress display
+    (export.Exporter as IDisposable)?.Dispose();
+}
+```
+
+`TryVisitPackets(from, to, in options, view, visitor, …)` is the same pull without a job: your visitor receives each packet of
+the range, parsed with your own `ParseOptions`, on your thread, under one stack lease per call. See
+[`SESSION_GUIDE.md`](SESSION_GUIDE.md) section 8.6.
 
 ## Value Caches
 

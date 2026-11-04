@@ -104,7 +104,7 @@ internal sealed class RandomSourceParseScenario : IProfilingScenario
         while ((next = source.NextFrame()) is not null)
         {
             Frame frame = next.Value;
-            PacketId id = new(packetId);
+            PacketId id = packetId;
             packetId++;
             if (!Packet.TryParse(id, stack, frame, in options, out Packet? packet, out ParseFailure failure))
             {

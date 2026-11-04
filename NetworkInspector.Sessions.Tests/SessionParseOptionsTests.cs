@@ -35,12 +35,12 @@ internal sealed class SessionParseOptionsTests
         ParseOptions stale = _TtlOptions(view, observer);
         _ = rig.RestartOntoStandard();
 
-        bool refused = rig.Session.TryGetPacket(new PacketId(3), in stale, view, null, out Packet? packet, out SessionFailure? failure);
+        bool refused = rig.Session.TryGetPacket(3, in stale, view, null, out Packet? packet, out SessionFailure? failure);
 
         StackView fresh = rig.Session.CurrentStack;
         RecordingFieldObserver freshObserver = new();
         ParseOptions rebuilt = _TtlOptions(fresh, freshObserver);
-        bool accepted = rig.Session.TryGetPacket(new PacketId(3), in rebuilt, fresh, null, out _, out _);
+        bool accepted = rig.Session.TryGetPacket(3, in rebuilt, fresh, null, out _, out _);
 
         await Assert.That(refused).IsFalse();
         await Assert.That(packet).IsNull();
@@ -77,7 +77,7 @@ internal sealed class SessionParseOptionsTests
             out _));
         await Assert.That(parseEntered.Wait(_Timeout)).IsTrue();
 
-        bool during = rig.Session.TryGetPacket(new PacketId(0), in options, view, null, out _, out SessionFailure? failure);
+        bool during = rig.Session.TryGetPacket(0, in options, view, null, out _, out SessionFailure? failure);
         parseRelease.Set();
         bool restarted = await restart.WaitAsync(_Timeout);
 
@@ -95,7 +95,7 @@ internal sealed class SessionParseOptionsTests
         RecordingFieldObserver observer = new();
         ParseOptions options = _TtlOptions(foreignView, observer);
 
-        bool parsed = rig.Session.TryGetPacket(new PacketId(1), in options, foreignView, null, out _, out SessionFailure? failure);
+        bool parsed = rig.Session.TryGetPacket(1, in options, foreignView, null, out _, out SessionFailure? failure);
 
         await Assert.That(parsed).IsFalse();
         await Assert.That(failure!.Value.Code).IsEqualTo(SessionErrorCode.OptionsStackMismatch);
@@ -115,15 +115,15 @@ internal sealed class SessionParseOptionsTests
         RecordingFieldObserver first = new();
         ParseOptions skip = _TtlOptions(view, first);
 
-        bool parsed = rig.Session.TryGetPacket(new PacketId(3), in skip, view, null, out Packet? packet, out SessionFailure? failure);
+        bool parsed = rig.Session.TryGetPacket(3, in skip, view, null, out Packet? packet, out SessionFailure? failure);
 
         RecordingFieldObserver second = new();
         ParseOptions again = _TtlOptions(view, second);
-        bool recycled = rig.Session.TryGetPacket(new PacketId(4), in again, view, packet, out Packet? sameInstance, out _);
+        bool recycled = rig.Session.TryGetPacket(4, in again, view, packet, out Packet? sameInstance, out _);
 
         RecordingFieldObserver built = new();
         ParseOptions build = _TtlOptions(view, built, FieldTreeMode.Build);
-        bool withTree = rig.Session.TryGetPacket(new PacketId(2), in build, view, null, out Packet? treePacket, out _);
+        bool withTree = rig.Session.TryGetPacket(2, in build, view, null, out Packet? treePacket, out _);
 
         await Assert.That(parsed).IsTrue();
         await Assert.That(failure).IsNull();
@@ -148,7 +148,7 @@ internal sealed class SessionParseOptionsTests
         using Stack foreign = TestHarness.CreateStack();
         ParseOptions options = new(FieldTreeMode.Skip, index: new PacketIndex(foreign));
 
-        bool parsed = rig.Session.TryGetPacket(new PacketId(1), in options, view, null, out _, out SessionFailure? failure);
+        bool parsed = rig.Session.TryGetPacket(1, in options, view, null, out _, out SessionFailure? failure);
 
         await Assert.That(parsed).IsFalse();
         await Assert.That(failure!.Value.Code).IsEqualTo(SessionErrorCode.OptionsStackMismatch);
@@ -162,9 +162,9 @@ internal sealed class SessionParseOptionsTests
         RecordingFieldObserver observer = new();
         ParseOptions options = _TtlOptions(view, observer);
 
-        bool unannounced = rig.Session.TryGetPacket(new PacketId(99), in options, view, null, out _, out SessionFailure? notFound);
+        bool unannounced = rig.Session.TryGetPacket(99, in options, view, null, out _, out SessionFailure? notFound);
         _ = rig.Session.TryRestart(registry => TestHarness.CreateStack(registry), out _, out _);
-        bool faulted = rig.Session.TryGetPacket(new PacketId(0), in options, view, null, out _, out SessionFailure? fault);
+        bool faulted = rig.Session.TryGetPacket(0, in options, view, null, out _, out SessionFailure? fault);
 
         await Assert.That(unannounced).IsFalse();
         await Assert.That(notFound!.Value.Code).IsEqualTo(SessionErrorCode.PacketNotFound);
