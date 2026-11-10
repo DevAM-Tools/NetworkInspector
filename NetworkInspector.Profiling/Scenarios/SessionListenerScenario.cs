@@ -67,9 +67,9 @@ internal sealed class SessionListenerScenario : IProfilingScenario, IDisposable
 
     /// <inheritdoc/>
     public string Description => _Materialize
-        ? FormattableString.Invariant(
+        ? Invariant(
             $"PrepareIteration: Session+RandomFrameSource; Run: WaitForCompletion + MaterializeAll, {FrameCount:N0} frames.")
-        : FormattableString.Invariant(
+        : Invariant(
             $"PrepareIteration: Session+RandomFrameSource; Run: WaitForCompletion + TryGetPacket recycle, {FrameCount:N0} frames.");
 
     /// <inheritdoc/>

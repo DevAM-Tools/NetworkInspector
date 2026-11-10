@@ -7,8 +7,6 @@ namespace NetworkInspector.Core.Errors;
 /// </summary>
 public enum ExportErrorKind
 {
-    #region Enum Values
-
     /// <summary>The frame's link type is not supported by this exporter.</summary>
     UnsupportedType,
 
@@ -34,6 +32,4 @@ public enum ExportErrorKind
     /// new export on the new stack. Appended after the earlier members so their numbers stay stable.
     /// </summary>
     StackMismatch,
-
-    #endregion
 }

@@ -400,9 +400,9 @@ internal static class Program
         for (int i = 0; i < scenarios.Length; i++)
         {
             Console.ForegroundColor = ConsoleColor.DarkCyan;
-            Console.Write($"  [{i + 1,2}] {scenarios[i].Name,-25}");
+            Console.Write(Invariant($"  [{i + 1,2}] {scenarios[i].Name,-25}"));
             Console.ResetColor();
-            Console.WriteLine($" — {scenarios[i].Description}");
+            Console.WriteLine(Invariant($" — {scenarios[i].Description}"));
         }
     }
 
@@ -438,7 +438,7 @@ internal static class Program
                 || selection < 1 || selection > scenarios.Length)
             {
                 Console.Error.WriteLine(
-                    FormattableString.Invariant(
+                    Invariant(
                         $"Invalid selection '{input}'. Enter a number between 1 and {scenarios.Length}."));
                 continue;
             }
@@ -498,7 +498,7 @@ internal static class Program
 
         if (!anyRan)
         {
-            Console.Error.WriteLine($"No scenario matched filter '{filter}'.");
+            Console.Error.WriteLine(Invariant($"No scenario matched filter '{filter}'."));
             Console.Error.WriteLine();
             _PrintScenarioList(scenarios);
             return 1;
@@ -520,8 +520,8 @@ internal static class Program
         TimeSpan warmupDuration = phases.Warmup(scenario);
         TimeSpan timedDuration = phases.Duration(scenario);
         Console.WriteLine();
-        _WriteColored($"=== Scenario: {scenario.Name} ===", ConsoleColor.Cyan);
-        Console.WriteLine($"    {scenario.Description}");
+        _WriteColored(Invariant($"=== Scenario: {scenario.Name} ==="), ConsoleColor.Cyan);
+        Console.WriteLine(Invariant($"    {scenario.Description}"));
         Console.WriteLine();
 
         Console.Write("Setting up...");
@@ -536,7 +536,7 @@ internal static class Program
         (long warmupIterations, _, _) = _RunForDuration(scenario, warmupDuration);
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.WriteLine(
-            FormattableString.Invariant(
+            Invariant(
                 $"Warm-up: {warmupIterations} iterations in {warmupDuration.TotalSeconds:F1} s."));
         Console.ResetColor();
 
@@ -563,7 +563,7 @@ internal static class Program
 
         // Timed profiling phase: call Run() until the configured duration has elapsed.
         Console.WriteLine(
-            FormattableString.Invariant($"Running for {timedDuration.TotalSeconds:F1} s..."));
+            Invariant($"Running for {timedDuration.TotalSeconds:F1} s..."));
         Stopwatch sw = Stopwatch.StartNew();
         (long timedIterations, long runTicks, long runAlloc) = _RunForDuration(scenario, timedDuration);
         sw.Stop();
@@ -586,7 +586,7 @@ internal static class Program
 
         double iterationsPerSecond = timedIterations / netSeconds;
         _WriteColored(
-            FormattableString.Invariant(
+            Invariant(
                 $"Completed {timedIterations} iterations in {wallSeconds:F3} s wall, {netSeconds:F3} s net Run ({iterationsPerSecond:F1} iter/s)."),
             ConsoleColor.Green);
 
@@ -602,7 +602,7 @@ internal static class Program
             double unitsPerSecond = totalWorkUnits / netSeconds;
             string throughput = _FormatRate(unitsPerSecond);
             _WriteColored(
-                FormattableString.Invariant(
+                Invariant(
                     $"Throughput: {throughput} {scenario.WorkUnitName}/s ({totalWorkUnits:N0} {scenario.WorkUnitName} total)."),
                 ConsoleColor.Yellow);
         }
@@ -613,24 +613,24 @@ internal static class Program
         double allocPerSec = wallSeconds > 0 ? allocDelta / wallSeconds : 0;
         Console.ForegroundColor = ConsoleColor.Magenta;
         Console.WriteLine(
-            FormattableString.Invariant(
+            Invariant(
                 $"  GC Allocations: {_FormatBytes(allocDelta)} total, {_FormatBytes((long)allocPerIter)}/iter, {_FormatRate(allocPerSec)}B/s"));
         Console.WriteLine(
-            FormattableString.Invariant(
+            Invariant(
                 $"  Phase alloc (includes PrepareIteration when set): {_FormatBytes(allocDelta)}"));
         Console.WriteLine(
-            FormattableString.Invariant(
+            Invariant(
                 $"  GC Collections: Gen0={gen0After - gen0Before}, Gen1={gen1After - gen1Before}, Gen2={gen2After - gen2Before}"));
         Console.WriteLine(
-            FormattableString.Invariant(
+            Invariant(
                 $"  GC Heap: {gcInfo.HeapSizeBytes / 1024.0 / 1024:F1} MB, Pause: {gcInfo.PauseTimePercentage:F1}%"));
         Console.WriteLine(
-            FormattableString.Invariant($"  Lock contentions (timed phase): {contentionAfter - contentionBefore:N0}"));
+            Invariant($"  Lock contentions (timed phase): {contentionAfter - contentionBefore:N0}"));
         if (totalWorkUnits > 0)
         {
             double allocPerWorkUnit = runAlloc / (double)totalWorkUnits;
             Console.WriteLine(
-                FormattableString.Invariant($"  Alloc/packet: {allocPerWorkUnit:F0} bytes (net Run)"));
+                Invariant($"  Alloc/packet: {allocPerWorkUnit:F0} bytes (net Run)"));
         }
         Console.ResetColor();
 
@@ -642,7 +642,7 @@ internal static class Program
         if (double.IsFinite(retained))
         {
             _WriteColored(
-                FormattableString.Invariant($"Retained: {retained:F3} bytes/{(hasUnits ? scenario.WorkUnitName : "iteration")}"),
+                Invariant($"Retained: {retained:F3} bytes/{(hasUnits ? scenario.WorkUnitName : "iteration")}"),
                 ConsoleColor.Yellow);
         }
 
@@ -686,7 +686,7 @@ internal static class Program
         }
 
         Console.WriteLine(
-            FormattableString.Invariant($"Starting timed phase automatically in {startDelay.TotalSeconds:F1} s..."));
+            Invariant($"Starting timed phase automatically in {startDelay.TotalSeconds:F1} s..."));
         Thread.Sleep(startDelay);
     }
 
@@ -704,19 +704,19 @@ internal static class Program
     /// </summary>
     private static string _FormatRate(double rate) => rate switch
     {
-        >= 1_000_000_000 => FormattableString.Invariant($"{rate / 1_000_000_000:F2} G"),
-        >= 1_000_000 => FormattableString.Invariant($"{rate / 1_000_000:F2} M"),
-        >= 1_000 => FormattableString.Invariant($"{rate / 1_000:F1} k"),
-        _ => FormattableString.Invariant($"{rate:F1} "),
+        >= 1_000_000_000 => Invariant($"{rate / 1_000_000_000:F2} G"),
+        >= 1_000_000 => Invariant($"{rate / 1_000_000:F2} M"),
+        >= 1_000 => Invariant($"{rate / 1_000:F1} k"),
+        _ => Invariant($"{rate:F1} "),
     };
 
     /// <summary>Formats a byte count with appropriate SI prefix.</summary>
     private static string _FormatBytes(long bytes) => bytes switch
     {
-        >= 1_073_741_824 => FormattableString.Invariant($"{bytes / 1_073_741_824.0:F2} GB"),
-        >= 1_048_576 => FormattableString.Invariant($"{bytes / 1_048_576.0:F1} MB"),
-        >= 1_024 => FormattableString.Invariant($"{bytes / 1_024.0:F1} KB"),
-        _ => FormattableString.Invariant($"{bytes} B"),
+        >= 1_073_741_824 => Invariant($"{bytes / 1_073_741_824.0:F2} GB"),
+        >= 1_048_576 => Invariant($"{bytes / 1_048_576.0:F1} MB"),
+        >= 1_024 => Invariant($"{bytes / 1_024.0:F1} KB"),
+        _ => Invariant($"{bytes} B"),
     };
 
     /// <summary>
@@ -733,13 +733,13 @@ internal static class Program
             process.PriorityClass = ProcessPriorityClass.High;
 
             Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine($"Process priority: {process.PriorityClass}");
+            Console.WriteLine(Invariant($"Process priority: {process.PriorityClass}"));
             Console.ResetColor();
         }
         catch (Exception ex)
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"WARNING: could not elevate process priority: {ex.Message}");
+            Console.WriteLine(Invariant($"WARNING: could not elevate process priority: {ex.Message}"));
             Console.WriteLine("Measurements may be skewed by OS scheduling jitter. Run elevated for best results.");
             Console.ResetColor();
         }

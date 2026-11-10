@@ -70,7 +70,10 @@ internal enum AscLineType : byte
     /// </summary>
     FlexRayStartCycle,
 
-    /// <summary>Ethernet packet. <c>ETH</c> or <c>AFDX</c> plus channel and direction <c>Rx</c>, <c>Tx</c>, <c>TxRq</c>, or <c>TxFwd</c>. Status lines are not packets.</summary>
+    /// <summary>
+    /// Ethernet packet. <c>ETH</c> or <c>AFDX</c> plus channel and direction <c>Rx</c>, <c>Tx</c>, <c>TxRq</c>, or <c>TxFwd</c>.
+    /// Status lines are not packets.
+    /// </summary>
     EthernetPacket,
 
     /// <summary>Environment variable event.</summary>

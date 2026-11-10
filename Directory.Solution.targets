@@ -1,0 +1,23 @@
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
+<Project>
+  <!--
+    Empties the package folder of the current version once, before `dotnet pack NetworkInspector.slnx` builds anything, so the
+    folder holds exactly the packages of this run: no package of a project that was removed, renamed, or made non-packable
+    since an earlier run of the same version, and no package from a failed run. Upload the folder as a whole.
+    Scope: only *.nupkg and *.snupkg directly in PackageOutputPath (artifacts\<Version>\); other versions and the other
+    folders below artifacts\ (baselines, measurements) are never touched.
+    Security: a PackageOutputPath that is empty would turn the file pattern into the current directory. Mitigation: nothing is
+    deleted unless PackageOutputPath is set and ends in a directory separator. Residual risk: a file that another program holds
+    open fails the delete, and the run stops with that error instead of leaving a partial folder.
+    A pack of a single project clears only that project's own package (Directory.Build.targets), because the other packages in
+    the folder may be wanted.
+    Sync: Directory.Build.targets (_RemoveOwnPackageBeforePack), README.md § Build From Source.
+  -->
+  <Target Name="_ClearPackageFolderBeforePack" BeforeTargets="Pack"
+          Condition="'$(NoBuild)' != 'true' and '$(PackageOutputPath)' != '' and HasTrailingSlash('$(PackageOutputPath)')">
+    <ItemGroup>
+      <_OldPackage Include="$(PackageOutputPath)*.nupkg;$(PackageOutputPath)*.snupkg" />
+    </ItemGroup>
+    <Delete Files="@(_OldPackage)" />
+  </Target>
+</Project>

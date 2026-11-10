@@ -14,7 +14,7 @@ namespace NetworkInspector.Core.Index;
 /// <para>
 /// <b>Container kinds and conversion:</b> the implementations are <see cref="ArrayContainer"/> (sparse: at most
 /// <see cref="ArrayContainer.MaxCapacity"/> sorted values), <see cref="BitmapContainer"/> (dense: a fixed 8 KiB bit set) and
-/// the run-length container (dense sequential ranges, created when a completed chunk is smaller as runs). An array becomes a
+/// <see cref="RunContainer"/> (dense sequential ranges, created when a completed chunk is smaller as runs). An array becomes a
 /// bitmap when an addition or a union would push it past its capacity, and a bitmap result of a set operation becomes an array
 /// again when it is sparse. That is why <see cref="Add"/> and the set operations return an <see cref="IContainer"/> that the
 /// caller must keep using instead of the instance it called: the returned container may be a different object of a different kind.
@@ -28,60 +28,28 @@ namespace NetworkInspector.Core.Index;
 /// </summary>
 internal interface IContainer
 {
-    #region Methods
+    #region Membership and mutation
 
     /// <summary>
     /// Adds a value to the container. May mutate <see langword="this"/>. Adding a value that is already present changes nothing.
     /// </summary>
+    /// <param name="value">The low 16 bits of the value to add; every <see cref="ushort"/> is valid.</param>
     /// <returns>
     /// The container to use from now on: <see langword="this"/> in the common case, or a new container of another kind when
     /// the addition made the current representation the wrong one (for example an array that outgrew its capacity).
     /// </returns>
     IContainer Add(ushort value);
 
-    /// <summary>Checks if a value is present.</summary>
+    /// <summary>Checks whether a value is present.</summary>
+    /// <param name="value">The low 16 bits of the value to look up.</param>
+    /// <returns><see langword="true"/> when the container holds <paramref name="value"/>.</returns>
     bool Contains(ushort value);
 
-    /// <summary>Number of values stored.</summary>
+    /// <summary>Number of values stored, between 0 and 65536.</summary>
     int Cardinality
     {
         get;
     }
-
-    /// <summary>
-    /// AND (intersection) with another container.
-    /// Must not mutate <see langword="this"/> or <paramref name="other"/>;
-    /// return a new container or a clone when in-place <see cref="Add"/> would alias an operand.
-    /// </summary>
-    IContainer And(IContainer other);
-
-    /// <summary>
-    /// OR (union) with another container.
-    /// Must not mutate <see langword="this"/> or <paramref name="other"/>;
-    /// return a new container or a clone when in-place <see cref="Add"/> would alias an operand.
-    /// </summary>
-    IContainer Or(IContainer other);
-
-    /// <summary>
-    /// ANDNOT (difference): this AND NOT other.
-    /// Must not mutate <see langword="this"/> or <paramref name="other"/>;
-    /// return a new container or a clone when in-place <see cref="Add"/> would alias an operand.
-    /// </summary>
-    IContainer AndNot(IContainer other);
-
-    /// <summary>
-    /// XOR (symmetric difference) with another container.
-    /// Must not mutate <see langword="this"/> or <paramref name="other"/>;
-    /// return a new container or a clone when in-place <see cref="Add"/> would alias an operand.
-    /// </summary>
-    IContainer Xor(IContainer other);
-
-    /// <summary>Creates a deep copy of this container. The copy is fully independent.</summary>
-    IContainer Clone();
-
-    #endregion
-
-    #region Properties
 
     /// <summary>
     /// The minimum value in the container.
@@ -100,6 +68,50 @@ internal interface IContainer
     {
         get;
     }
+
+    /// <summary>Creates a deep copy of this container. The copy is fully independent.</summary>
+    /// <returns>A new container of the same kind that holds the same values and shares no storage with this one.</returns>
+    IContainer Clone();
+
+    #endregion
+
+    #region Set operations
+
+    /// <summary>
+    /// AND (intersection) with another container.
+    /// Must not mutate <see langword="this"/> or <paramref name="other"/>;
+    /// return a new container or a clone when in-place <see cref="Add"/> would alias an operand.
+    /// </summary>
+    /// <param name="other">The container to intersect with; not <see langword="null"/>; not modified.</param>
+    /// <returns>A container that holds the values present in both operands; it may be of another kind than this one.</returns>
+    IContainer And(IContainer other);
+
+    /// <summary>
+    /// OR (union) with another container.
+    /// Must not mutate <see langword="this"/> or <paramref name="other"/>;
+    /// return a new container or a clone when in-place <see cref="Add"/> would alias an operand.
+    /// </summary>
+    /// <param name="other">The container to unite with; not <see langword="null"/>; not modified.</param>
+    /// <returns>A container that holds the values present in either operand; it may be of another kind than this one.</returns>
+    IContainer Or(IContainer other);
+
+    /// <summary>
+    /// ANDNOT (difference): this AND NOT other.
+    /// Must not mutate <see langword="this"/> or <paramref name="other"/>;
+    /// return a new container or a clone when in-place <see cref="Add"/> would alias an operand.
+    /// </summary>
+    /// <param name="other">The container whose values are removed from this one; not <see langword="null"/>; not modified.</param>
+    /// <returns>A container that holds the values of this container that are absent from <paramref name="other"/>.</returns>
+    IContainer AndNot(IContainer other);
+
+    /// <summary>
+    /// XOR (symmetric difference) with another container.
+    /// Must not mutate <see langword="this"/> or <paramref name="other"/>;
+    /// return a new container or a clone when in-place <see cref="Add"/> would alias an operand.
+    /// </summary>
+    /// <param name="other">The container to combine with; not <see langword="null"/>; not modified.</param>
+    /// <returns>A container that holds the values present in exactly one of the two operands.</returns>
+    IContainer Xor(IContainer other);
 
     #endregion
 }

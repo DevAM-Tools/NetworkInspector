@@ -130,7 +130,7 @@ internal sealed class PacketFrameMapTests
                     Interlocked.Increment(ref reads);
                 }
             })
-            { Name = $"PacketFrameMap reader {r}", IsBackground = true };
+            { Name = Invariant($"PacketFrameMap reader {r}"), IsBackground = true };
             readers[r].Start();
         }
 
@@ -196,7 +196,7 @@ internal sealed class PacketFrameMapTests
                     }
                 }
             })
-            { Name = $"PacketFrameMap in-order reader {r}", IsBackground = true };
+            { Name = Invariant($"PacketFrameMap in-order reader {r}"), IsBackground = true };
             readers[r].Start();
         }
 

@@ -261,7 +261,7 @@ internal static class PcapConstants
         BlockTypeDSB => "Decryption Secrets Block",
         BlockTypeCBCopy => "Custom Block (copyable)",
         BlockTypeCBNoCopy => "Custom Block (non-copyable)",
-        _ => $"Unknown Block (0x{blockType:X8})",
+        _ => Invariant($"Unknown Block (0x{blockType:X8})"),
     };
     #endregion
 }

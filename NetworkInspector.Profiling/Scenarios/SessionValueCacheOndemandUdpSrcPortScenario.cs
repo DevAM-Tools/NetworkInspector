@@ -30,7 +30,7 @@ internal sealed class SessionValueCacheOndemandUdpSrcPortScenario : IProfilingSc
     public string Name => "session-value-cache-ondemand-udp-srcport";
 
     /// <inheritdoc/>
-    public string Description => FormattableString.Invariant(
+    public string Description => Invariant(
         $"PrepareIteration: ingest {_FrameCount:N0} frames; Run: TryAddValueCache(udp.srcport) PullFill.");
 
     /// <inheritdoc/>

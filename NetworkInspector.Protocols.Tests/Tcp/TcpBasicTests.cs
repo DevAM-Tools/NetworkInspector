@@ -193,7 +193,8 @@ internal sealed class TcpBasicTests
             foreach (FieldId memberId in members)
             {
                 FieldLookupCookie cookie = FieldLookupCookie.Start;
-                while (packet.TryGetNextField(memberId, ref cookie, out Field valueField, materialize: true)) // materialize: true — need complete field tree for assertion
+                while (packet.TryGetNextField(memberId, ref cookie, out Field valueField,
+                    materialize: true)) // materialize: true — need complete field tree for assertion
                 {
                     FieldValue value = valueField.Value;
                     bool ok = value.Data.TryGetAsU64(out ulong port);

@@ -15,10 +15,17 @@ namespace NetworkInspector.Core.Protocols;
 /// <para>
 /// <b>Usage:</b>
 /// <code>
-/// if (_Gate.IsReplay(packet.Id)) { return _Replay(...); }
-/// using IngestScope scope = _Gate.Enter(packet.Id);
+/// if (_Gate.IsReplay(in context, packet.Id)) { return _Replay(...); }
+/// using IngestScope scope = _Gate.Enter(in context, packet.Id);
 /// // mutate state, record the effects of this packet
 /// </code>
+/// </para>
+/// <para>
+/// <b>Two watermarks, one truth:</b> the stack counts every packet id that completed its first parse (also one that never
+/// reached this protocol: an observer failed, another first protocol was chosen, an earlier dissector threw) and hands its
+/// verdict to the protocol in <see cref="ParseContext.IsReplay"/>. The gate's own watermark knows only the ids that passed
+/// through this protocol. The decision therefore asks the stack first; a replay of such a packet finds no recorded effect here
+/// and must treat that as "no information", never as a first parse.
 /// </para>
 /// <para>
 /// <b>Why a watermark and not a per-packet flag:</b> packet ids are first parsed in dense ascending order, so "id is at most
@@ -38,9 +45,12 @@ namespace NetworkInspector.Core.Protocols;
 /// </summary>
 public sealed class IngestGate
 {
-    #region Fields
+    #region Configuration and state
 
-    /// <summary>Highest packet id whose first parse completed; -1 until the first packet was parsed. Volatile: the release/acquire pair of the publication.</summary>
+    /// <summary>
+    /// Highest packet id whose first parse completed; -1 until the first packet was parsed. Volatile: the release/acquire pair of the
+    /// publication.
+    /// </summary>
     private volatile int _Watermark = -1;
 
     /// <summary>
@@ -49,34 +59,41 @@ public sealed class IngestGate
     /// </summary>
     private int _Nesting;
 
-    #endregion
-
-    #region Properties
-
     /// <summary>The highest packet id whose first parse completed; -1 until a packet was parsed. Readable from any thread.</summary>
     public int Watermark => _Watermark;
 
     #endregion
 
-    #region Public API
+    #region First parse or replay
 
     /// <summary>
-    /// Whether the packet was already parsed once and must therefore replay its recorded effects instead of mutating state.
+    /// Whether the parse must replay recorded effects instead of mutating state: the stack classified it as a replay, or this
+    /// gate already completed the id.
     /// </summary>
+    /// <param name="context">The context of the running parse; carries the stack's verdict.</param>
     /// <param name="id">The packet being parsed.</param>
-    /// <returns>True for a replay. Packet ids are first parsed in dense ascending order, so <c>id &lt;= watermark</c> means this id (or a later one) completed its first parse.</returns>
-    public bool IsReplay(PacketId id) => id.Value <= _Watermark;
+    /// <returns>
+    /// True for a replay. The stack's verdict comes first: a packet can complete its first parse without reaching this protocol
+    /// (an observer failed, another first protocol was chosen, an earlier dissector threw); its later parses are replays here too
+    /// and find no recorded effect. Otherwise packet ids are first parsed in dense ascending order, so <c>id &lt;= watermark</c>
+    /// means this id (or a later one) completed its first parse here.
+    /// </returns>
+    public bool IsReplay(in ParseContext context, PacketId id) => context.IsReplay || id.Value <= _Watermark;
 
     /// <summary>
     /// Opens the first-parse scope of a packet. Dispose the scope (a <c>using</c> declaration) when the parse ends, also on
     /// an error or exception.
     /// </summary>
+    /// <param name="context">The context of the running parse; carries the stack's verdict.</param>
     /// <param name="id">The packet being parsed for the first time.</param>
     /// <returns>The scope; ending the outermost one raises the watermark to <paramref name="id"/>.</returns>
-    /// <exception cref="InvalidOperationException">The packet was already parsed once. Entering for a replayed id is a bug of the caller: it would mutate shared state on a re-parse.</exception>
-    public IngestScope Enter(PacketId id)
+    /// <exception cref="InvalidOperationException">
+    /// The parse is a replay, by the stack's verdict or by this gate's watermark. Entering for a replayed id is a bug of the
+    /// caller: it would mutate shared state on a re-parse.
+    /// </exception>
+    public IngestScope Enter(in ParseContext context, PacketId id)
     {
-        if (IsReplay(id))
+        if (IsReplay(in context, id))
         {
             throw new InvalidOperationException("Enter called for a packet that was already parsed once.");
         }
@@ -85,14 +102,18 @@ public sealed class IngestGate
         return new IngestScope(this, id);
     }
 
-    #endregion
-
-    #region Internal API
-
     /// <summary>Ends one scope; the outermost one raises the watermark monotonically.</summary>
     /// <param name="id">The packet of the scope that ends.</param>
+    /// <exception cref="InvalidOperationException">No scope is open: a scope was disposed more than once.</exception>
     internal void Leave(PacketId id)
     {
+        // A scope copy that is disposed twice must not drive the counter below zero: the watermark would never be raised again
+        // and every later packet would be a first parse. This is a bug of the caller, hence an exception.
+        if (_Nesting == 0)
+        {
+            throw new InvalidOperationException("IngestScope was disposed more than once.");
+        }
+
         _Nesting--;
         if (_Nesting == 0 && id.Value > _Watermark)
         {
@@ -107,15 +128,24 @@ public sealed class IngestGate
 /// <summary>
 /// An open first-parse scope of an <see cref="IngestGate"/>. Disposing the outermost scope raises the watermark.
 /// <para>
-/// <b>Thread-safety:</b> a stack-only value of the first-parse thread. <see cref="Dispose"/> must be called exactly once; the
-/// default value is an inert scope (a replay holds one so the call site needs no branch around its <c>finally</c>).
+/// <b>Thread-safety:</b> a stack-only value of the first-parse thread. <see cref="Dispose"/> must be called exactly once. A
+/// second call on a copy throws <see cref="InvalidOperationException"/> when no other scope of the gate is open; while an outer
+/// scope is open the extra call is not detected (it would end the outer scope early), so the exactly-once rule is the caller's duty.
+/// The default value is an inert scope (a replay holds
+/// one so the call site needs no branch around its <c>finally</c>).
 /// </para>
 /// </summary>
 public readonly ref struct IngestScope
 {
+    /// <summary>The gate that opened the scope; null for the inert default scope.</summary>
     private readonly IngestGate? _Gate;
+
+    /// <summary>The packet of the scope.</summary>
     private readonly PacketId _Id;
 
+    /// <summary>Creates the scope that <see cref="IngestGate.Enter"/> hands out.</summary>
+    /// <param name="gate">The gate that counts the scope.</param>
+    /// <param name="id">The packet being parsed for the first time.</param>
     internal IngestScope(IngestGate gate, PacketId id)
     {
         _Gate = gate;
@@ -123,5 +153,6 @@ public readonly ref struct IngestScope
     }
 
     /// <summary>Ends the scope; the outermost scope of a packet raises the watermark and thereby publishes its effects.</summary>
+    /// <exception cref="InvalidOperationException">The scope was already disposed (through a copy) and no other scope is open.</exception>
     public void Dispose() => _Gate?.Leave(_Id);
 }

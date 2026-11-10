@@ -73,8 +73,8 @@ header (`PcapException`, `BlfException`). Problems inside the file are handled b
 ```csharp
 using NetworkInspector.Core;
 using NetworkInspector.Core.Ids;
-using NetworkInspector.Core.Settings;
 using NetworkInspector.Protocols;
+using NetworkInspector.Settings;
 using NetworkInspector.Sources.Pcapng;
 
 // The source must be started with the registry the stack was built with.

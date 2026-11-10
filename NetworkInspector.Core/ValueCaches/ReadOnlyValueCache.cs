@@ -24,16 +24,13 @@ namespace NetworkInspector.Core.ValueCaches;
 /// </summary>
 public readonly struct ReadOnlyValueCache : IReadOnlyValueCache
 {
-    #region Fields
+    #region Owner and construction
 
     /// <summary>The cache this view reads. Non-null for any view made with the public constructor; a <c>default</c> view has none.</summary>
     private readonly ValueCache _Owner;
 
-    #endregion
-
-    #region Lifecycle
-
     /// <summary>Creates a view over <paramref name="owner"/>.</summary>
+    /// <param name="owner">The cache to read; the view keeps a reference to it and never changes it.</param>
     /// <exception cref="ArgumentNullException"><paramref name="owner"/> is <see langword="null"/>.</exception>
     public ReadOnlyValueCache(ValueCache owner)
     {
@@ -43,7 +40,7 @@ public readonly struct ReadOnlyValueCache : IReadOnlyValueCache
 
     #endregion
 
-    #region Properties
+    #region Cache state
 
     /// <inheritdoc/>
     public bool IsAbandoned => _Owner.IsAbandoned;
@@ -77,7 +74,7 @@ public readonly struct ReadOnlyValueCache : IReadOnlyValueCache
 
     #endregion
 
-    #region Public API
+    #region Series lookup
 
     /// <inheritdoc/>
     public ReadOnlyValueCacheSeries<T> GetSeries<T>(FieldId fieldId) =>
@@ -86,7 +83,7 @@ public readonly struct ReadOnlyValueCache : IReadOnlyValueCache
     /// <inheritdoc/>
     public bool TryGetSeries<T>(FieldId fieldId, out ReadOnlyValueCacheSeries<T> series)
     {
-        if (!_Owner.TryGetSeries(fieldId, out ValueCacheSeries<T>? live) || live is null)
+        if (!_Owner.TryGetSeries(fieldId, out ValueCacheSeries<T>? live))
         {
             series = default;
             return false;
@@ -99,7 +96,7 @@ public readonly struct ReadOnlyValueCache : IReadOnlyValueCache
     /// <inheritdoc/>
     public bool TryGetSeries<T>(string fieldName, out ReadOnlyValueCacheSeries<T> series)
     {
-        if (!_Owner.TryGetSeries(fieldName, out ValueCacheSeries<T>? live) || live is null)
+        if (!_Owner.TryGetSeries(fieldName, out ValueCacheSeries<T>? live))
         {
             series = default;
             return false;
@@ -116,7 +113,7 @@ public readonly struct ReadOnlyValueCache : IReadOnlyValueCache
     /// <inheritdoc/>
     public bool TryGetCustomTextSeries(FieldId fieldId, out ReadOnlyValueCacheSeries<string> series)
     {
-        if (!_Owner.TryGetCustomTextSeries(fieldId, out ValueCacheSeries<string>? live) || live is null)
+        if (!_Owner.TryGetCustomTextSeries(fieldId, out ValueCacheSeries<string>? live))
         {
             series = default;
             return false;
@@ -129,7 +126,7 @@ public readonly struct ReadOnlyValueCache : IReadOnlyValueCache
     /// <inheritdoc/>
     public bool TryGetCustomTextSeries(string fieldName, out ReadOnlyValueCacheSeries<string> series)
     {
-        if (!_Owner.TryGetCustomTextSeries(fieldName, out ValueCacheSeries<string>? live) || live is null)
+        if (!_Owner.TryGetCustomTextSeries(fieldName, out ValueCacheSeries<string>? live))
         {
             series = default;
             return false;
@@ -146,7 +143,7 @@ public readonly struct ReadOnlyValueCache : IReadOnlyValueCache
     /// <inheritdoc/>
     public bool TryGetCustomRepresentationSeries(FieldId fieldId, out ReadOnlyValueCacheSeries<string> series)
     {
-        if (!_Owner.TryGetCustomRepresentationSeries(fieldId, out ValueCacheSeries<string>? live) || live is null)
+        if (!_Owner.TryGetCustomRepresentationSeries(fieldId, out ValueCacheSeries<string>? live))
         {
             series = default;
             return false;
@@ -159,7 +156,7 @@ public readonly struct ReadOnlyValueCache : IReadOnlyValueCache
     /// <inheritdoc/>
     public bool TryGetCustomRepresentationSeries(string fieldName, out ReadOnlyValueCacheSeries<string> series)
     {
-        if (!_Owner.TryGetCustomRepresentationSeries(fieldName, out ValueCacheSeries<string>? live) || live is null)
+        if (!_Owner.TryGetCustomRepresentationSeries(fieldName, out ValueCacheSeries<string>? live))
         {
             series = default;
             return false;

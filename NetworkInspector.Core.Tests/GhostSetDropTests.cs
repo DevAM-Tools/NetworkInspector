@@ -3,7 +3,8 @@
 namespace NetworkInspector.Core.Tests;
 
 /// <summary>
-/// Tests for <see cref="GhostSet{TKey}.DroppedCount"/> (F-CA-02): entries whose individual
+/// Tests for <see cref="GhostSet{TKey}.DroppedCount"/> and its public view
+/// <see cref="TwoQueueCache{TKey, TValue}.GhostDroppedCount"/>: entries whose individual
 /// weight exceeds the entire ghost budget must be silently dropped and counted.
 /// </summary>
 internal sealed class GhostSetDropTests
@@ -80,5 +81,27 @@ internal sealed class GhostSetDropTests
         g.Add(1, int.MaxValue);
         await Assert.That(g.Count).IsEqualTo(0);
         await Assert.That(g.DroppedCount).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task TwoQueueCache_ExposesTheGhostDropCount_AndClearResetsIt()
+    {
+        // Budget 4 with A1in 4 and a ghost budget of 2: the second insert evicts the first entry (weight 3), which is too heavy
+        // for the ghost budget, so the ghost set drops it and the cache reports it.
+        TwoQueueCache<int, int> cache = TwoQueueCache.Create2QCustom<int, int>(4, 4, 2, new ValueIsWeightWeigher());
+        cache.Put(1, 3);
+        await Assert.That(cache.GhostDroppedCount).IsEqualTo(0L);
+
+        cache.Put(2, 3);
+        await Assert.That(cache.GhostDroppedCount).IsEqualTo(1L);
+
+        cache.Clear();
+        await Assert.That(cache.GhostDroppedCount).IsEqualTo(0L);
+    }
+
+    /// <summary>Weigher that uses the int value itself as weight.</summary>
+    private sealed class ValueIsWeightWeigher : IWeigher<int, int>
+    {
+        public int Weigh(int key, int value) => value;
     }
 }

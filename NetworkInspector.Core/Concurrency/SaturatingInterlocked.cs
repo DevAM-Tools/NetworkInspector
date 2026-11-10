@@ -15,8 +15,6 @@ namespace NetworkInspector.Core.Concurrency;
 /// </summary>
 public static class SaturatingInterlocked
 {
-    #region Public API
-
     /// <summary>
     /// Atomically increments <paramref name="location"/> unless it is already <see cref="int.MaxValue"/>.
     /// </summary>
@@ -43,6 +41,4 @@ public static class SaturatingInterlocked
             }
         }
     }
-
-    #endregion
 }

@@ -9,8 +9,6 @@ namespace NetworkInspector.Core.Protocols;
 /// </summary>
 internal sealed class RootProtocol : IProtocol
 {
-    #region Properties
-
     /// <inheritdoc/>
     public string Name => "root";
 
@@ -20,14 +18,12 @@ internal sealed class RootProtocol : IProtocol
     /// <inheritdoc/>
     public string? Description => "Owning protocol for the root field";
 
-    #endregion
-
-    #region Methods
-
     /// <summary>
     /// No-op — <see cref="RootProtocol"/> does not own any fields beyond the root field
     /// (which is registered by <see cref="StackBuilder"/>).
     /// </summary>
+    /// <param name="builder">The builder; unused, because the root field is registered by <see cref="StackBuilder"/>.</param>
+    /// <param name="protocolId">The id of this protocol; unused.</param>
     internal static void RegisterWith(IStackBuilder builder, ProtocolId protocolId)
     {
         // Root field is registered by StackBuilder. Nothing else to register.
@@ -40,7 +36,9 @@ internal sealed class RootProtocol : IProtocol
     /// is the parse entry point (<see cref="Packet"/> dispatches to the stack's packet protocol, not to the root).
     /// Returns 0 (Ok, nothing consumed) as a safety fallback.
     /// </summary>
+    /// <param name="parentField">The parent field; unused.</param>
+    /// <param name="data">The packet data; unused.</param>
+    /// <param name="context">The parse context; unused.</param>
+    /// <returns>0: success with no byte consumed.</returns>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context) => 0;
-
-    #endregion
 }

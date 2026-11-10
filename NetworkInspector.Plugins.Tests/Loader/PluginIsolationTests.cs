@@ -92,9 +92,9 @@ internal sealed class PluginIsolationTests
         PluginRecord generic = report.Plugins.Single(static record => record.Name.StartsWith(_Namespace + "GenericPlugin", StringComparison.Ordinal));
         PluginRecord noConstructor = report.Plugins.Single(static record => record.Name == _Namespace + "NoDefaultCtorPlugin");
         PluginRecord infoThrows = report.Plugins.Single(static record => record.Name == _Namespace + "InfoThrowsPlugin");
-        await Assert.That(internalType.Reason).IsEqualTo($"Entry type '{_Namespace}InternalPlugin' must be public.");
+        await Assert.That(internalType.Reason).IsEqualTo(Invariant($"Entry type '{_Namespace}InternalPlugin' must be public."));
         await Assert.That(Expect.NotNull(generic.Reason)).EndsWith("must not be generic.");
-        await Assert.That(noConstructor.Reason).IsEqualTo($"Entry type '{_Namespace}NoDefaultCtorPlugin' needs a public parameterless constructor.");
+        await Assert.That(noConstructor.Reason).IsEqualTo(Invariant($"Entry type '{_Namespace}NoDefaultCtorPlugin' needs a public parameterless constructor."));
         await Assert.That(Expect.NotNull(infoThrows.Reason)).StartsWith("reading Info threw:");
         await Assert.That(new[] { internalType, generic, noConstructor, infoThrows }.All(static record => record.State == PluginLoadState.Failed)).IsTrue();
 

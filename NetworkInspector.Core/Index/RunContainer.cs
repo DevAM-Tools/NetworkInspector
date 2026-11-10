@@ -21,17 +21,17 @@ namespace NetworkInspector.Core.Index;
 /// </summary>
 internal sealed class RunContainer : IContainer
 {
-    #region Fields
 
-    // Sorted by Start; only the first RunCount entries are valid. Length is the run length minus one (inclusive end).
+    #region Configuration and state
+
+    /// <summary>
+    /// The runs, sorted by <c>Start</c>; only the first <see cref="RunCount"/> entries are valid. <c>Length</c> is the run
+    /// length minus one (the end is inclusive), so a full 65 536-value run fits a <see cref="ushort"/>.
+    /// </summary>
     private (ushort Start, ushort Length)[] _Runs;
 
     /// <summary>Number of valid runs in the backing array.</summary>
     internal int RunCount { get; private set; }
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>Creates an empty run-length encoded container.</summary>
     internal RunContainer()
@@ -40,7 +40,9 @@ internal sealed class RunContainer : IContainer
         RunCount = 0;
     }
 
-    /// <summary>Creates a run container from existing runs (used by Clone).</summary>
+    /// <summary>Creates a run container that takes over existing runs (used by <see cref="Clone"/> and <see cref="FromContainer"/>).</summary>
+    /// <param name="runs">The backing array; sorted, non-overlapping, non-touching runs; ownership passes to the container.</param>
+    /// <param name="count">The number of valid entries at the start of <paramref name="runs"/>.</param>
     private RunContainer((ushort Start, ushort Length)[] runs, int count)
     {
         _Runs = runs;
@@ -49,7 +51,7 @@ internal sealed class RunContainer : IContainer
 
     #endregion
 
-    #region Properties
+    #region Contents and copy
 
     /// <inheritdoc/>
     /// <remarks>O(runs): summed on every call, not cached (unlike the array and bitmap containers).</remarks>
@@ -62,6 +64,7 @@ internal sealed class RunContainer : IContainer
             {
                 total += _Runs[i].Length + 1;
             }
+
             return total;
         }
     }
@@ -76,6 +79,7 @@ internal sealed class RunContainer : IContainer
             {
                 return _Runs[0].Start;
             }
+
             return ushort.MinValue;
         }
     }
@@ -90,14 +94,11 @@ internal sealed class RunContainer : IContainer
             {
                 return ushort.MinValue;
             }
+
             (ushort Start, ushort Length) = _Runs[RunCount - 1];
             return (ushort)(Start + Length);
         }
     }
-
-    #endregion
-
-    #region Public API
 
     /// <inheritdoc/>
     public bool Contains(ushort value)
@@ -123,6 +124,7 @@ internal sealed class RunContainer : IContainer
                 return true;
             }
         }
+
         return false;
     }
 
@@ -134,6 +136,10 @@ internal sealed class RunContainer : IContainer
         Array.Copy(_Runs, runsCopy, RunCount);
         return new RunContainer(runsCopy, RunCount);
     }
+
+    #endregion
+
+    #region Adding values
 
     /// <inheritdoc/>
     /// <remarks>Mutates in place and always returns <see langword="this"/>; a run container never changes its type.</remarks>
@@ -154,7 +160,7 @@ internal sealed class RunContainer : IContainer
             idx++;
         }
 
-        // Check if can extend previous run
+        // Extend the previous run upwards when the value is directly above its end.
         if (idx > 0)
         {
             ref (ushort Start, ushort Length) prev = ref _Runs[idx - 1];
@@ -162,29 +168,92 @@ internal sealed class RunContainer : IContainer
             if (prevEnd + 1 == value)
             {
                 prev.Length++;
-                // Check if we can merge with next run
+
+                // The widened run may now touch the next one: merge to keep the "no touching runs" invariant.
                 _TryMergeAt(idx - 1);
                 return this;
             }
         }
 
-        // Check if can extend next run
+        // Extend the next run downwards when the value is directly below its start.
         if (idx < RunCount && _Runs[idx].Start == value + 1)
         {
             _Runs[idx].Start = value;
             _Runs[idx].Length++;
-            // Check merge with prev
+
+            // The widened run may now touch the previous one: merge.
             if (idx > 0)
             {
                 _TryMergeAt(idx - 1);
             }
+
             return this;
         }
 
-        // Insert new run
+        // The value touches no run: insert a new single-value run.
         _InsertRunAt(idx, value, 0);
         return this;
     }
+
+    /// <summary>
+    /// Merges run <paramref name="idx"/> with run <paramref name="idx"/> + 1 when they overlap or touch (the next run
+    /// starts at most one value after this run's end). Called after an add widened a run, to restore the invariant that
+    /// runs never touch.
+    /// </summary>
+    /// <param name="idx">The index of the run to merge with its successor; a value at or above <c>RunCount - 1</c> does nothing.</param>
+    private void _TryMergeAt(int idx)
+    {
+        if (idx + 1 >= RunCount)
+        {
+            return;
+        }
+
+        ushort end = (ushort)(_Runs[idx].Start + _Runs[idx].Length);
+        if (end + 1 >= _Runs[idx + 1].Start)
+        {
+            ushort newEnd = Math.Max(end, (ushort)(_Runs[idx + 1].Start + _Runs[idx + 1].Length));
+            _Runs[idx].Length = (ushort)(newEnd - _Runs[idx].Start);
+            _RemoveRunAt(idx + 1);
+        }
+    }
+
+    /// <summary>Inserts a run at position <paramref name="idx"/>, shifting later runs up and growing the backing array when full.</summary>
+    /// <param name="idx">The insertion index, 0 to <c>RunCount</c>; <c>RunCount</c> appends without shifting.</param>
+    /// <param name="start">The first value of the run; the caller keeps the runs sorted and non-touching.</param>
+    /// <param name="length">The run length minus one (the end is inclusive).</param>
+    private void _InsertRunAt(int idx, ushort start, ushort length)
+    {
+        // A zero-length run array (Clone of an empty container) grows to the default capacity 4; doubling 0 stays 0.
+        if (RunCount == _Runs.Length)
+        {
+            Array.Resize(ref _Runs, Math.Max(_Runs.Length * 2, 4));
+        }
+
+        // Open a gap only for a real insert; an append shifts nothing.
+        if (idx < RunCount)
+        {
+            Array.Copy(_Runs, idx, _Runs, idx + 1, RunCount - idx);
+        }
+
+        _Runs[idx] = (start, length);
+        RunCount++;
+    }
+
+    /// <summary>Removes the run at <paramref name="idx"/> by shifting later runs down. The backing array keeps its capacity.</summary>
+    /// <param name="idx">The index of the run to remove, 0 to <c>RunCount - 1</c>.</param>
+    private void _RemoveRunAt(int idx)
+    {
+        if (idx < RunCount - 1)
+        {
+            Array.Copy(_Runs, idx + 1, _Runs, idx, RunCount - idx - 1);
+        }
+
+        RunCount--;
+    }
+
+    #endregion
+
+    #region Set operations
 
     /// <inheritdoc/>
     public IContainer And(IContainer other)
@@ -234,6 +303,8 @@ internal sealed class RunContainer : IContainer
     /// <summary>
     /// Range-based intersection for two sorted run lists — O(runs) without per-value iteration.
     /// </summary>
+    /// <param name="other">The run container to intersect with; not modified.</param>
+    /// <returns>A new run container that holds the values present in both; empty when they share none.</returns>
     private RunContainer _AndRunContainer(RunContainer other)
     {
         // Two-pointer sweep: intersect the current pair of runs, then advance the run that ends first (both when they end
@@ -276,6 +347,8 @@ internal sealed class RunContainer : IContainer
     /// <summary>
     /// Intersect each run with a sorted array via binary search on run bounds — avoids full run expansion.
     /// </summary>
+    /// <param name="arr">The array container to intersect with; not modified.</param>
+    /// <returns>A new array container that holds the values of <paramref name="arr"/> that lie inside a run.</returns>
     private IContainer _AndArrayContainer(ArrayContainer arr)
     {
         ArrayContainer result = new();
@@ -313,22 +386,18 @@ internal sealed class RunContainer : IContainer
         // ArrayContainer.MaxCapacity (4096) the result could not be a valid array container, so go through a bitmap.
         if (Cardinality + other.Cardinality > ArrayContainer.MaxCapacity)
         {
+            // Perf: set whole runs with word masks (at most 1 024 word stores per chunk) instead of one Add per value (up to
+            // 65 536). Run with run stays in the word domain; FromPopcount then counts once and picks the result kind.
             BitmapContainer bitmap = new();
-            IContainer b = bitmap;
-            for (int i = 0; i < RunCount; i++)
+            SetRangesIn(bitmap.Bitmap);
+            if (other is RunContainer otherRun)
             {
-                ushort start = _Runs[i].Start;
-                ushort end = (ushort)(start + _Runs[i].Length);
-                for (ushort v = start; v <= end; v++)
-                {
-                    b = b.Add(v);
-                    if (v == ushort.MaxValue)
-                    {
-                        break;
-                    }
-                }
+                otherRun.SetRangesIn(bitmap.Bitmap);
+                return BitmapContainer.FromPopcount(bitmap);
             }
-            return b.Or(other);
+
+            // FromPopcount first: SetRangesIn does not maintain the cached cardinality that the receiver's Or relies on.
+            return BitmapContainer.FromPopcount(bitmap).Or(other);
         }
 
         // Small union: add other's elements to a clone of this.
@@ -421,32 +490,28 @@ internal sealed class RunContainer : IContainer
     /// <inheritdoc/>
     public IContainer Xor(IContainer other)
     {
-        // Materialize to bitmap for XOR — symmetric difference is complex with runs. The fill below goes value by value;
-        // SetRangesIn (word masks, as used by AndNot) fills a bitmap faster for long runs.
+        // Symmetric difference in the word domain: set this side's runs with word masks, then toggle (run operand) or let the
+        // counted container do the XOR (array or bitmap operand). Perf: word masks instead of one Add per value.
         BitmapContainer bitmap = new();
-        for (int i = 0; i < RunCount; i++)
+        SetRangesIn(bitmap.Bitmap);
+        if (other is RunContainer otherRun)
         {
-            ushort start = _Runs[i].Start;
-            ushort end = (ushort)(start + _Runs[i].Length);
-            for (ushort v = start; v <= end; v++)
-            {
-                bitmap.Add(v);
-                if (v == ushort.MaxValue)
-                {
-                    break;
-                }
-            }
+            otherRun.ToggleRangesIn(bitmap.Bitmap);
+            return BitmapContainer.FromPopcount(bitmap);
         }
-        return bitmap.Xor(other);
+
+        return BitmapContainer.FromPopcount(bitmap).Xor(other);
     }
 
     #endregion
 
-    #region Internal helpers (Bitmap interop)
+    #region Bitmap word-range interop
 
     /// <summary>
     /// Returns the i-th run as <c>(start, end)</c> where <c>end</c> is inclusive.
     /// </summary>
+    /// <param name="index">The run index, 0 to <see cref="RunCount"/> - 1; not range-checked.</param>
+    /// <returns>The first and the last value of the run.</returns>
     internal (ushort Start, ushort End) RunAt(int index)
     {
         (ushort start, ushort length) = _Runs[index];
@@ -458,6 +523,7 @@ internal sealed class RunContainer : IContainer
     /// (must be sized <see cref="BitmapContainer.BitmapSize"/>). Used by
     /// <c>BitmapContainer.Or(RunContainer)</c> to avoid the value-by-value loop.
     /// </summary>
+    /// <param name="bitmap">The words to change; exactly <see cref="BitmapContainer.BitmapSize"/> entries; not range-checked.</param>
     internal void SetRangesIn(ulong[] bitmap)
     {
         for (int i = 0; i < RunCount; i++)
@@ -471,6 +537,7 @@ internal sealed class RunContainer : IContainer
     /// Clears all bits covered by this container's runs in <paramref name="bitmap"/>.
     /// Used by <c>BitmapContainer.AndNot(RunContainer)</c>.
     /// </summary>
+    /// <param name="bitmap">The words to change; exactly <see cref="BitmapContainer.BitmapSize"/> entries; not range-checked.</param>
     internal void ClearRangesIn(ulong[] bitmap)
     {
         for (int i = 0; i < RunCount; i++)
@@ -484,6 +551,7 @@ internal sealed class RunContainer : IContainer
     /// Toggles all bits covered by this container's runs in <paramref name="bitmap"/>.
     /// Used by <c>BitmapContainer.Xor(RunContainer)</c>.
     /// </summary>
+    /// <param name="bitmap">The words to change; exactly <see cref="BitmapContainer.BitmapSize"/> entries; not range-checked.</param>
     internal void ToggleRangesIn(ulong[] bitmap)
     {
         for (int i = 0; i < RunCount; i++)
@@ -493,10 +561,16 @@ internal sealed class RunContainer : IContainer
         }
     }
 
+    /// <summary>The word operation that <see cref="_ApplyRangeMask"/> applies to every covered word.</summary>
     private enum RangeOp
     {
+        /// <summary>Sets the covered bits.</summary>
         Or,
+
+        /// <summary>Clears the covered bits.</summary>
         AndNot,
+
+        /// <summary>Toggles the covered bits.</summary>
         Xor,
     }
 
@@ -505,6 +579,10 @@ internal sealed class RunContainer : IContainer
     /// <paramref name="endBit"/>] in <paramref name="bitmap"/>. Uses ulong-word masks rather than
     /// per-bit loops, so a 65,536-bit run costs at most ~1024 ulong ops.
     /// </summary>
+    /// <param name="bitmap">The words to change; exactly <see cref="BitmapContainer.BitmapSize"/> entries.</param>
+    /// <param name="startBit">The first bit of the range, 0 to 65535.</param>
+    /// <param name="endBit">The last bit of the range (inclusive), <paramref name="startBit"/> to 65535.</param>
+    /// <param name="op">The operation applied to each covered word with the range mask.</param>
     private static void _ApplyRangeMask(ulong[] bitmap, int startBit, int endBit, RangeOp op)
     {
         // Single-word fast path: compute one mask covering the bit range and apply it.
@@ -518,23 +596,33 @@ internal sealed class RunContainer : IContainer
             // Construct mask of bits [firstBit..lastBit] inside one ulong without 64-bit shift
             // overflow: when lastBit == 63 and firstBit == 0 the mask must equal ~0UL.
             int width = lastBit - firstBit + 1;
-            ulong mask = width == 64 ? ~0UL : ((1UL << width) - 1) << firstBit;
+            ulong mask = width == 64
+                ? ~0UL
+                : ((1UL << width) - 1) << firstBit;
             _ApplyOp(ref bitmap[firstWord], mask, op);
             return;
         }
 
-        // Multi-word path
-        ulong firstMask = ~0UL << firstBit;       // high bits of the first word
-        ulong lastMask = lastBit == 63 ? ~0UL : (1UL << (lastBit + 1)) - 1; // low bits of the last word
+        // Multi-word path: a partial first word, whole words in between, a partial last word.
+        // The first mask holds the high bits of the first word, the last mask the low bits of the last word.
+        ulong firstMask = ~0UL << firstBit;
+        ulong lastMask = lastBit == 63
+            ? ~0UL
+            : (1UL << (lastBit + 1)) - 1;
 
         _ApplyOp(ref bitmap[firstWord], firstMask, op);
         for (int w = firstWord + 1; w < lastWord; w++)
         {
             _ApplyOp(ref bitmap[w], ~0UL, op);
         }
+
         _ApplyOp(ref bitmap[lastWord], lastMask, op);
     }
 
+    /// <summary>Applies one word operation with a mask to a word of the bitmap.</summary>
+    /// <param name="word">The word to change in place.</param>
+    /// <param name="mask">The bits to set, clear, or toggle.</param>
+    /// <param name="op">The operation to apply.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void _ApplyOp(ref ulong word, ulong mask, RangeOp op)
     {
@@ -554,13 +642,64 @@ internal sealed class RunContainer : IContainer
 
     #endregion
 
+    #region Rank and select
+
+    /// <summary>Counts the values of this container that are at most <paramref name="threshold"/>. O(runs), no allocation.</summary>
+    /// <param name="threshold">The largest value to count.</param>
+    /// <returns>The number of contained values in <c>0..threshold</c>.</returns>
+    internal int Rank(ushort threshold)
+    {
+        int count = 0;
+        for (int i = 0; i < RunCount; i++)
+        {
+            int start = _Runs[i].Start;
+            if (start > threshold)
+            {
+                // Runs are sorted by start: no later run can contribute.
+                break;
+            }
+
+            // Length is the run length minus one, so the inclusive end is Start + Length.
+            int end = start + _Runs[i].Length;
+            count += Math.Min(end, threshold) - start + 1;
+        }
+
+        return count;
+    }
+
+    /// <summary>Returns the value at position <paramref name="n"/> (0-based, ascending). O(runs), no allocation.</summary>
+    /// <param name="n">The position; the caller guarantees <c>0 &lt;= n &lt; Cardinality</c>.</param>
+    /// <returns>The n-th smallest contained value; 0 when <paramref name="n"/> is out of range (the caller's check prevents it).</returns>
+    internal ushort Select(int n)
+    {
+        int remaining = n;
+        for (int i = 0; i < RunCount; i++)
+        {
+            int size = _Runs[i].Length + 1;
+            if (remaining < size)
+            {
+                return (ushort)(_Runs[i].Start + remaining);
+            }
+
+            remaining -= size;
+        }
+
+        return 0;
+    }
+
+    #endregion
+
     #region Run optimization
 
     /// <summary>Serialized size of a bitmap container in bytes (1024 words; Roaring format).</summary>
     internal const int BitmapContainerBytes = BitmapContainer.BitmapSize * sizeof(ulong);
 
-    /// <summary>Serialized size in bytes of a run container with <paramref name="runCount"/> runs: a count and two
-    /// <see cref="ushort"/> values per run (Roaring format).</summary>
+    /// <summary>
+    /// Serialized size in bytes of a run container with <paramref name="runCount"/> runs: a count and two
+    /// <see cref="ushort"/> values per run (Roaring format).
+    /// </summary>
+    /// <param name="runCount">The number of runs, 0 to 32 768.</param>
+    /// <returns>The size in bytes: <c>2 + 4 * runCount</c>.</returns>
     internal static int SerializedSize(int runCount) => 2 + (4 * runCount);
 
     /// <summary>
@@ -570,6 +709,7 @@ internal sealed class RunContainer : IContainer
     /// heuristic for in-memory choice; nothing is serialized.
     /// </summary>
     /// <param name="container">The container to size.</param>
+    /// <returns>The size in bytes of <paramref name="container"/> in its current kind.</returns>
     internal static int SerializedSizeOf(IContainer container) => container switch
     {
         ArrayContainer array => 2 + (2 * array.Cardinality),
@@ -582,6 +722,7 @@ internal sealed class RunContainer : IContainer
     /// follow its predecessor. O(cardinality) for arrays, O(1024) word operations for bitmaps.
     /// </summary>
     /// <param name="container">The container to inspect.</param>
+    /// <returns>The number of runs; 0 for an empty container.</returns>
     /// <exception cref="UnreachableException">The container is none of the three known implementations.</exception>
     internal static int CountRuns(IContainer container)
     {
@@ -594,7 +735,9 @@ internal sealed class RunContainer : IContainer
             case ArrayContainer array:
             {
                 int count = array.Cardinality;
-                int runs = count > 0 ? 1 : 0;
+                int runs = count > 0
+                    ? 1
+                    : 0;
                 for (int i = 1; i < count; i++)
                 {
                     if (array.ValueAt(i) != array.ValueAt(i - 1) + 1)
@@ -632,6 +775,7 @@ internal sealed class RunContainer : IContainer
     /// clear bit ends the run (the CRoaring <c>run_container_from_bitmap</c> scan).
     /// </summary>
     /// <param name="container">The container to convert; it is not modified.</param>
+    /// <returns>A new run container; for a run container, a clone of it.</returns>
     /// <exception cref="UnreachableException">The container is none of the three known implementations.</exception>
     internal static RunContainer FromContainer(IContainer container)
     {
@@ -718,53 +862,4 @@ internal sealed class RunContainer : IContainer
 
     #endregion
 
-    #region Private Helpers
-
-    /// <summary>
-    /// Merges run <paramref name="idx"/> with run <paramref name="idx"/> + 1 when they overlap or touch (the next run
-    /// starts at most one value after this run's end). Called after an add widened a run, to restore the invariant that
-    /// runs never touch.
-    /// </summary>
-    private void _TryMergeAt(int idx)
-    {
-        if (idx + 1 >= RunCount)
-        {
-            return;
-        }
-        ushort end = (ushort)(_Runs[idx].Start + _Runs[idx].Length);
-        if (end + 1 >= _Runs[idx + 1].Start)
-        {
-            ushort newEnd = Math.Max(end, (ushort)(_Runs[idx + 1].Start + _Runs[idx + 1].Length));
-            _Runs[idx].Length = (ushort)(newEnd - _Runs[idx].Start);
-            _RemoveRunAt(idx + 1);
-        }
-    }
-
-    /// <summary>Inserts a run at position <paramref name="idx"/>, shifting later runs up and growing the backing array when full.</summary>
-    private void _InsertRunAt(int idx, ushort start, ushort length)
-    {
-        // A zero-length run array (Clone of an empty container) grows to the default capacity 4; doubling 0 stays 0.
-        if (RunCount == _Runs.Length)
-        {
-            Array.Resize(ref _Runs, Math.Max(_Runs.Length * 2, 4));
-        }
-        if (idx < RunCount)
-        {
-            Array.Copy(_Runs, idx, _Runs, idx + 1, RunCount - idx);
-        }
-        _Runs[idx] = (start, length);
-        RunCount++;
-    }
-
-    /// <summary>Removes the run at <paramref name="idx"/> by shifting later runs down. The backing array keeps its capacity.</summary>
-    private void _RemoveRunAt(int idx)
-    {
-        if (idx < RunCount - 1)
-        {
-            Array.Copy(_Runs, idx + 1, _Runs, idx, RunCount - idx - 1);
-        }
-        RunCount--;
-    }
-
-    #endregion
 }

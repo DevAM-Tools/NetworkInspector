@@ -24,13 +24,13 @@ internal sealed class CanBasicTests
     [Test]
     public async Task RegisterFields_NullMessageEntry_IsSkippedWithWarning()
     {
-        string directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         Directory.CreateDirectory(directory);
         try
         {
             string configPath = Path.Combine(directory, "can.json");
             await File.WriteAllTextAsync(configPath, """{"messages":[null, {"id": 291, "name": "Engine"}]}""").ConfigureAwait(false);
-            using SettingsManager settings = new(directory);
+            using SettingsManager settings = new(directory, CoreSettingsLayout.Instance);
             settings.PreloadValue("can.config_file", "can.json");
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             FrameProtocol frame = new();

@@ -101,7 +101,7 @@ internal static class TestHarness
         Dictionary<LinkType, FrameInterfaceId> interfaceIds = _ThreadInterfaceIds ??= [];
         if (!interfaceIds.TryGetValue(linkType, out FrameInterfaceId ifId))
         {
-            ifId = registry.Register(sourceId, $"test_{linkType}", null, linkType);
+            ifId = registry.Register(sourceId, Invariant($"test_{linkType}"), null, linkType);
             interfaceIds[linkType] = ifId;
         }
 

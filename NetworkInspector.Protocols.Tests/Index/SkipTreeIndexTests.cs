@@ -54,7 +54,7 @@ internal sealed class SkipTreeIndexTests
         HashSet<string> build = _PresentGroups(frame, FieldTreeMode.Build);
         HashSet<string> skip = _PresentGroups(frame, FieldTreeMode.Skip);
 
-        await Assert.That(skip.SetEquals(build)).IsTrue().Because($"build: {string.Join(',', build)}; skip: {string.Join(',', skip)}");
+        await Assert.That(skip.SetEquals(build)).IsTrue().Because(Invariant($"build: {string.Join(',', build)}; skip: {string.Join(',', skip)}"));
         await Assert.That(build.Contains("icmpv6.nd.error")).IsEqualTo(hopLimit != 255);
     }
 
@@ -89,6 +89,6 @@ internal sealed class SkipTreeIndexTests
         HashSet<string> build = _PresentGroups(frame, FieldTreeMode.Build);
         HashSet<string> skip = _PresentGroups(frame, FieldTreeMode.Skip);
 
-        await Assert.That(skip.SetEquals(build)).IsTrue().Because($"{name} build: {string.Join(',', build)}; skip: {string.Join(',', skip)}");
+        await Assert.That(skip.SetEquals(build)).IsTrue().Because(Invariant($"{name} build: {string.Join(',', build)}; skip: {string.Join(',', skip)}"));
     }
 }

@@ -263,26 +263,48 @@ internal sealed class PacketEffectLayerKeyTests
         await Assert.That(key).IsEqualTo(0);
     }
 
+
     [Test]
-    public async Task PackEffectLayerKey_Buffer256_Throws()
+    public async Task TryGetEffectLayerKey_OffsetBeyond24Bits_ReturnsFalse()
     {
-        await Assert.That(() => Packet.PackEffectLayerKeyForTests(256, 0))
-            .Throws<ArgumentOutOfRangeException>();
+        using Stack stack = _BuildStack();
+        Packet packet = _ParseFrameOfLength(stack, 0x1000000 + 16);
+
+        bool ok = packet.TryGetEffectLayerKey(packet.Frame.Data[0x1000000..], out int key);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(key).IsEqualTo(0);
     }
 
     [Test]
-    public async Task PackEffectLayerKey_OffsetTooLarge_Throws()
+    public async Task TryGetEffectLayerKey_LargestOffset_Packs()
     {
-        await Assert.That(() => Packet.PackEffectLayerKeyForTests(0, 0x1000000))
-            .Throws<ArgumentOutOfRangeException>();
+        using Stack stack = _BuildStack();
+        Packet packet = _ParseFrameOfLength(stack, 0x1000000);
+
+        bool ok = packet.TryGetEffectLayerKey(packet.Frame.Data[0xFFFFFF..], out int key);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(key).IsEqualTo(0xFFFFFF);
     }
 
-    [Test]
-    public async Task PackEffectLayerKey_MaxValues_Packs()
+    /// <summary>Parses a frame of <paramref name="length"/> zero bytes (EtherType 0) with the standard protocols and returns the packet.</summary>
+    private static Packet _ParseFrameOfLength(Stack stack, int length)
     {
-        int key = Packet.PackEffectLayerKeyForTests(255, 0xFFFFFF);
+        Frame frame = Frame.Create(
+            0,
+            Timestamp.FromSecs(0),
+            new byte[length],
+            LinkType.Ethernet,
+            FrameInterfaceId.Invalid,
+            stack.FrameInterfaceRegistry).Value;
+        ParseOptions options = new();
+        if (!Packet.TryParse(0, stack, frame, in options, out Packet? parsed, out ParseFailure failure))
+        {
+            throw new InvalidOperationException(failure.ToString());
+        }
 
-        await Assert.That(key).IsEqualTo((255 << 24) | 0xFFFFFF);
+        return parsed;
     }
 
     private static Stack _BuildStack()

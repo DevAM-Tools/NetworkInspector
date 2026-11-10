@@ -8,8 +8,6 @@ namespace NetworkInspector.Core.Protocols;
 /// </summary>
 internal sealed class HeuristicParserEntry
 {
-    #region Constructors
-
     /// <summary>Wraps a registered heuristic parser. The table keeps entries in registration order, which decides ties.</summary>
     /// <param name="parser">The parser to wrap.</param>
     /// <exception cref="ArgumentNullException"><paramref name="parser"/> is null.</exception>
@@ -18,10 +16,6 @@ internal sealed class HeuristicParserEntry
         ArgumentNullException.ThrowIfNull(parser);
         Parser = parser;
     }
-
-    #endregion
-
-    #region Properties
 
     /// <summary>The wrapped heuristic parser.</summary>
     internal IHeuristicParser Parser { get; }
@@ -38,13 +32,7 @@ internal sealed class HeuristicParserEntry
     /// <summary>The description of the wrapped parser.</summary>
     internal string? Description => Parser.Description;
 
-    #endregion
-
-    #region Methods
-
     /// <inheritdoc cref="IHeuristicParser.Test"/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool Test(ReadOnlyMemory<byte> data) => Parser.Test(data);
-
-    #endregion
 }

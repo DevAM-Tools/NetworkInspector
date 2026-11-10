@@ -166,7 +166,7 @@ internal sealed class StackEnumerationTests
         await Assert.That(anyIds!.Value.Length).IsEqualTo(2);
         await Assert.That(stack.GetU64TableEntries(ProtocolTableId.Invalid)).IsNull();
         await Assert.That(stack.IncludeExceptionStackTrace).IsFalse();
-        await Assert.That(stack.Settings.SettingCount).IsEqualTo(0);
+        await Assert.That(stack.Settings.SettingCount).IsEqualTo(CoreLimits.All.Count); // only the limits of Core
     }
 
     private sealed class StubProtocol(string name, string uiName) : IProtocol

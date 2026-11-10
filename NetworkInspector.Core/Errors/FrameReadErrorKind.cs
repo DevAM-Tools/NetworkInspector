@@ -7,8 +7,6 @@ namespace NetworkInspector.Core.Errors;
 /// </summary>
 public enum FrameReadErrorKind
 {
-    #region Enum Values
-
     /// <summary>The frame's data block is corrupted or truncated.</summary>
     CorruptedBlock,
 
@@ -36,6 +34,4 @@ public enum FrameReadErrorKind
     /// denies writers while the source is open. To read the new content, dispose the source and open the file again.
     /// </summary>
     SourceFileChanged,
-
-    #endregion
 }

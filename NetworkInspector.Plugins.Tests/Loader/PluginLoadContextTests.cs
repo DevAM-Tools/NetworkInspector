@@ -36,6 +36,51 @@ internal sealed class PluginLoadContextTests
     }
 
     [Test]
+    public async Task APluginRegistersASettingAndALimitThroughTheSettingsLibraryOfTheApplicationEvenWhenItsFolderShipsOwnCopies()
+    {
+        using LoaderHarness harness = new("settings-identity");
+        string folder = harness.Folder.FilePath("plugins");
+
+        // The plugin folder ships its own copies of both libraries. The loader must ignore them: a copy would be a second
+        // SettingsRegistrar and a second LimitDefinition, and the cast of the application's registrar to the plugin's would fail.
+        string settingsCopy = TestPluginFiles.CopyInto(typeof(SettingsRegistrar).Assembly.Location, folder);
+        string limitsCopy = TestPluginFiles.CopyInto(typeof(LimitValue).Assembly.Location, folder);
+        TestAssemblyCompiler.Compile(Path.Combine(folder, "IdentityPlugin.dll"), "IdentityPlugin", """
+            using NetworkInspector.Core.Settings;
+            using NetworkInspector.Limits;
+            using NetworkInspector.Limits.Utility;
+            using NetworkInspector.Plugins;
+            using NetworkInspector.Settings;
+            public sealed class IdentityPlugin : IPlugin
+            {
+                private static readonly LimitDefinition _MaxItems = new("test.identity.maxItems", LimitUnits.Count,
+                    100, 1, 1000, new LimitTexts("Largest list", "The largest list.", "A hostile list.",
+                        "A clear refusal.", "Smaller values refuse sooner: 10 refuses 11.", "Larger values allow more: 1000 allows 999.",
+                        "Every list passes."));
+                public PluginInfo Info => new("Test.Identity", "1", "MIT", "Registers a setting and a limit.", []);
+                public void Configure(IPluginBuilder builder) => builder.AddSettings(SettingScope.Application, static registrar =>
+                {
+                    registrar.RegisterI64Setting("test.identity.level", "Level", "test.identity", 7);
+                    registrar.RegisterLimit(_MaxItems);
+                });
+            }
+            """);
+
+        PluginLoadReport report = harness.Load([folder]);
+        using SettingsManager application = new();
+        IReadOnlyList<PluginContributionFailure> failures = harness.Registry.ApplySettings(SettingScope.Application, application);
+
+        PluginRecord identity = report.Plugins.Single(static record => record.Name == "Test.Identity");
+        await Assert.That(identity.State).IsEqualTo(PluginLoadState.Loaded);
+        await Assert.That(failures).IsEmpty();
+        await Assert.That(application.GetI64Setting("test.identity.level")).IsEqualTo(7L);
+        await Assert.That(application.GetLimit("test.identity.maxItems")).IsEqualTo((LimitValue?)LimitValue.Of(100));
+        await Assert.That(AppDomain.CurrentDomain.GetAssemblies().Any(assembly => !assembly.IsDynamic
+            && (string.Equals(assembly.Location, settingsCopy, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(assembly.Location, limitsCopy, StringComparison.OrdinalIgnoreCase)))).IsFalse();
+    }
+
+    [Test]
     public async Task APrivateDependencyResolvesFromThePluginFolder()
     {
         using LoaderHarness harness = new("private-dep");
@@ -77,7 +122,7 @@ internal sealed class PluginLoadContextTests
     public async Task APluginBuiltAgainstANewerSharedAssemblyFailsWithBothVersionsBeforeItsCodeRuns()
     {
         using LoaderHarness harness = new("newer-shared");
-        string available = Expect.NotNull(typeof(NetworkInspectorBuiltIns).Assembly.GetName().Version).ToString();
+        string available = string.Create(CultureInfo.InvariantCulture, $"{Expect.NotNull(typeof(NetworkInspectorBuiltIns).Assembly.GetName().Version)}");
 
         // NetworkInspector.Protocols is an assembly of the application (it comes from the default context); the plugin is
         // compiled against a stand-in of version 99 that is not shipped, exactly like a plugin built for a newer release.

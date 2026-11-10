@@ -44,7 +44,7 @@ internal sealed class BlfRandomAccessEquivalenceTests
                 using (BlfSource memory = BlfSource.FromData(data, name, memoryOptions))
                 {
                     List<Frame> frames = RandomAccessEquivalence.StartAndReadAll(memory);
-                    await Assert.That(RandomAccessEquivalence.FindMismatch(memory, frames, $"{name}/data/{mode}/{cache}")).IsNull();
+                    await Assert.That(RandomAccessEquivalence.FindMismatch(memory, frames, Invariant($"{name}/data/{mode}/{cache}"))).IsNull();
                 }
 
                 // File backends: preloaded and memory-mapped.
@@ -54,7 +54,7 @@ internal sealed class BlfRandomAccessEquivalenceTests
                     BlfSourceOptions options = new() { ScanMode = mode, CacheBudget = cache, PreloadBudget = budget };
                     using BlfSource source = BlfSource.Open(file.Path, options);
                     List<Frame> frames = RandomAccessEquivalence.StartAndReadAll(source);
-                    string label = $"{name}/{(budget is null ? "mapped" : "preload")}/{mode}/{cache}";
+                    string label = Invariant($"{name}/{(budget is null ? "mapped" : "preload")}/{mode}/{cache}");
                     await Assert.That(RandomAccessEquivalence.FindMismatch(source, frames, label)).IsNull();
                 }
             }
@@ -165,7 +165,7 @@ internal sealed class BlfRandomAccessEquivalenceTests
                     }
                 }
             })
-            { Name = $"BLF FrameById reader {r}", IsBackground = true };
+            { Name = Invariant($"BLF FrameById reader {r}"), IsBackground = true };
             readers[r].Start();
         }
 

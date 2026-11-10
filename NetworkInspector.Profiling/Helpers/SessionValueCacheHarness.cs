@@ -95,7 +95,7 @@ internal static class SessionValueCacheHarness
             if (!session.WaitForCompletion(WaitTimeout))
             {
                 throw new TimeoutException(
-                    FormattableString.Invariant(
+                    Invariant(
                         $"Session ingest WaitForCompletion timed out before PacketCount {session.PacketCount.ToString(CultureInfo.InvariantCulture)}."));
             }
 
@@ -203,7 +203,7 @@ internal static class SessionValueCacheHarness
             if (!listener.Filled.Wait(WaitTimeout))
             {
                 throw new TimeoutException(
-                    FormattableString.Invariant(
+                    Invariant(
                         $"On-demand value cache did not reach {expectedUdpSrcPortRows.ToString(CultureInfo.InvariantCulture)} udp.srcport rows."));
             }
         }
@@ -257,7 +257,7 @@ internal static class SessionValueCacheHarness
         ReadOnlyValueCache? view = session.IngestValueCache;
         int rows = _UdpSrcPortRowCount(view);
         int seriesCount = view is ReadOnlyValueCache cache ? cache.Series.Count : 0;
-        return FormattableString.Invariant(
+        return Invariant(
             $"Ingest value cache did not reach {expected} udp.srcport rows. PacketCount={session.PacketCount}, seriesCount={seriesCount}, udp.srcport rows={rows}, phase={session.Phase}.");
     }
 

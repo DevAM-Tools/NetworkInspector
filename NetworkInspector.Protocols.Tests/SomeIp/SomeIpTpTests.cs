@@ -71,7 +71,7 @@ internal sealed class SomeIpTpTests
             : _Items(payloadLength);
         await Assert.That(s.ByteLengths(packet, "someip.payload")).IsEquivalentTo(expectedRawLengths);
         await Assert.That(s.Strings(packet, "someip.tp.error.malformed"))
-            .IsEquivalentTo(_Items($"The TP header needs 4 bytes but only {payloadLength} follow the SOME/IP header."));
+            .IsEquivalentTo(_Items(Invariant($"The TP header needs 4 bytes but only {payloadLength} follow the SOME/IP header.")));
     }
 
     [Test]

@@ -544,7 +544,8 @@ internal sealed class FieldIteratorTests
             root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
 
-            await Assert.That(container.TryGetLastChild(out Field lastChild, materialize: true)).IsTrue(); // materialize: true — navigate/populate children including lazy
+            await Assert.That(container.TryGetLastChild(out Field lastChild,
+                materialize: true)).IsTrue(); // materialize: true — navigate/populate children including lazy
             await Assert.That(lastChild.TryGetPrev(out Field prev)).IsTrue();
             await Assert.That(prev.TryGetNext(out Field next)).IsTrue();
             await Assert.That(next.FieldId).IsEqualTo(lastChild.FieldId);
@@ -633,7 +634,8 @@ internal sealed class FieldIteratorTests
             root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
             packetContainer.TryGetNext(out Field container);
 
-            FieldChildEnumerator enumerator = container.Children(materialize: true).GetEnumerator(); // materialize: true — navigate/populate children including lazy
+            FieldChildEnumerator enumerator = container.Children(materialize: true)
+                .GetEnumerator(); // materialize: true — navigate/populate children including lazy
             int count = 0;
             while (enumerator.MoveNext())
             {

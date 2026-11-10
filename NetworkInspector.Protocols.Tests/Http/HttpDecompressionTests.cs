@@ -29,7 +29,7 @@ internal sealed class HttpDecompressionTests
     {
         byte[] compressed = _Gzip(plain);
         byte[] head = Encoding.ASCII.GetBytes(
-            $"HTTP/1.1 200 OK\r\nContent-Type: {contentType}\r\nContent-Encoding: gzip\r\nContent-Length: {compressed.Length}\r\n\r\n");
+            Invariant($"HTTP/1.1 200 OK\r\nContent-Type: {contentType}\r\nContent-Encoding: gzip\r\nContent-Length: {compressed.Length}\r\n\r\n"));
         return HttpHardeningTests.BuildHttpFrame([.. head, .. compressed]);
     }
 

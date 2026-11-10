@@ -75,7 +75,7 @@ internal sealed class PcapNgFormatConcurrencyTests
                     Interlocked.Increment(ref lookups);
                 }
             })
-            { Name = $"Section reader {r}", IsBackground = true };
+            { Name = Invariant($"Section reader {r}"), IsBackground = true };
             readers[r].Start();
         }
 

@@ -56,7 +56,7 @@
     <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
 
     <!-- Version & package metadata -->
-    <Version>0.20.0</Version>
+    <Version>0.21.0</Version>
     <Authors>DevAM</Authors>
     <Company>DevAM</Company>
     <Copyright>Copyright © 2026 DevAM. All rights reserved.</Copyright>

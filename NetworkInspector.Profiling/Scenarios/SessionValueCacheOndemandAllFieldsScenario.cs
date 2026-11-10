@@ -30,7 +30,7 @@ internal sealed class SessionValueCacheOndemandAllFieldsScenario : IProfilingSce
     public string Name => "session-value-cache-ondemand-all-fields";
 
     /// <inheritdoc/>
-    public string Description => FormattableString.Invariant(
+    public string Description => Invariant(
         $"PrepareIteration: ingest {_FrameCount:N0} frames; Run: TryAddValueCache(RecordAllFields) PullFill.");
 
     /// <inheritdoc/>

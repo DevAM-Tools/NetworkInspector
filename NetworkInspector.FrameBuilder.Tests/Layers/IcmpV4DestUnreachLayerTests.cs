@@ -51,7 +51,7 @@ internal sealed class IcmpV4DestUnreachLayerTests
         byte[] buf = _WriteHeader(layer);
 
         await Assert.That((int)buf[1]).IsEqualTo(expectedValue)
-            .Because($"code byte must be {expectedValue} for constant value {code}");
+            .Because(Invariant($"code byte must be {expectedValue} for constant value {code}"));
     }
 
     #endregion

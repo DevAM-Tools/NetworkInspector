@@ -114,7 +114,7 @@ internal static class TsharkPduTransportSignalMessageUatProfile
     {
         string path = Path.Combine(profileDirectory, TsharkSignalMessageFilenames.Identifiers + TsharkCsvUat.Filesuffix);
         string line =
-            $"{TsharkCsvUat.UatQuoted(TsharkCsvUat.Hex32Upper(layout.PduId))},{TsharkCsvUat.UatQuoted(layout.Name)}";
+            Invariant($"{TsharkCsvUat.UatQuoted(TsharkCsvUat.Hex32Upper(layout.PduId))},{TsharkCsvUat.UatQuoted(layout.Name)}");
         File.WriteAllText(path, line + Environment.NewLine, _TsharkUtf8NoBom());
     }
 

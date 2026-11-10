@@ -47,9 +47,9 @@ public sealed class BlfDecompressionLimitExceededException : Exception
     /// <param name="requestedSize">Requested uncompressed size in bytes.</param>
     public BlfDecompressionLimitExceededException(long configuredLimit, long requestedSize)
         : base(
-            $"BLF container decompression limit exceeded: requested "
-            + $"{requestedSize.ToString("N0", CultureInfo.InvariantCulture)} bytes, configured limit is "
-            + $"{configuredLimit.ToString("N0", CultureInfo.InvariantCulture)} bytes.")
+            Invariant($"BLF container decompression limit exceeded: requested ")
+            + Invariant($"{requestedSize.ToString("N0", CultureInfo.InvariantCulture)} bytes, configured limit is ")
+            + Invariant($"{configuredLimit.ToString("N0", CultureInfo.InvariantCulture)} bytes."))
     {
         ConfiguredLimit = configuredLimit;
         RequestedSize = requestedSize;

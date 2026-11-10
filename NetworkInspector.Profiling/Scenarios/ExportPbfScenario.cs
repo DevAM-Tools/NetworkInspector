@@ -32,7 +32,7 @@ internal sealed class ExportPbfScenario : ExportScenarioBase<Packet>
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Export {_Batch:N0} parsed IPv6/UDP packets as PBF (Standard) → MemoryStream per iteration.");
 
     /// <inheritdoc/>

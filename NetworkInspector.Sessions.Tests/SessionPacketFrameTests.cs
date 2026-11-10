@@ -66,7 +66,7 @@ internal sealed class SessionPacketFrameTests
         {
             if (!session.TryGetFrame(p, out Frame frame, out SessionFailure? failure))
             {
-                return $"Packet {p}: {failure?.Message}";
+                return Invariant($"Packet {p}: {failure?.Message}");
             }
 
             // The marker in the last 8 bytes is the (source, frame id) the frame was built with.
@@ -75,12 +75,12 @@ internal sealed class SessionPacketFrameTests
             int frameId = BinaryPrimitives.ReadInt32LittleEndian(data[^4..]);
             if (frameId != frame.Id.Value || !seen.Add((source, frameId)))
             {
-                return $"Packet {p}: frame {frame.Id.Value} carries marker ({source}, {frameId}) or repeats.";
+                return Invariant($"Packet {p}: frame {frame.Id.Value} carries marker ({source}, {frameId}) or repeats.");
             }
 
             if (lastFramePerSource.TryGetValue(source, out int last) && frameId <= last)
             {
-                return $"Packet {p}: frame {frameId} of source {source} does not follow frame {last}.";
+                return Invariant($"Packet {p}: frame {frameId} of source {source} does not follow frame {last}.");
             }
 
             lastFramePerSource[source] = frameId;

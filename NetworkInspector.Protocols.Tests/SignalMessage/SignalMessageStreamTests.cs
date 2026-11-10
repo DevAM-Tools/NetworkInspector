@@ -140,14 +140,14 @@ internal sealed class SignalMessageStreamTests
     [Test]
     public async Task Register_FromStream_WithFileSetting_RegistersBothSources()
     {
-        string dir = Path.Combine(Path.GetTempPath(), "ni_sig_both_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_sig_both_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
         {
             await File.WriteAllTextAsync(path, _FileOnlyMessageJson).ConfigureAwait(false);
 
-            using SettingsManager settings = new(dir);
+            using SettingsManager settings = new(dir, CoreSettingsLayout.Instance);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             using MemoryStream stream = _Utf8Stream(_ValidOneMessageJson);

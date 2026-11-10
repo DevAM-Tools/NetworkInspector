@@ -26,23 +26,40 @@ namespace NetworkInspector.Core.Index;
 /// </summary>
 public sealed class PacketIndex : IPacketIndexReader
 {
-    #region Fields
 
+    #region Configuration and state
+
+    /// <summary>
+    /// The bitmap of packet ids per index group, indexed by <see cref="IndexGroupId.Value"/>. The array is fixed at
+    /// construction; each bitmap follows the single-writer / multi-reader rules of <see cref="RoaringBitmap"/>.
+    /// </summary>
     private readonly RoaringBitmap[] _GroupBitmaps;
+
+    /// <summary>
+    /// The bitmap of packet ids per protocol, indexed by <see cref="ProtocolId.Value"/>. Same rules as
+    /// <see cref="_GroupBitmaps"/>.
+    /// </summary>
     private readonly RoaringBitmap[] _ProtocolBitmaps;
 
-    // Bit-vector dedup: one bit per group / protocol id, set while the current packet is parsed. Parsers may report the
-    // same presence many times per packet; a bit test costs a few instructions, whereas a bitmap Add would take the
-    // bitmap's write section (two fences) plus a container lookup. The bitmaps are therefore written once per set bit in
-    // EndPacket (_CommitDedupToBitmaps), in ascending id order, and RollbackCurrentPacket can discard a failed parse by
-    // clearing the vectors. Single writer only; not shared with readers, so the words are plain fields.
+    /// <summary>
+    /// Bit-vector dedup for index groups: one bit per group id, set while the current packet is parsed. Parsers may report
+    /// the same presence many times per packet; a bit test costs a few instructions, whereas a bitmap Add would take the
+    /// bitmap's write section (two fences) plus a container lookup. The bitmaps are therefore written once per set bit in
+    /// <see cref="EndPacket"/> (<see cref="_CommitDedupToBitmaps"/>), in ascending id order, and
+    /// <see cref="RollbackCurrentPacket"/> can discard a failed parse by clearing the vectors. Single writer only; not shared
+    /// with readers, so the words are plain fields.
+    /// </summary>
     private readonly ulong[] _GroupDedup;
+
+    /// <summary>Bit-vector dedup for protocols; same design and access rules as <see cref="_GroupDedup"/>.</summary>
     private readonly ulong[] _ProtocolDedup;
 
-    // Starts at -1 ("no active packet") so the < 0 guard in RecordGroupPresence /
-    // RecordProtocolPresence catches calls made before the very first BeginPacket.
-    // A plain field on purpose: only the single writer thread reads or writes it. Replaying threads leave
-    // TryBeginPacket before they would read it (see _MaxIndexedPacketId).
+    /// <summary>
+    /// The packet id of the open session, or -1 when none is open. Starts at -1 ("no active packet") so the &lt; 0 guard in
+    /// <see cref="RecordGroupPresence"/> / <see cref="RecordProtocolPresence"/> catches calls made before the very first
+    /// <see cref="BeginPacket"/>. A plain field on purpose: only the single writer thread reads or writes it. Replaying
+    /// threads leave <see cref="TryBeginPacket"/> before they would read it (see <see cref="_MaxIndexedPacketId"/>).
+    /// </summary>
     private int _CurrentPacketId = -1;
 
     /// <summary>
@@ -79,10 +96,6 @@ public sealed class PacketIndex : IPacketIndexReader
     /// </summary>
     private int _NextChunkToOptimize;
 
-    #endregion
-
-    #region Lifecycle
-
     /// <summary>
     /// Creates a packet index for the given stack, allocating bitmaps for all groups and protocols.
     /// </summary>
@@ -113,6 +126,19 @@ public sealed class PacketIndex : IPacketIndexReader
         _GroupDedup = new ulong[(groupCount + 63) >> 6];
         _ProtocolDedup = new ulong[(protoCount + 63) >> 6];
     }
+
+    /// <summary>Number of index groups tracked.</summary>
+    public int GroupCount => _GroupBitmaps.Length;
+
+    /// <summary>Number of protocols tracked.</summary>
+    public int ProtocolCount => _ProtocolBitmaps.Length;
+
+    /// <summary>The stack this index was created for.</summary>
+    public Stack Stack { get; }
+
+    #endregion
+
+    #region Packet session
 
     /// <summary>
     /// Begins indexing a new packet. Must be called before parsing.
@@ -256,22 +282,101 @@ public sealed class PacketIndex : IPacketIndexReader
         _ClearDedup(_ProtocolDedup);
     }
 
+    /// <summary>Clears every bit of a dedup vector, so the next packet starts without presence from an earlier one.</summary>
+    /// <param name="dedup">The vector to clear (<see cref="_GroupDedup"/> or <see cref="_ProtocolDedup"/>); at least one word.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void _ClearDedup(ulong[] dedup)
+    {
+        // Called four times per packet (group and protocol vector, once at begin and once at end). Direct zeroing for the
+        // typical 1-2 word case avoids Array.Clear method call overhead; larger stacks fall back to Array.Clear.
+        if (dedup.Length <= 2)
+        {
+            dedup[0] = 0;
+            if (dedup.Length == 2)
+            {
+                dedup[1] = 0;
+            }
+        }
+        else
+        {
+            Array.Clear(dedup);
+        }
+    }
+
+    /// <summary>
+    /// Run-optimizes every chunk below <paramref name="chunk"/> that was not optimized yet, in all group and protocol
+    /// bitmaps and in the indexed-packet set. Each chunk is visited once over the life of the index; a gap of absent
+    /// chunks costs one binary search per bitmap. Rare path (once per 65 536 packets in order).
+    /// <para>
+    /// Why: ids are appended in ascending order, so a finished chunk is long runs for protocols present in most
+    /// packets (a dense chunk shrinks from an 8 KiB bitmap container to a few bytes as runs). Only conversions that are
+    /// smaller are made (<see cref="RoaringBitmap.RunOptimizeKeys"/>). Why per finished chunk and not per add: a
+    /// conversion scans the whole container, and a chunk that is still growing would be converted again and again.
+    /// An id of an already optimized chunk that arrives later (out-of-order ingest) is still added correctly, because a
+    /// run container accepts adds.
+    /// </para>
+    /// </summary>
+    /// <param name="chunk">The chunk key (high 16 bits of the packet id) of the packet that was just committed; chunks below it
+    /// are complete. A value at or below <see cref="_NextChunkToOptimize"/> does nothing.</param>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void _RunOptimizeCompletedChunks(int chunk)
+    {
+        if (chunk <= _NextChunkToOptimize)
+        {
+            return;
+        }
+
+        foreach (RoaringBitmap bitmap in _GroupBitmaps)
+        {
+            _ = bitmap.RunOptimizeKeys(_NextChunkToOptimize, chunk);
+        }
+
+        foreach (RoaringBitmap bitmap in _ProtocolBitmaps)
+        {
+            _ = bitmap.RunOptimizeKeys(_NextChunkToOptimize, chunk);
+        }
+
+        _ = _IndexedPackets.RunOptimizeKeys(_NextChunkToOptimize, chunk);
+        _NextChunkToOptimize = chunk;
+    }
+
+    /// <summary>
+    /// Adds the id of the current packet to the bitmap of every id whose bit is set in a dedup vector. Called by
+    /// <see cref="EndPacket"/> for a session that commits.
+    /// </summary>
+    /// <param name="dedup">The dedup vector to read (<see cref="_GroupDedup"/> or <see cref="_ProtocolDedup"/>); not cleared here.</param>
+    /// <param name="bitmaps">The bitmaps parallel to <paramref name="dedup"/> (<see cref="_GroupBitmaps"/> or <see cref="_ProtocolBitmaps"/>).</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void _CommitDedupToBitmaps(ulong[] dedup, RoaringBitmap[] bitmaps)
+    {
+        // Walk only the set bits of each word: skip empty words, take the lowest set bit with TrailingZeroCount, clear it
+        // with bits &= bits - 1. Cost is proportional to the number of distinct ids of this packet, not to the id count of
+        // the stack. The bitmaps[id] access needs no bounds reasoning: a bit is only set after the Record method validated
+        // the id against the same array length.
+        uint packetId = (uint)_CurrentPacketId;
+        for (int word = 0; word < dedup.Length; word++)
+        {
+            ulong bits = dedup[word];
+            if (bits == 0)
+            {
+                continue;
+            }
+
+            int baseId = word << 6;
+            do
+            {
+                int bit = BitOperations.TrailingZeroCount(bits);
+                int id = baseId + bit;
+                bitmaps[id].Add(packetId);
+                bits &= bits - 1;
+            }
+            while (bits != 0);
+        }
+    }
+
     #endregion
 
-    #region Properties
-
-    /// <summary>Number of index groups tracked.</summary>
-    public int GroupCount => _GroupBitmaps.Length;
-
-    /// <summary>Number of protocols tracked.</summary>
-    public int ProtocolCount => _ProtocolBitmaps.Length;
-
-    /// <summary>The stack this index was created for.</summary>
-    public Stack Stack { get; }
-
-    #endregion
-
-    #region Recording
+    #region Presence recording
 
     /// <summary>
     /// Records that the current packet contains the given index group.
@@ -369,7 +474,7 @@ public sealed class PacketIndex : IPacketIndexReader
 
     #endregion
 
-    #region Query API
+    #region Bitmap lookups
 
     /// <inheritdoc/>
     /// <exception cref="ArgumentOutOfRangeException">
@@ -428,8 +533,8 @@ public sealed class PacketIndex : IPacketIndexReader
             throw new ArgumentOutOfRangeException(
                 nameof(fieldId),
                 groupId.Value,
-                $"Field {fieldId.Value} resolves to index group ID {groupId.Value}, which is out of range for this index " +
-                $"(GroupCount={_GroupBitmaps.Length}). Ensure the field ID was obtained from this index's own Stack.");
+                Invariant($"Field {fieldId.Value} resolves to index group ID {groupId.Value}, which is out of range for this index ") +
+                Invariant($"(GroupCount={_GroupBitmaps.Length}). Ensure the field ID was obtained from this index's own Stack."));
         }
         return _GroupBitmaps[groupId.Value].AsReadOnly();
     }
@@ -445,7 +550,7 @@ public sealed class PacketIndex : IPacketIndexReader
             throw new ArgumentOutOfRangeException(
                 nameof(groupId),
                 groupId.Value,
-                $"Index group ID {groupId.Value} is out of range for this index (GroupCount={_GroupBitmaps.Length}).");
+                Invariant($"Index group ID {groupId.Value} is out of range for this index (GroupCount={_GroupBitmaps.Length})."));
         }
         return _GroupBitmaps[groupId.Value].Cardinality;
     }
@@ -461,12 +566,13 @@ public sealed class PacketIndex : IPacketIndexReader
             throw new ArgumentOutOfRangeException(
                 nameof(protocolId),
                 protocolId.Value,
-                $"Protocol ID {protocolId.Value} is out of range for this index (ProtocolCount={_ProtocolBitmaps.Length}).");
+                Invariant($"Protocol ID {protocolId.Value} is out of range for this index (ProtocolCount={_ProtocolBitmaps.Length})."));
         }
         return _ProtocolBitmaps[protocolId.Value].Cardinality;
     }
 
     /// <summary>Creates a presence query builder.</summary>
+    /// <returns>A new query bound to this index; it holds no result until the caller adds terms.</returns>
     public PresenceQuery Query() => new(this);
 
     /// <summary>
@@ -475,11 +581,12 @@ public sealed class PacketIndex : IPacketIndexReader
     /// <c>where TIndex : IPacketIndexReader</c> APIs. Do not assign the result to
     /// <see cref="IPacketIndexReader"/> — that boxes.
     /// </summary>
+    /// <returns>A view that forwards every member to this index.</returns>
     public PacketIndexReaderView AsReadOnlyView() => new(this);
 
     #endregion
 
-    #region Try variants
+    #region Lookups that report an invalid id
 
     /// <inheritdoc/>
     public bool TryGetGroupBitmap(IndexGroupId groupId, out ReadOnlyRoaringBitmap bitmap)
@@ -550,162 +657,107 @@ public sealed class PacketIndex : IPacketIndexReader
 
     #endregion
 
-    #region Private helpers
+    #region Id validation
 
     // The three validators use one unsigned comparison: a negative id (for example the Invalid sentinel) wraps to a huge
     // uint and fails the same check, so no separate "< 0" test is needed.
+
+    /// <summary>Checks that an index group id addresses a bitmap of this index.</summary>
+    /// <param name="groupId">The id to check; any value, including the invalid sentinel.</param>
+    /// <returns><see langword="true"/> when <paramref name="groupId"/> is below <see cref="GroupCount"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool _IsValidGroupId(IndexGroupId groupId) => (uint)groupId.Value < (uint)_GroupBitmaps.Length;
 
+    /// <summary>Checks that a protocol id addresses a bitmap of this index.</summary>
+    /// <param name="protocolId">The id to check; any value, including the invalid sentinel.</param>
+    /// <returns><see langword="true"/> when <paramref name="protocolId"/> is below <see cref="ProtocolCount"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool _IsValidProtocolId(ProtocolId protocolId) => (uint)protocolId.Value < (uint)_ProtocolBitmaps.Length;
 
+    /// <summary>Checks that a field id addresses a field of this index's <see cref="Stack"/>.</summary>
+    /// <param name="fieldId">The id to check; any value, including the invalid sentinel.</param>
+    /// <returns><see langword="true"/> when <paramref name="fieldId"/> is below the field count of the stack.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool _IsValidFieldId(FieldId fieldId) => (uint)fieldId.Value < (uint)Stack.FieldCount;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void _ClearDedup(ulong[] dedup)
-    {
-        // Called four times per packet (group and protocol vector, once at begin and once at end). Direct zeroing for the
-        // typical 1-2 word case avoids Array.Clear method call overhead; larger stacks fall back to Array.Clear.
-        if (dedup.Length <= 2)
-        {
-            dedup[0] = 0;
-            if (dedup.Length == 2)
-            {
-                dedup[1] = 0;
-            }
-        }
-        else
-        {
-            Array.Clear(dedup);
-        }
-    }
+    #endregion
 
-    /// <summary>
-    /// Run-optimizes every chunk below <paramref name="chunk"/> that was not optimized yet, in all group and protocol
-    /// bitmaps and in the indexed-packet set. Each chunk is visited once over the life of the index; a gap of absent
-    /// chunks costs one binary search per bitmap. Rare path (once per 65 536 packets in order).
-    /// <para>
-    /// Why: ids are appended in ascending order, so a finished chunk is long runs for protocols present in most
-    /// packets (a dense chunk shrinks from an 8 KiB bitmap container to a few bytes as runs). Only conversions that are
-    /// smaller are made (<see cref="RoaringBitmap.RunOptimizeKeys"/>). Why per finished chunk and not per add: a
-    /// conversion scans the whole container, and a chunk that is still growing would be converted again and again.
-    /// An id of an already optimized chunk that arrives later (out-of-order ingest) is still added correctly, because a
-    /// run container accepts adds.
-    /// </para>
-    /// </summary>
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private void _RunOptimizeCompletedChunks(int chunk)
-    {
-        if (chunk <= _NextChunkToOptimize)
-        {
-            return;
-        }
-
-        foreach (RoaringBitmap bitmap in _GroupBitmaps)
-        {
-            _ = bitmap.RunOptimizeKeys(_NextChunkToOptimize, chunk);
-        }
-
-        foreach (RoaringBitmap bitmap in _ProtocolBitmaps)
-        {
-            _ = bitmap.RunOptimizeKeys(_NextChunkToOptimize, chunk);
-        }
-
-        _ = _IndexedPackets.RunOptimizeKeys(_NextChunkToOptimize, chunk);
-        _NextChunkToOptimize = chunk;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void _CommitDedupToBitmaps(ulong[] dedup, RoaringBitmap[] bitmaps)
-    {
-        // Walk only the set bits of each word: skip empty words, take the lowest set bit with TrailingZeroCount, clear it
-        // with bits &= bits - 1. Cost is proportional to the number of distinct ids of this packet, not to the id count of
-        // the stack. The bitmaps[id] access needs no bounds reasoning: a bit is only set after the Record method validated
-        // the id against the same array length.
-        uint packetId = (uint)_CurrentPacketId;
-        for (int word = 0; word < dedup.Length; word++)
-        {
-            ulong bits = dedup[word];
-            if (bits == 0)
-            {
-                continue;
-            }
-
-            int baseId = word << 6;
-            do
-            {
-                int bit = BitOperations.TrailingZeroCount(bits);
-                int id = baseId + bit;
-                bitmaps[id].Add(packetId);
-                bits &= bits - 1;
-            }
-            while (bits != 0);
-        }
-    }
+    #region Cold-path error helpers
 
     /// <summary>Cold-path helper: throws <see cref="InvalidOperationException"/> when a record method is called outside a Begin/EndPacket pair.</summary>
+    /// <exception cref="InvalidOperationException">Always.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void _ThrowNoActivePacket() =>
         throw new InvalidOperationException(
             "RecordGroupPresence/RecordProtocolPresence must be called between BeginPacket and EndPacket.");
 
     /// <summary>Cold-path helper: throws when <see cref="EndPacket"/> is called without a matching <see cref="BeginPacket"/>.</summary>
+    /// <exception cref="InvalidOperationException">Always.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void _ThrowNoActivePacketEnd() =>
         throw new InvalidOperationException(
             "EndPacket called without a matching BeginPacket.");
 
     /// <summary>Cold-path helper: throws when <see cref="BeginPacket"/> is called while a packet is already active.</summary>
+    /// <exception cref="InvalidOperationException">Always.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void _ThrowNestedBeginPacket() =>
         throw new InvalidOperationException(
             "BeginPacket called while a packet is already being indexed. Call EndPacket first.");
 
     /// <summary>Cold-path helper: throws a descriptive <see cref="ArgumentOutOfRangeException"/> for a bad group ID during recording.</summary>
+    /// <param name="groupId">The rejected id; named in the exception message.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Always.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _ThrowGroupIdOutOfRange(IndexGroupId groupId) =>
         throw new ArgumentOutOfRangeException(
             nameof(groupId),
             groupId.Value,
-            $"Index group ID {groupId.Value} is out of range for this index (GroupCount={_GroupBitmaps.Length}). " +
+            Invariant($"Index group ID {groupId.Value} is out of range for this index (GroupCount={_GroupBitmaps.Length}). ") +
             "Ensure the ID was obtained from this index's own Stack.");
 
     /// <summary>Cold-path helper: throws a descriptive <see cref="ArgumentOutOfRangeException"/> for a bad protocol ID during recording.</summary>
+    /// <param name="protocolId">The rejected id; named in the exception message.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Always.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _ThrowProtocolIdOutOfRange(ProtocolId protocolId) =>
         throw new ArgumentOutOfRangeException(
             nameof(protocolId),
             protocolId.Value,
-            $"Protocol ID {protocolId.Value} is out of range for this index (ProtocolCount={_ProtocolBitmaps.Length}). " +
+            Invariant($"Protocol ID {protocolId.Value} is out of range for this index (ProtocolCount={_ProtocolBitmaps.Length}). ") +
             "Ensure the ID was obtained from this index's own Stack.");
 
     /// <summary>Cold-path helper: throws a descriptive <see cref="ArgumentOutOfRangeException"/> for a bad group ID during lookup.</summary>
+    /// <param name="groupId">The rejected id; named in the exception message.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Always.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _ThrowGetGroupOutOfRange(IndexGroupId groupId) =>
         throw new ArgumentOutOfRangeException(
             nameof(groupId),
             groupId.Value,
-            $"Index group ID {groupId.Value} is out of range for this index (GroupCount={_GroupBitmaps.Length}). " +
+            Invariant($"Index group ID {groupId.Value} is out of range for this index (GroupCount={_GroupBitmaps.Length}). ") +
             "Ensure the ID was obtained from this index's own Stack.");
 
     /// <summary>Cold-path helper: throws a descriptive <see cref="ArgumentOutOfRangeException"/> for a bad protocol ID during lookup.</summary>
+    /// <param name="protocolId">The rejected id; named in the exception message.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Always.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _ThrowGetProtocolOutOfRange(ProtocolId protocolId) =>
         throw new ArgumentOutOfRangeException(
             nameof(protocolId),
             protocolId.Value,
-            $"Protocol ID {protocolId.Value} is out of range for this index (ProtocolCount={_ProtocolBitmaps.Length}). " +
+            Invariant($"Protocol ID {protocolId.Value} is out of range for this index (ProtocolCount={_ProtocolBitmaps.Length}). ") +
             "Ensure the ID was obtained from this index's own Stack.");
 
     /// <summary>Cold-path helper: throws a descriptive <see cref="ArgumentOutOfRangeException"/> for a bad field ID during lookup.</summary>
+    /// <param name="fieldId">The rejected id; named in the exception message.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Always.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _ThrowGetFieldOutOfRange(FieldId fieldId) =>
         throw new ArgumentOutOfRangeException(
             nameof(fieldId),
             fieldId.Value,
-            $"Field ID {fieldId.Value} is out of range for this index (FieldCount={Stack.FieldCount}). " +
+            Invariant($"Field ID {fieldId.Value} is out of range for this index (FieldCount={Stack.FieldCount}). ") +
             "Ensure the field ID was obtained from this index's own Stack.");
 
     #endregion

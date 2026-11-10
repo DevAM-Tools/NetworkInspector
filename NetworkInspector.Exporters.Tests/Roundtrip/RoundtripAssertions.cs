@@ -38,7 +38,7 @@ internal static class RoundtripAssertions
         LinkType.Lin => 107,  // WTAP_ENCAP_LIN
         LinkType.CanSocketcan => 125,  // WTAP_ENCAP_SOCKETCAN
         _ => throw new InvalidOperationException(
-            $"No tshark WTAP_ENCAP_* mapping defined for {linkType}. " +
+            Invariant($"No tshark WTAP_ENCAP_* mapping defined for {linkType}. ") +
             "Extend RoundtripAssertions._ExpectedTsharkEncap when adding new exporter link types.")
     };
 
@@ -59,7 +59,7 @@ internal static class RoundtripAssertions
         if (records.Count != originals.Count)
         {
             throw new InvalidOperationException(
-                $"tshark frame count mismatch: expected {originals.Count} but tshark reported {records.Count}.");
+                Invariant($"tshark frame count mismatch: expected {originals.Count} but tshark reported {records.Count}."));
         }
 
         // Build a stable mapping: original FrameInterfaceId.Value → tshark interface id.
@@ -78,8 +78,8 @@ internal static class RoundtripAssertions
             if (rec.EncapType != expectedEncap)
             {
                 throw new InvalidOperationException(
-                    $"Frame {i}: tshark frame.encap_type={rec.EncapType} but expected " +
-                    $"{expectedEncap} for LinkType {original.LinkType}.");
+                    Invariant($"Frame {i}: tshark frame.encap_type={rec.EncapType} but expected ") +
+                    Invariant($"{expectedEncap} for LinkType {original.LinkType}."));
             }
 
             // 2. Length match. Skipped for wrapped link types: SocketCAN/DLT_LIN/
@@ -94,7 +94,7 @@ internal static class RoundtripAssertions
             if (!isWrappedLinkType && rec.FrameLen != original.Data.Length)
             {
                 throw new InvalidOperationException(
-                    $"Frame {i}: tshark frame.len={rec.FrameLen} but original length is {original.Data.Length}.");
+                    Invariant($"Frame {i}: tshark frame.len={rec.FrameLen} but original length is {original.Data.Length}."));
             }
 
             // 3. Raw byte equality is verified by AssertReimportMatchesOriginals
@@ -107,8 +107,8 @@ internal static class RoundtripAssertions
             if (delta > timestampToleranceNs)
             {
                 throw new InvalidOperationException(
-                    $"Frame {i}: tshark timestamp {rec.TimeEpochNanos} ns differs from " +
-                    $"original {origNs} ns by {delta} ns (tolerance {timestampToleranceNs} ns).");
+                    Invariant($"Frame {i}: tshark timestamp {rec.TimeEpochNanos} ns differs from ") +
+                    Invariant($"original {origNs} ns by {delta} ns (tolerance {timestampToleranceNs} ns)."));
             }
 
             // 5. Stable bidirectional interface mapping.
@@ -118,8 +118,8 @@ internal static class RoundtripAssertions
                 if (existingTshark != rec.InterfaceId)
                 {
                     throw new InvalidOperationException(
-                        $"Frame {i}: original interface {origIfId} previously mapped to " +
-                        $"tshark interface {existingTshark}, but this frame uses tshark interface {rec.InterfaceId}.");
+                        Invariant($"Frame {i}: original interface {origIfId} previously mapped to ") +
+                        Invariant($"tshark interface {existingTshark}, but this frame uses tshark interface {rec.InterfaceId}."));
                 }
             }
             else
@@ -127,8 +127,8 @@ internal static class RoundtripAssertions
                 if (tsharkToOrig.TryGetValue(rec.InterfaceId, out int collidingOrig))
                 {
                     throw new InvalidOperationException(
-                        $"Frame {i}: tshark interface {rec.InterfaceId} is already bound to " +
-                        $"original interface {collidingOrig} but this frame originates from {origIfId}.");
+                        Invariant($"Frame {i}: tshark interface {rec.InterfaceId} is already bound to ") +
+                        Invariant($"original interface {collidingOrig} but this frame originates from {origIfId}."));
                 }
 
                 origToTshark[origIfId] = rec.InterfaceId;
@@ -160,7 +160,7 @@ internal static class RoundtripAssertions
             if (next is null)
             {
                 throw new InvalidOperationException(
-                    $"Reimport ended after {i} frames but {originals.Count} were expected.");
+                    Invariant($"Reimport ended after {i} frames but {originals.Count} were expected."));
             }
 
             Frame got = next.Value;
@@ -169,23 +169,23 @@ internal static class RoundtripAssertions
             if (got.LinkType != expected.LinkType)
             {
                 throw new InvalidOperationException(
-                    $"Frame {i}: reimport link type {got.LinkType} differs from original {expected.LinkType}.");
+                    Invariant($"Frame {i}: reimport link type {got.LinkType} differs from original {expected.LinkType}."));
             }
 
             if (!got.Data.Span.SequenceEqual(expected.Data.Span))
             {
                 throw new InvalidOperationException(
-                    $"Frame {i}: reimport data differs from original.\n" +
-                    $"  expected: {Convert.ToHexString(expected.Data.Span)}\n" +
-                    $"  actual  : {Convert.ToHexString(got.Data.Span)}");
+                    Invariant($"Frame {i}: reimport data differs from original.\n") +
+                    Invariant($"  expected: {Convert.ToHexString(expected.Data.Span)}\n") +
+                    Invariant($"  actual  : {Convert.ToHexString(got.Data.Span)}"));
             }
 
             long delta = Math.Abs(got.Timestamp.AsNanos - expected.Timestamp.AsNanos);
             if (delta > timestampToleranceNs)
             {
                 throw new InvalidOperationException(
-                    $"Frame {i}: reimport timestamp {got.Timestamp.AsNanos} ns differs from " +
-                    $"original {expected.Timestamp.AsNanos} ns by {delta} ns (tolerance {timestampToleranceNs} ns).");
+                    Invariant($"Frame {i}: reimport timestamp {got.Timestamp.AsNanos} ns differs from ") +
+                    Invariant($"original {expected.Timestamp.AsNanos} ns by {delta} ns (tolerance {timestampToleranceNs} ns)."));
             }
 
             // Verify that the per-source-interface routing survived the roundtrip.
@@ -196,8 +196,8 @@ internal static class RoundtripAssertions
                 if (existing != gotId)
                 {
                     throw new InvalidOperationException(
-                        $"Frame {i}: original interface {origId} previously mapped to " +
-                        $"reimport interface {existing}, but this frame uses {gotId}.");
+                        Invariant($"Frame {i}: original interface {origId} previously mapped to ") +
+                        Invariant($"reimport interface {existing}, but this frame uses {gotId}."));
                 }
             }
             else
@@ -205,8 +205,8 @@ internal static class RoundtripAssertions
                 if (reimportedToOrig.TryGetValue(gotId, out int collidingOrig))
                 {
                     throw new InvalidOperationException(
-                        $"Frame {i}: reimport interface {gotId} already bound to original " +
-                        $"interface {collidingOrig} but this frame originates from {origId}.");
+                        Invariant($"Frame {i}: reimport interface {gotId} already bound to original ") +
+                        Invariant($"interface {collidingOrig} but this frame originates from {origId}."));
                 }
 
                 origToReimported[origId] = gotId;
@@ -220,15 +220,15 @@ internal static class RoundtripAssertions
                 if (info is null)
                 {
                     throw new InvalidOperationException(
-                        $"Frame {i}: reimport interface id {gotId} is not registered in the source registry.");
+                        Invariant($"Frame {i}: reimport interface id {gotId} is not registered in the source registry."));
                 }
 
                 // The reimport-side interface must carry the original frame's link type.
                 if (info.LinkType != got.LinkType)
                 {
                     throw new InvalidOperationException(
-                        $"Frame {i}: reimport interface link type {info.LinkType} differs from " +
-                        $"frame link type {got.LinkType}.");
+                        Invariant($"Frame {i}: reimport interface link type {info.LinkType} differs from ") +
+                        Invariant($"frame link type {got.LinkType}."));
                 }
             }
 
@@ -240,8 +240,8 @@ internal static class RoundtripAssertions
         if (trailing is not null)
         {
             throw new InvalidOperationException(
-                $"Reimport returned more frames than expected ({originals.Count}); " +
-                $"first surplus frame id = {trailing.Value.Id.Value}.");
+                Invariant($"Reimport returned more frames than expected ({originals.Count}); ") +
+                Invariant($"first surplus frame id = {trailing.Value.Id.Value}."));
         }
 
         return reimported;

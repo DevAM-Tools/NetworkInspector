@@ -80,7 +80,7 @@ public sealed class TcpStreamOptions
         if (MinPayloadSize > MaxPayloadSize)
         {
             throw new ArgumentException(
-                $"{nameof(MinPayloadSize)} ({MinPayloadSize}) must not exceed {nameof(MaxPayloadSize)} ({MaxPayloadSize}).");
+                Invariant($"{nameof(MinPayloadSize)} ({MinPayloadSize}) must not exceed {nameof(MaxPayloadSize)} ({MaxPayloadSize})."));
         }
 
         // The layout counts frames in int (TcpStreamLayout multiplies without overflow checks, trusting this method):

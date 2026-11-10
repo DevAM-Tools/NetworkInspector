@@ -168,7 +168,7 @@ public sealed partial class FrameProtocol : IProtocol
         if (!container.Packet.Stack.FrameInterfaceRegistry.TryGet(interfaceId, out FrameInterfaceInfo? interfaceInfo)
             || interfaceInfo is null)
         {
-            return ParseError.InvalidData(ProtocolName, $"Interface {interfaceId.Value} not found in registry");
+            return ParseError.InvalidData(ProtocolName, Invariant($"Interface {interfaceId.Value} not found in registry"));
         }
 
         container.Append(_InterfaceIdFieldId, FieldValue.NewU64((ulong)interfaceId.Value));

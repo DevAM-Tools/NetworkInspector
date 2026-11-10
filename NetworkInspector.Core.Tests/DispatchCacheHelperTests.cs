@@ -164,7 +164,7 @@ internal sealed class DispatchCacheHelperTests
         public string UiName => uiName;
 
         public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
-            => _ = builder.RegisterField(protocolId, $"{name}.field", "Field", FieldType.None);
+            => _ = builder.RegisterField(protocolId, Invariant($"{name}.field"), "Field", FieldType.None);
 
         public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
             => data.Length;

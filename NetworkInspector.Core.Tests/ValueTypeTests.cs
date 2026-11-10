@@ -547,14 +547,14 @@ internal sealed class ValueTypeTests
     public async Task MacAddress_ToString_FormatProvider()
     {
         MacAddress mac = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
-        await Assert.That(mac.ToString(null, null)).IsEqualTo(mac.Format());
+        await Assert.That(mac.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(mac.Format());
     }
 
     [Test]
     public async Task MacAddress_ToString_MatchesFormat()
     {
         MacAddress mac = MacAddress.FromBytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
-        await Assert.That(mac.ToString()).IsEqualTo(mac.Format());
+        await Assert.That(mac.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(mac.Format());
     }
 
     [Test]
@@ -702,14 +702,14 @@ internal sealed class ValueTypeTests
     public async Task IPv4Address_ToString_MatchesFormat()
     {
         IPv4Address ip = IPv4Address.FromBytes([10, 0, 0, 1]);
-        await Assert.That(ip.ToString()).IsEqualTo(ip.Format());
+        await Assert.That(ip.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(ip.Format());
     }
 
     [Test]
     public async Task IPv4Address_ToString_FormatProvider()
     {
         IPv4Address ip = IPv4Address.FromBytes([10, 0, 0, 1]);
-        await Assert.That(ip.ToString(null, null)).IsEqualTo(ip.Format());
+        await Assert.That(ip.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(ip.Format());
     }
 
     [Test]
@@ -865,14 +865,14 @@ internal sealed class ValueTypeTests
     public async Task Timestamp_ToString_MatchesFormat()
     {
         Timestamp ts = Timestamp.FromSecs(0);
-        await Assert.That(ts.ToString()).IsEqualTo(ts.Format());
+        await Assert.That(ts.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(ts.Format());
     }
 
     [Test]
     public async Task Timestamp_ToString_FormatProvider()
     {
         Timestamp ts = Timestamp.FromSecs(0);
-        await Assert.That(ts.ToString(null, null)).IsEqualTo(ts.Format());
+        await Assert.That(ts.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(ts.Format());
     }
 
     [Test]

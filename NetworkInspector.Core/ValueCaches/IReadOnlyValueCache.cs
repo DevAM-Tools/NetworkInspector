@@ -25,7 +25,7 @@ namespace NetworkInspector.Core.ValueCaches;
 /// </summary>
 public interface IReadOnlyValueCache
 {
-    #region Properties
+    #region Cache state
 
     /// <summary>Whether the aliased writer was evicted.</summary>
     bool IsAbandoned
@@ -52,8 +52,8 @@ public interface IReadOnlyValueCache
     }
 
     /// <summary>
-    /// Sticky strictly-increasing packet-id flag: true until a recorded packet id is lower than the one before it.
-    /// Never returns to true.
+    /// Sticky strictly-increasing packet-id flag: true until a recorded packet has a lower id than the packet before it.
+    /// Once false, it stays false.
     /// </summary>
     bool PacketIdsStrictlyIncreasing
     {
@@ -62,7 +62,7 @@ public interface IReadOnlyValueCache
 
     /// <summary>
     /// Sticky strictly-increasing timestamp flag: true until a recorded packet has a timestamp that is not later than the
-    /// previous packet's. Never returns to true.
+    /// previous packet's. Once false, it stays false.
     /// </summary>
     bool TimestampsStrictlyIncreasing
     {
@@ -101,6 +101,7 @@ public interface IReadOnlyValueCache
     /// fields, <c>uint</c> for IPv4); a different <typeparamref name="T"/> finds no series.
     /// </typeparam>
     /// <param name="fieldId">The recorded field.</param>
+    /// <returns>A view of the live series; it follows the writer, so its <c>Count</c> grows.</returns>
     /// <exception cref="ArgumentException">No series, or <typeparamref name="T"/> does not match the stack field type.</exception>
     ReadOnlyValueCacheSeries<T> GetSeries<T>(FieldId fieldId);
 
@@ -108,30 +109,50 @@ public interface IReadOnlyValueCache
     /// <typeparam name="T">See <see cref="GetSeries{T}(FieldId)"/>.</typeparam>
     /// <param name="fieldId">The recorded field.</param>
     /// <param name="series">The view when found; otherwise <c>default</c>.</param>
+    /// <returns><see langword="true"/> when the payload series exists and <typeparamref name="T"/> matches its type.</returns>
     bool TryGetSeries<T>(FieldId fieldId, out ReadOnlyValueCacheSeries<T> series);
 
     /// <summary>Looks up a field by ordinal name, then <see cref="TryGetSeries{T}(FieldId, out ReadOnlyValueCacheSeries{T})"/>.</summary>
     /// <typeparam name="T">See <see cref="GetSeries{T}(FieldId)"/>.</typeparam>
     /// <param name="fieldName">The ordinal (case-sensitive) field name; <see langword="null"/> or unknown finds nothing.</param>
     /// <param name="series">The view when found; otherwise <c>default</c>.</param>
+    /// <returns><see langword="true"/> when the name is known and its payload series exists with a matching <typeparamref name="T"/>.</returns>
     bool TryGetSeries<T>(string fieldName, out ReadOnlyValueCacheSeries<T> series);
 
-    /// <summary>Custom-text series for <paramref name="fieldId"/>.</summary>
+    /// <summary>Returns the custom-text series (the display text of each recorded occurrence) of <paramref name="fieldId"/>.</summary>
+    /// <param name="fieldId">The recorded field.</param>
+    /// <returns>A view of the live string series.</returns>
+    /// <exception cref="ArgumentException">The cache records no custom text for this field.</exception>
     ReadOnlyValueCacheSeries<string> GetCustomTextSeries(FieldId fieldId);
 
     /// <summary>Try-get counterpart of <see cref="GetCustomTextSeries"/>.</summary>
+    /// <param name="fieldId">The recorded field.</param>
+    /// <param name="series">The view when found; otherwise <c>default</c>.</param>
+    /// <returns><see langword="true"/> when the cache records custom text for the field.</returns>
     bool TryGetCustomTextSeries(FieldId fieldId, out ReadOnlyValueCacheSeries<string> series);
 
-    /// <summary>Looks up custom text by ordinal name.</summary>
+    /// <summary>Looks up the custom-text series by ordinal field name.</summary>
+    /// <param name="fieldName">The ordinal (case-sensitive) field name; <see langword="null"/> or unknown finds nothing.</param>
+    /// <param name="series">The view when found; otherwise <c>default</c>.</param>
+    /// <returns><see langword="true"/> when the name is known and the cache records custom text for the field.</returns>
     bool TryGetCustomTextSeries(string fieldName, out ReadOnlyValueCacheSeries<string> series);
 
-    /// <summary>Custom-representation series for <paramref name="fieldId"/>.</summary>
+    /// <summary>Returns the custom-representation series (the alternative text of each recorded value) of <paramref name="fieldId"/>.</summary>
+    /// <param name="fieldId">The recorded field.</param>
+    /// <returns>A view of the live string series.</returns>
+    /// <exception cref="ArgumentException">The cache records no custom representation for this field.</exception>
     ReadOnlyValueCacheSeries<string> GetCustomRepresentationSeries(FieldId fieldId);
 
     /// <summary>Try-get counterpart of <see cref="GetCustomRepresentationSeries"/>.</summary>
+    /// <param name="fieldId">The recorded field.</param>
+    /// <param name="series">The view when found; otherwise <c>default</c>.</param>
+    /// <returns><see langword="true"/> when the cache records a custom representation for the field.</returns>
     bool TryGetCustomRepresentationSeries(FieldId fieldId, out ReadOnlyValueCacheSeries<string> series);
 
-    /// <summary>Looks up custom representation by ordinal name.</summary>
+    /// <summary>Looks up the custom-representation series by ordinal field name.</summary>
+    /// <param name="fieldName">The ordinal (case-sensitive) field name; <see langword="null"/> or unknown finds nothing.</param>
+    /// <param name="series">The view when found; otherwise <c>default</c>.</param>
+    /// <returns><see langword="true"/> when the name is known and the cache records a custom representation for the field.</returns>
     bool TryGetCustomRepresentationSeries(string fieldName, out ReadOnlyValueCacheSeries<string> series);
 
     #endregion

@@ -1,0 +1,11 @@
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkInspector.Settings\NetworkInspector.Settings.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- One source of the limit builders for every test project that needs a valid LimitDefinition; the helper is internal to each assembly. -->
+    <Compile Include="..\NetworkInspector.Limits.Tests\LimitTestDefinitions.cs" Link="Helpers\LimitTestDefinitions.cs" />
+  </ItemGroup>
+</Project>

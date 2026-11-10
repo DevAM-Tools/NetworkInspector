@@ -10,20 +10,13 @@ namespace NetworkInspector.Core.Errors;
 /// </summary>
 /// <param name="uiName">The rejected UI name; also reported in the message.</param>
 public sealed class InvalidUiNameRegistrationException(string uiName)
-    : RegistrationException($"Invalid UI name: '{uiName}'. UI names must be non-empty, single-line text without control characters.")
+    : RegistrationException(Invariant($"Invalid UI name: '{uiName}'. UI names must be non-empty, single-line text without control characters."))
 {
-    #region Properties
-
     /// <summary>The invalid UI name that failed validation.</summary>
     public string UiName { get; } = uiName;
 
-    #endregion
-
-    #region Factory Methods
-
     /// <summary>Creates an invalid-UI-name exception for the given UI name.</summary>
     /// <param name="uiName">The rejected UI name.</param>
+    /// <returns>The exception, ready to be thrown by the core.</returns>
     internal static InvalidUiNameRegistrationException For(string uiName) => new(uiName);
-
-    #endregion
 }

@@ -265,7 +265,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         if (!_Started)
         {
-            throw new InvalidOperationException($"{UiName} has not been started. Call Start() first.");
+            throw new InvalidOperationException(Invariant($"{UiName} has not been started. Call Start() first."));
         }
 
         if (_Exhausted)
@@ -585,7 +585,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
                 Kind = FrameReadErrorKind.Other,
-                Message = $"Failed to parse {lineType} line.",
+                Message = Invariant($"Failed to parse {lineType} line."),
             });
             return null;
         }
@@ -683,7 +683,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
                 Kind = FrameReadErrorKind.Other,
-                Message = $"Failed to parse {lineType} line.",
+                Message = Invariant($"Failed to parse {lineType} line."),
             });
             return null;
         }
@@ -720,7 +720,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
             FrameIndex = frameId,
             FileOffset = -1,
             Kind = FrameReadErrorKind.Other,
-            Message = $"Frame creation failed for {lineType} (frame {frameId}).",
+            Message = Invariant($"Frame creation failed for {lineType} (frame {frameId})."),
         });
 
         return null;
@@ -770,7 +770,7 @@ public sealed class AscStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         string displayName = busType.ToDisplayName();
         FrameInterfaceId id = registry.Register(
-            _SourceId, $"{displayName} {channel}", null, linkType,
+            _SourceId, Invariant($"{displayName} {channel}"), null, linkType,
             new Dictionary<string, object>
             {
                 [AscInterfacePropertyKeys.Channel] = (long)channel,

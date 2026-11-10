@@ -96,7 +96,8 @@ internal static class PcapngBlockLayout
         reason = null;
         if (inclLen > PcapConstants.MaxBlockSize)
         {
-            reason = $"Legacy PCAP incl_len {inclLen} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap; malformed header.";
+            reason = Invariant(
+                $"Legacy PCAP incl_len {inclLen} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap; malformed header.");
             return false;
         }
 
@@ -106,8 +107,8 @@ internal static class PcapngBlockLayout
         if (inclLen > effectiveSnapLength)
         {
             reason = declaredSnapLength > 0
-                ? $"Legacy PCAP incl_len {inclLen} exceeds snaplen {declaredSnapLength}; malformed header."
-                : $"Legacy PCAP incl_len {inclLen} exceeds the default cap {PcapConstants.DefaultSnapLength};"
+                ? Invariant($"Legacy PCAP incl_len {inclLen} exceeds snaplen {declaredSnapLength}; malformed header.")
+                : Invariant($"Legacy PCAP incl_len {inclLen} exceeds the default cap {PcapConstants.DefaultSnapLength};")
                     + " set an explicit snaplen in the global header to allow larger packets.";
             return false;
         }

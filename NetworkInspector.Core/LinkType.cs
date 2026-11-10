@@ -16,9 +16,7 @@ namespace NetworkInspector.Core;
 /// </summary>
 public enum LinkType
 {
-    #region Enum Values
-
-    // ── Core Link Types (0–10) ───────────────────────────────────────
+    // Core Link Types (0–10)
 
     /// <summary>BSD loopback encapsulation (DLT_NULL).</summary>
     Null = 0,
@@ -43,14 +41,14 @@ public enum LinkType
     /// <summary>FDDI (DLT_FDDI).</summary>
     Fddi = 10,
 
-    // ── PPP Variants (50–51) ─────────────────────────────────────────
+    // PPP Variants (50–51)
 
     /// <summary>PPP in HDLC-like framing (DLT_PPP_SERIAL).</summary>
     PppHdlc = 50,
     /// <summary>PPP over Ethernet (DLT_PPP_ETHER).</summary>
     PppEther = 51,
 
-    // ── ATM, Raw IP, Cisco (99–109) ─────────────────────────────────
+    // ATM, Raw IP, Cisco (99–109)
 
     /// <summary>Symantec Enterprise Firewall (DLT_SYMANTEC_FIREWALL).</summary>
     SymantecFirewall = 99,
@@ -75,7 +73,7 @@ public enum LinkType
     /// <summary>IPsec encapsulation (DLT_ENC).</summary>
     Enc = 109,
 
-    // ── Cooked Captures and Specialized (113–127) ───────────────────
+    // Cooked Captures and Specialized (113–127)
 
     /// <summary>Linux cooked capture v1 (DLT_LINUX_SLL).</summary>
     LinuxSll = 113,
@@ -92,14 +90,14 @@ public enum LinkType
     /// <summary>802.11 with radiotap header (DLT_IEEE802_11_RADIO).</summary>
     Ieee80211Radiotap = 127,
 
-    // ── ARCNET and Apple (129–138) ──────────────────────────────────
+    // ARCNET and Apple (129–138)
 
     /// <summary>ARCNET Linux-style (DLT_ARCNET_LINUX).</summary>
     ArcnetLinux = 129,
     /// <summary>Apple IP over IEEE 1394 (DLT_APPLE_IP_OVER_IEEE1394).</summary>
     AppleIpOverIeee1394 = 138,
 
-    // ── SS7 and DOCSIS (139–144) ────────────────────────────────────
+    // SS7 and DOCSIS (139–144)
 
     /// <summary>SS7 MTP2 with pseudo-header (DLT_MTP2_WITH_PHDR).</summary>
     Mtp2WithPhdr = 139,
@@ -114,7 +112,7 @@ public enum LinkType
     /// <summary>Linux IrDA (DLT_LINUX_IRDA).</summary>
     LinuxIrda = 144,
 
-    // ── User-defined Private Use (147–162) ──────────────────────────
+    // User-defined Private Use (147–162)
 
     /// <summary>User 0, private use (DLT_USER0).</summary>
     User0 = 147,
@@ -149,14 +147,14 @@ public enum LinkType
     /// <summary>User 15, private use (DLT_USER15).</summary>
     User15 = 162,
 
-    // ── 802.11 AVS and BACnet (163–165) ─────────────────────────────
+    // 802.11 AVS and BACnet (163–165)
 
     /// <summary>IEEE 802.11 with AVS header (DLT_IEEE802_11_RADIO_AVS).</summary>
     Ieee80211Avs = 163,
     /// <summary>BACnet MS/TP (DLT_BACNET_MS_TP).</summary>
     BacnetMsTp = 165,
 
-    // ── PPP with Direction and GPRS (166–171) ───────────────────────
+    // PPP with Direction and GPRS (166–171)
 
     /// <summary>PPP with direction (DLT_PPP_PPPD).</summary>
     PppPppd = 166,
@@ -167,7 +165,7 @@ public enum LinkType
     /// <summary>GPF-F frame-mapped (DLT_GPF_F).</summary>
     GpfF = 171,
 
-    // ── LAPD, USB, Bluetooth, 802.16, CAN, 802.15.4, ERF (177–197) ─
+    // LAPD, USB, Bluetooth, 802.16, CAN, 802.15.4, ERF (177–197)
 
     /// <summary>Linux LAPD (DLT_LINUX_LAPD).</summary>
     LinuxLapd = 177,
@@ -194,7 +192,7 @@ public enum LinkType
     /// <summary>Endace ERF (DLT_ERF).</summary>
     Erf = 197,
 
-    // ── Bluetooth, AX.25, Direction Variants (201–207) ──────────────
+    // Bluetooth, AX.25, Direction Variants (201–207)
 
     /// <summary>Bluetooth HCI H4 with direction (DLT_BLUETOOTH_HCI_H4_WITH_PHDR).</summary>
     BluetoothHciH4WithPhdr = 201,
@@ -211,7 +209,7 @@ public enum LinkType
     /// <summary>LAPB with direction (DLT_LAPB_WITH_DIR).</summary>
     LapbWithDir = 207,
 
-    // ── I2C, FlexRay, Automotive (209–215) ──────────────────────────
+    // I2C, FlexRay, Automotive (209–215)
 
     /// <summary>I2C/IPMB, Linux (DLT_I2C_LINUX).</summary>
     I2cLinux = 209,
@@ -228,7 +226,7 @@ public enum LinkType
     /// <summary>IEEE 802.15.4 Non-ASK PHY (DLT_IEEE802_15_4_NONASK_PHY).</summary>
     Ieee802154NonAskPhy = 215,
 
-    // ── Linux Events, GSM, MPLS, USB (216–220) ─────────────────────
+    // Linux Events, GSM, MPLS, USB (216–220)
 
     /// <summary>Linux evdev events (DLT_LINUX_EVDEV).</summary>
     LinuxEvdev = 216,
@@ -241,7 +239,7 @@ public enum LinkType
     /// <summary>USB packets with Linux memory-mapped header (DLT_USB_LINUX_MMAPPED).</summary>
     UsbLinuxMmapped = 220,
 
-    // ── DECT, Space, Fibre Channel, Solaris (221–229) ───────────────
+    // DECT, Space, Fibre Channel, Solaris (221–229)
 
     /// <summary>DECT (DLT_DECT).</summary>
     Dect = 221,
@@ -262,7 +260,7 @@ public enum LinkType
     /// <summary>Raw IPv6 (DLT_IPV6).</summary>
     IPv6 = 229,
 
-    // ── IEEE 802.15.4, D-Bus, DVB (230–237) ────────────────────────
+    // IEEE 802.15.4, D-Bus, DVB (230–237)
 
     /// <summary>IEEE 802.15.4 without FCS (DLT_IEEE802_15_4_NOFCS).</summary>
     Ieee802154NoFcs = 230,
@@ -275,7 +273,7 @@ public enum LinkType
     /// <summary>STANAG 5066 D_PDU (DLT_STANAG_5066_D_PDU).</summary>
     Stanag5066DPdu = 237,
 
-    // ── NFLOG, Network Analyzers, InfiniBand (239–248) ──────────────
+    // NFLOG, Network Analyzers, InfiniBand (239–248)
 
     /// <summary>Linux netfilter log messages (DLT_NFLOG).</summary>
     Nflog = 239,
@@ -294,7 +292,7 @@ public enum LinkType
     /// <summary>SCTP (DLT_SCTP).</summary>
     Sctp = 248,
 
-    // ── USB, Bluetooth LE, Netlink (249–256) ────────────────────────
+    // USB, Bluetooth LE, Netlink (249–256)
 
     /// <summary>USBPcap (DLT_USBPCAP).</summary>
     Usbpcap = 249,
@@ -313,7 +311,7 @@ public enum LinkType
     /// <summary>Bluetooth LE Link Layer with RF info (DLT_BLUETOOTH_LE_LL_WITH_PHDR).</summary>
     BluetoothLeLlWithPhdr = 256,
 
-    // ── PROFIBUS, PKTAP, EPON (257–262) ─────────────────────────────
+    // PROFIBUS, PKTAP, EPON (257–262)
 
     /// <summary>PROFIBUS Data Link (DLT_PROFIBUS_DL).</summary>
     ProfibusDl = 257,
@@ -328,7 +326,7 @@ public enum LinkType
     /// <summary>Z-Wave R3 (DLT_ZWAVE_R3).</summary>
     ZwaveR3 = 262,
 
-    // ── IoT and Smartcard (263–266) ─────────────────────────────────
+    // IoT and Smartcard (263–266)
 
     /// <summary>WattStopper DLM (DLT_WATTSTOPPER_DLM).</summary>
     WattstopperDlm = 263,
@@ -339,7 +337,7 @@ public enum LinkType
     /// <summary>USB Darwin/macOS (DLT_USB_DARWIN).</summary>
     UsbDarwin = 266,
 
-    // ── OpenFlow, SDLC, LoRa, vSock (267–272) ──────────────────────
+    // OpenFlow, SDLC, LoRa, vSock (267–272)
 
     /// <summary>OpenFlow (DLT_OPENFLOW).</summary>
     Openflow = 267,
@@ -354,7 +352,7 @@ public enum LinkType
     /// <summary>Nordic Semiconductor BLE (DLT_NORDIC_BLE).</summary>
     NordicBle = 272,
 
-    // ── DOCSIS 3.1, Ethernet mPacket, DisplayPort (273–276) ────────
+    // DOCSIS 3.1, Ethernet mPacket, DisplayPort (273–276)
 
     /// <summary>DOCSIS 3.1 XRA-31 (DLT_DOCSIS31_XRA31).</summary>
     Docsis31Xra31 = 273,
@@ -365,7 +363,7 @@ public enum LinkType
     /// <summary>Linux cooked capture v2 (DLT_LINUX_SLL2).</summary>
     LinuxSll2 = 276,
 
-    // ── Sercos, USB Sniffers, VPP (277–280) ─────────────────────────
+    // Sercos, USB Sniffers, VPP (277–280)
 
     /// <summary>Sercos Monitor (DLT_SERCOS_MONITOR).</summary>
     SercosMonitor = 277,
@@ -376,7 +374,7 @@ public enum LinkType
     /// <summary>VPP dispatch trace (DLT_VPP_DISPATCH).</summary>
     VppDispatch = 280,
 
-    // ── DSA Tags, IEEE 802.15.4 TAP (281–285) ──────────────────────
+    // DSA Tags, IEEE 802.15.4 TAP (281–285)
 
     /// <summary>DSA tag, Broadcom (DLT_DSA_TAG_BRCM).</summary>
     DsaTagBrcm = 281,
@@ -389,7 +387,7 @@ public enum LinkType
     /// <summary>DSA tag, Marvell EDSA (DLT_DSA_TAG_EDSA).</summary>
     DsaTagEdsa = 285,
 
-    // ── Z-Wave Serial, USB 2.0, ATSC (287–295) ─────────────────────
+    // Z-Wave Serial, USB 2.0, ATSC (287–295)
 
     /// <summary>Z-Wave Serial API (DLT_ZWAVE_SERIAL).</summary>
     ZwaveSerial = 287,
@@ -408,7 +406,7 @@ public enum LinkType
     /// <summary>USB 2.0 High Speed (DLT_USB_2_0_HIGH_SPEED).</summary>
     Usb20HighSpeed = 295,
 
-    // ── Auerswald, Z-Wave TAP, Silicon Labs, FiRa (296–301) ────────
+    // Auerswald, Z-Wave TAP, Silicon Labs, FiRa (296–301)
 
     /// <summary>Auerswald Logger (DLT_AUERSWALD_LOG).</summary>
     AuerswaldLog = 296,
@@ -423,19 +421,18 @@ public enum LinkType
     /// <summary>DECT NR (DLT_DECT_NR).</summary>
     DectNr = 301,
 
-    #endregion
 }
 
 /// <summary>Extension methods for <see cref="LinkType"/>.</summary>
 public static class LinkTypeExtensions
 {
-    #region Extension Methods
     /// <summary>
     /// Returns a human-readable display name for this link type. A value without a name here (including numbers
     /// that are not members of the enum) yields <see cref="Enum.ToString()"/>, which is the member name or the
     /// decimal number; the method never throws and never returns <see langword="null"/>.
     /// </summary>
     /// <param name="linkType">The link type to name.</param>
+    /// <returns>The display name, for example <c>Ethernet (IEEE 802.3)</c>.</returns>
     public static string UiName(this LinkType linkType) => linkType switch
     {
         // Core Link Types
@@ -655,6 +652,4 @@ public static class LinkTypeExtensions
 
         _ => linkType.ToString(),
     };
-
-    #endregion
 }

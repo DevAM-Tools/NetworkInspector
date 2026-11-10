@@ -147,7 +147,7 @@ internal sealed class TcpConnectionTsharkTests
             string? status = rows[i][0];
             await Assert.That(status)
                 .IsEqualTo("2")
-                .Because($"frame #{i} has tcp.checksum.status='{status ?? "<null>"}'.");
+                .Because(Invariant($"frame #{i} has tcp.checksum.status='{status ?? "<null>"}'."));
         }
     }
 
@@ -167,7 +167,7 @@ internal sealed class TcpConnectionTsharkTests
             string? status = rows[i][0];
             await Assert.That(status)
                 .IsEqualTo("2")
-                .Because($"frame #{i} has ip.checksum.status='{status ?? "<null>"}'.");
+                .Because(Invariant($"frame #{i} has ip.checksum.status='{status ?? "<null>"}'."));
         }
     }
 

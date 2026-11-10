@@ -9,8 +9,6 @@ namespace NetworkInspector.Core.Errors;
 /// </summary>
 public sealed class FrameReadErrorEventArgs : EventArgs
 {
-    #region Properties
-
     /// <summary>
     /// Zero-based index of the frame that could not be read.
     /// Defaults to -1 (unknown). Set explicitly when the frame index is available.
@@ -37,6 +35,4 @@ public sealed class FrameReadErrorEventArgs : EventArgs
     {
         get; init;
     }
-
-    #endregion
 }

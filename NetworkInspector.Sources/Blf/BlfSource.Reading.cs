@@ -575,7 +575,7 @@ public sealed partial class BlfSource
 
         lock (_ContainerCacheLock)
         {
-            if (_ContainerCache.TryGet(containerFileOffset, out byte[] cached))
+            if (_ContainerCache.TryGet(containerFileOffset, out byte[]? cached))
             {
                 return cached;
             }
@@ -600,7 +600,7 @@ public sealed partial class BlfSource
             lock (_ContainerCacheLock)
             {
                 // Winner succeeded: the result is in the cache, or handed over directly when the cache did not keep it.
-                if (_ContainerCache.TryGet(containerFileOffset, out byte[] cached))
+                if (_ContainerCache.TryGet(containerFileOffset, out byte[]? cached))
                 {
                     return cached;
                 }
@@ -638,7 +638,7 @@ public sealed partial class BlfSource
                 out ReadOnlySpan<byte> payloadData,
                 out ushort compressionMethod, out uint uncompressedSize, out _, out _))
             {
-                failure = new BlfException($"Failed to parse container headers at offset {containerFileOffset}.");
+                failure = new BlfException(Invariant($"Failed to parse container headers at offset {containerFileOffset}."));
             }
             else
             {
@@ -733,7 +733,7 @@ public sealed partial class BlfSource
 
         lock (_ContainerCacheLock)
         {
-            if (_ContainerCache.TryGet(containerFileOffset, out byte[] cached))
+            if (_ContainerCache.TryGet(containerFileOffset, out byte[]? cached))
             {
                 return _HoldSequentialContainer(containerFileOffset, cached);
             }
@@ -757,7 +757,7 @@ public sealed partial class BlfSource
 
             lock (_ContainerCacheLock)
             {
-                if (_ContainerCache.TryGet(containerFileOffset, out byte[] cached))
+                if (_ContainerCache.TryGet(containerFileOffset, out byte[]? cached))
                 {
                     return _HoldSequentialContainer(containerFileOffset, cached);
                 }
@@ -780,8 +780,8 @@ public sealed partial class BlfSource
                 FrameIndex = frameIndex,
                 FileOffset = containerFileOffset,
                 Kind = FrameReadErrorKind.DecompressionFailure,
-                Message = $"Container decompression failed at offset {containerFileOffset}: " +
-                          $"{(work.Error is OutOfMemoryException ? "OutOfMemoryException" : work.Error?.Message ?? "unknown error")}",
+                Message = Invariant($"Container decompression failed at offset {containerFileOffset}: ") +
+                          Invariant($"{(work.Error is OutOfMemoryException ? "OutOfMemoryException" : work.Error?.Message ?? "unknown error")}"),
             });
             return [];
         }
@@ -801,7 +801,7 @@ public sealed partial class BlfSource
                 out ushort compressionMethod, out uint uncompressedSize,
                 out FrameReadErrorKind errorKind, out string? errorMessage))
             {
-                failure = new BlfException(errorMessage ?? $"Failed to parse container headers at offset {containerFileOffset}.");
+                failure = new BlfException(errorMessage ?? Invariant($"Failed to parse container headers at offset {containerFileOffset}."));
                 errorArgs = new FrameReadErrorEventArgs
                 {
                     FrameIndex = frameIndex,
@@ -835,8 +835,8 @@ public sealed partial class BlfSource
                         FrameIndex = frameIndex,
                         FileOffset = containerFileOffset,
                         Kind = FrameReadErrorKind.DecompressionFailure,
-                        Message = $"Container decompression failed at offset {containerFileOffset}: " +
-                                  $"{(ex is OutOfMemoryException ? "OutOfMemoryException" : ex.Message)}",
+                        Message = Invariant($"Container decompression failed at offset {containerFileOffset}: ") +
+                                  Invariant($"{(ex is OutOfMemoryException ? "OutOfMemoryException" : ex.Message)}"),
                     };
                 }
                 finally
@@ -904,7 +904,7 @@ public sealed partial class BlfSource
                     // A missing result without a recorded failure cannot happen; it is reported like a failure so a waiter
                     // never mistakes it for an empty container.
                     work.Error = failure
-                        ?? new BlfException($"No decompressed data for the container at offset {containerFileOffset}.");
+                        ?? new BlfException(Invariant($"No decompressed data for the container at offset {containerFileOffset}."));
                 }
             }
             finally
@@ -955,7 +955,7 @@ public sealed partial class BlfSource
                     FrameIndex = frameIndex,
                     FileOffset = firstContainerOffset,
                     Kind = FrameReadErrorKind.CorruptedBlock,
-                    Message = $"Split container object at offset {firstContainerOffset} has invalid bounds.",
+                    Message = Invariant($"Split container object at offset {firstContainerOffset} has invalid bounds."),
                 });
             }
 
@@ -988,7 +988,7 @@ public sealed partial class BlfSource
                         FrameIndex = frameIndex,
                         FileOffset = containerOffset,
                         Kind = FrameReadErrorKind.CorruptedBlock,
-                        Message = $"Split object inner offset {skipInContainer} exceeds container size {decoded.Length}.",
+                        Message = Invariant($"Split object inner offset {skipInContainer} exceeds container size {decoded.Length}."),
                     });
                 }
 
@@ -1015,7 +1015,7 @@ public sealed partial class BlfSource
                         FrameIndex = frameIndex,
                         FileOffset = containerOffset,
                         Kind = FrameReadErrorKind.TruncatedStream,
-                        Message = $"Split object at offset {firstContainerOffset} has no following log container.",
+                        Message = Invariant($"Split object at offset {firstContainerOffset} has no following log container."),
                     });
                 }
 
@@ -1137,7 +1137,7 @@ public sealed partial class BlfSource
         if (containerFileOffset >= _Backend.FileSize)
         {
             errorKind = FrameReadErrorKind.CorruptedBlock;
-            errorMessage = $"Container offset {containerFileOffset} exceeds file size {_Backend.FileSize}.";
+            errorMessage = Invariant($"Container offset {containerFileOffset} exceeds file size {_Backend.FileSize}.");
             return false;
         }
 
@@ -1146,7 +1146,7 @@ public sealed partial class BlfSource
         if (!BlfBlockHeader.TryParse(blockData, out BlfBlockHeader blockHeader))
         {
             errorKind = FrameReadErrorKind.MalformedHeader;
-            errorMessage = $"Failed to parse container block header at offset {containerFileOffset}.";
+            errorMessage = Invariant($"Failed to parse container block header at offset {containerFileOffset}.");
             return false;
         }
 
@@ -1156,14 +1156,14 @@ public sealed partial class BlfSource
         if (totalSizeLong > int.MaxValue)
         {
             errorKind = FrameReadErrorKind.MalformedHeader;
-            errorMessage = $"Container at offset {containerFileOffset} claims size {totalSizeLong} which exceeds the addressable span range.";
+            errorMessage = Invariant($"Container at offset {containerFileOffset} claims size {totalSizeLong} which exceeds the addressable span range.");
             return false;
         }
 
         if (totalSizeLong > BlfConstants.MaxBlockReadSize)
         {
             errorKind = FrameReadErrorKind.MalformedHeader;
-            errorMessage = $"Container at offset {containerFileOffset} claims size {totalSizeLong} which exceeds the {BlfConstants.MaxBlockReadSize} byte block-read cap.";
+            errorMessage = Invariant($"Container at offset {containerFileOffset} claims size {totalSizeLong} which exceeds the {BlfConstants.MaxBlockReadSize} byte block-read cap.");
             return false;
         }
 
@@ -1171,7 +1171,7 @@ public sealed partial class BlfSource
         if (containerFileOffset + totalSize > _Backend.FileSize)
         {
             errorKind = FrameReadErrorKind.CorruptedBlock;
-            errorMessage = $"Container at offset {containerFileOffset} with size {totalSize} exceeds file size {_Backend.FileSize}.";
+            errorMessage = Invariant($"Container at offset {containerFileOffset} with size {totalSize} exceeds file size {_Backend.FileSize}.");
             return false;
         }
 
@@ -1179,7 +1179,7 @@ public sealed partial class BlfSource
         if (fullObjectData.Length < totalSize)
         {
             errorKind = FrameReadErrorKind.CorruptedBlock;
-            errorMessage = $"Container at offset {containerFileOffset} with size {totalSize} could not be read.";
+            errorMessage = Invariant($"Container at offset {containerFileOffset} with size {totalSize} could not be read.");
             return false;
         }
 
@@ -1188,21 +1188,21 @@ public sealed partial class BlfSource
         if (containerHeaderOffset + BlfConstants.ContainerHeaderSize > fullObjectData.Length)
         {
             errorKind = FrameReadErrorKind.MalformedHeader;
-            errorMessage = $"Invalid container header offset {containerHeaderOffset} at file offset {containerFileOffset}.";
+            errorMessage = Invariant($"Invalid container header offset {containerHeaderOffset} at file offset {containerFileOffset}.");
             return false;
         }
 
         if (!BlfContainerHeader.TryParse(fullObjectData[containerHeaderOffset..], out BlfContainerHeader containerHeader))
         {
             errorKind = FrameReadErrorKind.MalformedHeader;
-            errorMessage = $"Failed to parse container header at offset {containerFileOffset}.";
+            errorMessage = Invariant($"Failed to parse container header at offset {containerFileOffset}.");
             return false;
         }
 
         if (fullObjectData.Length <= containerPayloadOffset)
         {
             errorKind = FrameReadErrorKind.CorruptedBlock;
-            errorMessage = $"Container at offset {containerFileOffset} has no payload data.";
+            errorMessage = Invariant($"Container at offset {containerFileOffset} has no payload data.");
             return false;
         }
 

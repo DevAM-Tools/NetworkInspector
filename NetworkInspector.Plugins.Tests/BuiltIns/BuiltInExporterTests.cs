@@ -85,9 +85,9 @@ internal sealed class BuiltInExporterTests
         (Stack stack, List<Frame> frames, List<Packet> packets) = _Traffic(20, 2);
         (List<ExporterRegistration<IFrameListener>> frameRegistrations, List<ExporterRegistration<IPacketListener>> packetRegistrations) = _Registrations();
 
-        await Assert.That(frameRegistrations.Select(static r => $"{r.Format}{r.FileExtension}").ToArray())
+        await Assert.That(frameRegistrations.Select(static r => Invariant($"{r.Format}{r.FileExtension}")).ToArray())
             .IsEquivalentTo(["BLF.blf", "PCAPNG.pcapng", "ASC.asc"], CollectionOrdering.Matching);
-        await Assert.That(packetRegistrations.Select(static r => $"{r.Format}{r.FileExtension}").ToArray())
+        await Assert.That(packetRegistrations.Select(static r => Invariant($"{r.Format}{r.FileExtension}")).ToArray())
             .IsEquivalentTo(["CSV.csv", "JSON.json", "Text.txt", "PBF.pbf", "Parquet", "DuckDB.duckdb"], CollectionOrdering.Matching);
 
         // Frame formats receive the frames, packet formats the parsed packets; each finishes after 20 items.
@@ -97,7 +97,8 @@ internal sealed class BuiltInExporterTests
             IFrameListener listener = _Ok(RegistrationRunner.Create(registration, target, stack));
             _Write(listener, frames);
             IExporterStatistics statistics = (IExporterStatistics)listener;
-            await Assert.That($"{registration.Format}:{statistics.WrittenCount}:{statistics.IsFinished}").IsEqualTo($"{registration.Format}:20:True");
+            await Assert.That(Invariant($"{registration.Format}:{statistics.WrittenCount}:{statistics.IsFinished}"))
+                .IsEqualTo(Invariant($"{registration.Format}:20:True"));
             _Dispose(listener);
             await Assert.That(new FileInfo(target).Length).IsGreaterThan(0L);
         }
@@ -108,14 +109,15 @@ internal sealed class BuiltInExporterTests
             IPacketListener listener = _Ok(RegistrationRunner.Create(registration, target, stack));
             _Write(listener, packets);
             IExporterStatistics statistics = (IExporterStatistics)listener;
-            await Assert.That($"{registration.Format}:{statistics.WrittenCount}:{statistics.IsFinished}").IsEqualTo($"{registration.Format}:20:True");
+            await Assert.That(Invariant($"{registration.Format}:{statistics.WrittenCount}:{statistics.IsFinished}"))
+                .IsEqualTo(Invariant($"{registration.Format}:20:True"));
             _Dispose(listener);
 
             // Parquet writes a dataset folder; every other format a single non-empty file.
             bool written = registration.FileExtension.Length == 0
                 ? Directory.EnumerateFileSystemEntries(target).Any()
                 : new FileInfo(target).Length > 0;
-            await Assert.That($"{registration.Format}:{written}").IsEqualTo($"{registration.Format}:True");
+            await Assert.That(Invariant($"{registration.Format}:{written}")).IsEqualTo(Invariant($"{registration.Format}:True"));
         }
     }
 
@@ -142,7 +144,7 @@ internal sealed class BuiltInExporterTests
             List<Frame> read = SmallTraceWriter.ReadAll(reopened);
 
             await Assert.That(error).IsNull();
-            await Assert.That($"{format}:{read.Count}").IsEqualTo($"{format}:100");
+            await Assert.That(Invariant($"{format}:{read.Count}")).IsEqualTo(Invariant($"{format}:100"));
             for (int i = 0; i < 100; i++)
             {
                 long difference = Math.Abs(read[i].Timestamp.AsNanos - frames[i].Timestamp.AsNanos);
@@ -152,7 +154,7 @@ internal sealed class BuiltInExporterTests
                     ? 500
                     : 0;
                 await Assert.That(read[i].Data.Span.SequenceEqual(frames[i].Data.Span)).IsTrue();
-                await Assert.That($"{format}:{i}:{difference <= allowed}").IsEqualTo($"{format}:{i}:True");
+                await Assert.That(Invariant($"{format}:{i}:{difference <= allowed}")).IsEqualTo(Invariant($"{format}:{i}:True"));
             }
         }
     }
@@ -265,7 +267,7 @@ internal sealed class BuiltInExporterTests
         _Dispose(listener);
 
         await Assert.That(listener).IsNull();
-        await Assert.That($"{error?.Code}:{error?.Option}").IsEqualTo("InvalidOption:comment");
+        await Assert.That(Invariant($"{error?.Code}:{error?.Option}")).IsEqualTo("InvalidOption:comment");
     }
 
     [Test]
@@ -288,7 +290,7 @@ internal sealed class BuiltInExporterTests
         {
             string source = Expect.NotNull(SampleStack.Text(stack, packets[i], "ip.src"));
             ulong port = Expect.NotNull(SampleStack.U64(stack, packets[i], "udp.dstport"));
-            await Assert.That(lines[i + 1]).IsEqualTo($"{packets[i].Id.Value};{packets[i].Timestamp.Format()};{source};{port}");
+            await Assert.That(lines[i + 1]).IsEqualTo(Invariant($"{packets[i].Id.Value};{packets[i].Timestamp.Format()};{source};{port}"));
         }
 
         await Assert.That(File.ReadAllLines(defaults)[0]).IsEqualTo("No.,Time,Info,Length");
@@ -329,7 +331,7 @@ internal sealed class BuiltInExporterTests
 
             // The Core builder only records the declaration; a description that promises a sort (and memory use) would mislead.
             string description = Expect.NotNull(setting.Description);
-            await Assert.That($"{format}:{setting.UiName}").IsEqualTo($"{format}:Packets arrive sorted");
+            await Assert.That(Invariant($"{format}:{setting.UiName}")).IsEqualTo(Invariant($"{format}:Packets arrive sorted"));
             await Assert.That(description).Contains("Declares that the packets arrive in non-decreasing timestamp order");
             await Assert.That(description).Contains("sorts nothing");
             await Assert.That(description).DoesNotContain("more memory");
@@ -378,7 +380,7 @@ internal sealed class BuiltInExporterTests
             _Dispose(listener);
 
             await Assert.That(listener).IsNull();
-            await Assert.That($"{error?.Code}:{error?.Option}").IsEqualTo("InvalidOption:delimiter");
+            await Assert.That(Invariant($"{error?.Code}:{error?.Option}")).IsEqualTo("InvalidOption:delimiter");
         }
 
         (IPacketListener? unknown, PluginError? columnError) = RegistrationRunner.Create(_Packet("CSV"), folder.FilePath("c.csv"), stack,
@@ -401,7 +403,7 @@ internal sealed class BuiltInExporterTests
         {
             (IPacketListener? listener, PluginError? error) = RegistrationRunner.Create(registration, missingFolder + registration.FileExtension, stack);
             _Dispose(listener);
-            await Assert.That($"{registration.Format}:{error?.Code}").IsEqualTo($"{registration.Format}:FileNotFound");
+            await Assert.That(Invariant($"{registration.Format}:{error?.Code}")).IsEqualTo(Invariant($"{registration.Format}:FileNotFound"));
         }
 
         (IFrameListener? blf, PluginError? blfError) = RegistrationRunner.Create(_Frame("BLF"), missingFolder + ".blf", stack);
@@ -488,7 +490,7 @@ internal sealed class BuiltInExporterTests
             string uiName = listener is IFrameListener frameListener
                 ? frameListener.UiName
                 : ((IPacketListener)listener).UiName;
-            await Assert.That($"{format}:{uiName.Length > 0}").IsEqualTo($"{format}:True");
+            await Assert.That(Invariant($"{format}:{uiName.Length > 0}")).IsEqualTo(Invariant($"{format}:True"));
             _Dispose(listener);
         }
 
@@ -508,11 +510,11 @@ internal sealed class BuiltInExporterTests
             .Concat(packets.Select(static r => (r.Format, r.UiName, r.Description, r.RegisterOptions))))
         {
             using SettingsManager options = RegistrationOptions.CreateDefaults(register);
-            await Assert.That($"{format}:{uiName.Length > 0}:{description.Length > 0}").IsEqualTo($"{format}:True:True");
+            await Assert.That(Invariant($"{format}:{uiName.Length > 0}:{description.Length > 0}")).IsEqualTo(Invariant($"{format}:True:True"));
             foreach (Setting setting in options.AllSettings)
             {
-                await Assert.That($"{format}.{setting.Name}:{setting.UiName.Length > 0}:{setting.Description?.Length > 0}:{setting.GroupName.Length}")
-                    .IsEqualTo($"{format}.{setting.Name}:True:True:0");
+                await Assert.That(Invariant($"{format}.{setting.Name}:{setting.UiName.Length > 0}:{setting.Description?.Length > 0}:{setting.GroupName.Length}"))
+                    .IsEqualTo(Invariant($"{format}.{setting.Name}:True:True:0"));
             }
         }
     }

@@ -12,6 +12,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NetworkInspector.Values\NetworkInspector.Values.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Limits\NetworkInspector.Limits.csproj" />
+    <ProjectReference Include="..\NetworkInspector.Settings\NetworkInspector.Settings.csproj" />
     <ProjectReference Include="..\NetworkInspector.Generators\NetworkInspector.Generators.csproj"
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="false" />

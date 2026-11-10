@@ -38,7 +38,7 @@ internal sealed class SessionRestartScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description =>
-        FormattableString.Invariant($"Session.TryRestart onto a fresh profiling stack over {_FrameCount:N0} in-memory frames (swap + re-parse).");
+        Invariant($"Session.TryRestart onto a fresh profiling stack over {_FrameCount:N0} in-memory frames (swap + re-parse).");
 
     /// <inheritdoc/>
     public long WorkUnitsPerIteration => _FrameCount;
@@ -57,13 +57,13 @@ internal sealed class SessionRestartScenario : IProfilingScenario
         if (!session.TryAddFrameSource(new MemoryFrameSource(_Frames), out _, out SessionFailure? addFailure))
         {
             session.Dispose();
-            throw new InvalidOperationException(FormattableString.Invariant($"{Name}: adding the source failed: {addFailure!.Value.Message}"));
+            throw new InvalidOperationException(Invariant($"{Name}: adding the source failed: {addFailure!.Value.Message}"));
         }
 
         if (!session.TryStart(out SessionFailure? startFailure))
         {
             session.Dispose();
-            throw new InvalidOperationException(FormattableString.Invariant($"{Name}: session start failed: {startFailure!.Value.Message}"));
+            throw new InvalidOperationException(Invariant($"{Name}: session start failed: {startFailure!.Value.Message}"));
         }
 
         _ = session.WaitForCompletion();
@@ -71,7 +71,7 @@ internal sealed class SessionRestartScenario : IProfilingScenario
         {
             int packets = session.PacketCount;
             session.Dispose();
-            throw new InvalidOperationException(FormattableString.Invariant($"{Name}: ingested {packets} packets, expected {_FrameCount}."));
+            throw new InvalidOperationException(Invariant($"{Name}: ingested {packets} packets, expected {_FrameCount}."));
         }
 
         _Session = session;
@@ -83,13 +83,13 @@ internal sealed class SessionRestartScenario : IProfilingScenario
         Session session = _Session!;
         if (!session.TryRestart(registry => StackHelper.CreateStack(registry), out RestartReport? report, out SessionFailure? failure))
         {
-            throw new InvalidOperationException(FormattableString.Invariant($"{Name}: TryRestart failed: {failure!.Value.Message}"));
+            throw new InvalidOperationException(Invariant($"{Name}: TryRestart failed: {failure!.Value.Message}"));
         }
 
         if (report!.ReparsedPackets != _FrameCount)
         {
             throw new InvalidOperationException(
-                FormattableString.Invariant($"{Name}: re-parsed {report.ReparsedPackets} packets, expected {_FrameCount}."));
+                Invariant($"{Name}: re-parsed {report.ReparsedPackets} packets, expected {_FrameCount}."));
         }
     }
 

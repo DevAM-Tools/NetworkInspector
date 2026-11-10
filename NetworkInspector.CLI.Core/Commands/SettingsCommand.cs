@@ -3,7 +3,7 @@
 namespace NetworkInspector.CLI.Commands;
 
 /// <summary>
-/// <c>ni settings list | get | set | reset</c>: reads and changes the application settings and the settings of a profile,
+/// <c>ni settings list | get | set | reset | describe</c>: reads, describes, and changes the application settings and the settings of a profile,
 /// plugin settings included (plugins are loaded to register them). Values use the Core text form, errors use the Core
 /// problem messages, and every check happens before a file is touched, so a refused command changes nothing. A value is written
 /// with a merge save of its own key only, so other keys of the files (and other processes' changes) stay. Exit codes: a refused
@@ -21,6 +21,8 @@ internal static class SettingsCommand
         SettingScope? Scope,
         string? Group,
         bool Json,
+        bool Limits,
+        SettingsDescribe.DescribeFormat Format,
         CliSettingsOptions Options);
 
     #endregion
@@ -67,9 +69,9 @@ internal static class SettingsCommand
         }
 
         string command = args[0].ToUpperInvariant();
-        if (command is not ("LIST" or "GET" or "SET" or "RESET"))
+        if (command is not ("LIST" or "GET" or "SET" or "RESET" or "DESCRIBE"))
         {
-            io.Error.WriteLine($"Unknown settings command: '{args[0]}'");
+            io.Error.WriteLine(Invariant($"Unknown settings command: '{args[0]}'"));
             _PrintUsage(io.Error);
             return (int)ExitCode.ArgumentError;
         }
@@ -81,6 +83,8 @@ internal static class SettingsCommand
         SettingScope? scope = null;
         string? group = null;
         bool json = false;
+        bool limits = false;
+        SettingsDescribe.DescribeFormat format = SettingsDescribe.DescribeFormat.Text;
         CliSettingsOptionsBuilder settings = new();
         for (int i = 1; i < args.Length; i++)
         {
@@ -103,6 +107,12 @@ internal static class SettingsCommand
                 case "--JSON" when command == "LIST":
                     json = true;
                     break;
+                case "--LIMITS" when command == "DESCRIBE":
+                    limits = true;
+                    break;
+                case "--FORMAT" when command == "DESCRIBE":
+                    format = SettingsDescribe.ParseFormat(CliArgumentParsing.GetNextArg(args, ref i, "--format"));
+                    break;
                 default:
                     positional.Add(args[i]);
                     break;
@@ -114,6 +124,7 @@ internal static class SettingsCommand
         {
             "LIST" => 0,
             "SET" => 2,
+            "DESCRIBE" when limits => 0,
             _ => 1,
         };
         if (positional.Count != expected)
@@ -123,9 +134,24 @@ internal static class SettingsCommand
             return (int)ExitCode.ArgumentError;
         }
 
+        // An override applies to one run. A command that stores or removes a value would persist it or contradict it, so the
+        // two commands that write refuse the option before anything is opened.
+        CliSettingsOptions built = settings.Build();
+        if (command is "SET" or "RESET" && built.Overrides.Count > 0)
+        {
+            io.Error.WriteLine("Error: --set applies to one run; store values with ni settings set.");
+            return (int)ExitCode.ArgumentError;
+        }
+
+        if (command == "DESCRIBE" && format == SettingsDescribe.DescribeFormat.Markdown && !limits)
+        {
+            io.Error.WriteLine("Error: --format markdown is available only with --limits.");
+            return (int)ExitCode.ArgumentError;
+        }
+
         // Plugins are loaded on purpose: their settings only exist (with type, range, and description) while the plugin is
         // loaded. A stored value of a plugin that is not loaded is still reachable as an orphan.
-        SettingsArguments arguments = new(command, positional, scope, group, json, settings.Build());
+        SettingsArguments arguments = new(command, positional, scope, group, json, limits, format, built);
         (CliPluginSession? session, int openExit) = await CliPluginSession.OpenAsync(arguments.Options, io, cancellationToken)
             .ConfigureAwait(false);
         if (session is null)
@@ -144,6 +170,9 @@ internal static class SettingsCommand
                     "LIST" => _List(session, arguments, io),
                     "GET" => _Get(session, arguments, io),
                     "SET" => _Set(session, arguments, io),
+                    "DESCRIBE" => arguments.Limits
+                        ? SettingsDescribe.RunLimits(session, arguments.Scope, arguments.Group, arguments.Format, io)
+                        : SettingsDescribe.RunOne(session, arguments.Positional[0], arguments.Scope, arguments.Group, arguments.Format, io),
                     _ => _Reset(session, arguments, io),
                 };
             }
@@ -178,8 +207,8 @@ internal static class SettingsCommand
         }
 
         throw new ArgumentException(allowAll
-            ? $"Unknown scope '{text}'; use application, profile, or all."
-            : $"Unknown scope '{text}'; use application or profile.");
+            ? Invariant($"Unknown scope '{text}'; use application, profile, or all.")
+            : Invariant($"Unknown scope '{text}'; use application or profile."));
     }
 
     /// <summary>The syntax line of a sub-command for the error about a wrong number of arguments.</summary>
@@ -190,6 +219,7 @@ internal static class SettingsCommand
         "LIST" => "'settings list' takes no arguments.",
         "GET" => "usage: ni settings get <name> [--scope application|profile] [--group <group>]",
         "SET" => "usage: ni settings set <name> <value> [--scope application|profile] [--group <group>]",
+        "DESCRIBE" => "usage: ni settings describe <name> [--format text|json] | ni settings describe --limits [--format text|json|markdown]",
         _ => "usage: ni settings reset <name> [--scope application|profile]",
     };
 
@@ -258,7 +288,7 @@ internal static class SettingsCommand
                 : SettingValueText.Format(entry.Setting, entry.Setting.Value);
             // A string value can hold line breaks or terminal sequences (from a settings file or another process); the list is one
             // line per setting, so the text is cleaned here. "get" prints the value as it is, for scripts.
-            io.Out.WriteLine($"{ScopeName(entry.Scope)}  {entry.Name}  {type}  {CliLogFile.SingleLine(value)}");
+            io.Out.WriteLine(Invariant($"{ScopeName(entry.Scope)}  {entry.Name}  {type}  {CliLogFile.SingleLine(value)}"));
         }
 
         return (int)ExitCode.Success;
@@ -281,21 +311,20 @@ internal static class SettingsCommand
             return names;
         }
 
-        // The files are read with the limits the manager loaded them with (--settings-max-*): a file that Load skipped as too
+        // The files are read with the limits the manager loaded them with (the settings.* limits): a file that Load skipped as too
         // large or too deep is not read here either, and nothing is loaded into one string (the parser reads the stream).
         // Residual risk: the size is checked before the read, so a file that grows in between is bounded only by the depth
         // limit; the files belong to the user who runs the command.
         JsonDocumentOptions documentOptions = new()
         {
-            MaxDepth = manager.MaxJsonDepth > 0
-                ? manager.MaxJsonDepth
-                : int.MaxValue,
+            // The ceiling is long.MaxValue when the depth limit is off; the parser takes an int.
+            MaxDepth = checked((int)Math.Min(manager.Limits.MaxJsonDepth.Ceiling, int.MaxValue)),
         };
         foreach (string file in Directory.EnumerateFiles(manager.StoragePath, "*.json"))
         {
             try
             {
-                if (manager.MaxConfigFileBytes > 0 && new FileInfo(file).Length > manager.MaxConfigFileBytes)
+                if (new FileInfo(file).Length > manager.Limits.MaxFileSize.Ceiling)
                 {
                     continue;
                 }
@@ -435,7 +464,8 @@ internal static class SettingsCommand
         }
 
         Setting setting = match.Setting;
-        if (!SettingValueText.TryParse(setting, text, out SettingValue value, out SettingProblem? problem))
+        // The text length limit of the manager of this scope applies: the text comes from the command line.
+        if (!SettingValueText.TryParse(setting, text, match.Manager.Limits.MaxTextLength, out SettingValue value, out SettingProblem? problem))
         {
             io.Error.WriteLine("Error: " + problem);
             return (int)ExitCode.ArgumentError;
@@ -463,7 +493,7 @@ internal static class SettingsCommand
 
         match.Manager.ApplyChanges([name]);
         match.Manager.SaveChanged([name]);
-        io.Out.WriteLine($"{name} = {SettingValueText.Format(setting, setting.Value)}");
+        io.Out.WriteLine(Invariant($"{name} = {SettingValueText.Format(setting, setting.Value)}"));
         return (int)ExitCode.Success;
     }
 
@@ -501,7 +531,7 @@ internal static class SettingsCommand
             }
 
             match.Manager.SaveChanged([name]);
-            io.Out.WriteLine($"{name} = {document.RootElement.GetRawText()}");
+            io.Out.WriteLine(Invariant($"{name} = {document.RootElement.GetRawText()}"));
         }
 
         return (int)ExitCode.Success;
@@ -529,13 +559,13 @@ internal static class SettingsCommand
         // longer known to the manager (the lookup just found it, so this only guards against a change in between).
         if (!match.Manager.Unset(name))
         {
-            io.Error.WriteLine($"Error: Unknown setting '{name}'; see ni settings list.");
+            io.Error.WriteLine(Invariant($"Error: Unknown setting '{name}'; see ni settings list."));
             return (int)ExitCode.ArgumentError;
         }
 
         io.Out.WriteLine(match.Setting is { } setting
-            ? $"{name} = {SettingValueText.Format(setting, setting.DefaultValue)} (default)"
-            : $"{name} removed");
+            ? Invariant($"{name} = {SettingValueText.Format(setting, setting.DefaultValue)} (default)")
+            : Invariant($"{name} removed"));
         return (int)ExitCode.Success;
     }
 
@@ -551,14 +581,14 @@ internal static class SettingsCommand
         error.WriteLine("  get   <name> [--scope application|profile] [--group <group>]");
         error.WriteLine("  set   <name> <value> [--scope application|profile] [--group <group>]");
         error.WriteLine("  reset <name> [--scope application|profile]    Remove the stored value; the default applies");
+        error.WriteLine("  describe <name> [--format text|json]          What a setting is; for a limit what it bounds and why");
+        error.WriteLine("  describe --limits [--format text|json|markdown]   Every limit with value, default, unit, and range");
         error.WriteLine();
         error.WriteLine("Options:");
         error.WriteLine("  --profile <name>      Settings profile (must exist; 'default' is created on first use)");
         error.WriteLine("  --settings-path <dir> Base directory for settings storage");
-        error.WriteLine("  --settings-max-config-file-bytes <bytes>");
-        error.WriteLine("                        Max settings JSON size in bytes (default 1073741824). <=0 disables.");
-        error.WriteLine("  --settings-max-json-depth <n>");
-        error.WriteLine("                        Max JSON nesting depth for settings (default 1024). <=0 disables.");
+        error.WriteLine("  --set <key>=<value>   Override one setting for this run only, e.g. --set settings.maxFileSize=1GiB (repeatable;");
+        error.WriteLine("                        not allowed with set and reset; a limit takes a number with a unit, or off)");
         error.WriteLine("  -h, --help            Show this help message");
         error.WriteLine();
         error.WriteLine("Values: true/false, numbers, hex bytes (0A1B), enumeration names, text, and arrays as JSON ([1,2]) or comma lists.");

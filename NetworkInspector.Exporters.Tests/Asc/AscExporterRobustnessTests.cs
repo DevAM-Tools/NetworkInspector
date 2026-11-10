@@ -498,8 +498,31 @@ internal sealed class AscExporterRobustnessTests
     public async Task WriterConstructorFailureDoesNotLeavePooledBuffersRented()
     {
         using MemoryStream stream = new();
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int attempt = 0; attempt < 50; attempt++)
+
+        // Warm-up: the first throw of the exception type loads its machinery, which allocates once; the rounds below do not count it.
+        _AttemptFailedConstructions(stream, 1);
+
+        // The smallest of up to five rounds of 50 attempts keeps the per-attempt cost and drops a round that a one-off inflated.
+        long allocated = long.MaxValue;
+        for (int round = 0; round < 5 && allocated >= 500_000L; round++)
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            _AttemptFailedConstructions(stream, 50);
+            allocated = Math.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+
+        // Each failed construction used to rent a 64 KiB output buffer and never return it; 50 attempts would allocate over 3 MB.
+        await Assert.That(allocated).IsLessThan(500_000L);
+    }
+
+    /// <summary>
+    /// Calls the constructor with decimals 5, which it rejects, the given number of times and swallows each expected rejection.
+    /// </summary>
+    /// <param name="stream">The output stream passed to each constructor call.</param>
+    /// <param name="attempts">The number of failing constructor calls.</param>
+    private static void _AttemptFailedConstructions(MemoryStream stream, int attempts)
+    {
+        for (int attempt = 0; attempt < attempts; attempt++)
         {
             try
             {
@@ -510,10 +533,5 @@ internal sealed class AscExporterRobustnessTests
                 // Expected: the constructor rejects the argument.
             }
         }
-
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        // Each failed construction used to rent a 64 KiB output buffer and never return it; 50 attempts would allocate over 3 MB.
-        await Assert.That(allocated).IsLessThan(500_000L);
     }
 }

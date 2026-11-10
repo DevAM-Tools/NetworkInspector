@@ -36,18 +36,18 @@ internal sealed class CoreApiSampleTests
     {
         internal List<string> Lines { get; } = [];
 
-        public void BeginPacket(PacketId id, Timestamp timestamp) => Lines.Add($"packet {id.Value}");
+        public void BeginPacket(PacketId id, Timestamp timestamp) => Lines.Add(Invariant($"packet {id.Value}"));
 
         public void OnField(in FieldVisit visit)
         {
             // ForExtraction also delivers the other fields of the owning protocol; the observer keeps only its own.
             if (visit.FieldId == wanted)
             {
-                Lines.Add($"{visit.FieldId.Value}={visit.Value}");
+                Lines.Add(Invariant($"{visit.FieldId.Value}={visit.Value}"));
             }
         }
 
-        public void EndPacket(PacketId id, bool complete) => Lines.Add($"end {id.Value} complete={complete}");
+        public void EndPacket(PacketId id, bool complete) => Lines.Add(Invariant($"end {id.Value} complete={complete}"));
     }
 
     #endregion
@@ -75,14 +75,14 @@ internal sealed class CoreApiSampleTests
         {
             // The default display line of the field (label and value, or its custom text alone); the parts stay readable
             // for an own line: field.FieldInfo.UiName, field.Value, field.CustomText.
-            occurrences.Add(field.ToString());
+            occurrences.Add(field.ToString(null, CultureInfo.InvariantCulture));
         }
 
         // The whole tree, depth first.
         int count = packet.IterFieldsDfs(materialize: true).Count();
 
         await Assert.That(found).IsTrue();
-        await Assert.That(value.ToString()).IsEqualTo("53");
+        await Assert.That(value.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("53");
         await Assert.That(string.Join(",", occurrences)).IsEqualTo("Destination Port: 53");
         await Assert.That(count).IsGreaterThan(5);
     }
@@ -106,7 +106,7 @@ internal sealed class CoreApiSampleTests
         List<string> rows = [];
         foreach (ValueCacheRow<ulong> row in handle)
         {
-            rows.Add($"{handle.Keys.Count}:{row.Value}");
+            rows.Add(Invariant($"{handle.Keys.Count}:{row.Value}"));
         }
 
         await Assert.That(handle.Count).IsEqualTo(3);
@@ -129,6 +129,6 @@ internal sealed class CoreApiSampleTests
 
         await Assert.That(parsed).IsTrue();
         await Assert.That(packet!.HasFieldTree).IsFalse();
-        await Assert.That(string.Join(";", recorder.Lines)).IsEqualTo($"packet 0;{dstPort.Value}=53;end 0 complete=True");
+        await Assert.That(string.Join(";", recorder.Lines)).IsEqualTo(Invariant($"packet 0;{dstPort.Value}=53;end 0 complete=True"));
     }
 }

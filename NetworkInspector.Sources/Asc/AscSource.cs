@@ -1269,7 +1269,7 @@ public sealed class AscSource : IRandomAccessFrameSource, IErrorTolerantFrameSou
             }
 
             string displayName = busType.ToDisplayName();
-            string interfaceName = $"{displayName} {channel}";
+            string interfaceName = Invariant($"{displayName} {channel}");
 
             FrameInterfaceId id = registry.Register(
                 _SourceId, interfaceName, null, linkType,

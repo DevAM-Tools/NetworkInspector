@@ -9,8 +9,6 @@ namespace NetworkInspector.Core.Errors;
 /// </summary>
 public sealed class ExportErrorEventArgs : EventArgs
 {
-    #region Properties
-
     /// <summary>Zero-based index of the skipped frame/packet. Defaults to -1 (unknown).</summary>
     public int ItemIndex { get; init; } = -1;
 
@@ -25,6 +23,4 @@ public sealed class ExportErrorEventArgs : EventArgs
     {
         get; init;
     }
-
-    #endregion
 }

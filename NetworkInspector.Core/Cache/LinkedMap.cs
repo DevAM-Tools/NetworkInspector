@@ -27,17 +27,26 @@ namespace NetworkInspector.Core.Cache;
 /// </summary>
 internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
 {
+    #region Configuration and state
+
     /// <summary>One arena entry: payload plus its position in the recency list and in the free list.</summary>
     private struct Slot
     {
+        /// <summary>The key of the entry; cleared when the slot is freed.</summary>
         internal TKey Key;
-        internal TValue Value;
-        internal int Prev; // -1 = head sentinel
-        internal int Next; // -1 = tail sentinel
-        internal int NextFree; // free list link (-1 = end)
-    }
 
-    #region Fields
+        /// <summary>The value of the entry; cleared when the slot is freed.</summary>
+        internal TValue Value;
+
+        /// <summary>Slot index of the next more recently used entry; -1 for the head.</summary>
+        internal int Prev;
+
+        /// <summary>Slot index of the next less recently used entry; -1 for the tail.</summary>
+        internal int Next;
+
+        /// <summary>Slot index of the next free slot while this slot is on the free list; -1 at the end of the list.</summary>
+        internal int NextFree;
+    }
 
     /// <summary>The arena. Index into this list is the slot id used by <see cref="_Index"/>, <c>Prev</c> and <c>Next</c>.</summary>
     private readonly List<Slot> _Slots = [];
@@ -57,10 +66,6 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
     /// <summary>Number of occupied slots; equals the dictionary count.</summary>
     private int _Count;
 
-    #endregion
-
-    #region Constructors
-
     /// <summary>Creates an empty linked map with the specified initial capacity.</summary>
     /// <param name="capacity">Initial capacity of the key dictionary only; the slot arena always starts empty and grows on demand.</param>
     /// <param name="comparer">Optional key comparer; null uses the default comparer.</param>
@@ -70,10 +75,6 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
         _Index = new Dictionary<TKey, int>(capacity, comparer);
     }
 
-    #endregion
-
-    #region Properties
-
     /// <summary>Number of entries in the map.</summary>
     internal int Count => _Count;
 
@@ -82,7 +83,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
 
     #endregion
 
-    #region Internal API
+    #region Entry operations
 
     /// <summary>
     /// Inserts at the front of the list. If key already exists, updates value
@@ -136,13 +137,14 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
     /// <param name="key">The key to update.</param>
     /// <param name="newValue">The replacement value.</param>
     /// <param name="oldValue">The previous value (the caller needs it to adjust its weight accounting), or default when not found.</param>
+    /// <returns><see langword="true"/> when the key was found and updated.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool TryUpdateInPlace(TKey key, TValue newValue, out TValue oldValue)
+    internal bool TryUpdateInPlace(TKey key, TValue newValue, [MaybeNullWhen(false)] out TValue oldValue)
     {
         ref int slotIndex = ref CollectionsMarshal.GetValueRefOrNullRef(_Index, key);
         if (Unsafe.IsNullRef(ref slotIndex))
         {
-            oldValue = default!;
+            oldValue = default;
             return false;
         }
 
@@ -159,12 +161,13 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
     /// <param name="key">The key to update.</param>
     /// <param name="newValue">The replacement value.</param>
     /// <param name="oldValue">The previous value (the caller needs it to adjust its weight accounting), or default when not found.</param>
-    internal bool TryUpdateAndMoveToFront(TKey key, TValue newValue, out TValue oldValue)
+    /// <returns><see langword="true"/> when the key was found and updated.</returns>
+    internal bool TryUpdateAndMoveToFront(TKey key, TValue newValue, [MaybeNullWhen(false)] out TValue oldValue)
     {
         ref int slotIndex = ref CollectionsMarshal.GetValueRefOrNullRef(_Index, key);
         if (Unsafe.IsNullRef(ref slotIndex))
         {
-            oldValue = default!;
+            oldValue = default;
             return false;
         }
 
@@ -183,13 +186,14 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
     /// </summary>
     /// <param name="key">The key to look up.</param>
     /// <param name="value">The stored value, or default when not found.</param>
+    /// <returns><see langword="true"/> when the key was found.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool TryGetAndMoveToFront(TKey key, out TValue value)
+    internal bool TryGetAndMoveToFront(TKey key, [MaybeNullWhen(false)] out TValue value)
     {
         ref int slotIndex = ref CollectionsMarshal.GetValueRefOrNullRef(_Index, key);
         if (Unsafe.IsNullRef(ref slotIndex))
         {
-            value = default!;
+            value = default;
             return false;
         }
 
@@ -202,11 +206,12 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
     /// <summary>Removes a key. Returns true if found.</summary>
     /// <param name="key">The key to remove.</param>
     /// <param name="value">The removed value (the caller needs it to adjust its weight accounting), or default when not found.</param>
-    internal bool Remove(TKey key, out TValue value)
+    /// <returns><see langword="true"/> when the key was found and removed.</returns>
+    internal bool Remove(TKey key, [MaybeNullWhen(false)] out TValue value)
     {
         if (!_Index.Remove(key, out int slotIndex))
         {
-            value = default!;
+            value = default;
             return false;
         }
 
@@ -223,12 +228,12 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
     /// <param name="key">The key of the removed entry, or default when the map is empty.</param>
     /// <param name="value">The value of the removed entry, or default when the map is empty.</param>
     /// <returns><see langword="false"/> when the map is empty.</returns>
-    internal bool PopBack(out TKey key, out TValue value)
+    internal bool PopBack([MaybeNullWhen(false)] out TKey key, [MaybeNullWhen(false)] out TValue value)
     {
         if (_Tail < 0)
         {
-            key = default!;
-            value = default!;
+            key = default;
+            value = default;
             return false;
         }
 
@@ -245,23 +250,9 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
         return true;
     }
 
-    /// <summary>Moves a key to the front (most recently used).</summary>
-    /// <param name="key">The key to promote.</param>
-    /// <returns><see langword="true"/> when the key exists.</returns>
-    internal bool MoveToFront(TKey key)
-    {
-        ref int slotIndex = ref CollectionsMarshal.GetValueRefOrNullRef(_Index, key);
-        if (Unsafe.IsNullRef(ref slotIndex))
-        {
-            return false;
-        }
-
-        _MoveToFrontInternal(slotIndex);
-        return true;
-    }
-
     /// <summary>Checks if a key exists.</summary>
     /// <param name="key">The key to look up.</param>
+    /// <returns><see langword="true"/> when the key is in the map.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool ContainsKey(TKey key) => _Index.ContainsKey(key);
 
@@ -271,13 +262,14 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
     /// </summary>
     /// <param name="key">The key to look up.</param>
     /// <param name="value">The stored value, or default when not found.</param>
+    /// <returns><see langword="true"/> when the key was found.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool TryGetValue(TKey key, out TValue value)
+    internal bool TryGetValue(TKey key, [MaybeNullWhen(false)] out TValue value)
     {
         ref int slotIndex = ref CollectionsMarshal.GetValueRefOrNullRef(_Index, key);
         if (Unsafe.IsNullRef(ref slotIndex))
         {
-            value = default!;
+            value = default;
             return false;
         }
 
@@ -301,9 +293,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
 
     #endregion
 
-    #region Private Helpers
-
-    // ----- Internal helpers -----
+    #region Arena and list maintenance
 
     /// <summary>
     /// Returns the index of a free slot: a recycled one from the free list if available, otherwise a new one appended
@@ -328,11 +318,12 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
     /// Pushes a slot onto the free list. Key and value are cleared on purpose: the slot stays in the arena, so
     /// leaving them would keep an evicted (possibly large) value reachable for the GC until the slot is reused.
     /// </summary>
+    /// <param name="index">Slot to free; it must already be unlinked from the recency list and removed from the dictionary.</param>
     private void _FreeSlot(int index)
     {
         Span<Slot> slots = CollectionsMarshal.AsSpan(_Slots);
-        slots[index].Key = default!;
-        slots[index].Value = default!;
+        slots[index].Key = default!; // TKey is notnull; the freed slot is unreachable until _AllocateSlot reuses and overwrites it.
+        slots[index].Value = default!; // Same: a freed slot is never read before it is rewritten.
         slots[index].NextFree = _FreeHead;
         _FreeHead = index;
     }
@@ -341,6 +332,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
     /// Detaches a slot from the recency list and repairs its neighbours (or head/tail). Does not touch the dictionary,
     /// the free list, or the slot's own links, which the caller overwrites or discards.
     /// </summary>
+    /// <param name="index">Slot to detach; it must be on the recency list.</param>
     private void _UnlinkSlot(int index)
     {
         Span<Slot> slots = CollectionsMarshal.AsSpan(_Slots);
@@ -366,6 +358,7 @@ internal sealed class LinkedMap<TKey, TValue> where TKey : notnull
     }
 
     /// <summary>Relinks an existing slot at the front of the recency list without touching the dictionary.</summary>
+    /// <param name="slotIndex">Slot to move; it must be on the recency list.</param>
     private void _MoveToFrontInternal(int slotIndex)
     {
         // Already at front: skip the relink. This is the common case for repeated hits on the same entry.

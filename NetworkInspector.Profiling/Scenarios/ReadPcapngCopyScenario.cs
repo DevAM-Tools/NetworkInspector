@@ -52,11 +52,12 @@ internal sealed class ReadPcapngCopyScenario : ReadScenarioBase
         => SampleCaptureFiles.CreatePcapngFile(frames);
 
     /// <inheritdoc/>
-    public override string Name => FormattableString.Invariant(
-        $"read-pcapng-{(_Backend == PcapngCopyBackend.Mapped ? "mmap" : "stream")}{(_HoldFrames ? "-hold" : "")}{(_FrameSlabSize > 0 ? $"-slab{_FrameSlabSize / 1024}k" : "")}");
+    public override string Name => Invariant(
+        $"read-pcapng-{(_Backend == PcapngCopyBackend.Mapped ? "mmap" : "stream")}{(_HoldFrames ? "-hold" : "")}") +
+        Invariant($"{(_FrameSlabSize > 0 ? Invariant($"-slab{_FrameSlabSize / 1024}k") : "")}");
 
     /// <inheritdoc/>
-    public override string Description => FormattableString.Invariant(
+    public override string Description => Invariant(
         $"Read {_Count:N0} frames ({_Backend}, FrameSlabSize={_FrameSlabSize}, hold={_HoldFrames}) per iteration.");
 
     /// <inheritdoc/>

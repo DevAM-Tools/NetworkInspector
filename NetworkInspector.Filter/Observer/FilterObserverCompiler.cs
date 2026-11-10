@@ -195,7 +195,7 @@ internal static class FilterObserverCompiler
                 StringPredicateNode text => _Text(text),
                 PresenceNode presence => _Presence(presence),
                 FlankNode flank => _EmitFlank(flank),
-                _ => (FilterResult<int>)FilterError.Compiler($"Observer compile does not support {node.GetType().Name}."),
+                _ => (FilterResult<int>)FilterError.Compiler(Invariant($"Observer compile does not support {node.GetType().Name}.")),
             };
         }
 

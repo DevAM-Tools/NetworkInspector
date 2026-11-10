@@ -30,7 +30,7 @@ internal sealed class ValueCacheReadUdpSrcPortScenario : IProfilingScenario
     public string Name => "value-cache-read-udp-srcport";
 
     /// <inheritdoc/>
-    public string Description => FormattableString.Invariant(
+    public string Description => Invariant(
         $"SIMD-scan pre-built ValueCache udp.srcport values ({_PacketCount:N0} rows) — no parse, no rows.");
 
     /// <inheritdoc/>
@@ -70,7 +70,7 @@ internal sealed class ValueCacheReadUdpSrcPortScenario : IProfilingScenario
         if (series.Count != _PacketCount)
         {
             throw new InvalidOperationException(
-                FormattableString.Invariant(
+                Invariant(
                     $"Expected {_PacketCount} udp.srcport rows, got {series.Count}."));
         }
 

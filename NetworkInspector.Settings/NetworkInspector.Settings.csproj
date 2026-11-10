@@ -1,0 +1,17 @@
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Typed application settings for any .NET application: typed values, JSON and text forms, sparse persistence, profiles, and safe concurrent saving. It depends on nothing application-specific.</Description>
+    <PackageTags>settings;configuration;profiles;json;limits</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The tests reach the internal storage, codec, and save helpers through this grant only. -->
+    <InternalsVisibleTo Include="NetworkInspector.Settings.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkInspector.Limits\NetworkInspector.Limits.csproj" />
+  </ItemGroup>
+</Project>

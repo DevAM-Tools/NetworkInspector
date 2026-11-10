@@ -22,7 +22,7 @@ namespace NetworkInspector.Core.Fields;
 [StructLayout(LayoutKind.Sequential)]
 internal struct FieldBody
 {
-    #region Fields
+    #region Slot state and construction
 
     /// <summary>"No link" sentinel (0xFFFF) for every tree link; never a valid slot index.</summary>
     internal const ushort NullIndex = ushort.MaxValue;
@@ -33,7 +33,10 @@ internal struct FieldBody
     /// </summary>
     internal const ushort SkipStorageIndex = unchecked((ushort)(ushort.MaxValue - 1)); // 0xFFFE
 
+    /// <summary>The field value; <see cref="FieldValue.None"/> for a container. Accessed through <see cref="Value"/> and <see cref="SetValue"/>.</summary>
     private FieldValue _Value;
+
+    /// <summary>The custom display text; default (<see cref="LazyString.IsNull"/>) when absent. Read and written through <see cref="CustomText"/>.</summary>
     private LazyString _CustomText;
 
     /// <summary>Identifier of the field definition; set once at construction and never changed.</summary>
@@ -41,25 +44,34 @@ internal struct FieldBody
 
     // The six link fields below are plain ushort fields accessed only through the Volatile properties in the
     // "Tree links" region, so a reader that sees a link also sees the slot it points to.
+
+    /// <summary>Storage index of the parent, or <see cref="NullIndex"/>; accessed through <see cref="ParentIndex"/>.</summary>
     private ushort _ParentIndex;
+
+    /// <summary>Storage index of the first child, or <see cref="NullIndex"/>; accessed through <see cref="FirstChildIndex"/>.</summary>
     private ushort _FirstChildIndex;
+
+    /// <summary>Storage index of the last child, or <see cref="NullIndex"/>; accessed through <see cref="LastChildIndex"/>.</summary>
     private ushort _LastChildIndex;
+
+    /// <summary>Storage index of the next sibling, or <see cref="NullIndex"/>; accessed through <see cref="NextIndex"/>.</summary>
     private ushort _NextIndex;
+
+    /// <summary>Storage index of the previous sibling, or <see cref="NullIndex"/>; accessed through <see cref="PrevIndex"/>.</summary>
     private ushort _PrevIndex;
+
+    /// <summary>Number of direct children, saturating at <see cref="ushort.MaxValue"/>; accessed through <see cref="ChildCount"/>.</summary>
     private ushort _ChildCount;
 
-    // Lazy field support: 1-based index into Packet._LazyPopulators array.
-    // 0 = not lazy (or already materialized). Bit 15 set = materialization in progress, so a populator index uses
-    // the low 15 bits only.
-    // Stored as int so Interlocked.CompareExchange works on the volatile field without Unsafe.As.
+    /// <summary>
+    /// Lazy field state: 1-based slot in the packet's lazy populator table (Packet._LazyTable); 0 = not lazy (or already
+    /// materialized). Bit 15 (<see cref="LazyIndexMaterializingBit"/>) set = materialization in progress, so a populator index
+    /// uses the low 15 bits only. Stored as int so Interlocked.CompareExchange works on the volatile field without Unsafe.As.
+    /// </summary>
     private volatile int _LazyIndex;
 
     /// <summary>Bit set on <see cref="_LazyIndex"/> while a lazy field is being materialized.</summary>
     internal const ushort LazyIndexMaterializingBit = 0x8000;
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>
     /// Creates a field body node with a value and no links. Plain stores, as in the other constructors: the node reaches
@@ -125,6 +137,8 @@ internal struct FieldBody
 
     #endregion
 
+    #region Value and custom text
+
     /// <summary>
     /// The storage location of the field value. Plain read (no volatile): the value is written before the slot becomes visible
     /// to other threads through the packet's published field count.
@@ -185,6 +199,15 @@ internal struct FieldBody
     /// <summary>Removes the custom display text.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void ClearCustomText() => _CustomText = default;
+
+    /// <summary>Appends <paramref name="suffix"/> to the existing custom text, or sets it when there is none. Not synchronized.</summary>
+    /// <param name="suffix">Text to append.</param>
+    internal void AppendCustomText(LazyString suffix) =>
+        _CustomText = !_CustomText.IsNull
+            ? _CustomText.Append(suffix)
+            : suffix;
+
+    #endregion
 
     #region Tree links
 
@@ -269,7 +292,7 @@ internal struct FieldBody
     #region Lazy field support
 
     /// <summary>
-    /// The 1-based index into the Packet's lazy populator array.
+    /// The 1-based slot in the packet's lazy populator table (Packet._LazyTable).
     /// 0 means this field is not lazy or has already been materialized.
     /// The getter includes <see cref="LazyIndexMaterializingBit"/> while a materialization is in progress. Reads and
     /// writes go through the volatile field, so they are ordered with <see cref="TryClaimLazyMaterialization"/>.
@@ -309,10 +332,12 @@ internal struct FieldBody
     }
 
     /// <summary>Volatile read of the raw lazy-index word (includes materializing marker).</summary>
+    /// <returns>The populator slot, with <see cref="LazyIndexMaterializingBit"/> set while a materialization runs; 0 when not lazy.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ushort ReadLazyIndexVolatile() => (ushort)_LazyIndex;
 
     /// <summary>Whether another thread is currently materializing this lazy field.</summary>
+    /// <returns><see langword="true"/> when the materializing bit is set.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool IsLazyMaterializationInProgress() =>
         (ReadLazyIndexVolatile() & LazyIndexMaterializingBit) != 0;
@@ -325,6 +350,7 @@ internal struct FieldBody
     /// (see <see cref="IsLazyMaterializationInProgress"/>).
     /// </summary>
     /// <param name="lazyPopulatorIndex">The populator index (without the marker bit) when the claim succeeded; 0 otherwise.</param>
+    /// <returns><see langword="true"/> when this call claimed the field; <see langword="false"/> when it is not lazy or another thread claimed it.</returns>
     internal bool TryClaimLazyMaterialization(out ushort lazyPopulatorIndex)
     {
         // Not lazy (0), already being materialized, or already finished: nothing to claim.
@@ -354,10 +380,6 @@ internal struct FieldBody
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void FinishLazyMaterialization() => _LazyIndex = 0;
-
-    /// <summary>Appends <paramref name="suffix"/> to the existing custom text, or sets it when there is none. Not synchronized.</summary>
-    /// <param name="suffix">Text to append.</param>
-    internal void AppendCustomText(LazyString suffix) => _CustomText = !_CustomText.IsNull ? _CustomText.Append(suffix) : suffix;
 
     #endregion
 }

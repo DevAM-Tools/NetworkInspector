@@ -17,8 +17,6 @@ namespace NetworkInspector.Core;
 /// </summary>
 public abstract record BuildDiagnostic
 {
-    #region Properties
-
     /// <summary>Severity of this diagnostic.</summary>
     public abstract BuildDiagnosticSeverity Severity
     {
@@ -30,6 +28,4 @@ public abstract record BuildDiagnostic
     {
         get;
     }
-
-    #endregion
 }

@@ -194,7 +194,7 @@ internal sealed class PackedLongSequenceTests
                     Interlocked.Increment(ref reads);
                 }
             })
-            { Name = $"PackedLongSequence reader {r}", IsBackground = true };
+            { Name = Invariant($"PackedLongSequence reader {r}"), IsBackground = true };
             readers[r].Start();
         }
 
@@ -270,7 +270,7 @@ internal sealed class PackedLongSequenceTests
                     }
                 }
             })
-            { Name = $"PackedLongSequence cached reader {r}", IsBackground = true };
+            { Name = Invariant($"PackedLongSequence cached reader {r}"), IsBackground = true };
             readers[r].Start();
         }
 

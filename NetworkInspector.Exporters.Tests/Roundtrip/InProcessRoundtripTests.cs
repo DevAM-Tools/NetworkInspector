@@ -249,7 +249,7 @@ internal sealed class InProcessRoundtripTests
         long ts = _EpochBaseNs;
         foreach (LinkType linkType in Enum.GetValues<LinkType>())
         {
-            FrameInterfaceId ifId = factory.AddInterface($"if {(int)linkType}", linkType);
+            FrameInterfaceId ifId = factory.AddInterface(Invariant($"if {(int)linkType}"), linkType);
             frames.Add(factory.Create(ifId, linkType, ts, FrameGenerators.BuildEthernetIpv4UdpFrame(64)));
             ts += 1_000;
         }
@@ -292,7 +292,7 @@ internal sealed class InProcessRoundtripTests
 
     private static Frame _Single(List<Frame> frames) => frames.Count == 1
         ? frames[0]
-        : throw new InvalidOperationException($"Expected one frame, got {frames.Count}.");
+        : throw new InvalidOperationException(Invariant($"Expected one frame, got {frames.Count}."));
 
     private static byte[] _ExportBlf(IReadOnlyList<Frame> frames, TimeZoneInfo? zone = null)
     {
@@ -339,7 +339,7 @@ internal sealed class InProcessRoundtripTests
         {
             if (!exporter.OnFrame(frame))
             {
-                throw new InvalidOperationException($"Exporter rejected frame {frame.Id.Value}.");
+                throw new InvalidOperationException(Invariant($"Exporter rejected frame {frame.Id.Value}."));
             }
         }
 
@@ -369,7 +369,7 @@ internal sealed class InProcessRoundtripTests
         // A round trip must read back cleanly: any skip event fails the test with the reader's own message.
         if (source is IErrorTolerantFrameSource tolerant)
         {
-            tolerant.FrameSkipped += static (_, e) => throw new InvalidOperationException($"Reader skipped a frame: {e.Kind}: {e.Message}");
+            tolerant.FrameSkipped += static (_, e) => throw new InvalidOperationException(Invariant($"Reader skipped a frame: {e.Kind}: {e.Message}"));
         }
 
         FrameInterfaceRegistry registry = new();

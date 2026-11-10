@@ -149,7 +149,7 @@ internal sealed class TraceCache
             catch (IOException exception) when (exception is not (DirectoryNotFoundException or FileNotFoundException))
             {
                 // The same contention after the deadline: fail with a message that names the lock file instead of waiting on.
-                throw new TimeoutException($"The trace lock '{lockPath}' was not released within {_LockTimeout.TotalSeconds:0} seconds.", exception);
+                throw new TimeoutException(Invariant($"The trace lock '{lockPath}' was not released within {_LockTimeout.TotalSeconds:0} seconds."), exception);
             }
 
             await Task.Delay(pause, cancellationToken).ConfigureAwait(false);
@@ -167,8 +167,8 @@ internal sealed class TraceCache
         // they are written straight into the final side folder; that is safe because readers look at the trace file first
         // and the trace is moved last.
         string sideDirectory = stem + ".files";
-        string temporaryTrace = tracePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        string temporarySettings = settingsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        string temporaryTrace = tracePath + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
+        string temporarySettings = settingsPath + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
         try
         {
             // Leftovers of a writer that died half-way are removed before the new write starts.

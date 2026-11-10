@@ -10,9 +10,9 @@ The tier 1 sample plugin of NetworkInspector. It is small on purpose and uses ev
 | Protocol `sample` | a hand-written `IProtocol` decoding `sample.counter`, `sample.gear`, `sample.speed`, registered on UDP port 40000 | [`SampleProtocol.cs`](SampleProtocol.cs) |
 | Heuristic parser | the magic `NIS1` found in TCP payload on any port through the existing `tcp.heuristic` table | [`SampleHeuristicParser.cs`](SampleHeuristicParser.cs) |
 | Post-parser | `sample.post.magic_offset` on every frame that carries the magic | [`SamplePostParser.cs`](SamplePostParser.cs) |
-| Source `SampleGen` | a Core `IFrameSource` (with random access and statistics) whose options are Core settings | [`SampleSource.cs`](SampleSource.cs), [`SampleFrameSource.cs`](SampleFrameSource.cs) |
+| Source `SampleGen` | a Core `IFrameSource` (with random access and statistics) whose options are settings of `NetworkInspector.Settings` | [`SampleSource.cs`](SampleSource.cs), [`SampleFrameSource.cs`](SampleFrameSource.cs) |
 | Exporter `SampleText` | a Core `IPacketListener` with statistics and partial-output cleanup | [`SampleTextExporter.cs`](SampleTextExporter.cs), [`SampleTextListener.cs`](SampleTextListener.cs) |
-| Setting `sample.greeting` | an application setting registered with the Core `SettingsRegistrar` | [`SampleProtocolPlugin.cs`](SampleProtocolPlugin.cs) |
+| Setting `sample.greeting` | an application setting registered with the `SettingsRegistrar` of `NetworkInspector.Settings` | [`SampleProtocolPlugin.cs`](SampleProtocolPlugin.cs) |
 
 The wire format is a 14-byte payload: magic `NIS1` (4 bytes), counter (8 bytes, big endian), gear (1 byte), speed (1 byte).
 The generated speed pattern gives tests two special values: 254 (error) when the frame index is a multiple of 50, and 255

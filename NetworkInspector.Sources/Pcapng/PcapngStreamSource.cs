@@ -252,7 +252,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         if (!_Started)
         {
-            throw new InvalidOperationException($"{UiName} has not been started. Call Start() first.");
+            throw new InvalidOperationException(Invariant($"{UiName} has not been started. Call Start() first."));
         }
 
         if (_Exhausted)
@@ -373,12 +373,12 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
         // A first SHB whose length can never be valid is fatal: nothing can be read without a section.
         if (!PcapPadding.TryRoundBlockLength(blockLength, out uint roundedLength))
         {
-            throw new PcapException($"SHB block length {blockLength} cannot be rounded to a multiple of 4.");
+            throw new PcapException(Invariant($"SHB block length {blockLength} cannot be rounded to a multiple of 4."));
         }
 
         if (roundedLength < PcapConstants.ShbFixedSize)
         {
-            throw new PcapException($"SHB block length {roundedLength} is less than minimum {PcapConstants.ShbFixedSize}.");
+            throw new PcapException(Invariant($"SHB block length {roundedLength} is less than minimum {PcapConstants.ShbFixedSize}."));
         }
 
         // Everything else (cap, body read, trailing length, section length, options) uses the routine that parses every
@@ -484,7 +484,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
                         FrameIndex = _FrameIndex,
                         FileOffset = -1,
                         Kind = FrameReadErrorKind.TruncatedStream,
-                        Message = $"Stream truncated while reading SHB body (block length {blockLength})."
+                        Message = Invariant($"Stream truncated while reading SHB body (block length {blockLength}).")
                     });
                     _Exhausted = true;
                     return null;
@@ -523,7 +523,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
                     Kind = FrameReadErrorKind.CorruptedBlock,
-                    Message = $"PCAPNG block length {blockLength} cannot be rounded to a multiple of 4.",
+                    Message = Invariant($"PCAPNG block length {blockLength} cannot be rounded to a multiple of 4."),
                 });
                 _Exhausted = true;
                 return null;
@@ -537,7 +537,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
                     Kind = FrameReadErrorKind.CorruptedBlock,
-                    Message = $"PCAPNG block length {blockLength} is below the minimum block size.",
+                    Message = Invariant($"PCAPNG block length {blockLength} is below the minimum block size."),
                 });
                 _Exhausted = true;
                 return null;
@@ -555,7 +555,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
                     Kind = FrameReadErrorKind.CorruptedBlock,
-                    Message = $"Block length {blockLength} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt."
+                    Message = Invariant($"Block length {blockLength} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt.")
                 });
                 _Exhausted = true;
                 return null;
@@ -573,7 +573,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
                     Kind = FrameReadErrorKind.CorruptedBlock,
-                    Message = $"Block body size {bodySize} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt."
+                    Message = Invariant($"Block body size {bodySize} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap; the stream data may be corrupt.")
                 });
                 _Exhausted = true;
                 return null;
@@ -587,7 +587,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
                     FrameIndex = _FrameIndex,
                     FileOffset = -1,
                     Kind = FrameReadErrorKind.TruncatedStream,
-                    Message = $"Stream truncated while reading block body (type=0x{blockType:X}, expected {bodySize} bytes)."
+                    Message = Invariant($"Stream truncated while reading block body (type=0x{blockType:X}, expected {bodySize} bytes).")
                 });
                 _Exhausted = true;
                 return null;
@@ -1031,7 +1031,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
                 Kind = FrameReadErrorKind.TruncatedStream,
-                Message = $"Stream truncated while reading frame data (expected {inclLen} bytes)."
+                Message = Invariant($"Stream truncated while reading frame data (expected {inclLen} bytes).")
             });
             _Exhausted = true;
             return null;
@@ -1064,7 +1064,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
             return;
         }
 
-        string name = info.Name is { } ifName && NameValidation.IsValidUiName(ifName) ? ifName : $"Interface {localInterfaceId}";
+        string name = info.Name is { } ifName && NameValidation.IsValidUiName(ifName) ? ifName : Invariant($"Interface {localInterfaceId}");
         FrameInterfaceId id = registry.Register(
             _SourceId, name, info.Description, info.LinkType, PcapInterfaceProperties.ForPcapng(info, section));
         _ = _Interfaces.TryAdd(sectionIndex, localInterfaceId, new PcapInterfaceEntry(id, info.LinkType));
@@ -1142,7 +1142,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
                 FrameIndex = skipId,
                 FileOffset = -1,
                 Kind = FrameReadErrorKind.UnresolvedInterface,
-                Message = $"Unresolved interface: section={sectionIndex}, interface={interfaceId}."
+                Message = Invariant($"Unresolved interface: section={sectionIndex}, interface={interfaceId}.")
             });
             return null;
         }
@@ -1167,7 +1167,7 @@ public sealed class PcapngStreamSource : IFrameSource, IErrorTolerantFrameSource
             FrameIndex = frameId,
             FileOffset = -1,
             Kind = FrameReadErrorKind.Other,
-            Message = $"Frame creation failed for section={sectionIndex}, interface={interfaceId}."
+            Message = Invariant($"Frame creation failed for section={sectionIndex}, interface={interfaceId}.")
         });
         return null;
     }

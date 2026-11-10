@@ -30,7 +30,7 @@ internal sealed class ExportPcapngScenario : ExportScenarioBase<Frame>
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Export {_Batch:N0} IPv6/UDP frames as PCAPNG → MemoryStream per iteration.");
 
     /// <inheritdoc/>

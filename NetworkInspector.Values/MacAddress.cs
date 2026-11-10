@@ -152,7 +152,7 @@ public readonly record struct MacAddress :
     {
         if (!TryParse(s, out MacAddress result))
         {
-            throw new FormatException($"Input '{s}' is not a valid MAC address.");
+            throw new FormatException(Invariant($"Input '{s}' is not a valid MAC address."));
         }
         return result;
     }
@@ -172,7 +172,7 @@ public readonly record struct MacAddress :
         ArgumentNullException.ThrowIfNull(s);
         if (!TryParse(s.AsSpan(), out MacAddress result))
         {
-            throw new FormatException($"Input '{s}' is not a valid MAC address.");
+            throw new FormatException(Invariant($"Input '{s}' is not a valid MAC address."));
         }
         return result;
     }
@@ -329,7 +329,10 @@ public readonly record struct MacAddress :
     /// <remarks>
     /// Allocates exactly the result string (the text is built on the stack first). Use <see cref="FormatInto"/> or
     /// <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> when the caller owns a buffer.
-    /// <param name="hexCase">Letter case of the hex digits; <see cref="HexCase.Upper"/> by default. The format specifier <c>x</c> of <c>ToString</c> and of interpolation selects <see cref="HexCase.Lower"/>.</param>
+    /// <param name="hexCase">
+    /// Letter case of the hex digits; <see cref="HexCase.Upper"/> by default. The format specifier <c>x</c> of <c>ToString</c> and of
+    /// interpolation selects <see cref="HexCase.Lower"/>.
+    /// </param>
     /// </remarks>
     public string Format(HexCase hexCase = HexCase.Upper)
     {
@@ -362,7 +365,7 @@ public readonly record struct MacAddress :
     {
         if (obj is null) { return 1; }
         if (obj is MacAddress other) { return CompareTo(other); }
-        throw new ArgumentException($"Object must be of type {nameof(MacAddress)}.", nameof(obj));
+        throw new ArgumentException(Invariant($"Object must be of type {nameof(MacAddress)}."), nameof(obj));
     }
 
     #endregion

@@ -580,7 +580,7 @@ internal sealed class AscWriter
             : dto.Day.ToString(CultureInfo.InvariantCulture);
         string time = dto.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture);
         string year = dto.Year.ToString(CultureInfo.InvariantCulture);
-        return $"{dow} {mon} {day} {time} {year}";
+        return Invariant($"{dow} {mon} {day} {time} {year}");
     }
 
     #endregion

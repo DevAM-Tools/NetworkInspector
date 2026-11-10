@@ -133,7 +133,7 @@ internal sealed class CultureInvarianceTests
             .Start(new SocketCanLayer(0x100u, signalBytes))
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
-        string directory = Path.Combine(Path.GetTempPath(), "ni_culture_" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), "ni_culture_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(directory);
         try
         {

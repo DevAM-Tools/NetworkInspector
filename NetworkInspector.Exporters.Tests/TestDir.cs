@@ -16,7 +16,7 @@ internal sealed class TestDir : IDisposable
     /// <param name="prefix">Prefix for the directory name.</param>
     internal TestDir(string prefix)
     {
-        _Path = Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
+        _Path = Path.Combine(Path.GetTempPath(), Invariant($"{prefix}_{Guid.NewGuid():N}"));
         Directory.CreateDirectory(_Path);
     }
 

@@ -1,0 +1,6 @@
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkInspector.Limits\NetworkInspector.Limits.csproj" />
+  </ItemGroup>
+</Project>

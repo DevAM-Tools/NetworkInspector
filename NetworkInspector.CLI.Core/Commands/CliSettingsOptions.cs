@@ -3,61 +3,59 @@
 namespace NetworkInspector.CLI.Commands;
 
 /// <summary>
-/// The settings options every command accepts: <c>--profile</c>, <c>--settings-path</c>,
-/// <c>--settings-max-config-file-bytes</c>, and <c>--settings-max-json-depth</c>. Immutable.
+/// The settings options every command accepts: <c>--profile</c>, <c>--settings-path</c>, and <c>--set &lt;key&gt;=&lt;value&gt;</c>
+/// (repeatable). Immutable.
 /// <para>
-/// The two <c>Max…</c> values are the trust-boundary limits of the settings loader: they stop a hostile or runaway settings
-/// file from exhausting memory or the parser (size) and the stack of recursive walks (depth); the files are parsed into a
-/// complete in-memory document. They are configurable here by the operator of the command line, who also owns the files, and
-/// default to the open defaults of <see cref="SettingsManager"/> (<see cref="SettingsManager.DefaultMaxConfigFileBytes"/>,
-/// <see cref="SettingsManager.DefaultMaxJsonDepth"/>): a loose default so that large legitimate files load, lowering is opt-in.
-/// A value of zero or less disables the check; that is the operator's explicit choice. The manager applies the
-/// values; a file over a limit is skipped with a warning, never truncated silently.
+/// <c>--set</c> overrides one setting for the current run only; nothing is written. The value uses the text form of the setting
+/// (a limit takes a number with a unit word such as <c>64MiB</c>, or <c>off</c>). The loader limits of the settings library
+/// (<c>settings.maxFileSize</c>, <c>settings.maxJsonDepth</c>, <c>settings.folderLockTimeout</c>, <c>settings.maxGroupFiles</c>,
+/// <c>settings.maxTextLength</c>) are in effect before the first settings file is read, so an override can let a run load a file
+/// that the stored limit would skip. A repeated key keeps its first position and takes the last value.
 /// </para>
 /// </summary>
 /// <param name="SettingsPath">Base folder of the settings, or <see langword="null"/> for the default of the platform.</param>
 /// <param name="Profile">Profile name, or <see langword="null"/> for <see cref="SettingsProfiles.DefaultProfile"/>.</param>
-/// <param name="MaxConfigFileBytes">Largest accepted settings JSON in bytes; 0 or less disables the check.</param>
-/// <param name="MaxJsonDepth">Deepest accepted JSON nesting; 0 or less disables the check.</param>
-internal sealed record CliSettingsOptions(string? SettingsPath, string? Profile, long MaxConfigFileBytes, int MaxJsonDepth)
+/// <param name="Overrides">The <c>--set</c> pairs (key, text) in the order given, one per key; applied for this run only.</param>
+internal sealed record CliSettingsOptions(string? SettingsPath, string? Profile, IReadOnlyList<KeyValuePair<string, string>> Overrides)
 {
-    /// <summary>The options when none is given: the platform default folder, the profile <c>default</c>, and the default limits.</summary>
-    internal static CliSettingsOptions Defaults { get; } =
-        new(null, null, SettingsManager.DefaultMaxConfigFileBytes, SettingsManager.DefaultMaxJsonDepth);
+    /// <summary>The options when none is given: the platform default folder, the profile <c>default</c>, and no override.</summary>
+    internal static CliSettingsOptions Defaults { get; } = new(null, null, []);
 }
 
 /// <summary>
 /// Collects the settings options while a command walks its arguments; every command calls <see cref="TryConsume"/> first for
-/// each argument, so the four options behave the same everywhere. Not thread-safe; used by one parser.
+/// each argument, so the options behave the same everywhere. Not thread-safe; used by one parser.
 /// </summary>
 internal sealed class CliSettingsOptionsBuilder
 {
-    #region Fields
+    #region Collected options
 
+    /// <summary>The settings base given with <c>--settings-path</c>, or <see langword="null"/>.</summary>
     private string? _SettingsPath;
 
+    /// <summary>The profile given with <c>--profile</c>, or <see langword="null"/>.</summary>
     private string? _Profile;
 
-    private long _MaxConfigFileBytes = SettingsManager.DefaultMaxConfigFileBytes;
-
-    private int _MaxJsonDepth = SettingsManager.DefaultMaxJsonDepth;
+    /// <summary>The <c>--set</c> pairs, one per key.</summary>
+    private readonly List<KeyValuePair<string, string>> _Overrides = [];
 
     #endregion
 
-    #region Public API
+    #region Consuming an argument
 
     /// <summary>
-    /// Consumes the option at <paramref name="index"/> when it is one of the four settings options (and its value).
+    /// Consumes the option at <paramref name="index"/> when it is one of the settings options (and its value).
     /// </summary>
     /// <param name="args">All arguments of the command.</param>
     /// <param name="index">Position of the current argument; advanced to the last consumed argument.</param>
     /// <returns><see langword="true"/> when the argument was a settings option.</returns>
-    /// <exception cref="ArgumentException">The option has no value or the value is not a number.</exception>
+    /// <exception cref="ArgumentException">The option has no value.</exception>
+    /// <exception cref="CliUsageException">
+    /// A <c>--set</c> value is not <c>key=value</c>, or the option is one of the two flags that <c>--set</c> replaced.
+    /// </exception>
     internal bool TryConsume(string[] args, ref int index)
     {
-        // Case-insensitive like every option of the CLI. A repeated option overwrites the earlier one (last one wins). The
-        // numbers are parsed here, so a malformed value is a usage error before any command work starts; their range is the
-        // manager's business (zero or less disables the check).
+        // Case-insensitive like every option of the CLI. A repeated option overwrites the earlier one (last one wins).
         switch (args[index].ToUpperInvariant())
         {
             case "--PROFILE":
@@ -66,14 +64,13 @@ internal sealed class CliSettingsOptionsBuilder
             case "--SETTINGS-PATH":
                 _SettingsPath = CliArgumentParsing.GetNextArg(args, ref index, "--settings-path");
                 return true;
+            case "--SET":
+                _AddOverride(CliArgumentParsing.GetNextArg(args, ref index, "--set"));
+                return true;
             case "--SETTINGS-MAX-CONFIG-FILE-BYTES":
-                _MaxConfigFileBytes = CliArgumentParsing.ParseInt64(
-                    CliArgumentParsing.GetNextArg(args, ref index, "--settings-max-config-file-bytes"));
-                return true;
+                throw _Replaced(args, index, "--settings-max-config-file-bytes", "settings.maxFileSize");
             case "--SETTINGS-MAX-JSON-DEPTH":
-                _MaxJsonDepth = CliArgumentParsing.ParseInt32(
-                    CliArgumentParsing.GetNextArg(args, ref index, "--settings-max-json-depth"));
-                return true;
+                throw _Replaced(args, index, "--settings-max-json-depth", "settings.maxJsonDepth");
             default:
                 return false;
         }
@@ -81,7 +78,61 @@ internal sealed class CliSettingsOptionsBuilder
 
     /// <summary>Creates the options from what was consumed.</summary>
     /// <returns>The options record.</returns>
-    internal CliSettingsOptions Build() => new(_SettingsPath, _Profile, _MaxConfigFileBytes, _MaxJsonDepth);
+    internal CliSettingsOptions Build() => new(_SettingsPath, _Profile, [.. _Overrides]);
+
+    #endregion
+
+    #region Override text
+
+    /// <summary>Adds one <c>--set</c> pair; a key that was given before keeps its position and takes the new value.</summary>
+    /// <param name="text">The argument after <c>--set</c>: <c>key=value</c>.</param>
+    /// <exception cref="CliUsageException">The text has no <c>=</c> or an empty key.</exception>
+    private void _AddOverride(string text)
+    {
+        int separator = text.IndexOf('=', StringComparison.Ordinal);
+        if (separator <= 0)
+        {
+            throw new CliUsageException(Invariant($"--set expects key=value, got '{_Shown(text)}'."));
+        }
+
+        string key = text[..separator];
+        string value = text[(separator + 1)..];
+        for (int index = 0; index < _Overrides.Count; index++)
+        {
+            if (string.Equals(_Overrides[index].Key, key, StringComparison.Ordinal))
+            {
+                _Overrides[index] = new KeyValuePair<string, string>(key, value);
+                return;
+            }
+        }
+
+        _Overrides.Add(new KeyValuePair<string, string>(key, value));
+    }
+
+    /// <summary>Shortens an argument that an error message repeats and replaces its control characters.</summary>
+    /// <param name="text">The argument as typed.</param>
+    /// <returns>At most 64 characters on one line, followed by an ellipsis when shortened.</returns>
+    private static string _Shown(string text)
+    {
+        string line = CliLogFile.SingleLine(text);
+        return line.Length <= 64
+            ? line
+            : line[..64] + "…";
+    }
+
+    /// <summary>The usage error for a flag that <c>--set</c> replaced; it names the replacement with the value the user gave.</summary>
+    /// <param name="args">All arguments of the command.</param>
+    /// <param name="index">Position of the removed flag.</param>
+    /// <param name="flag">The removed flag as the user types it.</param>
+    /// <param name="key">The key of the limit that <c>--set</c> takes now.</param>
+    /// <returns>The exception to throw.</returns>
+    private static CliUsageException _Replaced(string[] args, int index, string flag, string key)
+    {
+        string value = index + 1 < args.Length
+            ? _Shown(args[index + 1])
+            : "<value>";
+        return new CliUsageException(Invariant($"{flag} was replaced: use --set {key}={value}."));
+    }
 
     #endregion
 }

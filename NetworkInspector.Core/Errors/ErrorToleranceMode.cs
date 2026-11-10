@@ -9,8 +9,6 @@ namespace NetworkInspector.Core.Errors;
 /// </summary>
 public enum ErrorToleranceMode
 {
-    #region Enum Values
-
     /// <summary>
     /// Skip frames with recoverable errors and continue reading.
     /// Skipped frames are counted in <see cref="IFrameSourceStatistics.SkippedFrameCount"/>.
@@ -27,6 +25,4 @@ public enum ErrorToleranceMode
     /// <see langword="false"/>).
     /// </summary>
     Strict,
-
-    #endregion
 }

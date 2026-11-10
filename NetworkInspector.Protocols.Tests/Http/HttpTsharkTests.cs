@@ -308,6 +308,6 @@ internal sealed class HttpTsharkTests
         {
             return null;
         }
-        return value.ToString();
+        return value.ToString(null, CultureInfo.InvariantCulture);
     }
 }

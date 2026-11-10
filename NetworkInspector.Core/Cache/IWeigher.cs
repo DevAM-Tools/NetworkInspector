@@ -19,8 +19,6 @@ namespace NetworkInspector.Core.Cache;
 /// <typeparam name="TValue">Value type.</typeparam>
 public interface IWeigher<in TKey, in TValue>
 {
-    #region Methods
-
     /// <summary>
     /// Returns the weight of the given key-value pair (minimum 1; the cache raises smaller results to 1 so that
     /// every entry consumes budget; the ghost set also rejects weights below 1).
@@ -30,13 +28,14 @@ public interface IWeigher<in TKey, in TValue>
     /// <returns>The weight in the unit of the cache budget.</returns>
     int Weigh(TKey key, TValue value);
 
-    #endregion
 }
 
 /// <summary>
 /// Default weigher that assigns weight 1 to every entry, turning the weight budget into an entry-count limit.
 /// Stateless and therefore safe to share between threads and caches.
 /// </summary>
+/// <typeparam name="TKey">Key type.</typeparam>
+/// <typeparam name="TValue">Value type.</typeparam>
 public sealed class UnitWeigher<TKey, TValue> : IWeigher<TKey, TValue>
 {
     /// <summary>Shared singleton instance (the weigher has no state, so one instance per type pair is enough).</summary>

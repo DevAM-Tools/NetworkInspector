@@ -36,29 +36,33 @@ namespace NetworkInspector.Core.Index;
 /// </summary>
 public interface IPacketIndexReader
 {
-    #region Properties
+    #region Index shape
 
-    /// <summary>Number of index groups tracked.</summary>
+    /// <summary>Number of index groups tracked; valid <see cref="IndexGroupId"/> values are below this count.</summary>
     int GroupCount
     {
         get;
     }
 
-    /// <summary>Number of protocols tracked.</summary>
+    /// <summary>Number of protocols tracked; valid <see cref="ProtocolId"/> values are below this count.</summary>
     int ProtocolCount
     {
         get;
     }
 
-    /// <summary>The stack this index was created for.</summary>
+    /// <summary>The stack this index was created for; the only source of valid ids for the lookups below.</summary>
     Stack Stack
     {
         get;
     }
 
+    /// <summary>Creates a presence query builder.</summary>
+    /// <returns>A new query bound to this index; it holds no result until the caller adds terms.</returns>
+    PresenceQuery Query();
+
     #endregion
 
-    #region Methods
+    #region Lookups that require a valid id
 
     /// <summary>
     /// Gets the bitmap of packets containing a specific index group.
@@ -67,6 +71,8 @@ public interface IPacketIndexReader
     /// <see cref="ArgumentOutOfRangeException"/>.
     /// Use <see cref="TryGetGroupBitmap"/> when the ID may be invalid.
     /// </summary>
+    /// <param name="groupId">An index group id of this index's own <see cref="Stack"/>.</param>
+    /// <returns>The live bitmap of the packets that hold the group; it grows with the index.</returns>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="groupId"/> is out of range for this index.
     /// </exception>
@@ -79,6 +85,8 @@ public interface IPacketIndexReader
     /// <see cref="ArgumentOutOfRangeException"/>.
     /// Use <see cref="TryGetProtocolBitmap"/> when the ID may be invalid.
     /// </summary>
+    /// <param name="protocolId">A protocol id of this index's own <see cref="Stack"/>.</param>
+    /// <returns>The live bitmap of the packets that hold the protocol; it grows with the index.</returns>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="protocolId"/> is out of range for this index.
     /// </exception>
@@ -90,6 +98,11 @@ public interface IPacketIndexReader
     /// Returns <see cref="ReadOnlyRoaringBitmap.Empty"/> if the field is in range but has no index group.
     /// Use <see cref="TryGetFieldBitmap"/> when the ID may be invalid.
     /// </summary>
+    /// <param name="fieldId">A field id of this index's own <see cref="Stack"/>.</param>
+    /// <returns>
+    /// The live bitmap of the packets that hold the field, or <see cref="ReadOnlyRoaringBitmap.Empty"/> when the field has no
+    /// index group.
+    /// </returns>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="fieldId"/> is out of range for this index's <see cref="Stack"/>.
     /// </exception>
@@ -102,6 +115,8 @@ public interface IPacketIndexReader
     /// <see cref="ArgumentOutOfRangeException"/>.
     /// Use <see cref="TryGroupCardinality"/> when the ID may be invalid.
     /// </summary>
+    /// <param name="groupId">An index group id of this index's own <see cref="Stack"/>.</param>
+    /// <returns>The number of packets committed so far that hold the group.</returns>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="groupId"/> is out of range for this index.
     /// </exception>
@@ -114,13 +129,16 @@ public interface IPacketIndexReader
     /// <see cref="ArgumentOutOfRangeException"/>.
     /// Use <see cref="TryProtocolCardinality"/> when the ID may be invalid.
     /// </summary>
+    /// <param name="protocolId">A protocol id of this index's own <see cref="Stack"/>.</param>
+    /// <returns>The number of packets committed so far that hold the protocol.</returns>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="protocolId"/> is out of range for this index.
     /// </exception>
     long ProtocolCardinality(ProtocolId protocolId);
 
-    /// <summary>Creates a presence query builder.</summary>
-    PresenceQuery Query();
+    #endregion
+
+    #region Lookups that report an invalid id
 
     /// <summary>
     /// Attempts to retrieve the bitmap of packets containing the specified index group.
@@ -128,6 +146,9 @@ public interface IPacketIndexReader
     /// for this index. Never throws for invalid IDs. On failure <paramref name="bitmap"/>
     /// is set to <see cref="ReadOnlyRoaringBitmap.Empty"/>.
     /// </summary>
+    /// <param name="groupId">The index group id to look up; any value, including one of another stack.</param>
+    /// <param name="bitmap">The live bitmap of the group on success; <see cref="ReadOnlyRoaringBitmap.Empty"/> on failure.</param>
+    /// <returns><see langword="true"/> when <paramref name="groupId"/> is in range for this index.</returns>
     bool TryGetGroupBitmap(IndexGroupId groupId, out ReadOnlyRoaringBitmap bitmap);
 
     /// <summary>
@@ -136,6 +157,9 @@ public interface IPacketIndexReader
     /// for this index. Never throws for invalid IDs. On failure <paramref name="bitmap"/>
     /// is set to <see cref="ReadOnlyRoaringBitmap.Empty"/>.
     /// </summary>
+    /// <param name="protocolId">The protocol id to look up; any value, including one of another stack.</param>
+    /// <param name="bitmap">The live bitmap of the protocol on success; <see cref="ReadOnlyRoaringBitmap.Empty"/> on failure.</param>
+    /// <returns><see langword="true"/> when <paramref name="protocolId"/> is in range for this index.</returns>
     bool TryGetProtocolBitmap(ProtocolId protocolId, out ReadOnlyRoaringBitmap bitmap);
 
     /// <summary>
@@ -146,6 +170,9 @@ public interface IPacketIndexReader
     /// semantics for a field without a group). Never throws for invalid IDs. On failure <paramref name="bitmap"/> is set to
     /// <see cref="ReadOnlyRoaringBitmap.Empty"/>.
     /// </summary>
+    /// <param name="fieldId">The field id to look up; any value, including one of another stack.</param>
+    /// <param name="bitmap">The live bitmap of the field's group on success; <see cref="ReadOnlyRoaringBitmap.Empty"/> on failure.</param>
+    /// <returns><see langword="true"/> when the field is in range and has an index group.</returns>
     bool TryGetFieldBitmap(FieldId fieldId, out ReadOnlyRoaringBitmap bitmap);
 
     /// <summary>
@@ -153,6 +180,9 @@ public interface IPacketIndexReader
     /// Returns <see langword="false"/> when <paramref name="groupId"/> is out of range.
     /// Never throws for invalid IDs. <paramref name="cardinality"/> is 0 on failure.
     /// </summary>
+    /// <param name="groupId">The index group id to count; any value, including one of another stack.</param>
+    /// <param name="cardinality">The number of packets that hold the group on success; 0 on failure.</param>
+    /// <returns><see langword="true"/> when <paramref name="groupId"/> is in range for this index.</returns>
     bool TryGroupCardinality(IndexGroupId groupId, out long cardinality);
 
     /// <summary>
@@ -160,6 +190,9 @@ public interface IPacketIndexReader
     /// Returns <see langword="false"/> when <paramref name="protocolId"/> is out of range.
     /// Never throws for invalid IDs. <paramref name="cardinality"/> is 0 on failure.
     /// </summary>
+    /// <param name="protocolId">The protocol id to count; any value, including one of another stack.</param>
+    /// <param name="cardinality">The number of packets that hold the protocol on success; 0 on failure.</param>
+    /// <returns><see langword="true"/> when <paramref name="protocolId"/> is in range for this index.</returns>
     bool TryProtocolCardinality(ProtocolId protocolId, out long cardinality);
 
     #endregion

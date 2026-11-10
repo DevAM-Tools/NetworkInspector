@@ -11,7 +11,10 @@ public static class TwoQueueCache
     /// Creates an unbounded 2Q cache. No eviction will occur.
     /// The weigher is still called for accurate total-weight reporting.
     /// </summary>
+    /// <typeparam name="TKey">Key type; compared with the default equality comparer.</typeparam>
+    /// <typeparam name="TValue">Value type.</typeparam>
     /// <param name="weigher">Weigher for entries, or null for a weight of 1 per entry.</param>
+    /// <returns>An empty cache without a weight budget.</returns>
     /// <remarks>
     /// Every entry stays in the first-access queue (A1in) because nothing is ever evicted, so the ghost set is
     /// disabled (null budget). <see cref="TwoQueueCache{TKey, TValue}.TotalWeight"/> is an <see cref="int"/> that reports
@@ -26,12 +29,15 @@ public static class TwoQueueCache
     /// Creates a simple weight-bounded cache. Eviction is FIFO-first from A1in with no
     /// separate A1in budget. Use <see cref="Create2Q"/> for the full scan-resistant algorithm.
     /// </summary>
+    /// <typeparam name="TKey">Key type; compared with the default equality comparer.</typeparam>
+    /// <typeparam name="TValue">Value type.</typeparam>
     /// <param name="maxWeight">Total weight budget; 0 creates a cache that stores nothing.</param>
     /// <param name="weigher">Weigher for entries, or null for a weight of 1 per entry.</param>
     /// <param name="ghostMaxWeight">
     /// Weight budget of the ghost set; null defaults to <paramref name="maxWeight"/> (the ghost set then remembers about
     /// as much evicted weight as the cache holds).
     /// </param>
+    /// <returns>An empty cache with the given total budget.</returns>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="maxWeight"/> or <paramref name="ghostMaxWeight"/> is negative.
     /// </exception>
@@ -49,7 +55,9 @@ public static class TwoQueueCache
         }
 
         // A zero-capacity cache never evicts (it never stores), so a ghost set would only ever stay empty.
-        int? effectiveGhostMaxWeight = maxWeight == 0 ? null : ghostMaxWeight ?? maxWeight;
+        int? effectiveGhostMaxWeight = maxWeight == 0
+            ? null
+            : ghostMaxWeight ?? maxWeight;
         return new TwoQueueCache<TKey, TValue>(maxWeight, null, effectiveGhostMaxWeight, weigher);
     }
 
@@ -57,8 +65,11 @@ public static class TwoQueueCache
     /// Creates a bounded 2Q cache with the standard partitioning from the original paper:
     /// A1in receives 25 % of <paramref name="maxWeight"/> and ghost tracks 50 %.
     /// </summary>
+    /// <typeparam name="TKey">Key type; compared with the default equality comparer.</typeparam>
+    /// <typeparam name="TValue">Value type.</typeparam>
     /// <param name="maxWeight">Total weight budget; 0 creates a cache that stores nothing.</param>
     /// <param name="weigher">Weigher for entries, or null for a weight of 1 per entry.</param>
+    /// <returns>An empty cache with 25 % A1in and 50 % ghost shares.</returns>
     /// <remarks>
     /// The shares are those recommended by the original 2Q paper (Johnson and Shasha). Integer division is used, so a
     /// <paramref name="maxWeight"/> below 4 gives A1in a budget of 0: new entries then leave A1in immediately and
@@ -88,10 +99,13 @@ public static class TwoQueueCache
     /// Creates a bounded 2Q cache with explicit partition budgets.
     /// Use this only when measured workloads require different A1in or ghost ratios.
     /// </summary>
+    /// <typeparam name="TKey">Key type; compared with the default equality comparer.</typeparam>
+    /// <typeparam name="TValue">Value type.</typeparam>
     /// <param name="maxWeight">Total weight budget (A1in plus Am); 0 creates a cache that stores nothing.</param>
     /// <param name="a1InMaxWeight">Weight budget of the first-access queue; must not exceed <paramref name="maxWeight"/>.</param>
     /// <param name="ghostMaxWeight">Weight budget of the ghost set of evicted A1in keys; independent of <paramref name="maxWeight"/>.</param>
     /// <param name="weigher">Weigher for entries, or null for a weight of 1 per entry.</param>
+    /// <returns>An empty cache with the given budgets.</returns>
     /// <remarks>
     /// Setting <paramref name="a1InMaxWeight"/> equal to <paramref name="maxWeight"/> lets new entries use the whole
     /// budget, which keeps an entry that is larger than a quarter of the budget from being evicted by its own insertion.
@@ -130,6 +144,8 @@ public static class TwoQueueCache
 ///   <item><description>Ghost: tracks recently evicted A1in keys with their weights for re-access detection.</description></item>
 /// </list>
 /// </summary>
+/// <typeparam name="TKey">Key type; compared with the default equality comparer.</typeparam>
+/// <typeparam name="TValue">Value type.</typeparam>
 /// <remarks>
 /// <para>
 /// Use <see cref="TwoQueueCache.CreateBounded{TKey, TValue}"/> for simple weight-capped caching with FIFO-first eviction.
@@ -182,7 +198,7 @@ public static class TwoQueueCache
 /// </remarks>
 public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
 {
-    #region Fields
+    #region Configuration and state
 
     /// <summary>Maximum total weight (A1in + Am), or null for unbounded.</summary>
     private readonly int? _MaxWeight;
@@ -219,10 +235,6 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
     /// </summary>
     private const int _InitialMapCapacity = 16;
 
-    #endregion
-
-    #region Constructors
-
     /// <summary>
     /// Constructor for the <see cref="TwoQueueCache"/> factory methods, which are the only intended callers
     /// (the factories validate the budget combinations).
@@ -246,22 +258,24 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
         _Ghost = new GhostSet<TKey>(ghostMaxWeight);
     }
 
-    #endregion
-
-    #region Properties
-
     /// <summary>Total number of entries across both queues (ghost keys are not counted; they hold no value).</summary>
     public int Count => _A1In.Count + _Am.Count;
 
     /// <summary>Total weight across both queues (ghost entries are not counted); <see cref="int.MaxValue"/> when the sum is larger.</summary>
     public int TotalWeight => (int)Math.Min(int.MaxValue, _A1InWeight + _AmWeight);
 
+    /// <summary>
+    /// Entries that were too heavy for the ghost budget and were not remembered; a growing value means the ghost budget is too
+    /// small for the entry weights. Reset by <see cref="Clear"/>.
+    /// </summary>
+    public long GhostDroppedCount => _Ghost.DroppedCount;
+
     /// <summary>Whether the cache is empty.</summary>
     public bool IsEmpty => Count == 0;
 
     #endregion
 
-    #region Public API
+    #region Lookup, insertion, and removal
 
     /// <summary>
     /// Gets a value by key. Accessing in Am moves it to the front (LRU promotion).
@@ -272,7 +286,7 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
     /// <param name="value">The cached value, or default on a miss.</param>
     /// <returns><see langword="true"/> on a hit.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGet(TKey key, out TValue value)
+    public bool TryGet(TKey key, [MaybeNullWhen(false)] out TValue value)
     {
         // Check Am (frequent) first — single-lookup move to front on hit
         if (_Am.TryGetAndMoveToFront(key, out (TValue Value, int Weight) amEntry))
@@ -288,7 +302,7 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
             return true;
         }
 
-        value = default!;
+        value = default;
         return false;
     }
 
@@ -308,7 +322,7 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
         ArgumentNullException.ThrowIfNull(valueFactory);
 
         // Hit: no factory call and no allocation.
-        if (TryGet(key, out TValue value))
+        if (TryGet(key, out TValue? value))
         {
             return value;
         }
@@ -337,7 +351,7 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
     {
         ArgumentNullException.ThrowIfNull(valueFactory);
 
-        if (TryGet(key, out TValue value))
+        if (TryGet(key, out TValue? value))
         {
             return value;
         }
@@ -429,7 +443,7 @@ public sealed class TwoQueueCache<TKey, TValue> where TKey : notnull
 
     #endregion
 
-    #region Private Helpers
+    #region Eviction
 
     /// <summary>
     /// Enforces the 2Q eviction policy.

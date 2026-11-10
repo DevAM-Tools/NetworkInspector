@@ -75,7 +75,7 @@ internal sealed class FrameBuilderCustomInterceptorScenario : FrameBuilderScenar
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Build {_FrameCount:N0} Eth/IPv4/UDP frames with a custom IFrameInterceptor.");
 
     /// <inheritdoc/>

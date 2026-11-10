@@ -115,7 +115,8 @@ internal sealed class PacketBindBufferTests
         await Assert.That(key >>> 24).IsEqualTo(2);
     }
 
-    /// <summary>A bound slice resolves an effect-layer key with the buffer index in bits 31–24, and a reparse binding the same bytes in the same order gets the same key.</summary>
+    /// <summary>A bound slice resolves an effect-layer key with the buffer index in bits 31–24,
+    /// and a reparse binding the same bytes in the same order gets the same key.</summary>
     [Test]
     public async Task ABoundSliceHasAnEffectKeyThatRepeatsOnReparse()
     {

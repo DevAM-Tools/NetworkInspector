@@ -66,8 +66,8 @@ public sealed partial class ProtocolGenerator : IIncrementalGenerator
     private const string _GloFieldType = "global::NetworkInspector.Core.Fields.FieldType";
     private const string _GloTableKeyType = "global::NetworkInspector.Core.Tables.ProtocolTableKeyType";
     private const string _GloBytesKey = "global::NetworkInspector.Core.Tables.BytesKey";
-    private const string _GloEnumMetadata = "global::NetworkInspector.Core.Settings.EnumSettingMetadata";
-    private const string _GloSettingsRegistrar = "global::NetworkInspector.Core.Settings.SettingsRegistrar";
+    private const string _GloEnumMetadata = "global::NetworkInspector.Settings.EnumSettingMetadata";
+    private const string _GloSettingsRegistrar = "global::NetworkInspector.Settings.SettingsRegistrar";
     private const string _GloStack = "global::NetworkInspector.Core.Stack";
     private const string _GloGeneratedCode = "global::System.CodeDom.Compiler.GeneratedCodeAttribute";
     private const string _GloExcludeFromCoverage = "global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverageAttribute";

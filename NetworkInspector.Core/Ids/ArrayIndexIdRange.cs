@@ -16,14 +16,8 @@ namespace NetworkInspector.Core.Ids;
 /// </remarks>
 public static class ArrayIndexIdRange
 {
-    #region Constants
-
     /// <summary>Sentinel value for invalid/unassigned array-indexed identifiers.</summary>
     public const int InvalidValue = -1;
-
-    #endregion
-
-    #region Properties
 
     /// <summary>
     /// Largest valid array index for a single <see cref="Array"/> in the current runtime
@@ -37,10 +31,6 @@ public static class ArrayIndexIdRange
     /// less than <see cref="int.MaxValue"/> on current .NET runtimes.
     /// </summary>
     public static int MaxCount => MaxValue + 1;
-
-    #endregion
-
-    #region Validation
 
     /// <summary>Whether <paramref name="value"/> is the invalid sentinel (<see cref="InvalidValue"/>).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -93,25 +83,29 @@ public static class ArrayIndexIdRange
         }
     }
 
-    #endregion
-
-    #region Private helpers
-
-    // The throw helpers are NoInlining and take the already-validated inputs so the exception construction and message
-    // formatting stay out of the inlined validation methods above (keeps the inlined fast path small).
+    /// <summary>Throws the out-of-range error of <see cref="ValidateIndexOrThrow"/>; never returns.</summary>
+    /// <param name="value">The rejected value; reported as the actual value of the exception.</param>
+    /// <param name="paramName">The parameter name reported by the exception.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Always; the message names the valid range.</exception>
+    /// <remarks>
+    /// The throw helpers are NoInlining so the exception construction and message formatting stay out of the inlined validation
+    /// methods above, which keeps the inlined fast path small.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void _ThrowIndexOutOfRange(int value, string paramName) =>
         throw new ArgumentOutOfRangeException(
             paramName,
             value,
-            $"Value must be in the range 0..{MaxValue.ToString(CultureInfo.InvariantCulture)} " +
-            $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+            Invariant($"Value must be in the range 0..{MaxValue.ToString(CultureInfo.InvariantCulture)} ") +
+            Invariant($"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)})."));
 
+    /// <summary>Throws the capacity error of <see cref="ThrowIfInvalidNextIndex"/>; never returns.</summary>
+    /// <param name="entityName">Singular noun that the message uses to name the counted entity.</param>
+    /// <exception cref="InvalidOperationException">Always; the message names the entity and the valid id range.</exception>
+    /// <remarks>NoInlining for the same reason as <see cref="_ThrowIndexOutOfRange"/>.</remarks>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void _ThrowCapacityExceeded(string entityName) =>
         throw new InvalidOperationException(
-            $"Maximum {entityName} count exceeded. Valid {entityName} IDs are 0..{MaxValue.ToString(CultureInfo.InvariantCulture)} " +
-            $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
-
-    #endregion
+            Invariant($"Maximum {entityName} count exceeded. Valid {entityName} IDs are 0..{MaxValue.ToString(CultureInfo.InvariantCulture)} ") +
+            Invariant($"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)})."));
 }

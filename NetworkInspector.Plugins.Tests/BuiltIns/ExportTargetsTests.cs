@@ -48,10 +48,10 @@ internal sealed class ExportTargetsTests
         await Assert.That(fileOk).IsFalse();
         await Assert.That(filePath).IsNull();
         await Assert.That(Expect.NotNull(fileError).Code).IsEqualTo(PluginErrorCode.TargetExists);
-        await Assert.That(Expect.NotNull(fileError).Message).IsEqualTo($"Output '{file}' exists.");
+        await Assert.That(Expect.NotNull(fileError).Message).IsEqualTo(Invariant($"Output '{file}' exists."));
         await Assert.That(folderOk).IsFalse();
         await Assert.That(folderPath).IsNull();
-        await Assert.That(Expect.NotNull(folderError).Message).IsEqualTo($"Output '{dataset}' exists.");
+        await Assert.That(Expect.NotNull(folderError).Message).IsEqualTo(Invariant($"Output '{dataset}' exists."));
         await Assert.That(File.ReadAllText(file)).IsEqualTo("keep");
         await Assert.That(File.Exists(Path.Combine(dataset, "keep.txt"))).IsTrue();
     }
@@ -232,7 +232,7 @@ internal sealed class ExportTargetsTests
     public async Task AFreeTargetIsReturnedAsAFullPathAndNothingIsCreated()
     {
         using TempFolder folder = new("targets-free");
-        string relative = "ni-relative-" + Guid.NewGuid().ToString("N") + ".csv";
+        string relative = "ni-relative-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".csv";
 
         bool relativeOk = ExportTargets.TryPrepare(relative, isDirectory: false, overwrite: false, out string? relativePath, out _, out _);
         bool absoluteOk = ExportTargets.TryPrepare(folder.FilePath("new.json"), isDirectory: false, overwrite: false, out string? absolutePath, out _, out _);
@@ -260,7 +260,7 @@ internal sealed class ExportTargetsTests
 
         await Assert.That(missingOk).IsFalse();
         await Assert.That(Expect.NotNull(missing).Code).IsEqualTo(PluginErrorCode.FileNotFound);
-        await Assert.That(Expect.NotNull(missing).Message).IsEqualTo($"Folder '{Path.Combine(folder.Path, "missing")}' does not exist.");
+        await Assert.That(Expect.NotNull(missing).Message).IsEqualTo(Invariant($"Folder '{Path.Combine(folder.Path, "missing")}' does not exist."));
         await Assert.That(blankOk).IsFalse();
         await Assert.That(Expect.NotNull(blank).Code).IsEqualTo(PluginErrorCode.InvalidOption);
         await Assert.That(nullOk).IsFalse();

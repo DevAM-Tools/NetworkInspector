@@ -528,7 +528,7 @@ internal sealed class HttpBodyBufferTests
         for (int index = 0; index < first.BufferCount; index++)
         {
             await Assert.That(ProtocolTestHelper.BufferBytes(reparse, index).AsSpan().SequenceEqual(ProtocolTestHelper.BufferBytes(first, index))).IsTrue()
-                .Because($"buffer {index} of the reparse equals the first parse");
+                .Because(Invariant($"buffer {index} of the reparse equals the first parse"));
         }
 
         await Assert.That(ProtocolTestHelper.BufferBytes(reparse, first.BufferCount - 1).AsSpan().SequenceEqual(_Decoded)).IsTrue();

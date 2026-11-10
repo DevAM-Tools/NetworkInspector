@@ -22,7 +22,7 @@ internal sealed class UpperHex3Tests
         await Assert.That(ok).IsTrue();
         await Assert.That(written).IsEqualTo(3);
         await Assert.That(new string(buffer)).IsEqualTo(expected);
-        await Assert.That(hex.ToString()).IsEqualTo(expected);
+        await Assert.That(hex.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(expected);
     }
 
     [Test]

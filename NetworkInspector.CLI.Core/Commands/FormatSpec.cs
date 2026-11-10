@@ -59,27 +59,40 @@ internal static class FormatSpec
     }
 
     /// <summary>
-    /// Creates the listener of a registration: the options at their defaults, the option texts applied with the Core codec,
-    /// then the registration's factory. The option manager is disposed afterwards; the exporter copied what it needs.
+    /// Creates the listener of a registration: the options at their defaults (a limit option at the stored limit), the option
+    /// texts applied with the Core codec, then the registration's factory. The option manager is disposed afterwards; the
+    /// exporter copied what it needs.
     /// </summary>
     /// <typeparam name="TListener">The Core listener type.</typeparam>
     /// <param name="registration">The export format.</param>
     /// <param name="optionTexts">The option texts of the spec.</param>
     /// <param name="fullPath">The prepared output path (see <c>ExportTargets.TryPrepare</c>).</param>
     /// <param name="stack">The stack that parsed the packets.</param>
+    /// <param name="storedLimit">
+    /// Returns the stored value of a limit key, or <see langword="null"/>; a limit option takes its default from it.
+    /// </param>
     /// <param name="cancellationToken">Cancels the export.</param>
     /// <param name="listener">The created listener; <see langword="null"/> on failure.</param>
     /// <param name="error">Why no listener was created; <see langword="null"/> on success.</param>
+    /// <param name="onIgnoredStoredValue">Receives each stored limit that was refused and replaced by the definition default.</param>
     /// <returns><see langword="true"/> when <paramref name="listener"/> is set.</returns>
     internal static bool TryCreate<TListener>(ExporterRegistration<TListener> registration,
-        IReadOnlyList<KeyValuePair<string, string>> optionTexts, string fullPath, IStack stack, CancellationToken cancellationToken,
-        [NotNullWhen(true)] out TListener? listener, [NotNullWhen(false)] out PluginError? error)
+        IReadOnlyList<KeyValuePair<string, string>> optionTexts, string fullPath, IStack stack, Func<string, LimitValue?> storedLimit,
+        Action<PluginError> onIgnoredStoredValue, [NotNullWhen(true)] out TListener? listener, [NotNullWhen(false)] out PluginError? error,
+        CancellationToken cancellationToken)
         where TListener : class
     {
         // The option settings live only for this call (the using): the factories read their option values while they create the
         // listener, so the read-only view handed to them is not valid afterwards. A text the codec rejects is an expected failure
-        // and returns an error value, never an exception.
-        using SettingsManager options = RegistrationOptions.CreateDefaults(registration.RegisterOptions);
+        // and returns an error value, never an exception. A limit option starts at the stored limit; the inline option texts
+        // applied next override it.
+        using SettingsManager options = RegistrationOptions.CreateDefaults(
+            registration.RegisterOptions, storedLimit, out IReadOnlyList<PluginError> ignored);
+        foreach (PluginError ignoredValue in ignored)
+        {
+            onIgnoredStoredValue(ignoredValue);
+        }
+
         if (!RegistrationOptions.TryApplyTexts(options, optionTexts, out error))
         {
             listener = null;

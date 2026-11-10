@@ -23,7 +23,7 @@ internal static class TsharkCsvUat
     /// <c>binstring</c> and fail hex validation (<c>epan/uat_load.l</c>).
     /// </remarks>
     internal static string Hex32Upper(uint id) =>
-        $"{id:X8}".ToUpperInvariant();
+        Invariant($"{id:X8}").ToUpperInvariant();
 
     internal static string Bool(bool value)
     {

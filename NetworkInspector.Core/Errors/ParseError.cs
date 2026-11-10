@@ -28,15 +28,7 @@ namespace NetworkInspector.Core.Errors;
 [StructLayout(LayoutKind.Auto)]
 public readonly struct ParseError
 {
-    /// <summary>
-    /// Thread-local storage for the most recent error details. Written only by <c>SetLastError</c> on the error
-    /// path. It keeps the last error (and its message string) reachable until the next error on the same thread
-    /// replaces it.
-    /// </summary>
-    [ThreadStatic]
-    private static ParseError _LastError;
-
-    #region Properties
+    #region Error details and construction
 
     /// <summary>The kind of parse error.</summary>
     public ParseErrorKind Kind
@@ -63,10 +55,6 @@ public readonly struct ParseError
         get;
     } = string.Empty;
 
-    #endregion
-
-    #region Constructors
-
     /// <summary>Creates a parse error with the specified details. Null <paramref name="message"/> is stored as empty.</summary>
     /// <param name="kind">Category of the error.</param>
     /// <param name="protocolName">Protocol that produced the error, or null when no protocol applies.</param>
@@ -80,7 +68,15 @@ public readonly struct ParseError
 
     #endregion
 
-    #region Factory Methods
+    #region Last-error slot
+
+    /// <summary>
+    /// Thread-local storage for the most recent error details. Written only by <c>SetLastError</c> on the error
+    /// path. It keeps the last error (and its message string) reachable until the next error on the same thread
+    /// replaces it.
+    /// </summary>
+    [ThreadStatic]
+    private static ParseError _LastError;
 
     /// <summary>
     /// Retrieves the most recent error stored by an implicit conversion to <see cref="ParseResult"/>.
@@ -115,11 +111,17 @@ public readonly struct ParseError
     /// on the same thread that produced the <see cref="ParseResult"/>.
     /// </para>
     /// </summary>
+    /// <param name="error">The error to keep as the last error of the calling thread.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void SetLastError(ParseError error) => _LastError = error;
 
+    #endregion
+
+    #region Error factories
+
     /// <summary>Creates an insufficient data error. The message is a constant, so the call formats nothing.</summary>
     /// <param name="protocolName">Protocol that produced the error.</param>
+    /// <returns>An error of kind <see cref="ParseErrorKind.InsufficientData"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="protocolName"/> is <see langword="null"/>.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ParseError InsufficientData(string protocolName)
@@ -132,6 +134,7 @@ public readonly struct ParseError
     /// <param name="protocolName">Protocol that produced the error.</param>
     /// <param name="expected">Number of bytes the protocol needed.</param>
     /// <param name="actual">Number of bytes that were available.</param>
+    /// <returns>An error of kind <see cref="ParseErrorKind.InsufficientData"/> whose message states both sizes.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="protocolName"/> is <see langword="null"/>.</exception>
     // Not inlined — string interpolation on the rare error path should stay out of hot code.
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -149,6 +152,7 @@ public readonly struct ParseError
     /// <summary>Creates an invalid data error.</summary>
     /// <param name="protocolName">Protocol that produced the error.</param>
     /// <param name="message">Detail text; <see langword="null"/> is stored as empty.</param>
+    /// <returns>An error of kind <see cref="ParseErrorKind.InvalidData"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="protocolName"/> is <see langword="null"/>.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ParseError InvalidData(string protocolName, string? message)
@@ -160,6 +164,7 @@ public readonly struct ParseError
     /// <summary>Creates a custom error.</summary>
     /// <param name="protocolName">Protocol that produced the error.</param>
     /// <param name="message">Detail text; <see langword="null"/> is stored as empty.</param>
+    /// <returns>An error of kind <see cref="ParseErrorKind.Custom"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="protocolName"/> is <see langword="null"/>.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ParseError Custom(string protocolName, string? message)
@@ -168,13 +173,18 @@ public readonly struct ParseError
         return new(ParseErrorKind.Custom, protocolName, message);
     }
 
-    /// <summary>Creates an internal error.</summary>
+    /// <summary>Creates an internal logic error (a condition that should not occur); it has no protocol name.</summary>
     /// <param name="message">Detail text; <see langword="null"/> is stored as empty.</param>
+    /// <returns>An error of kind <see cref="ParseErrorKind.InternalError"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ParseError InternalError(string? message) =>
         new(ParseErrorKind.InternalError, null, message);
 
-    /// <summary>Creates a field append failed error.</summary>
+    /// <summary>
+    /// Creates a field append failed error: the field tree cannot take the field (it is full or the packet is finalized).
+    /// It has no protocol name.
+    /// </summary>
+    /// <returns>An error of kind <see cref="ParseErrorKind.FieldAppendFailed"/> with a constant message.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ParseError FieldAppendFailed() =>
         new(ParseErrorKind.FieldAppendFailed, null,
@@ -184,6 +194,7 @@ public readonly struct ParseError
     /// <param name="fieldName">Name of the field that was accessed with the wrong type.</param>
     /// <param name="expected">The type the caller asked for.</param>
     /// <param name="actual">The type the field holds.</param>
+    /// <returns>An error of kind <see cref="ParseErrorKind.FieldTypeMismatch"/> whose message names the field and both types.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="fieldName"/> is <see langword="null"/>.</exception>
     // Not inlined — string interpolation on the rare error path should stay out of hot code.
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -202,15 +213,16 @@ public readonly struct ParseError
     /// Creates an error when a dispatch table cannot be resolved (invalid id or not registered on the stack).
     /// This is not used for "table exists, key has no protocol".
     /// </summary>
-    /// <param name="protocolName">Optional protocol context.</param>
+    /// <param name="protocolName">Optional protocol context; <see langword="null"/> when no protocol applies.</param>
     /// <param name="message">Detail text; <see langword="null"/> is stored as empty.</param>
+    /// <returns>An error of kind <see cref="ParseErrorKind.ProtocolTableMissing"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ParseError ProtocolTableMissing(string? protocolName, string? message) =>
         new(ParseErrorKind.ProtocolTableMissing, protocolName, message);
 
     #endregion
 
-    #region Formatting
+    #region Text form
 
     /// <inheritdoc/>
     /// <remarks>

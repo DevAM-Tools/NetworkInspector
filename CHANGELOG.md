@@ -7,6 +7,146 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.21.0] — Settings and limits as packages, invariant text, and a full review of Core
+
+Delta since 0.20.0. Version is `0.21.0` in `Directory.Build.props`.
+
+**Text is formatted with the invariant culture everywhere.** Numbers, GUIDs, and other values that the code writes into text
+(export cells, messages, display lines) no longer depend on the machine's culture. On a machine whose culture writes decimals
+with a comma, such text now writes a point, as the CLI README has always said. Inside the repository every interpolated string
+that formats such a value is `Invariant($"…")` (`InvariantStringHelper`, referenced by every .NET 6+ project;
+`NetworkInspector.Limits` uses `string.Create(CultureInfo.InvariantCulture, …)` and keeps no package dependency).
+
+Two new packages, `NetworkInspector.Limits` and `NetworkInspector.Settings`, hold what `NetworkInspector.Core` used to hold for
+trust-boundary limits and for typed, persisted settings. Both work in any .NET 10 application and know nothing of
+NetworkInspector: the applications choose the file names of the settings folder (`SettingsStorageLayout`) and the sentence that
+tells a user how to change a limit. Each package has a README and a guide whose code is the body of a passing test.
+`NetworkInspector.Core` depends on both. The settings folders of `ni` are unchanged: the lock file and the ownership manifest
+keep the names of every earlier release (`.ni-settings.lock`, `.ni-settings-owned`), and the messages of `ni` are unchanged.
+
+**A small core and optional unit parts.** `NetworkInspector.Limits` holds the record that describes a limit (`LimitDefinition`:
+key, UI title, seven texts, unit, a fixed default that is checked to lie inside the range, the range, `allowOff`, `readOnly`),
+the value (`LimitValue`, a number or `off`), a lock-free live holder for hot loops (`Limit` is the read side: `Ceiling` is one volatile read and
+allocates nothing, and it cannot change the value; `LimitWriter` is the only way to change it), a duplicate-key check (`LimitCatalog.Check`), and the unit seam `ILimitUnit`. The namespace
+`NetworkInspector.Limits.Utility` holds the optional parts the core never uses: `UnitWordSet` (`Binary("B")`, `Decimal("bit/s")`,
+`Of("ms").With("s", 1000)`), `TableUnit`, the ready units `LimitUnits.Count`, `Bytes`, `Duration`, and the hit sentence
+(`LimitMessages.HitMessage`). Durations accept `d` and `w`; a month or a year is an unknown word because it has no fixed length.
+A definition can refuse `off` (`allowOff: false`) and can be read-only (`readOnly: true`: only the default is valid).
+NetworkInspector keeps `off` for every limit and has no read-only limit.
+
+**No machine-dependent values.** A default is one fixed number. The defaults of NetworkInspector are sized for a reference
+machine of 8 logical processors and 16 GB of memory; no default is read from the memory or the processors of the machine.
+
+**Settings.** A limit setting owns a live holder (`Setting.LiveLimit`, `SettingsManager.GetLiveLimit`,
+`ReadOnlySettingsManagerView.GetLiveLimit`) that follows the current value: apply, load, and reset change it, a pending value does
+not. A read-only limit refuses every value but its default in the pending value, the text form, and a file
+(`SettingProblemKind.ReadOnly`, appended at the end of the enumeration).
+
+**The loader limits are limits.** The settings library bounds what it reads with five `LimitDefinition`s in `SettingsLimits`:
+`settings.maxFileSize` (64 MiB), `settings.maxJsonDepth` (64), `settings.folderLockTimeout` (2 s, was a constant),
+`settings.maxGroupFiles` (1,024 files, new), and `settings.maxTextLength` (1,048,576 characters, new). `SettingsLimitValues` carries their starting values into the `SettingsManager`
+constructor and `SettingsManagerFactory.Create`; `LimitValue.Off` removes a limit and `0` is refused. A file above the size limit
+is a `FileTooLarge` warning, a text above the length limit is a `TextTooLong` problem, and a refused folder lock names the limit;
+all three use the standard hit sentence with the limit and its key.
+
+**The loader limits are settings, on request.** `SettingsManager.RegisterOwnLimits()` registers the five limits as settings of the
+group `settings` (file `settings.json`). `Load` then reads that file first, so a stored limit bounds every other file; the value
+given to the constructor is the start value, and a sparse save stores only a value that differs from it. The call is opt-in: a
+manager that does not make it lists no extra setting, as before. `SettingsManager.Limits` now returns the values in effect.
+`ni` calls it on its application manager (see the command line below). `RegisterOwnLimits(defaults)` takes the default values of the settings, and returns the warnings for stored values that the registration refused.
+
+**Limits on the command line.** The five loader limits are settings of the application scope in `ni`: `ni settings get`, `set`,
+`reset`, and `list` work on `settings.maxFileSize`, `settings.maxJsonDepth`, `settings.folderLockTimeout`,
+`settings.maxGroupFiles` (new), and `settings.maxTextLength`, with unit forms (`256 MiB`, `off`); a stored limit lives in
+`application/settings.json` and bounds every other settings file of the run. `--set <key>=<value>` on every command overrides one
+setting for one run and writes nothing (`settings set` and `settings reset` refuse it); the loader limits are in effect before the
+first file is read. `ni settings describe <key>` and `ni settings describe --limits` (text, JSON, Markdown) print what a limit
+bounds, why it exists, what a smaller and a larger value do, and what `off` means. **Breaking:** `--settings-max-config-file-bytes`
+and `--settings-max-json-depth` are refused and name the `--set` to use. `--blf-cache-size` stays until the BLF limits are
+settings.
+
+**Hardening.** `Save` reads every file it would replace or delete before it writes the first, and throws when `Load` had skipped
+one of them (too large, too deep, not valid JSON), so a typo in a hand-edited file no longer costs its group. A depth hit is the
+warning `JsonTooDeep`, a folder over the file limit is `TooManyGroupFiles`, and a key in the file of another group is
+`WrongGroupFile` (not applied, kept by a save); a file that vanishes during a load is skipped. `SettingValueText` refusals and load
+warnings quote at most 32 characters of the input and replace control characters. `JsonConfigStream.TryLoad` is bounded by default
+(64 MiB, depth 64) and takes the limits as a last optional argument; `JsonConfigFile` returns a path with a NUL character or an
+unknown type discriminator as an error instead of throwing. A repeated key makes `SaveChanged` and `Unset` throw the documented
+`PersistenceSettingsException`. The folder lock retries only a sharing violation and `SaveChangedAsync` waits without blocking a
+thread. A late registration returns the refusal text in `SettingRegistrationResult.Warning`. `SettingValueText.TryParse` in `ni
+settings set` and in the option texts now uses the text length limit of its manager. The manager uses one plain lock for its
+registries; JSON conversion no longer runs under it, and a save streams to the file. The key rule of `LimitUnits` also refuses
+`MiB`, `KiB`, `GiB`, `TiB`, `Secs`, `Mins`, and `Hrs`, and the Limits package has no package dependency.
+
+**Breaking:** `Limit` has no public constructor and no `TrySet`: `LimitWriter` creates and changes it, and
+`IReadOnlySettingsManager.GetLiveLimit` and `IReadOnlySetting.LiveLimit` return the read side.
+`SettingProblemKind.InvalidPath` and `UnknownSetting` are removed, `JsonConfigFile` has no overload without limits, and a refused
+document of the SOME/IP configuration stream is the warning of `JsonConfigStream` (kind `ExternalConfigUnavailable`).
+`SettingsManager.MaxConfigFileBytes`, `MaxJsonDepth`, the two `Default…` constants, and the matching constructor and
+factory parameters are replaced by `SettingsManager.Limits` (`SettingsLimitValues`); the defaults are now 64 MiB and depth 64 (were
+1 GiB and 1024), and `0` or less no longer switches a check off (the CLI flags refuse it). The property that returns the definition of a limit setting is named `LimitDefinition` (was `Limit`) on
+`Setting`, `IReadOnlySetting`, and `ReadOnlySettingView`. A `Setting` can be registered with one manager only; a second registration throws
+`InvalidOperationException`. Temporary files of a save carry a 32-digit id and `Save` deletes only those, no longer every
+`*.json.tmp`. The namespace `NetworkInspector.Core.Settings` moved to `NetworkInspector.Settings`, and the settings errors
+(`SettingsException` and its subclasses) moved with it; `SettingScope` stays in `NetworkInspector.Core.Settings`. Plugins built
+against 0.20.0 must be rebuilt. Creating a persisting `SettingsManager`, a profile, or a settings path takes a
+`SettingsStorageLayout` (`CoreSettingsLayout.Instance` for NetworkInspector). An invalid UI name of a setting throws the new
+`InvalidUiNameSettingsException`, and the group name `default` is refused where a limit becomes a setting. The limit types
+(`LimitDefinition`, `LimitValue`, `Limit`, `ILimitUnit`, the `Utility` parts, `CoreLimitPolicy`) are new in this release.
+
+### Core: a full review of `NetworkInspector.Core`
+
+**Fixed.** A field insert whose value-cache record throws no longer leaves a linked tombstone that cuts later siblings out of the
+tree (`Packet`: the cache records before the links are written). A packet at the field limit keeps its index entry and its limit
+error (`PacketProtocol` guards its two trailing appends). `MutField.AsField` works on a tree-free packet. A lazy field that waits
+for a table growth no longer invokes an empty populator slot. `OutOfMemoryException` is never contained at a parse boundary (all
+eight catch blocks use one filter). `Stack.Dispose` waits for a `Shutdown` that another thread started before it releases the
+settings manager. A replay that reaches a stateful protocol whose gate never saw the packet is a replay (the gate asks the stack).
+Held TCP segments sit in a binary heap, so a crafted segment order no longer costs a list shift per segment. The SIMD set
+operations of the array container bound both counts to the arrays they hold. `FrameInterfaceRegistry` registers in amortized
+constant time (snapshot with spare capacity, doubling) instead of copying its array per registration. `RunContainer.Or`/`Xor` fill
+bitmaps with word masks, rank and select of run and array containers no longer probe every value, and `RoaringBitmap.AndWith`/
+`AndNotWith` take one pass per container pair.
+
+**Registration is checked.** Every `StackBuilder` registration member throws `InvalidOperationException` after `Build`. Unknown
+protocol ids (post-parsers, parser entries, heuristic table owners, stream reassembly configs) throw `NotFoundRegistrationException`,
+null arguments throw `ArgumentNullException`, a field registered with an index group has the group when its subscribers run, and
+`RegisterStreamReassemblyConfig` refuses a buffer smaller than the PDU and names the protocol of a duplicate. `ParsePlan.TryCreate`
+refuses a packet index of another stack (`ParsePlanErrorCode.IndexStackMismatch`). `LazyString.Lazy` and `FormatLazy` refuse a null
+delegate; a null result of a delegate reads as an empty text. The HTTP/2 stream buffer is as large as its largest frame (16 MiB plus
+8 bytes) so a maximal frame can complete.
+
+**API changes in `NetworkInspector.Core`.**
+- Added: `Packet.ErrorCount` (dissector errors, caught exceptions, observer failures; counts also in `FieldTreeMode.Skip`),
+  `ParseContext.IsReplay`, `ParsePlanErrorCode.IndexStackMismatch`, `TwoQueueCache.GhostDroppedCount`.
+- Changed: `IngestGate.IsReplay` and `IngestGate.Enter` take the `ParseContext` (`IsReplay(in context, id)`, `Enter(in context, id)`);
+  `IStack.TryMatchHeuristic` returns `bool` with `out ProtocolId` (it returned `ProtocolId?`); `Packet.TryParse`, the
+  `ValueCache.TryGet*Series` members, `DispatchContext.TryGetString`, and `TwoQueueCache.TryGet` carry `[NotNullWhen(true)]` or
+  `[MaybeNullWhen(false)]`; `RecycleError` is internal.
+- Removed: `RoaringTreemap` (no use in the repository), `LazyString.TryWriteTo`, `Packet.PackEffectLayerKeyForTests`.
+- A scope of an `IngestGate` that is disposed twice (through a copy) throws `InvalidOperationException`.
+- Changed behavior found by the closing review: `PresenceQuery.SelectProtocol`/`SelectGroup`/`SelectField` start the query again and
+  discard the result built so far (they intersected with it before, which made `Select*(a).Select*(b)` an AND). A `default` `Field`
+  has no tree: `HasFieldTree` is false, so `TryGetParent`/`TryGetNext`/`TryGetPrev`/`TryGetFirstChild`/`TryGetLastChild`/`HasChildren`/
+  `ChildCount` return false and 0 instead of throwing `NullReferenceException`. `AppendLazy` with a `null` populator records a
+  `packet.error` (counted in `ErrorCount`) and nothing is thrown. A series that hits its index limit leaves its monotonic flags as they were.
+
+### Core limits are settings
+
+Nine limits of Core are `LimitDefinition`s in `CoreLimits`, registered by every `StackBuilder` as settings and shown by
+`ni settings describe --limits`; each allows `off`: `reassembly.maxStreamBufferSize` (1 MiB), `reassembly.maxStreamPduSize` (64 KiB),
+`reassembly.maxStreamRebases` (64, new), `reassembly.maxPendingDatagrams` (1,024), `reassembly.maxFragmentStorage` (64 MiB, was
+unbounded), `reassembly.maxFragmentsPerDatagram` (8,192), `packet.maxLazyDepth` (128), `valuecache.maxRows` (100 million, new), and
+`frames.maxInterfaces` (1,048,576, new). `Stack.Limits` (`CoreLimitSet`) holds the live holders. A stream configuration that assigns
+no size follows the setting (`StreamReassemblyConfig.WithLimits`); the IP reassemblers apply the settings when the stack starts
+(`FragmentReassembler.ApplyLimits`). `SequenceStreamBuffer.TryAppend(…, out StreamAppendRefusal)` names the limit that refused a
+segment, and descending segments stop at the rebase limit. A value cache stops recording at its row limit and sets
+`ValueCache.IsRecordingIncomplete`; `RecordingLimitMessage` names the limit. `LengthPrefixDetector.DefaultMaxPduSize` is removed (a
+detector without a `maxPduSize` has no limit of its own; the stream's PDU limit bounds it). `FragmentReassemblyOptions.IPv4`/`IPv6`
+use a finite byte budget of 64 MiB (it was `long.MaxValue`).
+
+---
+
 ## [0.20.0] — Exports that parse only what they write, a writer thread for the big formats, and SOME/IP names you can type
 
 Delta since 0.19.0. Version is `0.20.0` in `Directory.Build.props`.

@@ -14,7 +14,7 @@ internal sealed class SomeIpTransportTests
     private static byte[] _Udp(byte[] payload, ushort srcPort, ushort dstPort) =>
         FrameBuilderTestExtensions.WrapRawUdp(payload, srcPort, dstPort);
 
-    private static string _Config(string ports) => $$"""{"schema_version":"1.0",{{ports}},"services":[]}""";
+    private static string _Config(string ports) => Invariant($$"""{"schema_version":"1.0",{{ports}},"services":[]}""");
 
     #region UDP ports
 

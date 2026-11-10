@@ -77,7 +77,7 @@ internal sealed class PluginLifecycleTests
 
         foreach (string name in (string[])["Life.StartHangs", "Life.StartIgnoresToken"])
         {
-            string expected = $"Plugin '{name}' did not start within 0.2 s. Limit: 0.2 (setting plugins.startTimeoutSeconds). "
+            string expected = Invariant($"Plugin '{name}' did not start within 0.2 s. Limit: 0.2 (setting plugins.startTimeoutSeconds). ")
                 + "Change it in Settings ▸ Plugins ▸ Start timeout (s) or with ni settings set plugins.startTimeoutSeconds <value>.";
             await Assert.That(started.Plugins.Single(record => record.Name == name).State).IsEqualTo(PluginLoadState.Failed);
             await Assert.That(started.Plugins.Single(record => record.Name == name).Reason).IsEqualTo(expected);
@@ -113,7 +113,8 @@ internal sealed class PluginLifecycleTests
 
         await Assert.That(async () => await PluginLifecycle.StartAsync(loaded, harness.Registry.Disable, contexts.For, TimeSpan.Zero,
             CancellationToken.None)).Throws<ArgumentOutOfRangeException>();
-        await Assert.That(async () => await PluginLifecycle.StartAsync(null!, harness.Registry.Disable, contexts.For, TimeSpan.FromSeconds(1), // deliberate null: proves the guard
+        // deliberate null: proves the guard
+        await Assert.That(async () => await PluginLifecycle.StartAsync(null!, harness.Registry.Disable, contexts.For, TimeSpan.FromSeconds(1),
             CancellationToken.None)).Throws<ArgumentNullException>();
     }
 

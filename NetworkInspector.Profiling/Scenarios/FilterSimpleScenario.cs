@@ -13,7 +13,7 @@ internal sealed class FilterSimpleScenario : FilterScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Classic match \"{Expression}\" without index (null PacketIndex on eval).");
 
     /// <inheritdoc/>

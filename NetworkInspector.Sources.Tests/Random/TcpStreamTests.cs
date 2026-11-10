@@ -459,7 +459,7 @@ internal sealed class TcpStreamTests
             byte[]? randomAccessFrame = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, i, false);
             await Assert.That(randomAccessFrame).IsNotNull();
             await Assert.That(randomAccessFrame!.SequenceEqual(allFrames[i])).IsTrue()
-                .Because($"Frame {i} should be identical when accessed out of order");
+                .Because(Invariant($"Frame {i} should be identical when accessed out of order"));
         }
 
         // Access at arbitrary positions
@@ -470,7 +470,7 @@ internal sealed class TcpStreamTests
             {
                 byte[]? frame = TcpStreamFrameBuilder.BuildFrame(in layout, options, seed, idx, false);
                 await Assert.That(frame!.SequenceEqual(allFrames[idx])).IsTrue()
-                    .Because($"Random access to frame {idx} should match sequential");
+                    .Because(Invariant($"Random access to frame {idx} should match sequential"));
             }
         }
     }

@@ -30,7 +30,7 @@ internal sealed class FrameBuilderValueReuseScenario : FrameBuilderScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Build {_StackCount:N0} × {_FramesPerStack:N0} = {(long)_StackCount * _FramesPerStack:N0} frames reusing the same Eth/IPv4 layer values across distinct UDP stacks.");
 
     /// <inheritdoc/>

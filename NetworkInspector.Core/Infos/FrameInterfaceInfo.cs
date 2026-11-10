@@ -5,8 +5,6 @@ namespace NetworkInspector.Core.Infos;
 /// <summary>Metadata for a registered frame interface (e.g., eth0, wlan0).</summary>
 public sealed record FrameInterfaceInfo
 {
-    #region Lifecycle
-
     /// <summary>Creates interface metadata; freezes optional property bags.</summary>
     /// <param name="id">The unique interface identifier.</param>
     /// <param name="sourceId">The owning frame source, or <see cref="FrameSourceId.Invalid"/> if none was specified.</param>
@@ -49,10 +47,6 @@ public sealed record FrameInterfaceInfo
         Properties = properties?.ToFrozenDictionary() ?? FrozenDictionary<string, object>.Empty;
     }
 
-    #endregion
-
-    #region Properties
-
     /// <summary>Unique interface identifier.</summary>
     public FrameInterfaceId Id { get; }
 
@@ -76,6 +70,4 @@ public sealed record FrameInterfaceInfo
     /// Always non-null; empty when no metadata was provided.
     /// </summary>
     public FrozenDictionary<string, object> Properties { get; }
-
-    #endregion
 }

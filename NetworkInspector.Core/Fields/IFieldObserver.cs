@@ -10,12 +10,13 @@ namespace NetworkInspector.Core.Fields;
 /// <see cref="BeginPacket"/> runs on the parse thread before any <see cref="OnField"/> for that
 /// frame. <see cref="FieldVisit"/> is valid only for the <see cref="OnField"/> call.
 /// A <see cref="Field"/> copied out of the visit must not be held across a later recycle of that
-/// packet; that was already unsupported for any field handle.
+/// packet; no field handle survives a recycle.
 /// </para>
 /// <para>
 /// <b>Failure containment:</b> an observer is user code running inside the parse. An exception thrown from
 /// <see cref="BeginPacket"/> or <see cref="OnField"/> does not fail the parse: the packet catches it, records it as a
-/// caught error, and stops all further observer calls for that packet. Implementations should therefore not rely on
+/// caught error, and stops all further <see cref="BeginPacket"/> and <see cref="OnField"/> calls for that packet
+/// (<see cref="EndPacket"/> still follows, with <c>complete</c> false). Implementations should therefore not rely on
 /// throwing to abort a parse and must tolerate being muted after a failure.
 /// </para>
 /// <para>
@@ -24,8 +25,8 @@ namespace NetworkInspector.Core.Fields;
 /// observer should be paired with the narrowest watch it needs.
 /// </para>
 /// <para>
-/// <b>Replays:</b> observers are called on every parse of a frame, including replays; the value cache and the index record only on
-/// the first parse unless <see cref="ParseOptions.RecordOnReplay"/> is set.
+/// <b>Replays:</b> observers are called on every parse of a frame, including replays; the value cache records only the
+/// first parse unless <see cref="ParseOptions.RecordOnReplay"/> is set, and the index records only the first parse.
 /// </para>
 /// <para>
 /// <b>Thread-safety:</b> the parse calls one observer from the thread that called
@@ -35,11 +36,9 @@ namespace NetworkInspector.Core.Fields;
 /// </remarks>
 public interface IFieldObserver
 {
-    #region Public API
-
     /// <summary>A frame is starting. No field of this frame has been reported yet.</summary>
     /// <param name="id">The packet id assigned to this frame.</param>
-    /// <param name="timestamp">The frame timestamp. Flank uses it as the sample clock.</param>
+    /// <param name="timestamp">The frame timestamp.</param>
     void BeginPacket(PacketId id, Timestamp timestamp);
 
     /// <summary>One produced field. Not called for the synthetic packet root.</summary>
@@ -52,8 +51,11 @@ public interface IFieldObserver
     /// </summary>
     /// <param name="id">The packet id of the matching <see cref="BeginPacket"/>.</param>
     /// <param name="complete">
-    /// <see langword="false"/> when the observers of this packet were muted (an observer threw in BeginPacket or OnField) or
-    /// the parse aborted; the observer then did not receive every field and must not treat the packet as complete.
+    /// <see langword="false"/> when the observers of this packet were muted (an observer threw in BeginPacket or OnField) or an
+    /// exception escaped the dissector boundaries (for example from the end-of-parse step of a value cache); the observer then
+    /// did not receive every field and must not treat the packet as complete. <see langword="true"/> does not mean "no error":
+    /// a dissector that threw or returned an error is contained, the packet ends complete, and the error is counted in
+    /// <see cref="Packet.ErrorCount"/>.
     /// </param>
     /// <remarks>
     /// <b>Why:</b> a consumer that collects fields during the parse (a tree-free export) needs a point where the packet's
@@ -62,11 +64,10 @@ public interface IFieldObserver
     /// it: the member is required, so an observer that forgets it fails to compile instead of leaking staged state. An
     /// observer with no per-packet state leaves the body empty. An exception thrown here is recorded like the other observer
     /// failures: as a <c>packet.error</c> field when the parse keeps a tree, and in an attached value cache that records
-    /// <c>packet.error</c>; a parse without tree and without such a cache keeps no trace. The remaining observers still get their
-    /// call. Fields that an end call expands (a tree read with <c>materialize: true</c>) reach the tree and the cache, but no
-    /// observer: the observers are detached before the first end call.
+    /// <c>packet.error</c>; a parse without tree and without such a cache still counts it in <see cref="Packet.ErrorCount"/>.
+    /// The remaining observers still get their call. Fields that an end call expands (a tree read with
+    /// <c>materialize: true</c>) reach the tree and the cache, but no observer: the observers are detached before the first
+    /// end call.
     /// </remarks>
     void EndPacket(PacketId id, bool complete);
-
-    #endregion
 }

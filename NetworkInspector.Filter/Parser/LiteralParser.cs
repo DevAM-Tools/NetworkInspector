@@ -39,7 +39,7 @@ internal static class LiteralParser
                 {
                     return FieldValueData.NewF64(d);
                 }
-                return FilterError.InvalidValue($"Invalid number '{token.Text}'", token.Position, token.Length);
+                return FilterError.InvalidValue(Invariant($"Invalid number '{token.Text}'"), token.Position, token.Length);
 
             case TokenKind.StringLiteral:
                 return FieldValueData.NewString(token.Text);
@@ -55,28 +55,28 @@ internal static class LiteralParser
                 {
                     return FieldValueData.NewMacAddress(mac);
                 }
-                return FilterError.InvalidValue($"Invalid MAC address '{token.Text}'", token.Position, token.Length);
+                return FilterError.InvalidValue(Invariant($"Invalid MAC address '{token.Text}'"), token.Position, token.Length);
 
             case TokenKind.Ipv4Address:
                 if (IPv4Address.TryParse(token.Text, out IPv4Address ipv4))
                 {
                     return FieldValueData.NewIPv4(ipv4);
                 }
-                return FilterError.InvalidValue($"Invalid IPv4 address '{token.Text}'", token.Position, token.Length);
+                return FilterError.InvalidValue(Invariant($"Invalid IPv4 address '{token.Text}'"), token.Position, token.Length);
 
             case TokenKind.Ipv6Address:
                 if (IPv6Address.TryParse(token.Text, out IPv6Address ipv6))
                 {
                     return FieldValueData.NewIPv6(ipv6);
                 }
-                return FilterError.InvalidValue($"Invalid IPv6 address '{token.Text}'", token.Position, token.Length);
+                return FilterError.InvalidValue(Invariant($"Invalid IPv6 address '{token.Text}'"), token.Position, token.Length);
 
             case TokenKind.HexBytes:
                 return _ParseHexBytes(token);
 
             default:
                 return FilterError.Syntax(
-                    $"Expected a literal value but found '{token.Text}'",
+                    Invariant($"Expected a literal value but found '{token.Text}'"),
                     token.Position,
                     Math.Max(token.Length, 1));
         }
@@ -113,7 +113,7 @@ internal static class LiteralParser
         if (token.Kind != TokenKind.Duration)
         {
             return FilterError.Syntax(
-                $"'within:' expects a duration such as 5s, 100ms or 10packets, but found '{token.Text}'",
+                Invariant($"'within:' expects a duration such as 5s, 100ms or 10packets, but found '{token.Text}'"),
                 token.Position,
                 Math.Max(token.Length, 1));
         }
@@ -137,7 +137,7 @@ internal static class LiteralParser
         if (!double.TryParse(numberPart, NumberStyles.Float, CultureInfo.InvariantCulture, out double amount)
             || amount < 0)
         {
-            return FilterError.InvalidValue($"Invalid window amount '{text}'", token.Position, token.Length);
+            return FilterError.InvalidValue(Invariant($"Invalid window amount '{text}'"), token.Position, token.Length);
         }
 
         // Packet-count window: a whole number of packets, capped at the largest packet id so the (int) cast and the
@@ -146,13 +146,13 @@ internal static class LiteralParser
         {
             if (amount != Math.Floor(amount))
             {
-                return FilterError.InvalidValue($"Invalid window amount '{text}'", token.Position, token.Length);
+                return FilterError.InvalidValue(Invariant($"Invalid window amount '{text}'"), token.Position, token.Length);
             }
 
             if (amount > ArrayIndexIdRange.MaxCount)
             {
                 return FilterError.InvalidValue(
-                    $"Packet window must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)}",
+                    Invariant($"Packet window must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)}"),
                     token.Position,
                     token.Length);
             }
@@ -174,7 +174,7 @@ internal static class LiteralParser
 
         if (nanosPerUnit < 0)
         {
-            return FilterError.InvalidValue($"Unknown duration unit '{suffix}'", token.Position, token.Length);
+            return FilterError.InvalidValue(Invariant($"Unknown duration unit '{suffix}'"), token.Position, token.Length);
         }
 
         // A window beyond long.MaxValue nanoseconds (about 292 years) cannot be represented. Reject it instead of
@@ -185,7 +185,7 @@ internal static class LiteralParser
         if (nanos >= long.MaxValue)
         {
             return FilterError.InvalidValue(
-                $"Window '{text}' exceeds the supported range of about 292 years",
+                Invariant($"Window '{text}' exceeds the supported range of about 292 years"),
                 token.Position,
                 token.Length);
         }
@@ -213,7 +213,7 @@ internal static class LiteralParser
                 return FieldValueData.NewI64(signed);
             }
 
-            return FilterError.InvalidValue($"Invalid integer '{token.Text}'", token.Position, token.Length);
+            return FilterError.InvalidValue(Invariant($"Invalid integer '{token.Text}'"), token.Position, token.Length);
         }
 
         // Radix prefixes need at least one digit after them ("0x" alone falls through to the decimal parse and fails).
@@ -239,7 +239,7 @@ internal static class LiteralParser
         {
             return FieldValueData.NewU64(value);
         }
-        return FilterError.InvalidValue($"Invalid integer '{token.Text}'", token.Position, token.Length);
+        return FilterError.InvalidValue(Invariant($"Invalid integer '{token.Text}'"), token.Position, token.Length);
     }
 
     /// <summary>
@@ -254,14 +254,14 @@ internal static class LiteralParser
             int digit = _HexValue(c);
             if (digit < 0 || digit >= radix)
             {
-                return FilterError.InvalidValue($"Invalid integer '{token.Text}'", token.Position, token.Length);
+                return FilterError.InvalidValue(Invariant($"Invalid integer '{token.Text}'"), token.Position, token.Length);
             }
 
             // Overflow guard: result * radix + digit <= ulong.MaxValue exactly when
             // result <= (ulong.MaxValue - digit) / radix (integer division). Checked before multiplying.
             if (result > (ulong.MaxValue - (ulong)digit) / (ulong)radix)
             {
-                return FilterError.InvalidValue($"Integer '{token.Text}' does not fit in 64 bits", token.Position, token.Length);
+                return FilterError.InvalidValue(Invariant($"Integer '{token.Text}' does not fit in 64 bits"), token.Position, token.Length);
             }
             result = (result * (ulong)radix) + (ulong)digit;
         }
@@ -294,13 +294,13 @@ internal static class LiteralParser
         {
             if (pos + 1 >= text.Length || written >= bytes.Length)
             {
-                return FilterError.InvalidValue($"Invalid byte sequence '{text}'", token.Position, token.Length);
+                return FilterError.InvalidValue(Invariant($"Invalid byte sequence '{text}'"), token.Position, token.Length);
             }
             int high = _HexValue(text[pos]);
             int low = _HexValue(text[pos + 1]);
             if (high < 0 || low < 0)
             {
-                return FilterError.InvalidValue($"Invalid byte sequence '{text}'", token.Position, token.Length);
+                return FilterError.InvalidValue(Invariant($"Invalid byte sequence '{text}'"), token.Position, token.Length);
             }
             bytes[written++] = (byte)((high << 4) | low);
             pos += 2;

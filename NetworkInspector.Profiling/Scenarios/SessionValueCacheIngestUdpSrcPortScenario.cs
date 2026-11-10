@@ -30,7 +30,7 @@ internal sealed class SessionValueCacheIngestUdpSrcPortScenario : IProfilingScen
     public string Name => "session-value-cache-ingest-udp-srcport";
 
     /// <inheritdoc/>
-    public string Description => FormattableString.Invariant(
+    public string Description => Invariant(
         $"PrepareIteration: new Stack+Session (fresh first-parse ids); Run: ingest wait {_FrameCount:N0} frames, ValueCache(udp.srcport).");
 
     /// <inheritdoc/>

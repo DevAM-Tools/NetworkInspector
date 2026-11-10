@@ -60,7 +60,7 @@ internal sealed class Eui64Tests
     {
         Eui64 eui = new(value);
         await Assert.That(eui.Format()).IsEqualTo(expected);
-        await Assert.That(eui.ToString()).IsEqualTo(expected);
+        await Assert.That(eui.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(expected);
     }
 
     [Test]

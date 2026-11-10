@@ -32,7 +32,7 @@ internal sealed class CachedFramesHoldReferenceScenario : IProfilingScenario, ID
     public string Name => "cached-frames-hold-reference";
 
     /// <inheritdoc/>
-    public string Description => FormattableString.Invariant(
+    public string Description => Invariant(
         $"PrepareIteration: CachedFrameSource; Run: NextFrame {_FrameCount:N0} sequential frames.");
 
     /// <inheritdoc/>
@@ -81,7 +81,7 @@ internal sealed class CachedFramesHoldReferenceScenario : IProfilingScenario, ID
         if (_Ran)
         {
             Console.WriteLine(
-                FormattableString.Invariant(
+                Invariant(
                     $"EstimatedPayloadBytes={_PayloadBytes}, EstimatedIndexBytes={_IndexBytes}"));
             _Ran = false;
         }

@@ -59,7 +59,7 @@ internal sealed class DuckDbBulkWriterTests
         DuckDBConnectionStringBuilder connectionString = new() { DataSource = path };
         using DuckDBConnection other = new(connectionString.ConnectionString);
         other.Open();
-        DuckDbReadBack.Execute(other, $"CREATE TABLE field_{lastFieldId}(unrelated INTEGER)");
+        DuckDbReadBack.Execute(other, Invariant($"CREATE TABLE field_{lastFieldId}(unrelated INTEGER)"));
 
         // The failure is the appender's refusal of the wrong table shape (one column instead of the writer's columns), not any other exception.
         IndexOutOfRangeException firstFailure = Assert.Throws<IndexOutOfRangeException>(() => writer.WriteBatch(batch));

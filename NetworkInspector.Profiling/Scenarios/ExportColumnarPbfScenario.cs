@@ -32,7 +32,7 @@ internal sealed class ExportColumnarPbfScenario : ExportScenarioBase<Packet>
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Export {_Batch:N0} parsed IPv6/UDP packets as PBF (Columnar) → MemoryStream per iteration.");
 
     /// <inheritdoc/>

@@ -29,12 +29,13 @@ internal static class CliCommandSupport
     /// </summary>
     /// <param name="configs">The parsed sources.</param>
     /// <param name="stack">The stack whose settings the sources read.</param>
+    /// <param name="storedLimit">Returns the stored value of a limit key, or <see langword="null"/>; the sources' limit options start there.</param>
     /// <param name="frames">The registry that gives each source its id.</param>
     /// <param name="sources">Receives the sources that were created (the caller disposes them, also after a failure).</param>
     /// <param name="io">Receives the error line.</param>
     /// <returns><see cref="ExitCode.Success"/> or the exit code of the failure.</returns>
-    internal static int OpenSources(List<SourceConfig> configs, Stack stack, FrameInterfaceRegistry frames, List<IFrameSource> sources,
-        CliIo io)
+    internal static int OpenSources(List<SourceConfig> configs, Stack stack, Func<string, LimitValue?> storedLimit,
+        FrameInterfaceRegistry frames, List<IFrameSource> sources, CliIo io)
     {
         foreach (SourceConfig config in configs)
         {
@@ -42,7 +43,10 @@ internal static class CliCommandSupport
             {
                 // An expected failure comes back as an error value: an invalid option text is the user's mistake (exit 1), anything
                 // else (missing file, bad header) is a source that cannot be opened (exit 2).
-                if (!config.TryCreateSource(stack.Settings, out IFrameSource? source, out PluginError? error))
+                // A stored limit that the option's range refuses is reported as a warning and the default applies: a stale stored
+                // value must neither stop the run nor pass unnoticed.
+                if (!config.TryCreateSource(stack.Settings, storedLimit, out IFrameSource? source, out PluginError? error,
+                    ignored => io.Error.WriteLine("Warning: " + ignored.Message)))
                 {
                     io.Error.WriteLine(error.Value.Code == PluginErrorCode.InvalidOption
                         ? "Error: " + error.Value.Message
@@ -62,7 +66,7 @@ internal static class CliCommandSupport
             {
                 // A plugin's source is plugin code: whatever it throws ends this command with an error line, never the process.
                 // A cancellation is excluded on purpose: it is not an open failure and propagates to the cancelling command.
-                io.Error.WriteLine($"Error opening source: {ex.Message}");
+                io.Error.WriteLine(Invariant($"Error opening source: {ex.Message}"));
                 return (int)ExitCode.SourceOpenError;
             }
         }
@@ -170,7 +174,7 @@ internal static class CliCommandSupport
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // Plugin code: a listener that cannot close does not stop the cleanup of its file.
-            error.WriteLine($"Warning: closing the unfinished output failed: {ex.Message}");
+            error.WriteLine(Invariant($"Warning: closing the unfinished output failed: {ex.Message}"));
         }
 
         // Then delete whatever is at the output path. A finished output is never passed here: the loops reset the path when they
@@ -180,7 +184,7 @@ internal static class CliCommandSupport
             string? problem = ExportTargets.DeletePartial(Path.GetFullPath(currentPath), isDirectory);
             if (problem is not null)
             {
-                error.WriteLine($"Warning: the unfinished output '{currentPath}' could not be removed: {problem}");
+                error.WriteLine(Invariant($"Warning: the unfinished output '{currentPath}' could not be removed: {problem}"));
             }
         }
 

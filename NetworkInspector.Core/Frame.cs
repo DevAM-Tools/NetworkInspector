@@ -40,20 +40,39 @@ namespace NetworkInspector.Core;
 /// </summary>
 public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
 {
+    #region Configuration and state
+
+    /// <summary>The unique frame identifier; read through <see cref="Id"/> and compared by <see cref="Equals(Frame)"/>.</summary>
     private readonly FrameId _Id;
+
+    /// <summary>The capture timestamp; read through <see cref="Timestamp"/>.</summary>
     private readonly Timestamp _Timestamp;
 
-    // Zero-copy view of the captured bytes: the frame neither copies nor owns them. A source may hand out slices of a
-    // larger shared buffer (for example a frame slab), so keeping a Frame alive can keep that whole buffer alive.
+    /// <summary>
+    /// Zero-copy view of the captured bytes: the frame neither copies nor owns them. A source may hand out slices of a
+    /// larger shared buffer (for example a frame slab), so keeping a Frame alive can keep that whole buffer alive.
+    /// </summary>
     private readonly ReadOnlyMemory<byte> _Data;
+
+    /// <summary>The link-layer header type of <see cref="_Data"/>; read through <see cref="LinkType"/>.</summary>
     private readonly LinkType _LinkType;
+
+    /// <summary>The interface that captured the frame, or the invalid id when the source has none.</summary>
     private readonly FrameInterfaceId _InterfaceId;
 
-    // The mandatory registry doubles as the validity marker: Create rejects null, so a non-null registry means "created
-    // through Create" and null means default(Frame). This avoids a separate flag field and lets IsValid be one null test.
+    /// <summary>
+    /// The mandatory registry doubles as the validity marker: Create rejects null, so a non-null registry means "created
+    /// through Create" and null means default(Frame). This avoids a separate flag field and lets IsValid be one null test.
+    /// </summary>
     private readonly FrameInterfaceRegistry _Registry;
 
-    /// <summary>Creates a new frame (private — use <see cref="Create"/> factory).</summary>
+    /// <summary>Creates a frame from already validated parts; the public way in is <see cref="Create"/>.</summary>
+    /// <param name="id">Unique frame identifier.</param>
+    /// <param name="timestamp">Capture timestamp.</param>
+    /// <param name="data">Raw frame data, stored without a copy.</param>
+    /// <param name="linkType">Link-layer header type of <paramref name="data"/>.</param>
+    /// <param name="interfaceId">Capturing interface, or the invalid id.</param>
+    /// <param name="registry">The non-null registry that owns <paramref name="interfaceId"/>; also marks the frame valid.</param>
     private Frame(
         FrameId id,
         Timestamp timestamp,
@@ -70,7 +89,9 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         _Registry = registry;
     }
 
-    #region Factory
+    #endregion
+
+    #region Creation
 
     /// <summary>
     /// Creates a new frame, validating that a valid interface ID is registered.
@@ -114,7 +135,7 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         if (interfaceId.IsValid && registry.Get(interfaceId) is null)
         {
             return ParseError.Custom("frame",
-                $"Interface ID {interfaceId} is not registered in the FrameInterfaceRegistry");
+                Invariant($"Interface ID {interfaceId} is not registered in the FrameInterfaceRegistry"));
         }
 
         return new Frame(id, timestamp, data, linkType, interfaceId, registry);
@@ -122,7 +143,7 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
 
     #endregion
 
-    #region Properties
+    #region Frame data access
 
     /// <summary>
     /// Whether this frame is a valid, non-default instance produced via <see cref="Create"/>.
@@ -251,7 +272,10 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         }
     }
 
-    /// <summary>Guards every property read: a default frame has no meaningful data, so reading it fails loudly instead of returning zeros.</summary>
+    /// <summary>
+    /// Guards every property read: a default frame has no meaningful data, so reading it fails loudly instead of returning
+    /// zeros.
+    /// </summary>
     /// <exception cref="InvalidOperationException">The frame is the default sentinel.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _ThrowIfInvalid()
@@ -291,17 +315,40 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
         return _Id.CompareTo(other._Id);
     }
 
-    /// <summary>Compares frames by <see cref="IsValid"/> then <see cref="FrameId"/>.</summary>
+    /// <summary>Whether <paramref name="left"/> sorts before <paramref name="right"/> (sentinel first, then by frame id).</summary>
+    /// <param name="left">The first frame.</param>
+    /// <param name="right">The second frame.</param>
+    /// <returns><see langword="true"/> when <see cref="CompareTo(Frame)"/> of the two is negative.</returns>
     public static bool operator <(Frame left, Frame right) => left.CompareTo(right) < 0;
-    /// <summary>Compares frames by <see cref="IsValid"/> then <see cref="FrameId"/>.</summary>
+
+    /// <summary>Whether <paramref name="left"/> sorts after <paramref name="right"/> (sentinel first, then by frame id).</summary>
+    /// <param name="left">The first frame.</param>
+    /// <param name="right">The second frame.</param>
+    /// <returns><see langword="true"/> when <see cref="CompareTo(Frame)"/> of the two is positive.</returns>
     public static bool operator >(Frame left, Frame right) => left.CompareTo(right) > 0;
-    /// <summary>Compares frames by <see cref="IsValid"/> then <see cref="FrameId"/>.</summary>
+
+    /// <summary>Whether <paramref name="left"/> sorts before or equal to <paramref name="right"/>.</summary>
+    /// <param name="left">The first frame.</param>
+    /// <param name="right">The second frame.</param>
+    /// <returns><see langword="true"/> when <see cref="CompareTo(Frame)"/> of the two is zero or negative.</returns>
     public static bool operator <=(Frame left, Frame right) => left.CompareTo(right) <= 0;
-    /// <summary>Compares frames by <see cref="IsValid"/> then <see cref="FrameId"/>.</summary>
+
+    /// <summary>Whether <paramref name="left"/> sorts after or equal to <paramref name="right"/>.</summary>
+    /// <param name="left">The first frame.</param>
+    /// <param name="right">The second frame.</param>
+    /// <returns><see langword="true"/> when <see cref="CompareTo(Frame)"/> of the two is zero or positive.</returns>
     public static bool operator >=(Frame left, Frame right) => left.CompareTo(right) >= 0;
-    /// <summary>Checks equality by <see cref="IsValid"/> then <see cref="FrameId"/>.</summary>
+
+    /// <summary>Whether two frames have the same validity and frame id; payload and metadata are ignored.</summary>
+    /// <param name="left">The first frame.</param>
+    /// <param name="right">The second frame.</param>
+    /// <returns><see langword="true"/> when <see cref="Equals(Frame)"/> holds.</returns>
     public static bool operator ==(Frame left, Frame right) => left.Equals(right);
-    /// <summary>Checks inequality by <see cref="IsValid"/> then <see cref="FrameId"/>.</summary>
+
+    /// <summary>Whether two frames differ in validity or frame id; payload and metadata are ignored.</summary>
+    /// <param name="left">The first frame.</param>
+    /// <param name="right">The second frame.</param>
+    /// <returns><see langword="true"/> when <see cref="Equals(Frame)"/> does not hold.</returns>
     public static bool operator !=(Frame left, Frame right) => !left.Equals(right);
 
     /// <summary>Compares by <see cref="IsValid"/> then <see cref="FrameId"/> (payload and metadata are ignored).</summary>
@@ -314,5 +361,6 @@ public readonly struct Frame : IComparable<Frame>, IEquatable<Frame>
 
     /// <inheritdoc/>
     public override int GetHashCode() => HashCode.Combine(IsValid, _Id);
+
     #endregion
 }

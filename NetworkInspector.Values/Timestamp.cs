@@ -261,7 +261,7 @@ public readonly record struct Timestamp :
     {
         if (!TryParse(s, out Timestamp result))
         {
-            throw new FormatException($"Input '{s}' is not a valid Timestamp.");
+            throw new FormatException(Invariant($"Input '{s}' is not a valid Timestamp."));
         }
         return result;
     }
@@ -281,7 +281,7 @@ public readonly record struct Timestamp :
         ArgumentNullException.ThrowIfNull(s);
         if (!TryParse(s.AsSpan(), out Timestamp result))
         {
-            throw new FormatException($"Input '{s}' is not a valid Timestamp.");
+            throw new FormatException(Invariant($"Input '{s}' is not a valid Timestamp."));
         }
         return result;
     }
@@ -508,7 +508,7 @@ public readonly record struct Timestamp :
     {
         if (obj is null) { return 1; }
         if (obj is Timestamp other) { return CompareTo(other); }
-        throw new ArgumentException($"Object must be of type {nameof(Timestamp)}.", nameof(obj));
+        throw new ArgumentException(Invariant($"Object must be of type {nameof(Timestamp)}."), nameof(obj));
     }
 
     #endregion

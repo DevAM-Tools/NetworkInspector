@@ -467,11 +467,14 @@ internal sealed class ColumnarStagingTests
         await Assert.That(measured).IsLessThanOrEqualTo(baseline + 8192);
     }
 
-    /// <summary>One warm batch (2 000 packets, then <c>Reset</c>), then the bytes allocated by 1 000 parses and commits.</summary>
+    /// <summary>
+    /// One warm batch (2 000 packets, then <c>Reset</c>), then the fewest bytes allocated by one of up to five rounds of 1 000 parses
+    /// and commits.
+    /// </summary>
     /// <param name="frame">The frame that is parsed in every round.</param>
     /// <param name="options">The parse options; they decide whether a collector observes the parse.</param>
     /// <param name="batch">The batch that commits each packet, or <see langword="null"/> to measure the parse alone.</param>
-    /// <returns>The bytes the measured rounds allocated on this thread.</returns>
+    /// <returns>The smallest allocated byte count of a measured round on this thread.</returns>
     /// <exception cref="InvalidOperationException">The batch refused a committed packet.</exception>
     private static long _MeasureRounds(Frame frame, in ParseOptions options, ColumnarPacketBatch? batch)
     {
@@ -485,20 +488,27 @@ internal sealed class ColumnarStagingTests
             }
         }
 
-        // The lists keep their capacity across Reset: the measured rounds below add rows without regrowing them.
-        batch?.Reset();
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++)
+        // Each round starts from a reset batch. The lists keep their capacity across Reset, so a round adds rows without regrowing
+        // them. The smallest of up to five rounds drops a round that a one-off allocation inflated.
+        long smallest = long.MaxValue;
+        for (int round = 0; round < 5; round++)
         {
-            recycle = TestHarness.ParseFrame(frame, in options, recycle);
-            if (batch is not null && !batch.TryCommit(recycle, out _, out _))
+            batch?.Reset();
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 1000; i++)
             {
-                throw new InvalidOperationException("The batch refused the committed packet of the measured round.");
+                recycle = TestHarness.ParseFrame(frame, in options, recycle);
+                if (batch is not null && !batch.TryCommit(recycle, out _, out _))
+                {
+                    throw new InvalidOperationException("The batch refused the committed packet of the measured round.");
+                }
             }
+
+            smallest = Math.Min(smallest, GC.GetAllocatedBytesForCurrentThread() - before);
         }
 
-        return GC.GetAllocatedBytesForCurrentThread() - before;
+        return smallest;
     }
 
     #endregion

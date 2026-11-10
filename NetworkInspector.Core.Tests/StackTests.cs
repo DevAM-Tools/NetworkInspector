@@ -66,6 +66,31 @@ internal sealed class StackTests
         await Assert.That(ex).IsNull();
     }
 
+    [Test]
+    public async Task Dispose_WaitsForAShutdownThatAnotherThreadStarted()
+    {
+        BlockingShutdownProto proto = new();
+        Stack stack = _BuildStack(proto);
+        Task shutdownTask = Task.Factory.StartNew(
+            stack.Shutdown, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        bool entered = proto.Entered.Wait(TimeSpan.FromSeconds(60));
+
+        // Thread A is inside OnShutdown and blocked. Dispose on another thread must not finish before A does. The short wait
+        // is the negative check: with the wait missing, Dispose returns at once and the wait ends early.
+        Task disposeTask = Task.Factory.StartNew(
+            stack.Dispose, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        bool disposedWhileShutdownRuns = ReferenceEquals(
+            await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromMilliseconds(100))),
+            disposeTask);
+
+        proto.Release.Set();
+        await Task.WhenAll(shutdownTask, disposeTask);
+
+        await Assert.That(disposedWhileShutdownRuns).IsFalse();
+        await Assert.That(entered).IsTrue();
+        await Assert.That(proto.Order.Count).IsEqualTo(1);
+    }
+
     // === Stack introspection and dispatch (exit-point coverage) ===
 
     private static (Stack Stack, ProtocolId ChildId, ProtocolTableId U64Table, ProtocolTableId StringTable,
@@ -225,9 +250,11 @@ internal sealed class StackTests
             await Assert.That(stack.HeuristicProtocolTableCount).IsEqualTo(1);
             await Assert.That(stack.HeuristicProtocolTableInfos.Length).IsEqualTo(1);
 
-            ProtocolId? matched = stack.TryMatchHeuristic(heuristicTable, new byte[] { 0xBE, 0xEF, 0x01 });
-            await Assert.That(matched).IsEqualTo(childId);
-            await Assert.That(stack.TryMatchHeuristic(HeuristicProtocolTableId.Invalid, ReadOnlyMemory<byte>.Empty)).IsNull();
+            bool matched = stack.TryMatchHeuristic(heuristicTable, new byte[] { 0xBE, 0xEF, 0x01 }, out ProtocolId matchedId);
+            await Assert.That(matched).IsTrue();
+            await Assert.That(matchedId).IsEqualTo(childId);
+            await Assert.That(stack.TryMatchHeuristic(HeuristicProtocolTableId.Invalid, ReadOnlyMemory<byte>.Empty, out ProtocolId none)).IsFalse();
+            await Assert.That(none).IsEqualTo(ProtocolId.Invalid);
 
             HeuristicProtocolTable? table = stack.GetHeuristicProtocolTable(heuristicTable);
             await Assert.That(table).IsNotNull();
@@ -235,9 +262,8 @@ internal sealed class StackTests
             await Assert.That(table.Count).IsEqualTo(1);
             await Assert.That(table.IsEmpty).IsFalse();
             await Assert.That(table.Entries.Count).IsEqualTo(1);
-            await Assert.That(table.FindByName("prefix")).IsNotNull();
-            await Assert.That(table.TryMatchAll(new byte[] { 0xBE, 0xEF })[0]).IsEqualTo(childId);
-            await Assert.That(table.TryMatchWithName(new byte[] { 0xBE, 0xEF })!.Value.Id).IsEqualTo(childId);
+            await Assert.That(table.TryMatch(new byte[] { 0xBE, 0xEF }, out ProtocolId viaTable)).IsTrue();
+            await Assert.That(viaTable).IsEqualTo(childId);
         }
     }
 
@@ -342,6 +368,35 @@ internal sealed class StackTests
 
     // === Helpers ===
 
+    /// <summary>A protocol whose OnShutdown announces itself and then waits until the test releases it.</summary>
+    private sealed class BlockingShutdownProto : IProtocol
+    {
+        /// <summary>Set when OnShutdown has started.</summary>
+        public ManualResetEventSlim Entered { get; } = new();
+
+        /// <summary>Set by the test to let OnShutdown return.</summary>
+        public ManualResetEventSlim Release { get; } = new();
+
+        /// <summary>What happened, in order.</summary>
+        public List<string> Order { get; } = [];
+
+        public string Name => "blocking.shutdown";
+        public string UiName => "Blocking Shutdown";
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context) => 0;
+
+        public void OnShutdown(Stack stack)
+        {
+            Entered.Set();
+            if (!Release.Wait(TimeSpan.FromSeconds(60)))
+            {
+                throw new TimeoutException("The test did not release OnShutdown.");
+            }
+
+            Order.Add("shutdown-done");
+        }
+    }
+
     private sealed class CountingProto : IProtocol
     {
         /// <summary>Number of times <see cref="OnShutdown"/> has been called.</summary>
@@ -364,7 +419,7 @@ internal sealed class StackTests
 
         public void RegisterFields(StackBuilder builder, ProtocolId protoId)
         {
-            _DataFieldId = builder.RegisterField(protoId, $"{name}.data", "Data", FieldType.Bytes);
+            _DataFieldId = builder.RegisterField(protoId, Invariant($"{name}.data"), "Data", FieldType.Bytes);
         }
 
         public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)

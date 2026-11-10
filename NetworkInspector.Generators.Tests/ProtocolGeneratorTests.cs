@@ -31,6 +31,33 @@ internal sealed class ProtocolGeneratorTests
         await Assert.That(generated.Contains("public void OnStart", StringComparison.Ordinal)).IsTrue();
     }
 
+    [Test]
+    public async Task Run_WhenProtocolHasSettings_NamesTheSettingsLibraryTypesAndNoTypeOfCore()
+    {
+        const string source = """
+            using NetworkInspector.Protocols.Attributes;
+            namespace TestProtocols;
+            [Protocol("test", "Test")]
+            public partial class SettingsProto
+            {
+                [BoolSetting("test.flag", "Flag", "General")]
+                private bool _flag;
+
+                [EnumSetting("test.mode", "Mode", "General", AllowedValues = "Off=0;On=1")]
+                private ulong _mode;
+            }
+            """;
+
+        GeneratorDriverRunResult result = RunGenerator(source);
+        string generated = GetFirstGeneratedSource(result);
+
+        // Sync: the constants _GloSettingsRegistrar and _GloEnumMetadata of the generator name the namespace of the settings library;
+        // the generated code of the shipped protocols compiles against that library, and a type in another namespace fails only there.
+        await Assert.That(generated).Contains("global::NetworkInspector.Settings.SettingsRegistrar");
+        await Assert.That(generated).Contains("global::NetworkInspector.Settings.EnumSettingMetadata");
+        await Assert.That(generated).DoesNotContain("NetworkInspector.Core.Settings");
+    }
+
     #endregion
 
     #region NIGEN001 — duplicate field name

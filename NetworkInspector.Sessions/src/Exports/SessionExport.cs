@@ -55,10 +55,14 @@ public static class SessionExport
     /// <param name="toIdExclusive">End of the range (exclusive), ≤ the session's packet count.</param>
     /// <param name="filterExpression">Optional filter; <see langword="null"/> or whitespace exports every packet of the range.</param>
     /// <param name="export">The handle; set on success.</param>
-    /// <param name="failure">Session refusal (range, plan conflict, phase, restart pending); set when the call returns <see langword="false"/> without a filter error.</param>
+    /// <param name="failure">
+    /// Session refusal (range, plan conflict, phase, restart pending); set when the call returns <see langword="false"/> without a filter error.
+    /// </param>
     /// <param name="filterError">Compile error of <paramref name="filterExpression"/>; set when the call returns <see langword="false"/> because of it.</param>
     /// <returns><see langword="true"/> when the job was started.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="session"/>, <paramref name="uiName"/> or <paramref name="createExporter"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="session"/>, <paramref name="uiName"/> or <paramref name="createExporter"/> is <see langword="null"/>.
+    /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="fromId"/> is negative or <paramref name="toIdExclusive"/> is below it.</exception>
     public static bool TryStart(
         ISession session,

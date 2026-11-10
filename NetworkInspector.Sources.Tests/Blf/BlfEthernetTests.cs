@@ -110,7 +110,7 @@ internal sealed class BlfEthernetTests
             long ts = frame!.Value.Timestamp.AsNanos;
             await Assert.That(ts > prevTs)
                 .IsTrue()
-                .Because($"Timestamps must increase: prev={prevTs}, curr={ts}");
+                .Because(Invariant($"Timestamps must increase: prev={prevTs}, curr={ts}"));
             prevTs = ts;
         }
     }

@@ -58,7 +58,7 @@ internal static class BlfContainer
         if (uncompressedSize > (uint)Array.MaxLength)
         {
             throw new BlfException(
-                $"BLF container uncompressedSize {uncompressedSize} exceeds the largest array ({Array.MaxLength} bytes).");
+                Invariant($"BLF container uncompressedSize {uncompressedSize} exceeds the largest array ({Array.MaxLength} bytes)."));
         }
 
         if (compressionMethod == BlfConstants.CompressionNone)
@@ -76,7 +76,7 @@ internal static class BlfContainer
             if ((uint)compressedData.Length != uncompressedSize)
             {
                 throw new BlfException(
-                    $"BLF uncompressed container size mismatch: expected {uncompressedSize} bytes, got {compressedData.Length}.");
+                    Invariant($"BLF uncompressed container size mismatch: expected {uncompressedSize} bytes, got {compressedData.Length}."));
             }
 
             // Uncompressed: copy, because the source span may point into a memory-mapped view that is released later.
@@ -93,7 +93,7 @@ internal static class BlfContainer
             return _DecompressZlib(compressedData, uncompressedSize);
         }
 
-        throw new BlfException($"Unsupported BLF compression method: {compressionMethod}");
+        throw new BlfException(Invariant($"Unsupported BLF compression method: {compressionMethod}"));
     }
 
     #endregion
@@ -116,13 +116,13 @@ internal static class BlfContainer
         if (decoded < 0)
         {
             throw new BlfException(
-                $"BLF LZ4 decompression failed (Lz4Codec returned {decoded}).");
+                Invariant($"BLF LZ4 decompression failed (Lz4Codec returned {decoded})."));
         }
 
         if ((uint)decoded != uncompressedSize)
         {
             throw new BlfException(
-                $"BLF LZ4 decompression size mismatch: expected {uncompressedSize} bytes, got {decoded}.");
+                Invariant($"BLF LZ4 decompression size mismatch: expected {uncompressedSize} bytes, got {decoded}."));
         }
 
         return output;
@@ -168,13 +168,13 @@ internal static class BlfContainer
             catch (InvalidDataException ex)
             {
                 // Corrupt zlib stream — wrap so callers only need to catch BlfException.
-                throw new BlfException($"BLF zlib decompression failed: {ex.Message}", ex);
+                throw new BlfException(Invariant($"BLF zlib decompression failed: {ex.Message}"), ex);
             }
 
             if (totalRead != (int)uncompressedSize)
             {
                 throw new BlfException(
-                    $"BLF zlib decompression size mismatch: expected {uncompressedSize} bytes, got {totalRead}");
+                    Invariant($"BLF zlib decompression size mismatch: expected {uncompressedSize} bytes, got {totalRead}"));
             }
         }
 

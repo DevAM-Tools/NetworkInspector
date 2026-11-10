@@ -347,7 +347,7 @@ internal sealed class Icmpv6NdpOptionTests
             bool found = packet.TryGetFieldValue(id!.Value, out FieldValue value, materialize: true);
             await Assert.That(found).IsTrue();
             await Assert.That(value.Data.TryGetAsEui64(out Eui64 eui64)).IsTrue();
-            await Assert.That(eui64.ToString()).IsEqualTo("00:11:22:FF:FE:33:44:55");
+            await Assert.That(eui64.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("00:11:22:FF:FE:33:44:55");
             await ProtocolTestHelper.AssertFieldNotPresent(stack, packet, "icmpv6.opt.linkaddr").ConfigureAwait(false);
         }
     }

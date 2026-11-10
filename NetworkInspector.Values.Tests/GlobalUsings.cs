@@ -11,3 +11,7 @@ global using System.Threading.Tasks;
 #region NetworkInspector.Values
 global using NetworkInspector.Values;
 #endregion
+
+#region Formatting
+global using static InvariantStringHelper.InvariantText;
+#endregion

@@ -169,22 +169,22 @@ internal static class SomeIpLimits
 
     /// <summary>
     /// Nesting depth of data types while decoding a payload. Threat: a deep (or self-referencing) type graph exhausts the
-    /// stack. Setting, every front end. Secure by default: real graphs nest below 10; the description warns that high values
-    /// can end the process.
+    /// stack. Setting, every front end. Secure by default: real graphs nest below 10. The range ends at 128, the depth that
+    /// one decode holds on a thread-pool thread with its default stack; the compiler expands the description to the same depth.
     /// </summary>
     public static SomeIpLimitDefinition MaxTypeDepth { get; } = new(
         "someip.max_type_depth",
         SomeIpLimitUnit.Count,
         64,
         1,
-        1_024,
+        128,
         new SomeIpLimitTexts(
             "Payload type nesting depth",
             "How deeply structures, arrays, unions and aliases may nest while one payload is decoded.",
             "A deeply nested type graph in the configuration would exhaust the call stack of the thread that expands the payload.",
             "The deepest level is cut off with a named diagnostic instead of ending the process.",
             "Shallower nesting is decoded; for example 1 decodes only the top level of each parameter.",
-            "Deeper nesting is decoded; for example 1024 follows very deep types, but a value near the maximum can end the process by stack exhaustion.",
+            "Deeper nesting is decoded up to the range; for example 128 follows the deepest types the range allows.",
             _OffEffect));
 
     /// <summary>
@@ -268,7 +268,8 @@ internal static class SomeIpLimits
 
     /// <summary>
     /// Bytes bound to one packet in total when a reassembled SOME/IP-TP message is bound, all messages of the packet together and
-    /// the bytes of other protocols included (the packet keeps one sum); the message size limit bounds one message only. Threat: the bound payloads stay referenced until the packet is recycled, and one
+    /// the bytes of other protocols included (the packet keeps one sum); the message size limit bounds one message only.
+    /// Threat: the bound payloads stay referenced until the packet is recycled, and one
     /// datagram can hold many segments that each complete a message (up to the messages-per-unit limit, 100 by default), so the
     /// sum is bounded by nothing else per packet (100 messages of 10 MiB are 1 GiB). Setting, every front end, validated by the
     /// settings layer (2 KiB to 16 GiB; the value is rejected outside the range and the default stays). Posture: secure by

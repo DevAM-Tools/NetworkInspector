@@ -280,6 +280,8 @@ public sealed partial class IPv4Protocol : IProtocol
     /// </summary>
     partial void _OnStartCustom(Stack stack)
     {
+        // The reassembly bounds are the limits of this stack (settings reassembly.*): read when the stack starts.
+        _Defragmenter.ApplyLimits(stack.Limits);
         _Populator = _PopulateIPv4;
         _OptionFieldIds = _BuildOptionFieldIds();
         // Pre-build 256-entry dense cache: IP protocol field is a u8, so the full domain
@@ -435,10 +437,10 @@ public sealed partial class IPv4Protocol : IProtocol
         // watermark. A nested IPv4 parse of the same packet (for example IP-in-IP) must still count as a first parse, so
         // the watermark stays below the packet id until the outermost scope ends; raising it from the inner scope would
         // turn the packet's remaining layers into replays. A replay holds the inert default scope.
-        bool isReplay = _Gate.IsReplay(packet.Id);
+        bool isReplay = _Gate.IsReplay(in context, packet.Id);
         IngestScope scope = isReplay
             ? default
-            : _Gate.Enter(packet.Id);
+            : _Gate.Enter(in context, packet.Id);
 
         // finally, not a plain epilogue: the scope must end and the watermark must advance even when the body returns an
         // error, otherwise one failed packet would leave every later packet a "nested first parse" that never raises it.
@@ -498,11 +500,11 @@ public sealed partial class IPv4Protocol : IProtocol
         int headerLen = header.HeaderLength; // bytes
         if (version != _ExpectedVersion)
         {
-            return ParseError.InvalidData(ProtocolName, $"Expected version 4, got {version}");
+            return ParseError.InvalidData(ProtocolName, Invariant($"Expected version 4, got {version}"));
         }
         if (headerLen < IPv4Header.MinHeaderSize || headerLen > data.Length)
         {
-            return ParseError.InvalidData(ProtocolName, $"Invalid header length: {headerLen}");
+            return ParseError.InvalidData(ProtocolName, Invariant($"Invalid header length: {headerLen}"));
         }
 
         // Only extract the fields needed at parse time: src/dst for the summary

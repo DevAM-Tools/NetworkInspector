@@ -9,7 +9,7 @@ global using System.IO;
 global using System.Reflection;
 global using System.Threading;
 global using System.Threading.Tasks;
-global using static System.FormattableString;
+global using static InvariantStringHelper.InvariantText;
 #endregion
 
 #region NetworkInspector.Core
@@ -17,7 +17,7 @@ global using NetworkInspector.Core;
 global using NetworkInspector.Core.Errors;
 global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Interfaces;
-global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Settings;
 #endregion
 
 #region NetworkInspector.Plugins and Protocols

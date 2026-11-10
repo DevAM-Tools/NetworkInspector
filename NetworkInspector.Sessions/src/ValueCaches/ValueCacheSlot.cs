@@ -122,8 +122,8 @@ internal sealed class ValueCacheSlot : IDisposable
             jobId,
             listener.UiName,
             fillMode == ValueCacheFillMode.NotifyOnly
-                ? $"ValueCache ingest: {listener.UiName}"
-                : $"ValueCache: {listener.UiName}",
+                ? Invariant($"ValueCache ingest: {listener.UiName}")
+                : Invariant($"ValueCache: {listener.UiName}"),
             JobStackBinding.Independent,
             generation: -1,
             _RunLoop,
@@ -481,7 +481,7 @@ internal sealed class ValueCacheSlot : IDisposable
 
                 throw new SessionException(
                     SessionErrorCode.FrameUnavailable,
-                    FormattableString.Invariant(
+                    Invariant(
                         $"ValueCache PullFill cannot load frame for PacketId {id.ToString(CultureInfo.InvariantCulture)}."));
             }
 
@@ -521,7 +521,7 @@ internal sealed class ValueCacheSlot : IDisposable
                         // broken invariant, not something to skip. Returning the end of the window here would report ids as
                         // delivered that were never recorded, so the slot fails instead (documented for an unreadable frame).
                         throw new InvalidOperationException(
-                            FormattableString.Invariant(
+                            Invariant(
                                 $"ValueCache PullFill cannot parse PacketId {id.ToString(CultureInfo.InvariantCulture)}: {parseFailure}."));
                     }
                 }

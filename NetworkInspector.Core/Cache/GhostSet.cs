@@ -26,7 +26,8 @@ namespace NetworkInspector.Core.Cache;
 /// <para>
 /// <b>Drop policy:</b> If a new entry's weight exceeds the configured ghost budget even
 /// after evicting all existing entries, it is silently dropped — there is no point in
-/// tracking a single ghost entry that already exceeds the budget. <see cref="DroppedCount"/>
+/// tracking a single ghost entry that already exceeds the budget. <see cref="DroppedCount"/> (exposed as
+/// <c>TwoQueueCache.GhostDroppedCount</c>)
 /// counts these events so callers can detect mis-sized ghost budgets.
 /// </para>
 /// <para>
@@ -35,7 +36,7 @@ namespace NetworkInspector.Core.Cache;
 /// </remarks>
 internal sealed class GhostSet<TKey> where TKey : notnull
 {
-    #region Fields
+    #region Configuration and state
 
     /// <summary>Maximum total tracked weight, or null if ghost tracking is disabled.</summary>
     private readonly int? _MaxWeight;
@@ -50,10 +51,6 @@ internal sealed class GhostSet<TKey> where TKey : notnull
     /// <summary>Key → node mapping for O(1) membership test and O(1) removal.</summary>
     private readonly Dictionary<TKey, LinkedListNode<(TKey Key, int Weight)>> _Index;
 
-    #endregion
-
-    #region Constructors
-
     /// <summary>Creates a ghost set with the specified maximum weight budget.</summary>
     /// <param name="maxWeight">
     /// Maximum tracked weight, or null to disable ghost tracking. Not validated here: the owning cache factories
@@ -66,10 +63,6 @@ internal sealed class GhostSet<TKey> where TKey : notnull
         _Order = new LinkedList<(TKey, int)>();
         _Index = new Dictionary<TKey, LinkedListNode<(TKey, int)>>(comparer);
     }
-
-    #endregion
-
-    #region Properties
 
     /// <summary>Number of ghost entries currently tracked.</summary>
     internal int Count => _Index.Count;
@@ -92,7 +85,7 @@ internal sealed class GhostSet<TKey> where TKey : notnull
 
     #endregion
 
-    #region Internal API
+    #region Ghost tracking
 
     /// <summary>Checks if the key is in the ghost set.</summary>
     /// <param name="key">The key to look up.</param>

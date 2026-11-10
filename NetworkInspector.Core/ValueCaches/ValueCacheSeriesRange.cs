@@ -10,9 +10,9 @@ namespace NetworkInspector.Core.ValueCaches;
 /// </summary>
 public readonly struct ValueCacheSeriesRange
 {
-    #region Constructors
-
     /// <summary>Creates a range. <paramref name="end"/> must be greater than or equal to <paramref name="start"/>.</summary>
+    /// <param name="start">Inclusive first row index; not negative.</param>
+    /// <param name="end">Exclusive end row index; not less than <paramref name="start"/>. Equal to <paramref name="start"/> makes an empty range.</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="start"/> is negative, or <paramref name="end"/> is less than <paramref name="start"/>.
     /// </exception>
@@ -28,10 +28,6 @@ public readonly struct ValueCacheSeriesRange
         End = end;
     }
 
-    #endregion
-
-    #region Properties
-
     /// <summary>Inclusive start index.</summary>
     public int Start { get; }
 
@@ -43,6 +39,4 @@ public readonly struct ValueCacheSeriesRange
 
     /// <summary>True when <see cref="Count"/> is 0.</summary>
     public bool IsEmpty => Start == End;
-
-    #endregion
 }

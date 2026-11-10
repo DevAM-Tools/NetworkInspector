@@ -18,7 +18,7 @@ global using System.Threading;
 global using System.Threading.Tasks;
 // Gives the commands Invariant($"..."): interpolated user-facing text is formatted with the invariant culture, never with the
 // culture of the machine.
-global using static System.FormattableString;
+global using static InvariantStringHelper.InvariantText;
 #endregion
 
 #region NetworkInspector.Core
@@ -29,7 +29,11 @@ global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Index;
 global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Interfaces;
+global using NetworkInspector.Core.Limits;
+global using NetworkInspector.Limits;
+global using NetworkInspector.Limits.Utility;
 global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Settings;
 #endregion
 
 #region NetworkInspector.Filter

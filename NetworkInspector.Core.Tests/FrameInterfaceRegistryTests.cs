@@ -244,17 +244,32 @@ internal sealed class FrameInterfaceRegistryTests
         await Assert.That(all.Length).IsEqualTo(2);
     }
 
+    /// <summary>
+    /// Builds a private <c>FrameInterfaceRegistry.Snapshot&lt;T&gt;</c> with an empty array and the given count, by reflection
+    /// (the type is private). Only for the tests that drive the capacity guard without allocating a huge array.
+    /// </summary>
+    private static object _SnapshotWithCount<T>(int count)
+        where T : class
+    {
+        Type open = typeof(FrameInterfaceRegistry).GetNestedType("Snapshot`1", BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Snapshot type not found.");
+        return Activator.CreateInstance(open.MakeGenericType(typeof(T)), Array.Empty<T>(), count)
+            ?? throw new InvalidOperationException("Snapshot could not be created.");
+    }
+
     // === Minimal stub for IFrameSource ===
 
     [Test]
-    public async Task Register_OversizedInterfaceArray_Throws()
+    public async Task Register_OversizedInterfaceCount_Throws()
     {
         FrameInterfaceRegistry registry = new();
         System.Reflection.FieldInfo? interfacesField = typeof(FrameInterfaceRegistry).GetField(
             "_Interfaces", BindingFlags.NonPublic | BindingFlags.Instance);
         await Assert.That(interfacesField).IsNotNull();
 
-        FrameInterfaceInfo[] oversized = GC.AllocateUninitializedArray<FrameInterfaceInfo>(
+        // A snapshot that claims one more entry than an id can hold; the count is what the capacity guard reads, so no array of
+        // that size is needed.
+        object oversized = _SnapshotWithCount<FrameInterfaceInfo>(
             ArrayIndexIdRange.MaxValue + 1);
         interfacesField!.SetValue(registry, oversized);
 
@@ -267,14 +282,15 @@ internal sealed class FrameInterfaceRegistryTests
     }
 
     [Test]
-    public async Task RegisterSource_OversizedSourceArray_Throws()
+    public async Task RegisterSource_OversizedSourceCount_Throws()
     {
         FrameInterfaceRegistry registry = new();
         System.Reflection.FieldInfo? sourcesField = typeof(FrameInterfaceRegistry).GetField(
             "_Sources", BindingFlags.NonPublic | BindingFlags.Instance);
         await Assert.That(sourcesField).IsNotNull();
 
-        FrameSourceInfo[] oversized = GC.AllocateUninitializedArray<FrameSourceInfo>(
+        // See Register_OversizedInterfaceCount_Throws: only the count of the snapshot matters.
+        object oversized = _SnapshotWithCount<FrameSourceInfo>(
             ArrayIndexIdRange.MaxValue + 1);
         sourcesField!.SetValue(registry, oversized);
 
@@ -282,6 +298,59 @@ internal sealed class FrameInterfaceRegistryTests
         InvalidOperationException ex = Assert.Throws<InvalidOperationException>(
             () => registry.RegisterSource(source));
         await Assert.That(ex.Message).Contains("Maximum frame source count exceeded");
+    }
+
+    [Test]
+    public async Task ConcurrentRegistrationsGetDenseUniqueIdsAndEveryIdResolves()
+    {
+        const int threads = 8;
+        const int perThread = 2_000;
+        FrameInterfaceRegistry registry = new();
+        using StubFrameSource source = new("S");
+        FrameSourceId sourceId = registry.RegisterSource(source);
+        int[][] issued = new int[threads][];
+
+        // Eight writers race on one table; the shared array grows several times, so both the spare-capacity claim and the
+        // doubling path run under contention.
+        Task[] writers = [.. Enumerable.Range(0, threads).Select(thread => Task.Factory.StartNew(
+            () =>
+            {
+                int[] ids = new int[perThread];
+                for (int index = 0; index < perThread; index++)
+                {
+                    ids[index] = registry.Register(sourceId, "if").Value;
+                }
+
+                issued[thread] = ids;
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default))];
+        await Task.WhenAll(writers);
+
+        // Ids are exactly 0..n-1, each issued once, and every one resolves to an entry that carries its own id.
+        bool[] seen = new bool[threads * perThread];
+        bool allUnique = true;
+        foreach (int[] ids in issued)
+        {
+            foreach (int id in ids)
+            {
+                allUnique &= !seen[id];
+                seen[id] = true;
+            }
+        }
+
+        bool allResolve = true;
+        for (int id = 0; id < seen.Length; id++)
+        {
+            FrameInterfaceInfo? info = registry.Get(new FrameInterfaceId(id));
+            allResolve &= info is not null && info.Id.Value == id;
+        }
+
+        await Assert.That(registry.Count).IsEqualTo(threads * perThread);
+        await Assert.That(allUnique).IsTrue();
+        await Assert.That(allResolve).IsTrue();
+        await Assert.That(registry.All.Length).IsEqualTo(threads * perThread);
     }
 
     private sealed class StubFrameSource(string uiName) : IFrameSource

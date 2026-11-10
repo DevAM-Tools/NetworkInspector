@@ -75,7 +75,7 @@ internal sealed class ListenerSlot : IDisposable
         _Job = new Job(
             jobId,
             listener.UiName,
-            $"Listener: {listener.UiName}",
+            Invariant($"Listener: {listener.UiName}"),
             JobStackBinding.Independent,
             generation: -1,
             _RunLoop,

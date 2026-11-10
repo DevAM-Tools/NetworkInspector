@@ -209,7 +209,7 @@ internal sealed class BlfCaptureBuilder
         }
 
         throw new InvalidOperationException(
-            $"Unsupported compression method {compressionMethod} in test generator.");
+            Invariant($"Unsupported compression method {compressionMethod} in test generator."));
     }
 
     /// <summary>

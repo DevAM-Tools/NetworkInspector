@@ -38,8 +38,8 @@ internal sealed class DuckDbExporterFlushFailureTests
                     : "BIGINT";
                 DuckDbReadBack.Execute(
                     connection,
-                    $"CREATE TABLE field_{bag.Key}(packet_id INTEGER, node_id INTEGER, value {valueType}, PRIMARY KEY (packet_id, node_id))");
-                DuckDbReadBack.Execute(connection, $"INSERT INTO field_{bag.Key} VALUES ({rejected.Id.Value}, {bag.Value.Positions[0]}, 0)");
+                    Invariant($"CREATE TABLE field_{bag.Key}(packet_id INTEGER, node_id INTEGER, value {valueType}, PRIMARY KEY (packet_id, node_id))"));
+                DuckDbReadBack.Execute(connection, Invariant($"INSERT INTO field_{bag.Key} VALUES ({rejected.Id.Value}, {bag.Value.Positions[0]}, 0)"));
                 return;
             }
         }

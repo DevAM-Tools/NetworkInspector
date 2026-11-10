@@ -242,7 +242,7 @@ internal sealed class CliExportFormatTests
     /// <remarks>Sync: <c>ExportContentOptionsTests._ReportedStorageVersion</c> in NetworkInspector.Plugins.Tests (the same query).</remarks>
     private static string _ReportedStorageVersion(string path)
     {
-        using DuckDB.NET.Data.DuckDBConnection connection = new($"Data Source={path};access_mode=READ_ONLY");
+        using DuckDB.NET.Data.DuckDBConnection connection = new(Invariant($"Data Source={path};access_mode=READ_ONLY"));
         connection.Open();
         using DuckDB.NET.Data.DuckDBCommand command = connection.CreateCommand();
         command.CommandText = "SELECT tags['storage_version'] FROM duckdb_databases() WHERE NOT internal";
@@ -291,7 +291,7 @@ internal sealed class CliExportFormatTests
         using DuckDB.NET.Data.DuckDBConnection connection = new("Data Source=:memory:");
         connection.Open();
         using DuckDB.NET.Data.DuckDBCommand command = connection.CreateCommand();
-        command.CommandText = $"SELECT DISTINCT compression FROM parquet_metadata([{list}]) ORDER BY 1";
+        command.CommandText = Invariant($"SELECT DISTINCT compression FROM parquet_metadata([{list}]) ORDER BY 1");
         using DuckDB.NET.Data.DuckDBDataReader reader = command.ExecuteReader();
         List<string> codecs = [];
         while (reader.Read())
@@ -372,10 +372,10 @@ internal sealed class CliExportFormatTests
 
         await Assert.That(refused.Exit).IsEqualTo(1);
         await Assert.That(refused.ErrorMessages).IsEquivalentTo(
-            [$"Error: Output '{json}' exists; pass --overwrite to replace it."], CollectionOrdering.Matching);
+            [Invariant($"Error: Output '{json}' exists; pass --overwrite to replace it.")], CollectionOrdering.Matching);
         await Assert.That(convertRefused.Exit).IsEqualTo(1);
         await Assert.That(convertRefused.ErrorMessages).IsEquivalentTo(
-            [$"Error: Output '{pcapng}' exists; pass --overwrite to replace it."], CollectionOrdering.Matching);
+            [Invariant($"Error: Output '{pcapng}' exists; pass --overwrite to replace it.")], CollectionOrdering.Matching);
         await Assert.That(keptJson).IsEqualTo("keep");
         await Assert.That(keptPcapng).IsEqualTo("keep");
         await Assert.That(replaced.Exit).IsEqualTo(0);
@@ -399,10 +399,10 @@ internal sealed class CliExportFormatTests
         // The file that exists is the first split file, not the base name the user typed (which is never written in a split run).
         await Assert.That(export.Exit).IsEqualTo(1);
         await Assert.That(export.ErrorMessages).IsEquivalentTo(
-            [$"Error: Output '{exportFirst}' exists; pass --overwrite to replace it."], CollectionOrdering.Matching);
+            [Invariant($"Error: Output '{exportFirst}' exists; pass --overwrite to replace it.")], CollectionOrdering.Matching);
         await Assert.That(convert.Exit).IsEqualTo(1);
         await Assert.That(convert.ErrorMessages).IsEquivalentTo(
-            [$"Error: Output '{convertFirst}' exists; pass --overwrite to replace it."], CollectionOrdering.Matching);
+            [Invariant($"Error: Output '{convertFirst}' exists; pass --overwrite to replace it.")], CollectionOrdering.Matching);
     }
 
     [Test]

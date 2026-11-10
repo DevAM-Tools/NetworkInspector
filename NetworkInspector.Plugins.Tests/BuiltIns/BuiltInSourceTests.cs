@@ -53,7 +53,7 @@ internal sealed class BuiltInSourceTests
 
             // The Core source itself comes back: no wrapper type stands between the caller and the reader.
             await Assert.That(source.GetType()).IsEqualTo(expectedTypes[i]);
-            await Assert.That($"{kinds[i].Name}:{frames.Count}").IsEqualTo($"{kinds[i].Name}:50");
+            await Assert.That(Invariant($"{kinds[i].Name}:{frames.Count}")).IsEqualTo(Invariant($"{kinds[i].Name}:50"));
         }
 
         // The Random registration with the options of the trace yields the bytes that the PCAPNG file holds.
@@ -183,14 +183,14 @@ internal sealed class BuiltInSourceTests
             PluginError directory = _Fail(registration, [folder.Path]);
             PluginError blank = _Fail(registration, [" "]);
 
-            await Assert.That($"{name}:{none.Code}:{none.Option}:{none.Message}")
-                .IsEqualTo($"{name}:InvalidOption:paths:A file path is required.");
-            await Assert.That($"{name}:{two.Code}:{two.Option}:{two.Message}")
-                .IsEqualTo($"{name}:InvalidOption:paths:Exactly one file per source; open several sources for several files.");
-            await Assert.That($"{name}:{absent.Code}:{absent.Message}").IsEqualTo($"{name}:FileNotFound:File '{missing}' does not exist.");
-            await Assert.That($"{name}:{directory.Code}").IsEqualTo($"{name}:FileNotFound");
-            await Assert.That($"{name}:{blank.Code}:{blank.Option}:{blank.Message}")
-                .IsEqualTo($"{name}:InvalidOption:paths:The file path is empty.");
+            await Assert.That(Invariant($"{name}:{none.Code}:{none.Option}:{none.Message}"))
+                .IsEqualTo(Invariant($"{name}:InvalidOption:paths:A file path is required."));
+            await Assert.That(Invariant($"{name}:{two.Code}:{two.Option}:{two.Message}"))
+                .IsEqualTo(Invariant($"{name}:InvalidOption:paths:Exactly one file per source; open several sources for several files."));
+            await Assert.That(Invariant($"{name}:{absent.Code}:{absent.Message}")).IsEqualTo(Invariant($"{name}:FileNotFound:File '{missing}' does not exist."));
+            await Assert.That(Invariant($"{name}:{directory.Code}")).IsEqualTo(Invariant($"{name}:FileNotFound"));
+            await Assert.That(Invariant($"{name}:{blank.Code}:{blank.Option}:{blank.Message}"))
+                .IsEqualTo(Invariant($"{name}:InvalidOption:paths:The file path is empty."));
         }
     }
 
@@ -212,11 +212,11 @@ internal sealed class BuiltInSourceTests
         PluginError fromPcap = _Fail(PcapSourceRegistration.Create(), [pcap]);
 
         await Assert.That(fromBlf.Code).IsEqualTo(PluginErrorCode.UnsupportedFormat);
-        await Assert.That(fromBlf.Message).StartsWith($"'{blf}' is not a valid BLF file: ");
+        await Assert.That(fromBlf.Message).StartsWith(Invariant($"'{blf}' is not a valid BLF file: "));
         await Assert.That(fromPcapng.Code).IsEqualTo(PluginErrorCode.UnsupportedFormat);
-        await Assert.That(fromPcapng.Message).StartsWith($"'{pcapng}' is not a valid PCAPNG file: ");
+        await Assert.That(fromPcapng.Message).StartsWith(Invariant($"'{pcapng}' is not a valid PCAPNG file: "));
         await Assert.That(fromPcap.Code).IsEqualTo(PluginErrorCode.UnsupportedFormat);
-        await Assert.That(fromPcap.Message).StartsWith($"'{pcap}' is not a valid PCAP file: ");
+        await Assert.That(fromPcap.Message).StartsWith(Invariant($"'{pcap}' is not a valid PCAP file: "));
     }
 
     [Test]
@@ -228,7 +228,7 @@ internal sealed class BuiltInSourceTests
         foreach ((string name, SourceRegistration registration, string path) in _FileKinds(trace))
         {
             PluginError slab = _Fail(registration, [path], ("frameSlabBytes", SettingValue.I64(100)));
-            await Assert.That($"{name}:{slab.Code}:{slab.Option}").IsEqualTo($"{name}:InvalidOption:frameSlabBytes");
+            await Assert.That(Invariant($"{name}:{slab.Code}:{slab.Option}")).IsEqualTo(Invariant($"{name}:InvalidOption:frameSlabBytes"));
         }
 
         PluginError zoneBlf = _Fail(BlfSourceRegistration.Create(), [trace.Blf], ("timestampTimeZone", SettingValue.String("Mars/Base")));
@@ -267,8 +267,8 @@ internal sealed class BuiltInSourceTests
         // limit + 1 stays inside the setting bounds, so it is the registration that judges it.
         await Assert.That(atLimitError).IsNull();
         await Assert.That(atLimit).IsNotNull();
-        await Assert.That($"{above.Code}:{above.Option}").IsEqualTo("InvalidOption:maxFrameSize");
-        await Assert.That(above.Message).IsEqualTo($"The largest frame size {limit + 1} exceeds the maximum {limit} for mode {mode}.");
+        await Assert.That(Invariant($"{above.Code}:{above.Option}")).IsEqualTo("InvalidOption:maxFrameSize");
+        await Assert.That(above.Message).IsEqualTo(Invariant($"The largest frame size {limit + 1} exceeds the maximum {limit} for mode {mode}."));
     }
 
     [Test]
@@ -306,11 +306,11 @@ internal sealed class BuiltInSourceTests
             ("count", SettingValue.I64(1)), ("framesPerSecond", SettingValue.F64(0.001)));
         single?.Dispose();
 
-        await Assert.That($"{unlimited.Code}:{unlimited.Option}").IsEqualTo("InvalidOption:framesPerSecond");
+        await Assert.That(Invariant($"{unlimited.Code}:{unlimited.Option}")).IsEqualTo("InvalidOption:framesPerSecond");
         await Assert.That(unlimited.Message).IsEqualTo(
             "The rate 0.2 frames per second is too low for an unlimited source: the timestamps must fit in 64 bits, so the rate must be at least 0.233.");
-        await Assert.That($"{largeCount.Code}:{largeCount.Option}").IsEqualTo("InvalidOption:framesPerSecond");
-        await Assert.That(largeCount.Message).StartsWith($"The rate 0.2 frames per second is too low for {Array.MaxLength} frames: ");
+        await Assert.That(Invariant($"{largeCount.Code}:{largeCount.Option}")).IsEqualTo("InvalidOption:framesPerSecond");
+        await Assert.That(largeCount.Message).StartsWith(Invariant($"The rate 0.2 frames per second is too low for {Array.MaxLength} frames: "));
         await Assert.That(atMinimumError).IsNull();
         await Assert.That(atMinimum).IsNotNull();
         await Assert.That(slowError).IsNull();
@@ -430,9 +430,9 @@ internal sealed class BuiltInSourceTests
             await Assert.That(options.AllSettings.Count).IsGreaterThan(0);
             foreach (Setting setting in options.AllSettings)
             {
-                string described = $"{setting.UiName.Length > 0}:{setting.Description?.Length > 0}:{setting.GroupName.Length}";
-                await Assert.That($"{registration.Kind}.{setting.Name}:{described}")
-                    .IsEqualTo($"{registration.Kind}.{setting.Name}:True:True:0");
+                string described = Invariant($"{setting.UiName.Length > 0}:{setting.Description?.Length > 0}:{setting.GroupName.Length}");
+                await Assert.That(Invariant($"{registration.Kind}.{setting.Name}:{described}"))
+                    .IsEqualTo(Invariant($"{registration.Kind}.{setting.Name}:True:True:0"));
             }
         }
     }

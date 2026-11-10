@@ -16,8 +16,8 @@ they are used together. How to build a plugin: [plugin guide](guide.md).
 | Expected failures | [`PluginError`](#pluginerror), [`PluginErrorCode`](#pluginerrorcode) |
 
 The contract adds registrations and a lifecycle only. Sources and exporters are the Core types `IFrameSource`,
-`IFrameListener`, and `IPacketListener`; options and settings are Core settings (`SettingScope`, `SettingsRegistrar`,
-`ReadOnlySettingsManagerView` in `NetworkInspector.Core.Settings`).
+`IFrameListener`, and `IPacketListener`; options and settings are the types of the settings library (`SettingsRegistrar`,
+`ReadOnlySettingsManagerView` in `NetworkInspector.Settings`) and `SettingScope` of `NetworkInspector.Core.Settings`.
 
 ## Entry and metadata
 

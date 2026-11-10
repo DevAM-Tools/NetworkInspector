@@ -24,50 +24,7 @@ namespace NetworkInspector.Core.Infos;
 /// <param name="source">The registered source, or <see langword="null"/> for synthetic or test scenarios.</param>
 public sealed class FrameSourceInfo(FrameSourceId id, IFrameSource? source)
 {
-    #region Fields
-    // Callback set by the session to implement the Stop convenience API.
-    // Cleared only when the callback returns true, so a refused stop can be retried.
-    // A single reference is the whole state, so volatile publication plus Interlocked compare-exchange is enough and no
-    // lock is needed, and the callback (which calls back into the session) is invoked without holding any lock of this
-    // class.
-    private volatile Func<bool>? _StopCallback;
-
-    #endregion
-
-    #region Methods
-
-    /// <summary>
-    /// Registers a callback that will be invoked when <see cref="Stop"/> is called.
-    /// Typically wired by the session to unsubscribe the source's job.
-    /// </summary>
-    /// <param name="callback">
-    /// The stop callback to register. It returns <see langword="true"/> when the stop was accepted (the callback is then
-    /// dropped) and <see langword="false"/> when it was refused (the callback stays registered for a retry).
-    /// </param>
-    /// <exception cref="ArgumentNullException"><paramref name="callback"/> is <see langword="null"/>.</exception>
-    /// <exception cref="InvalidOperationException">A stop callback is already registered.</exception>
-    public void RegisterStopCallback(Func<bool> callback)
-    {
-        ArgumentNullException.ThrowIfNull(callback);
-
-        // Atomic "register if none": the compare-exchange installs the callback only while the slot is empty, so two
-        // racing registrations cannot both succeed and silently replace each other.
-        if (Interlocked.CompareExchange(ref _StopCallback, callback, null) is not null)
-        {
-            throw new InvalidOperationException("A stop callback is already registered.");
-        }
-    }
-
-    /// <summary>
-    /// Drops the stop callback without invoking it.
-    /// Used by the session when a source is removed or unsubscribed so
-    /// <see cref="IsStoppable"/> becomes false without calling <see cref="Stop"/>.
-    /// </summary>
-    public void ClearStopCallback() => Interlocked.Exchange(ref _StopCallback, null);
-
-    #endregion
-
-    #region Properties
+    #region Source identity
 
     /// <summary>Unique frame source identifier.</summary>
     public FrameSourceId Id { get; } = id;
@@ -97,6 +54,48 @@ public sealed class FrameSourceInfo(FrameSourceId id, IFrameSource? source)
 
     /// <summary>Optional description text (delegated from <see cref="IFrameSource.Description"/>).</summary>
     public string? Description => Source?.Description;
+
+    #endregion
+
+    #region Stop callback
+
+    /// <summary>
+    /// Callback set by the session to implement the <see cref="Stop"/> convenience API; <see langword="null"/> while the source
+    /// is not stoppable. Cleared only when the callback returns true, so a refused stop can be retried.
+    /// A single reference is the whole state, so volatile publication plus Interlocked compare-exchange is enough and no
+    /// lock is needed, and the callback (which calls back into the session) is invoked without holding any lock of this
+    /// class.
+    /// </summary>
+    private volatile Func<bool>? _StopCallback;
+
+    /// <summary>
+    /// Registers a callback that will be invoked when <see cref="Stop"/> is called.
+    /// Typically wired by the session to unsubscribe the source's job.
+    /// </summary>
+    /// <param name="callback">
+    /// The stop callback to register. It returns <see langword="true"/> when the stop was accepted (the callback is then
+    /// dropped) and <see langword="false"/> when it was refused (the callback stays registered for a retry).
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="callback"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">A stop callback is already registered.</exception>
+    public void RegisterStopCallback(Func<bool> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+
+        // Atomic "register if none": the compare-exchange installs the callback only while the slot is empty, so two
+        // racing registrations cannot both succeed and silently replace each other.
+        if (Interlocked.CompareExchange(ref _StopCallback, callback, null) is not null)
+        {
+            throw new InvalidOperationException("A stop callback is already registered.");
+        }
+    }
+
+    /// <summary>
+    /// Drops the stop callback without invoking it.
+    /// Used by the session when a source is removed or unsubscribed so
+    /// <see cref="IsStoppable"/> becomes false without calling <see cref="Stop"/>.
+    /// </summary>
+    public void ClearStopCallback() => Interlocked.Exchange(ref _StopCallback, null);
 
     /// <summary>
     /// Whether this source can be stopped via <see cref="Stop"/>.

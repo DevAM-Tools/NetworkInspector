@@ -205,8 +205,8 @@ public static class SignalMessageRegistration
                 SettingsLoadWarningKind.ExternalConfigUnavailable,
                 _GroupName,
                 ConfigFileSetting,
-                $"Dispatch table '{callback.Name}' was never registered "
-                + $"({callback.CallbackCount.ToString(CultureInfo.InvariantCulture)} deferred binding(s) skipped)."));
+                Invariant($"Dispatch table '{callback.Name}' was never registered ")
+                + Invariant($"({callback.CallbackCount.ToString(CultureInfo.InvariantCulture)} deferred binding(s) skipped).")));
         }
     }
 
@@ -421,7 +421,7 @@ public static class SignalMessageRegistration
         {
             warnings.Add(_MessageWarning(
                 compiled.Name,
-                $"registration failed: {ex.Message}"));
+                Invariant($"registration failed: {ex.Message}")));
         }
     }
 
@@ -462,7 +462,7 @@ public static class SignalMessageRegistration
                 {
                     warnings.Add(_MessageWarning(
                         messageName,
-                        $"dispatch binding table '{tableName}' key {key.ToString(CultureInfo.InvariantCulture)} failed: {ex.Message}"));
+                        Invariant($"dispatch binding table '{tableName}' key {key.ToString(CultureInfo.InvariantCulture)} failed: {ex.Message}")));
                 }
             });
         }
@@ -502,7 +502,7 @@ public static class SignalMessageRegistration
             kind,
             _GroupName,
             settingName,
-            $"Persisted value for '{settingName}' could not be applied ({result.LoadResult}). The value is ignored."));
+            Invariant($"Persisted value for '{settingName}' could not be applied ({result.LoadResult}). The value is ignored.")));
     }
 
     /// <summary>Builds a message-level skip warning for <see cref="ConfigFileSetting"/>.</summary>
@@ -511,7 +511,7 @@ public static class SignalMessageRegistration
             SettingsLoadWarningKind.ExternalConfigUnavailable,
             _GroupName,
             ConfigFileSetting,
-            $"Skipping signal message '{messageName}': {detail}");
+            Invariant($"Skipping signal message '{messageName}': {detail}"));
 
     #endregion
 }

@@ -31,12 +31,13 @@ internal sealed class EthernetBasicTests
             FieldId? id = stack.GetFieldId("eth.dst");
             await Assert.That(id).IsNotNull();
 
-            bool found = packet.TryGetFieldValue(id!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool found = packet.TryGetFieldValue(id!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(found).IsTrue();
 
             bool ok = value.Data.TryGetAsMacAddress(out MacAddress mac);
             await Assert.That(ok).IsTrue();
-            await Assert.That(mac.ToString()).IsEqualTo("AA:BB:CC:DD:EE:FF");
+            await Assert.That(mac.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("AA:BB:CC:DD:EE:FF");
         }
     }
 
@@ -50,12 +51,13 @@ internal sealed class EthernetBasicTests
             FieldId? id = stack.GetFieldId("eth.src");
             await Assert.That(id).IsNotNull();
 
-            bool found = packet.TryGetFieldValue(id!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool found = packet.TryGetFieldValue(id!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(found).IsTrue();
 
             bool ok = value.Data.TryGetAsMacAddress(out MacAddress mac);
             await Assert.That(ok).IsTrue();
-            await Assert.That(mac.ToString()).IsEqualTo("11:22:33:44:55:66");
+            await Assert.That(mac.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("11:22:33:44:55:66");
         }
     }
 

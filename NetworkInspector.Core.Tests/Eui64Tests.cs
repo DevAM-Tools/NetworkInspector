@@ -153,14 +153,14 @@ internal sealed class Eui64Tests
     public async Task ToString_MatchesFormat()
     {
         Eui64 eui = new(0x0011223344556677);
-        await Assert.That(eui.ToString()).IsEqualTo(eui.Format());
+        await Assert.That(eui.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(eui.Format());
     }
 
     [Test]
     public async Task ToString_FormatProvider()
     {
         Eui64 eui = new(1);
-        await Assert.That(eui.ToString(null, null)).IsEqualTo(eui.Format());
+        await Assert.That(eui.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(eui.Format());
     }
 
     // === TryFormat ===

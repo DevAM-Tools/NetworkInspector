@@ -22,8 +22,6 @@ public delegate ParseResult ParseDelegate(in MutField parentField, ReadOnlyMemor
 /// </summary>
 public interface IProtocol
 {
-    #region Properties
-
     /// <summary>Machine-readable protocol name (e.g., "eth", "ip", "tcp").</summary>
     string Name
     {
@@ -42,16 +40,13 @@ public interface IProtocol
     /// <summary>Optional description.</summary>
     string? Description => null;
 
-    #endregion
-
-    #region Methods
-
     /// <summary>
     /// Called after all protocols are registered and the stack is built.
     /// Exceptions thrown here are caught by <see cref="StackBuilder.Build"/>, collected on
     /// <see cref="IStack.BuildDiagnostics"/>, and do not prevent later protocols from starting.
     /// Callers are expected to inspect these startup errors after build.
     /// </summary>
+    /// <param name="stack">The built stack that this protocol belongs to.</param>
     void OnStart(Stack stack)
     {
     }
@@ -61,6 +56,7 @@ public interface IProtocol
     /// This may be invoked even if <see cref="OnStart(Stack)"/> previously threw for the same
     /// protocol and the startup exception was only recorded on the stack.
     /// </summary>
+    /// <param name="stack">The stack that is shutting down.</param>
     void OnShutdown(Stack stack)
     {
     }
@@ -80,6 +76,4 @@ public interface IProtocol
     /// <param name="context">The parse context carrying the stack, optional index, and dispatch info.</param>
     /// <returns>A <see cref="ParseResult"/> encoding consumed byte count or error.</returns>
     ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context);
-
-    #endregion
 }

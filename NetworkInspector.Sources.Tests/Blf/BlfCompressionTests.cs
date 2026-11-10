@@ -838,6 +838,6 @@ internal sealed class BlfCompressionTests
         }
 
         throw new InvalidOperationException(
-            $"Could not produce a {compressionMethod} container whose object_length is unaligned.");
+            Invariant($"Could not produce a {compressionMethod} container whose object_length is unaligned."));
     }
 }

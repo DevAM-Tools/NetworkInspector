@@ -54,7 +54,7 @@ The smallest useful plugin: a protocol `hello` on UDP port 40100 with two fields
   </PropertyGroup>
   <ItemGroup>
     <!-- The application provides the contract and Core at run time. -->
-    <PackageReference Include="NetworkInspector.Plugins" Version="0.20.0" ExcludeAssets="runtime" />
+    <PackageReference Include="NetworkInspector.Plugins" Version="0.21.0" ExcludeAssets="runtime" />
   </ItemGroup>
 </Project>
 ```
@@ -68,6 +68,7 @@ using NetworkInspector.Core.Interfaces;
 using NetworkInspector.Core.Protocols;
 using NetworkInspector.Core.Settings;
 using NetworkInspector.Plugins;
+using NetworkInspector.Settings;
 
 namespace My.Hello;
 
@@ -145,7 +146,7 @@ ni plugins list
 
 ```text
 Pre-scan: 1 candidate files, 1 inspected, 0 from cache, 1 plugin assemblies, 21.4 ms
-NetworkInspector.StandardProtocols  0.20.0  core  Loaded  -  …  MIT  load 101.0 ms  Protocol 29, Heuristic 5, Reassembly 5, Setting 44
+NetworkInspector.StandardProtocols  0.21.0  core  Loaded  -  …  MIT  load 101.0 ms  Protocol 29, Heuristic 5, Reassembly 5, Setting 44
 …
 My.Hello  1.0.0  core  Loaded  -  /opt/ni-plugins/hello/My.Hello.dll  MIT  load 6.0 ms  Protocol 1, Setting 1
 ```
@@ -184,7 +185,8 @@ The namespaces a plugin usually imports:
 | --- | --- |
 | `NetworkInspector.Plugins` | `IPlugin`, `IPluginBuilder`, `IPluginContext`, registrations, `PluginError` |
 | `NetworkInspector.Core.Interfaces` | `IProtocol`, `IStackBuilder`, `IFrameSource`, `IFrameListener`, `IPacketListener`, … |
-| `NetworkInspector.Core.Settings` | `SettingScope`, `SettingsRegistrar`, `Setting`, `ReadOnlySettingsManagerView` |
+| `NetworkInspector.Core.Settings` | `SettingScope` |
+| `NetworkInspector.Settings` | `SettingsRegistrar`, `Setting`, `ReadOnlySettingsManagerView`; limits as settings use `NetworkInspector.Limits` |
 | `NetworkInspector.Core.Protocols`, `.Fields`, `.Ids`, `.Errors` | `ParseResult`, `ParseContext`, `MutField`, `FieldValue`, `FieldType`, `ProtocolId`, `FieldId`, `ParseError` |
 | `NetworkInspector.Core` | `Frame`, `Packet`, `LazyString`, `FrameInterfaceRegistry` |
 
@@ -336,7 +338,7 @@ public static ExporterRegistration<IPacketListener> Registration { get; } = new(
 
 ### 5.1 Options of sources and exporters
 
-Options are Core settings. `RegisterOptions` registers them into a **fresh** `SettingsManager` per request, in group
+Options are settings of the settings library (`NetworkInspector.Settings`). `RegisterOptions` registers them into a **fresh** `SettingsManager` per request, in group
 `""`, with Core names, types, bounds, defaults, and enumeration values. Core parses and checks every option text before
 your factory runs, so the factory only reads values that are already valid, and every application gives the same
 messages for the same mistakes.
@@ -548,7 +550,7 @@ lower version.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `The plugin was built against NetworkInspector.Plugins 0.21.0.0, but this application provides 0.20.0.0; …` | The plugin was built against a **newer** NetworkInspector (or .NET) version than the running `ni`; a reference cannot bind to a lower version, so the plugin is refused before any of its code runs | Build against the version of the `ni` you run or an older one, or update `ni` |
+| `The plugin was built against NetworkInspector.Plugins 0.22.0.0, but this application provides 0.21.0.0; …` | The plugin was built against a **newer** NetworkInspector (or .NET) version than the running `ni`; a reference cannot bind to a lower version, so the plugin is refused before any of its code runs | Build against the version of the `ni` you run or an older one, or update `ni` |
 | `Entry type '…' was not found in the plugin assembly.` | The pre-scan found the class, but the runtime cannot load it (for example a base type in a dependency that is missing) | Ship the plugin's private dependencies next to it; check `ni plugins list` for the full reason |
 | `… does not implement the loaded IPlugin; the plugin ships its own NetworkInspector.Plugins.` | The plugin loads its own copy of the contract | Remove the contract from the plugin folder; use `ExcludeAssets="runtime"` or `Private="false"` |
 | The plugin does not appear at all | The class lists `IPlugin` only through a base class, is not public, or the folder is not in `plugins.paths` | List `IPlugin` on the entry class itself; check `ni settings get plugins.paths` |

@@ -53,7 +53,7 @@ internal static class PluginsCommand
 
         if (!string.Equals(args[0], "list", StringComparison.OrdinalIgnoreCase))
         {
-            io.Error.WriteLine($"Unknown plugins command: '{args[0]}'");
+            io.Error.WriteLine(Invariant($"Unknown plugins command: '{args[0]}'"));
             _PrintUsage(io.Error);
             return (int)ExitCode.ArgumentError;
         }
@@ -81,7 +81,7 @@ internal static class PluginsCommand
                 continue;
             }
 
-            throw new ArgumentException($"Unknown option '{args[i]}' for 'plugins list'.");
+            throw new ArgumentException(Invariant($"Unknown option '{args[i]}' for 'plugins list'."));
         }
 
         // Open the session (settings, plugin load, plugin start) and print the report it holds. The report is read before the
@@ -117,17 +117,17 @@ internal static class PluginsCommand
     private static void _WriteText(PluginLoadReport report, TextWriter output)
     {
         PrescanSummary prescan = report.Prescan;
-        output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-            $"Pre-scan: {prescan.CandidateFiles} candidate files, {prescan.InspectedFiles} inspected, {prescan.CachedFiles} from cache, "
-            + $"{prescan.PluginAssemblies} plugin assemblies, {prescan.InspectionTime.TotalMilliseconds:0.0} ms"));
+        output.WriteLine(
+            Invariant($"Pre-scan: {prescan.CandidateFiles} candidate files, {prescan.InspectedFiles} inspected, {prescan.CachedFiles} from cache, ") +
+            Invariant($"{prescan.PluginAssemblies} plugin assemblies, {prescan.InspectionTime.TotalMilliseconds:0.0} ms"));
         foreach (PluginRecord record in report.Plugins)
         {
             string contributions = string.Join(", ", Enum.GetValues<ContributionKind>()
                 .Where(kind => record.Contributions.TryGetValue(kind, out IReadOnlyList<ContributionEntry>? entries) && entries.Count > 0)
                 .Select(kind => string.Create(CultureInfo.InvariantCulture, $"{kind} {record.Contributions[kind].Count}")));
-            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"{Cell(record.Name)}  {Cell(record.Version)}  {_TierName(record.Tier)}  {record.State}  {Cell(record.Reason)}  "
-                + $"{Cell(record.Path)}  {Cell(record.License)}  load {record.LoadTime.TotalMilliseconds:0.0} ms  {Cell(contributions)}"));
+            output.WriteLine(
+                Invariant($"{Cell(record.Name)}  {Cell(record.Version)}  {_TierName(record.Tier)}  {record.State}  {Cell(record.Reason)}  ") +
+                Invariant($"{Cell(record.Path)}  {Cell(record.License)}  load {record.LoadTime.TotalMilliseconds:0.0} ms  {Cell(contributions)}"));
         }
     }
 
@@ -252,10 +252,8 @@ internal static class PluginsCommand
         error.WriteLine("  --json                Write one JSON document instead of text lines");
         error.WriteLine("  --profile <name>      Settings profile (must exist; 'default' is created on first use)");
         error.WriteLine("  --settings-path <dir> Base directory for settings storage");
-        error.WriteLine("  --settings-max-config-file-bytes <bytes>");
-        error.WriteLine("                        Max settings JSON size in bytes (default 1073741824). <=0 disables.");
-        error.WriteLine("  --settings-max-json-depth <n>");
-        error.WriteLine("                        Max JSON nesting depth for settings (default 1024). <=0 disables.");
+        error.WriteLine("  --set <key>=<value>   Override one setting for this run only, e.g. --set settings.maxFileSize=1GiB (repeatable;");
+        error.WriteLine("                        a limit takes a number with a unit, or off; see ni settings describe --limits)");
         error.WriteLine("  -h, --help            Show this help message");
         error.WriteLine();
         error.WriteLine("Each line: name, version, tier, state, reason, path, license, load time, and what the plugin contributes.");

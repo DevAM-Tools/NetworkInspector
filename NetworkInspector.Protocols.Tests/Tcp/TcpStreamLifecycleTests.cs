@@ -341,13 +341,14 @@ internal sealed class TcpStreamLifecycleTests
     [Test]
     public async Task BufferOverflowDropsTheMessageAndRecovers()
     {
-        // A tiny buffer limit makes the overflow reachable with small segments: the first response announces more than the
+        // A tiny limit pair makes the overflow reachable with small segments (the registration refuses a buffer smaller than the PDU,
+        // so both are 400): the first response announces more than the
         // buffer can hold and is cut by the limit, the next response fits. The connection must survive the first one: the
         // loss is reported once, the framing resumes at the next start line, and the later response is delivered whole.
         StreamReassemblyConfig config = new()
         {
             BoundaryDetector = new Http1MessageDetector(),
-            MaxPduSize = 1000,
+            MaxPduSize = 400,
             MaxBufferSize = 400,
         };
         using Stack stack = CountingProbeProtocol.BuildStack(40200, out CountingProbeProtocol probe, config);

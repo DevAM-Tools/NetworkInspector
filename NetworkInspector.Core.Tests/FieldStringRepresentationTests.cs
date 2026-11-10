@@ -80,7 +80,7 @@ internal sealed class FieldStringRepresentationTests
         Span<byte> bytes = stackalloc byte[512];
         bool bytesFit = field.TryFormat(bytes, out int bytesWritten, default, CultureInfo.InvariantCulture);
         return new PathResults(
-            field.ToString(),
+            field.ToString(null, CultureInfo.InvariantCulture),
             charsFit,
             new string(chars[..charsWritten]),
             bytesFit,
@@ -147,7 +147,7 @@ internal sealed class FieldStringRepresentationTests
         bool charsFit = cursor.TryFormat(chars, out int charsWritten, default, CultureInfo.InvariantCulture);
         Span<byte> bytes = stackalloc byte[8];
         bool bytesFit = cursor.TryFormat(bytes, out int bytesWritten, default, CultureInfo.InvariantCulture);
-        return (cursor.ToString(), charsFit, charsWritten, bytesFit, bytesWritten);
+        return (cursor.ToString(null, CultureInfo.InvariantCulture), charsFit, charsWritten, bytesFit, bytesWritten);
     }
 
     /// <summary>The line of every path of one field, as strings and flags.</summary>
@@ -186,7 +186,7 @@ internal sealed class FieldStringRepresentationTests
         {
             Field field = _Named(stack, packet, fieldName);
 
-            string line = field.ToString();
+            string line = field.ToString(null, CultureInfo.InvariantCulture);
 
             await Assert.That(field.IsValid).IsTrue();
             await Assert.That(line).IsEqualTo(expectedLine);
@@ -202,7 +202,7 @@ internal sealed class FieldStringRepresentationTests
         {
             Field field = _Named(stack, packet, "disptest.length");
 
-            string line = field.ToString();
+            string line = field.ToString(null, CultureInfo.InvariantCulture);
 
             await Assert.That(line.StartsWith("Length: Length", StringComparison.Ordinal)).IsFalse();
             await Assert.That(line).IsEqualTo(field.CustomText.AsString);
@@ -225,8 +225,8 @@ internal sealed class FieldStringRepresentationTests
         {
             Field field = _Named(stack, packet, fieldName);
 
-            string valueText = field.Value.ToString();
-            string dataText = field.Value.Data.ToString();
+            string valueText = field.Value.ToString(null, CultureInfo.InvariantCulture);
+            string dataText = field.Value.Data.ToString(null, CultureInfo.InvariantCulture);
 
             await Assert.That(valueText).IsEqualTo(expectedValueText);
             await Assert.That(dataText).IsEqualTo(expectedDataText);
@@ -244,7 +244,7 @@ internal sealed class FieldStringRepresentationTests
             Field length = _Named(stack, packet, "disptest.length");
             Field port = _Named(stack, packet, "disptest.port");
 
-            string own = $"{echo.FieldInfo?.Name}={echo.Value.Data}";
+            string own = Invariant($"{echo.FieldInfo?.Name}={echo.Value.Data}");
 
             await Assert.That(own).IsEqualTo("disptest.echo=5");
             await Assert.That(echo.FieldInfo?.UiName).IsEqualTo("UI");
@@ -281,13 +281,13 @@ internal sealed class FieldStringRepresentationTests
         Field layer = _Find(packet!, stack.GetFieldId("udp")!.Value);
         Field length = _Find(packet!, stack.GetFieldId("udp.length")!.Value);
 
-        string layerLine = layer.ToString();
-        string lengthLine = length.ToString();
+        string layerLine = layer.ToString(null, CultureInfo.InvariantCulture);
+        string lengthLine = length.ToString(null, CultureInfo.InvariantCulture);
 
         await Assert.That(layer.CustomText.IsNull).IsFalse();
         await Assert.That(layerLine).IsEqualTo(layer.CustomText.AsString);
         await Assert.That(length.CustomText.IsNull).IsTrue();
-        await Assert.That(lengthLine).IsEqualTo(string.Concat("Length: ", length.Value.ToString()));
+        await Assert.That(lengthLine).IsEqualTo(string.Concat("Length: ", length.Value.ToString(null, CultureInfo.InvariantCulture)));
     }
 
     #endregion
@@ -312,7 +312,7 @@ internal sealed class FieldStringRepresentationTests
             PathResults paths = _FormatAllPaths(field);
             (bool exactFits, int exactWritten, string exactText) = _FormatChars(field, expectedLine.Length);
             (bool utf8Fits, int utf8Written, string utf8Text) = _FormatUtf8(field, Encoding.UTF8.GetByteCount(expectedLine));
-            string interpolated = $"{field}";
+            string interpolated = Invariant($"{field}");
             string created = string.Create(CultureInfo.InvariantCulture, $"{field}");
 
             await Assert.That(paths.Text).IsEqualTo(expectedLine);
@@ -345,7 +345,7 @@ internal sealed class FieldStringRepresentationTests
         using (stack)
         {
             Field field = _Named(stack, packet, fieldName);
-            string line = field.ToString();
+            string line = field.ToString(null, CultureInfo.InvariantCulture);
             int utf8Length = Encoding.UTF8.GetByteCount(line);
 
             (bool charsFit, int charsWritten, _) = _FormatChars(field, line.Length - 1);
@@ -415,10 +415,10 @@ internal sealed class FieldStringRepresentationTests
             Field field = _Named(stack, packet, "disptest.deferred");
             int callsBeforeAnyRead = protocol.FactoryCalls;
 
-            string text = field.ToString();
+            string text = field.ToString(null, CultureInfo.InvariantCulture);
             PathResults paths = _FormatAllPaths(field);
-            string interpolated = $"{field}";
-            string again = field.ToString();
+            string interpolated = Invariant($"{field}");
+            string again = field.ToString(null, CultureInfo.InvariantCulture);
 
             await Assert.That(callsBeforeAnyRead).IsEqualTo(0);
             await Assert.That(protocol.FactoryCalls).IsEqualTo(1);
@@ -475,7 +475,7 @@ internal sealed class FieldStringRepresentationTests
                 {
                     barrier.SignalAndWait();
                     seen[slot] = (slot % 2 == 0)
-                        ? field.ToString()
+                        ? field.ToString(null, CultureInfo.InvariantCulture)
                         : _FormatAllPaths(field).Chars;
                 })
                 {
@@ -525,8 +525,8 @@ internal sealed class FieldStringRepresentationTests
     [MethodDataSource(nameof(DefaultTextCases))]
     public async Task EveryFieldTypeHasItsDocumentedDefaultText((string Name, FieldValue Value, string Expected) testCase)
     {
-        string valueText = testCase.Value.ToString();
-        string dataText = testCase.Value.Data.ToString();
+        string valueText = testCase.Value.ToString(null, CultureInfo.InvariantCulture);
+        string dataText = testCase.Value.Data.ToString(null, CultureInfo.InvariantCulture);
 
         await Assert.That(valueText).IsEqualTo(testCase.Expected);
         await Assert.That(dataText).IsEqualTo(testCase.Expected);
@@ -589,9 +589,9 @@ internal sealed class FieldStringRepresentationTests
             (bool tooSmallUtf8, int tooSmallUtf8Written, _) = _FormatUtf8(withValue, 0);
 
             await Assert.That(withoutValue.FieldInfo).IsNull();
-            await Assert.That(withoutValue.ToString()).IsEqualTo(string.Empty);
-            await Assert.That(withValue.ToString()).IsEqualTo("7");
-            await Assert.That(withText.ToString()).IsEqualTo("Own text");
+            await Assert.That(withoutValue.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(string.Empty);
+            await Assert.That(withValue.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("7");
+            await Assert.That(withText.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("Own text");
             await Assert.That(valuePaths.Chars).IsEqualTo("7");
             await Assert.That(valuePaths.Utf8).IsEqualTo("7");
             await Assert.That(tooSmallChars).IsFalse();
@@ -664,7 +664,7 @@ internal sealed class FieldStringRepresentationTests
             await Assert.That(childPaths.Utf8).IsEqualTo("Source Port");
             await Assert.That(childValueRead).IsFalse();
             await Assert.That(childTextRead).IsFalse();
-            await Assert.That(root.ToString()).IsEqualTo(root.FieldInfo?.UiName);
+            await Assert.That(root.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(root.FieldInfo?.UiName);
         }
     }
 
@@ -860,7 +860,7 @@ internal sealed class FieldStringRepresentationTests
             Span<byte> bytes = stackalloc byte[512];
             bool bytesFit = cursor.TryFormat(bytes, out int bytesWritten, default, CultureInfo.InvariantCulture);
             Cursors[cursor.FieldId.Value] = new CursorLine(
-                cursor.ToString(),
+                cursor.ToString(null, CultureInfo.InvariantCulture),
                 charsFit,
                 new string(chars[..charsWritten]),
                 bytesFit,
@@ -914,12 +914,12 @@ internal sealed class FieldStringRepresentationTests
                 (in MutField container) =>
                 {
                     PopulatorRuns++;
-                    LineInsidePopulator = container.ToString();
+                    LineInsidePopulator = container.ToString(null, CultureInfo.InvariantCulture);
 
                     // The child is appended to a skip packet: it keeps no storage and carries the same slot index as the container,
                     // so the line of each is the label alone.
                     MutField child = container.Append(ChildId, FieldValue.NewU64(3));
-                    LineOfAppendedChild = child.ToString();
+                    LineOfAppendedChild = child.ToString(null, CultureInfo.InvariantCulture);
                     return 0;
                 });
             return data.Length;

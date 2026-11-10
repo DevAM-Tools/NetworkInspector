@@ -137,7 +137,7 @@ internal sealed class ExportCommandRecycleTests
         await Assert.That(exporter.CapturedIds.Count).IsEqualTo(10);
         for (int i = 0; i < 10; i++)
         {
-            await Assert.That(exporter.CapturedIds[i]).IsEqualTo(i).Because($"packet at index {i} must have ID {i}");
+            await Assert.That(exporter.CapturedIds[i]).IsEqualTo(i).Because(Invariant($"packet at index {i} must have ID {i}"));
         }
     }
 
@@ -432,7 +432,7 @@ internal sealed class ExportCommandRecycleTests
         FilterResult<PacketFilter> result = PacketFilter.Compile(expression, stack);
         if (!result.TryGetValue(out PacketFilter? filter))
         {
-            throw new InvalidOperationException($"Expected '{expression}' to compile but got {result.Error}.");
+            throw new InvalidOperationException(Invariant($"Expected '{expression}' to compile but got {result.Error}."));
         }
 
         return filter;

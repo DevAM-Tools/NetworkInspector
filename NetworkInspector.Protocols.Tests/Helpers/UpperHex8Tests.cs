@@ -24,7 +24,7 @@ internal sealed class UpperHex8Tests
         await Assert.That(ok).IsTrue();
         await Assert.That(written).IsEqualTo(8);
         await Assert.That(new string(buffer)).IsEqualTo(expected);
-        await Assert.That(hex.ToString()).IsEqualTo(expected);
+        await Assert.That(hex.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(expected);
     }
 
     [Test]

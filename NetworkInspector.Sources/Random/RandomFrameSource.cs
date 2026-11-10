@@ -185,9 +185,11 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
 
     /// <inheritdoc/>
     public string? Description =>
-        $"Synthetic random frame source — mode={_Options.Mode}, " +
-        $"seed={(_Options.Seed.HasValue ? _Options.Seed.Value.ToString(CultureInfo.InvariantCulture) : (_Started ? _MasterSeed.ToString(CultureInfo.InvariantCulture) : "<entropy>"))}, " +
-        $"count={_Options.FrameCount}";
+        Invariant($"Synthetic random frame source — mode={_Options.Mode}, ") +
+        Invariant($"seed={(_Options.Seed.HasValue
+            ? _Options.Seed.Value.ToString(CultureInfo.InvariantCulture)
+            : (_Started ? _MasterSeed.ToString(CultureInfo.InvariantCulture) : "<entropy>"))}, ") +
+        Invariant($"count={_Options.FrameCount}");
 
     /// <inheritdoc/>
     public int? EstimatedFrameCount =>
@@ -306,7 +308,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
             if (!streamResult.IsSuccess)
             {
                 throw new InvalidOperationException(
-                    $"RandomFrameSource failed to create TCP stream frame at index {currentIndex}: {streamResult.Error}");
+                    Invariant($"RandomFrameSource failed to create TCP stream frame at index {currentIndex}: {streamResult.Error}"));
             }
 
             _FrameIndex = currentIndex + 1;
@@ -494,7 +496,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
                 _GenerateTcpIPv6(ref rng, data);
                 break;
             default:
-                throw new InvalidOperationException($"Unsupported RandomFrameMode: {_Options.Mode}");
+                throw new InvalidOperationException(Invariant($"Unsupported RandomFrameMode: {_Options.Mode}"));
         }
 
         // Timestamp: base + index × interval (saturating, see _TimestampFor)
@@ -511,7 +513,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
         if (!result.IsSuccess)
         {
             throw new InvalidOperationException(
-                $"RandomFrameSource failed to create frame at index {index}: {result.Error}");
+                Invariant($"RandomFrameSource failed to create frame at index {index}: {result.Error}"));
         }
 
         return result.Value;
@@ -952,7 +954,7 @@ public sealed class RandomFrameSource(RandomSourceOptions options, string? uiNam
 
     /// <summary>Builds a human-readable name from the options when no explicit name is provided.</summary>
     private static string _BuildDefaultName(RandomSourceOptions options) =>
-        $"random({options.Mode}, count={options.FrameCount}, seed={options.Seed?.ToString(CultureInfo.InvariantCulture) ?? "entropy"})";
+        Invariant($"random({options.Mode}, count={options.FrameCount}, seed={options.Seed?.ToString(CultureInfo.InvariantCulture) ?? "entropy"})");
 
     /// <summary>
     /// Validates the supplied options at construction time so invalid configurations surface

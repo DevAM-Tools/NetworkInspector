@@ -40,7 +40,7 @@ internal sealed class FrameBuilderFragmentedScenario : FrameBuilderScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Build {_DatagramCount:N0} Eth/IPv4/UDP datagrams with a {PayloadSize}-byte payload, emitting six IP fragments per datagram via the new FrameStack fragmentation API.");
 
     /// <inheritdoc/>

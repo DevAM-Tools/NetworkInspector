@@ -90,7 +90,9 @@ internal sealed class SlabAllocator<T>
     internal SlabAllocator(int capacity, bool uninitialized)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(capacity);
-        _Buffer = uninitialized ? GC.AllocateUninitializedArray<T>(capacity) : new T[capacity];
+        _Buffer = uninitialized
+            ? GC.AllocateUninitializedArray<T>(capacity)
+            : new T[capacity];
     }
 
     /// <summary>

@@ -65,6 +65,8 @@ internal static class TestAssemblyCompiler
 
         references.Add(MetadataReference.CreateFromFile(typeof(IPlugin).Assembly.Location));
         references.Add(MetadataReference.CreateFromFile(typeof(StackBuilder).Assembly.Location));
+        references.Add(MetadataReference.CreateFromFile(typeof(SettingsRegistrar).Assembly.Location));
+        references.Add(MetadataReference.CreateFromFile(typeof(LimitValue).Assembly.Location));
         references.Add(MetadataReference.CreateFromFile(typeof(Timestamp).Assembly.Location));
         foreach (string extra in extraReferences ?? [])
         {

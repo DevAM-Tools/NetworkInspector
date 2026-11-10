@@ -54,7 +54,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? frameIdField = stack.GetFieldId("flexray.frame_id");
             await Assert.That(frameIdField).IsNotNull();
-            bool has = packet.TryGetFieldValue(frameIdField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(frameIdField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(42UL);
@@ -72,7 +73,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? frameIdField = stack.GetFieldId("flexray.frame_id");
             await Assert.That(frameIdField).IsNotNull();
-            bool has = packet.TryGetFieldValue(frameIdField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(frameIdField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(2047UL);
@@ -89,7 +91,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? cycleField = stack.GetFieldId("flexray.cycle");
             await Assert.That(cycleField).IsNotNull();
-            bool has = packet.TryGetFieldValue(cycleField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(cycleField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(7UL);
@@ -107,7 +110,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? cycleField = stack.GetFieldId("flexray.cycle");
             await Assert.That(cycleField).IsNotNull();
-            bool has = packet.TryGetFieldValue(cycleField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(cycleField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(63UL);
@@ -125,7 +129,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? lengthField = stack.GetFieldId("flexray.payload_length");
             await Assert.That(lengthField).IsNotNull();
-            bool has = packet.TryGetFieldValue(lengthField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(lengthField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(16UL);
@@ -142,7 +147,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? channelField = stack.GetFieldId("flexray.channel");
             await Assert.That(channelField).IsNotNull();
-            bool has = packet.TryGetFieldValue(channelField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(channelField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsString(out string strVal);
             await Assert.That(strVal).IsEqualTo("Channel A");
@@ -159,7 +165,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? channelField = stack.GetFieldId("flexray.channel");
             await Assert.That(channelField).IsNotNull();
-            bool has = packet.TryGetFieldValue(channelField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(channelField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsString(out string strVal);
             await Assert.That(strVal).IsEqualTo("Channel B");
@@ -177,7 +184,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? nfiField = stack.GetFieldId("flexray.nfi");
             await Assert.That(nfiField).IsNotNull();
-            bool has = packet.TryGetFieldValue(nfiField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(nfiField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -195,7 +203,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? nfiField = stack.GetFieldId("flexray.nfi");
             await Assert.That(nfiField).IsNotNull();
-            bool has = packet.TryGetFieldValue(nfiField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(nfiField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsFalse();
@@ -212,7 +221,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? sfiField = stack.GetFieldId("flexray.sfi");
             await Assert.That(sfiField).IsNotNull();
-            bool has = packet.TryGetFieldValue(sfiField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(sfiField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -229,7 +239,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? stfiField = stack.GetFieldId("flexray.stfi");
             await Assert.That(stfiField).IsNotNull();
-            bool has = packet.TryGetFieldValue(stfiField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(stfiField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -246,7 +257,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? ppiField = stack.GetFieldId("flexray.ppi");
             await Assert.That(ppiField).IsNotNull();
-            bool has = packet.TryGetFieldValue(ppiField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(ppiField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -263,7 +275,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? hcrcField = stack.GetFieldId("flexray.hcrc");
             await Assert.That(hcrcField).IsNotNull();
-            bool has = packet.TryGetFieldValue(hcrcField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(hcrcField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x5A3UL);
@@ -280,7 +293,8 @@ internal sealed class FlexRayProtocolTests
         {
             FieldId? fcrcField = stack.GetFieldId("flexray.fcrc_err");
             await Assert.That(fcrcField).IsNotNull();
-            bool has = packet.TryGetFieldValue(fcrcField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(fcrcField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -339,8 +353,9 @@ internal sealed class FlexRayProtocolTests
         {
             // Verify frame ID is still correct when indicators are set
             FieldId? frameIdField = stack.GetFieldId("flexray.frame_id");
-            packet.TryGetFieldValue(frameIdField!.Value, out FieldValue fidValue, materialize: true); // materialize: true — need complete field tree for assertion
-            fidValue.Data.TryGetAsU64(out ulong u64Val);
+            packet.TryGetFieldValue(frameIdField!.Value, out FieldValue fidValue,
+                materialize: true); // materialize: true — need complete field tree for assertion
+fidValue.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(100UL);
 
             // All indicators true
@@ -355,7 +370,8 @@ internal sealed class FlexRayProtocolTests
             await Assert.That(boolVal2).IsTrue();
 
             FieldId? stfiField = stack.GetFieldId("flexray.stfi");
-            packet.TryGetFieldValue(stfiField!.Value, out FieldValue stfiValue, materialize: true); // materialize: true — need complete field tree for assertion
+            packet.TryGetFieldValue(stfiField!.Value, out FieldValue stfiValue,
+                materialize: true); // materialize: true — need complete field tree for assertion
             stfiValue.Data.TryGetAsBool(out bool boolVal3);
             await Assert.That(boolVal3).IsTrue();
 
@@ -366,7 +382,8 @@ internal sealed class FlexRayProtocolTests
 
             // Cycle correct
             FieldId? cycleField = stack.GetFieldId("flexray.cycle");
-            packet.TryGetFieldValue(cycleField!.Value, out FieldValue cycleValue, materialize: true); // materialize: true — need complete field tree for assertion
+            packet.TryGetFieldValue(cycleField!.Value, out FieldValue cycleValue,
+                materialize: true); // materialize: true — need complete field tree for assertion
             cycleValue.Data.TryGetAsU64(out ulong u64Val2);
             await Assert.That(u64Val2).IsEqualTo(15UL);
         }
@@ -517,7 +534,7 @@ internal sealed class FlexRayProtocolTests
         try
         {
             string keyText = expectedKey.ToString(CultureInfo.InvariantCulture);
-            string json = $$"""
+            string json = Invariant($$"""
                 {
                   "messages": [{
                     "name": "fr_dispatch_probe",
@@ -533,7 +550,7 @@ internal sealed class FlexRayProtocolTests
                     }]
                   }]
                 }
-                """;
+                """);
             File.WriteAllText(jsonPath, json);
 
             using SettingsManager settingsManager = new();

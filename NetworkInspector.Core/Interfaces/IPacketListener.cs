@@ -12,8 +12,6 @@ namespace NetworkInspector.Core.Interfaces;
 /// </summary>
 public interface IPacketListener
 {
-    #region Properties
-
     /// <summary>Gets the user-friendly display name of the listener.</summary>
     string UiName
     {
@@ -26,10 +24,6 @@ public interface IPacketListener
         get;
     }
 
-    #endregion
-
-    #region Methods
-
     /// <summary>
     /// Called when a packet has been parsed.
     /// Must not be called concurrently or after <see cref="OnFinish"/>.
@@ -40,10 +34,8 @@ public interface IPacketListener
 
     /// <summary>
     /// Called when the listener is unsubscribed or finished.
-    /// Must be called exactly once, after all <see cref="OnPacket"/> calls have returned.
-    /// Idempotent: safe to call more than once, subsequent calls are no-ops.
+    /// Caller: call it exactly once, after the last packet (after all <see cref="OnPacket"/> calls have returned).
+    /// Implementer: tolerate a second call (do nothing).
     /// </summary>
     void OnFinish();
-
-    #endregion
 }

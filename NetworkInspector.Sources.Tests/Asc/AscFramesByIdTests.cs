@@ -21,14 +21,14 @@ internal sealed class AscFramesByIdTests
         using (AscSource memory = AscSource.FromText(text, name))
         {
             List<Frame> frames = RandomAccessEquivalence.StartAndReadAll(memory);
-            _CollectMismatches(memory, frames.Count, $"{name}/memory", mismatches);
+            _CollectMismatches(memory, frames.Count, Invariant($"{name}/memory"), mismatches);
         }
 
         // Disk backend.
         using TempCaptureFile file = new(Encoding.Latin1.GetBytes(text), ".asc");
         using AscSource disk = AscSource.Open(file.Path, new AscSourceOptions { PreloadBudget = null });
         List<Frame> diskFrames = RandomAccessEquivalence.StartAndReadAll(disk);
-        _CollectMismatches(disk, diskFrames.Count, $"{name}/disk", mismatches);
+        _CollectMismatches(disk, diskFrames.Count, Invariant($"{name}/disk"), mismatches);
 
         await Assert.That(mismatches).IsEmpty();
     }
@@ -41,7 +41,7 @@ internal sealed class AscFramesByIdTests
     {
         foreach ((string name, FrameId first, int length) in RandomAccessEquivalence.BatchRanges(frameCount))
         {
-            string? mismatch = RandomAccessEquivalence.FindBatchMismatch(source, first, length, $"{label}/{name}");
+            string? mismatch = RandomAccessEquivalence.FindBatchMismatch(source, first, length, Invariant($"{label}/{name}"));
             if (mismatch is not null)
             {
                 mismatches.Add(mismatch);

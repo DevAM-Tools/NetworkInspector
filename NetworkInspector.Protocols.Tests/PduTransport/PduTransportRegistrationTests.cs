@@ -204,14 +204,14 @@ internal sealed class PduTransportRegistrationTests
     [Test]
     public async Task StreamLoadFailure_StillAppliesFileSetting()
     {
-        string dir = Path.Combine(Path.GetTempPath(), "ni_pdu_fileplusbad_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_pdu_fileplusbad_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "pdutr.json");
         try
         {
             await File.WriteAllTextAsync(path, """{"pdus":[{"id":1,"name":"FromFile"}]}""").ConfigureAwait(false);
 
-            using SettingsManager settings = new(dir);
+            using SettingsManager settings = new(dir, CoreSettingsLayout.Instance);
             settings.PreloadValue(PduTransportRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             PduTransportProtocol protocol = new();
@@ -241,14 +241,14 @@ internal sealed class PduTransportRegistrationTests
     [Test]
     public async Task Register_FromStream_MergesOnTopOfFileSetting()
     {
-        string dir = Path.Combine(Path.GetTempPath(), "ni_pdu_merge_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_pdu_merge_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "pdutr.json");
         try
         {
             await File.WriteAllTextAsync(path, """{"pdus":[{"id":1,"name":"FromFile"}]}""").ConfigureAwait(false);
 
-            using SettingsManager settings = new(dir);
+            using SettingsManager settings = new(dir, CoreSettingsLayout.Instance);
             settings.PreloadValue(PduTransportRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             using MemoryStream extra = _Utf8Stream("""{"pdus":[{"id":1,"name":"FromStream"},{"id":2,"name":"Extra"}]}""");

@@ -14,7 +14,7 @@ internal sealed class FilterFlankNomatchScenario : FilterScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Flank no-match \"{Expression}\" (ports stay &lt; 100; full stateful eval).");
 
     /// <inheritdoc/>

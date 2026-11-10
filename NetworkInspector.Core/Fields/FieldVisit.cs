@@ -24,18 +24,19 @@ public readonly ref struct FieldVisit
 {
     #region Visit state
 
-    // Reference to the value of this append, not a copy: the field's slab slot when the parse keeps a tree (a custom
-    // representation evaluated through it caches its string there for every later reader), the append argument otherwise.
-    // Valid only while the observer call is running.
+    /// <summary>
+    /// Reference to the value of this append, not a copy: the field's slab slot when the parse keeps a tree (a custom
+    /// representation evaluated through it caches its string there for every later reader), the append argument otherwise.
+    /// Valid only while the observer call is running.
+    /// </summary>
     private readonly ref readonly FieldValue _Value;
 
-    // Reference to the location that holds the custom text: the field's slab slot when the parse keeps a tree, the append
-    // argument otherwise. A LazyString caches its evaluated string in the location it is read from, so reading through this
-    // reference (instead of a copy) caches into the slot that later readers use.
+    /// <summary>
+    /// Reference to the location that holds the custom text: the field's slab slot when the parse keeps a tree, the append
+    /// argument otherwise. A <see cref="LazyString"/> caches its evaluated string in the location it is read from, so reading
+    /// through this reference (instead of a copy) caches into the slot that later readers use.
+    /// </summary>
     private readonly ref readonly LazyString _CustomText;
-
-    // Explicit internal constructor on purpose: a primary constructor has the visibility of the type (public), and a visit built
-    // outside the packet would refer to locations nobody guarantees for the observer call.
 
     /// <summary>Creates a visit for one produced field. Internal: only the packet builds visits.</summary>
     /// <param name="packetId">Packet id of the frame being parsed.</param>
@@ -50,6 +51,10 @@ public readonly ref struct FieldVisit
     /// </param>
     /// <param name="field">Tree cursor of the field, default when <paramref name="hasField"/> is false.</param>
     /// <param name="hasField">Whether <paramref name="field"/> can be navigated.</param>
+    /// <remarks>
+    /// An explicit internal constructor on purpose: a primary constructor has the visibility of the type (public), and a visit
+    /// built outside the packet would refer to locations nobody guarantees for the observer call.
+    /// </remarks>
     internal FieldVisit(
         PacketId packetId,
         FieldId fieldId,

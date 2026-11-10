@@ -108,7 +108,7 @@ internal sealed class ExporterStackMismatchTests
         bool refused = exporter.OnPacket(other);
         exporter.OnFinish();
 
-        using DuckDBConnection connection = new($"Data Source={outputPath}");
+        using DuckDBConnection connection = new(Invariant($"Data Source={outputPath}"));
         connection.Open();
         using DuckDBCommand command = connection.CreateCommand();
         command.CommandText = "SELECT COUNT(*) FROM packets;";

@@ -589,8 +589,9 @@ public sealed partial class HttpProtocol : IProtocol
             // referenced until the packet is recycled, and one segment can complete many messages, so the per-body limit alone
             // does not bound the sum (see the setting). The packet keeps one sum for all protocols, and DerivedBytesLimit.TryBind
             // checks this protocol's total against it before binding, so a refused body leaves the packet unchanged. In both
-            // cases the body is not parsed further and the cause is named. Rejected alternative: dispatching the unbound bytes (a stateful nested protocol would fail with a generic
-            // "not a slice of this packet's buffers" and a buffer export would miss the bytes). Residual risk: a packet can still
+            // cases the body is not parsed further and the cause is named. Rejected alternative: dispatching the unbound
+            // bytes (a stateful nested protocol would fail with a generic "not a slice of this packet's buffers" and a buffer
+            // export would miss the bytes). Residual risk: a packet can still
             // keep bodies up to the total alive (the setting names the value and the operator may raise it), and the body that
             // fails the check was already inflated (at most the per-body limit, freed at once); the HTTP fields themselves are
             // still shown by the populator.

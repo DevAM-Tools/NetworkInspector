@@ -909,8 +909,8 @@ internal sealed class FieldStorageTests
 
         string walkEntry = first < walk.Count ? walk[first].ToString() : "(end)";
         string expectedEntry = first < expected.Count ? expected[first].ToString() : "(end)";
-        return $"worker {worker}: {walk.Count} fields, expected {expected.Count}; first difference at {first}: "
-            + $"got {walkEntry}, expected {expectedEntry}";
+        return Invariant($"worker {worker}: {walk.Count} fields, expected {expected.Count}; first difference at {first}: ")
+            + Invariant($"got {walkEntry}, expected {expectedEntry}");
     }
 
     [Test]

@@ -72,7 +72,7 @@ internal static class TraceReading
     {
         SettingsManager settings = settingsBase is null
             ? new SettingsManager()
-            : new SettingsManager(settingsBase);
+            : new SettingsManager(settingsBase, CoreSettingsLayout.Instance);
         if (profileSettings is not null)
         {
             foreach (KeyValuePair<string, string> setting in profileSettings)
@@ -182,7 +182,7 @@ internal static class TraceReading
             return null;
         }
 
-        return value.ToString();
+        return value.ToString(null, CultureInfo.InvariantCulture);
     }
 
     #endregion

@@ -44,7 +44,7 @@ internal sealed class Icmpv6TsharkTests
         await Assert.That(value).IsNotNull().Because("tshark must report this field");
         // tshark may format as "4660" (decimal) or "0x1234" — accept either.
         bool ok = value == "4660" || value == "0x1234";
-        await Assert.That(ok).IsTrue().Because($"expected 0x1234 or 4660, got '{value}'");
+        await Assert.That(ok).IsTrue().Because(Invariant($"expected 0x1234 or 4660, got '{value}'"));
     }
 
     [Test]

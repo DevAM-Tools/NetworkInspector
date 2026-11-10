@@ -22,26 +22,17 @@ namespace NetworkInspector.Core.ValueCaches;
 /// <typeparam name="T">Payload type selected from the stack <see cref="FieldType"/>.</typeparam>
 public readonly struct ReadOnlyValueCacheSeries<T> : IReadOnlyValueCacheSeries<T>
 {
-    #region Fields
-
     /// <summary>The series this view reads. Non-null for any view made with the public constructor; a <c>default</c> view has none.</summary>
     private readonly ValueCacheSeries<T> _Owner;
 
-    #endregion
-
-    #region Lifecycle
-
     /// <summary>Creates a view over <paramref name="owner"/>.</summary>
+    /// <param name="owner">The series to read; the view keeps a reference to it and never changes it.</param>
     /// <exception cref="ArgumentNullException"><paramref name="owner"/> is <see langword="null"/>.</exception>
     public ReadOnlyValueCacheSeries(ValueCacheSeries<T> owner)
     {
         ArgumentNullException.ThrowIfNull(owner);
         _Owner = owner;
     }
-
-    #endregion
-
-    #region Properties
 
     /// <inheritdoc/>
     public FieldId FieldId => _Owner.FieldId;
@@ -70,10 +61,6 @@ public readonly struct ReadOnlyValueCacheSeries<T> : IReadOnlyValueCacheSeries<T
     /// <inheritdoc/>
     public ValueCacheRow<T> this[int index] => _Owner[index];
 
-    #endregion
-
-    #region Public API
-
     /// <inheritdoc/>
     public int GetPacketId(int index) => _Owner.GetPacketId(index);
 
@@ -97,6 +84,4 @@ public readonly struct ReadOnlyValueCacheSeries<T> : IReadOnlyValueCacheSeries<T
     /// <inheritdoc/>
     public bool TryGetValueChunk(int chunkIndex, int observedCount, out ReadOnlySpan<T> span) =>
         _Owner.TryGetValueChunk(chunkIndex, observedCount, out span);
-
-    #endregion
 }

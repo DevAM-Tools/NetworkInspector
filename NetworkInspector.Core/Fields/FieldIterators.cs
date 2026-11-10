@@ -27,21 +27,31 @@ public readonly struct FieldChildEnumerable(Packet packet, ushort parentIndex, b
     /// <summary>
     /// Returns the zero-alloc struct-based enumerator for <see langword="foreach"/> loops.
     /// </summary>
+    /// <returns>An enumerator over the direct children, first to last; it materializes the parent's lazy children first when requested.</returns>
     public FieldChildEnumerator GetEnumerator() => new(packet, parentIndex, materialize);
 
     /// <summary>
     /// Returns an allocating class-based enumerator for LINQ and <see cref="IEnumerable{T}"/> compatibility.
     /// </summary>
+    /// <returns>An enumerator over the direct children; one allocation, and it materializes lazily on the first <c>MoveNext</c>.</returns>
     IEnumerator<Field> IEnumerable<Field>.GetEnumerator() => new BoxedEnumerator(packet, parentIndex, materialize);
 
     /// <inheritdoc/>
     IEnumerator IEnumerable.GetEnumerator() => ((IEnumerable<Field>)this).GetEnumerator();
 
-    // Allocating class-based enumerator used for IEnumerable<Field> / LINQ scenarios.
-    // The zero-alloc foreach path uses GetEnumerator() above (returning ref struct).
+    /// <summary>
+    /// Allocating class-based enumerator used for <see cref="IEnumerable{T}"/> and LINQ scenarios. The zero-allocation
+    /// <see langword="foreach"/> path uses <see cref="FieldChildEnumerable.GetEnumerator()"/> (a <see langword="ref struct"/>).
+    /// </summary>
+    /// <param name="p">The packet that owns the fields.</param>
+    /// <param name="parentIdx">Storage index of the parent whose children are enumerated.</param>
+    /// <param name="mat">Whether to populate the parent's lazy children on the first <c>MoveNext</c>.</param>
     private sealed class BoxedEnumerator(Packet p, ushort parentIdx, bool mat) : IEnumerator<Field>
     {
+        /// <summary>Storage index of the current child; the null index before the first <c>MoveNext</c> and after the last child.</summary>
         private ushort _CurrentIndex = FieldBody.NullIndex;
+
+        /// <summary>Whether <c>MoveNext</c> has already resolved the first child.</summary>
         private bool _Started;
 
         /// <inheritdoc/>
@@ -100,6 +110,7 @@ public readonly struct FieldChildEnumerable(Packet packet, ushort parentIndex, b
 /// </summary>
 public ref struct FieldChildEnumerator
 {
+    /// <summary>The packet that owns the fields.</summary>
     private readonly Packet _Packet;
 
     /// <summary>Storage index of the current child; before the first <c>MoveNext</c> it holds the first child (or the null index).</summary>
@@ -187,25 +198,40 @@ public readonly struct FieldDescendantEnumerable(Packet packet, ushort rootIndex
     /// <summary>
     /// Returns the zero-alloc struct-based enumerator for <see langword="foreach"/> loops.
     /// </summary>
+    /// <returns>An enumerator over every descendant in depth-first pre-order, the root excluded.</returns>
     public FieldDescendantEnumerator GetEnumerator() => new(packet, rootIndex, materialize);
 
     /// <summary>
     /// Returns an allocating class-based enumerator for LINQ and <see cref="IEnumerable{T}"/> compatibility.
     /// </summary>
+    /// <returns>An enumerator over every descendant in depth-first pre-order, the root excluded; one allocation plus a stack.</returns>
     IEnumerator<Field> IEnumerable<Field>.GetEnumerator() => new BoxedEnumerator(packet, rootIndex, materialize);
 
     /// <inheritdoc/>
     IEnumerator IEnumerable.GetEnumerator() => ((IEnumerable<Field>)this).GetEnumerator();
 
-    // Allocating class-based enumerator used for IEnumerable<Field> / LINQ scenarios.
+    /// <summary>Allocating class-based enumerator used for <see cref="IEnumerable{T}"/> and LINQ scenarios.</summary>
     private sealed class BoxedEnumerator : IEnumerator<Field>
     {
+        /// <summary>The packet that owns the fields.</summary>
         private readonly Packet _Packet;
+
+        /// <summary>Storage index of the field whose descendants are enumerated.</summary>
         private readonly ushort _RootIndex;
+
+        /// <summary>Whether lazy fields are populated while traversing.</summary>
         private readonly bool _Materialize;
+
+        /// <summary>Pending fields: each pop yields the next field in pre-order; siblings sit below the children of their predecessor.</summary>
         private readonly Stack<ushort> _Stack = new();
+
+        /// <summary>Storage index of the current field; the null index before the first <c>MoveNext</c>.</summary>
         private ushort _Current = FieldBody.NullIndex;
 
+        /// <summary>Creates the enumerator and positions it before the first descendant.</summary>
+        /// <param name="packet">The packet that owns the fields.</param>
+        /// <param name="rootIndex">Storage index of the field whose descendants are enumerated.</param>
+        /// <param name="materialize">Whether to populate lazy fields while traversing.</param>
         internal BoxedEnumerator(Packet packet, ushort rootIndex, bool materialize)
         {
             _Packet = packet;
@@ -214,6 +240,10 @@ public readonly struct FieldDescendantEnumerable(Packet packet, ushort rootIndex
             Initialize();
         }
 
+        /// <summary>
+        /// Clears the stack and pushes the first child of the root (the root itself is not yielded), materializing the root first
+        /// when requested.
+        /// </summary>
         private void Initialize()
         {
             _Stack.Clear();
@@ -289,9 +319,16 @@ public readonly struct FieldDescendantEnumerable(Packet packet, ushort rootIndex
 /// </summary>
 public ref struct FieldDescendantEnumerator
 {
+    /// <summary>The packet that owns the fields.</summary>
     private readonly Packet _Packet;
+
+    /// <summary>Whether lazy fields are populated while traversing.</summary>
     private readonly bool _Materialize;
+
+    /// <summary>Pending fields; each pop yields the next field in pre-order.</summary>
     private InlineStack16 _Stack;
+
+    /// <summary>Storage index of the current descendant; the null index before the first <c>MoveNext</c>.</summary>
     private ushort _Current;
 
     /// <summary>Creates a DFS pre-order descendant enumerator.</summary>
@@ -329,7 +366,7 @@ public ref struct FieldDescendantEnumerator
         }
     }
 
-    /// <summary>The current descendant field.</summary>
+    /// <summary>The current descendant field. Valid only after <see cref="MoveNext"/> returned <see langword="true"/>.</summary>
     public readonly Field Current
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -337,6 +374,7 @@ public ref struct FieldDescendantEnumerator
     }
 
     /// <summary>Advances to the next descendant in DFS pre-order.</summary>
+    /// <returns><see langword="false"/> when there is no further descendant.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
@@ -389,24 +427,36 @@ public readonly struct FieldDfsEnumerable(Packet packet, bool materialize)
     /// <summary>
     /// Returns the zero-alloc struct-based enumerator for <see langword="foreach"/> loops.
     /// </summary>
+    /// <returns>An enumerator over every field in depth-first pre-order, the root included.</returns>
     public FieldDfsEnumerator GetEnumerator() => new(packet, materialize);
 
     /// <summary>
     /// Returns an allocating class-based enumerator for LINQ and <see cref="IEnumerable{T}"/> compatibility.
     /// </summary>
+    /// <returns>An enumerator over every field in depth-first pre-order, the root included; one allocation plus a stack.</returns>
     IEnumerator<Field> IEnumerable<Field>.GetEnumerator() => new BoxedEnumerator(packet, materialize);
 
     /// <inheritdoc/>
     IEnumerator IEnumerable.GetEnumerator() => ((IEnumerable<Field>)this).GetEnumerator();
 
-    // Allocating class-based enumerator used for IEnumerable<Field> / LINQ scenarios.
+    /// <summary>Allocating class-based enumerator used for <see cref="IEnumerable{T}"/> and LINQ scenarios.</summary>
     private sealed class BoxedEnumerator : IEnumerator<Field>
     {
+        /// <summary>The packet that owns the fields.</summary>
         private readonly Packet _Packet;
+
+        /// <summary>Whether lazy fields are populated while traversing.</summary>
         private readonly bool _Materialize;
+
+        /// <summary>Pending fields: each pop yields the next field in pre-order; siblings sit below the children of their predecessor.</summary>
         private readonly Stack<ushort> _Stack = new();
+
+        /// <summary>Storage index of the current field; the null index before the first <c>MoveNext</c>.</summary>
         private ushort _Current = FieldBody.NullIndex;
 
+        /// <summary>Creates the enumerator and positions it before the root.</summary>
+        /// <param name="packet">The packet to traverse.</param>
+        /// <param name="materialize">Whether to populate lazy fields while traversing.</param>
         internal BoxedEnumerator(Packet packet, bool materialize)
         {
             _Packet = packet;
@@ -414,6 +464,7 @@ public readonly struct FieldDfsEnumerable(Packet packet, bool materialize)
             Initialize();
         }
 
+        /// <summary>Clears the stack and pushes the root when the packet has a field tree with at least one field.</summary>
         private void Initialize()
         {
             _Stack.Clear();
@@ -478,9 +529,16 @@ public readonly struct FieldDfsEnumerable(Packet packet, bool materialize)
 /// </summary>
 public ref struct FieldDfsEnumerator
 {
+    /// <summary>The packet that owns the fields.</summary>
     private readonly Packet _Packet;
+
+    /// <summary>Whether lazy fields are populated while traversing.</summary>
     private readonly bool _Materialize;
+
+    /// <summary>Pending fields; each pop yields the next field in pre-order.</summary>
     private InlineStack16 _Stack;
+
+    /// <summary>Storage index of the current field; the null index before the first <c>MoveNext</c>.</summary>
     private ushort _Current;
 
     /// <summary>Creates a DFS enumerator starting from the packet's root field.</summary>
@@ -500,7 +558,7 @@ public ref struct FieldDfsEnumerator
         }
     }
 
-    /// <summary>The current field.</summary>
+    /// <summary>The current field. Valid only after <see cref="MoveNext"/> returned <see langword="true"/>.</summary>
     public readonly Field Current
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -508,6 +566,7 @@ public ref struct FieldDfsEnumerator
     }
 
     /// <summary>Advances to the next field in DFS pre-order.</summary>
+    /// <returns><see langword="false"/> when there is no further field.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
@@ -561,23 +620,33 @@ public readonly struct FieldFlatEnumerable(Packet packet, bool materialize)
     /// <summary>
     /// Returns the zero-alloc struct-based enumerator for <see langword="foreach"/> loops.
     /// </summary>
+    /// <returns>An enumerator over every field in storage order, the root included.</returns>
     public FieldFlatEnumerator GetEnumerator() => new(packet, materialize);
 
     /// <summary>
     /// Returns an allocating class-based enumerator for LINQ and <see cref="IEnumerable{T}"/> compatibility.
     /// </summary>
+    /// <returns>An enumerator over every field in storage order, the root included; one allocation.</returns>
     IEnumerator<Field> IEnumerable<Field>.GetEnumerator() => new BoxedEnumerator(packet, materialize);
 
     /// <inheritdoc/>
     IEnumerator IEnumerable.GetEnumerator() => ((IEnumerable<Field>)this).GetEnumerator();
 
-    // Allocating class-based enumerator used for IEnumerable<Field> / LINQ scenarios.
+    /// <summary>Allocating class-based enumerator used for <see cref="IEnumerable{T}"/> and LINQ scenarios.</summary>
     private sealed class BoxedEnumerator : IEnumerator<Field>
     {
+        /// <summary>The packet that owns the fields.</summary>
         private readonly Packet _Packet;
-        private readonly bool _Materialize;
-        private int _CurrentIndex = -1; // -1 = before first element
 
+        /// <summary>Whether lazy fields are populated while iterating.</summary>
+        private readonly bool _Materialize;
+
+        /// <summary>Storage index of the current field; -1 before the first element.</summary>
+        private int _CurrentIndex = -1;
+
+        /// <summary>Creates the enumerator and positions it before the first field.</summary>
+        /// <param name="packet">The packet to iterate.</param>
+        /// <param name="materialize">Whether to populate lazy fields while iterating.</param>
         internal BoxedEnumerator(Packet packet, bool materialize)
         {
             _Packet = packet;
@@ -628,8 +697,13 @@ public readonly struct FieldFlatEnumerable(Packet packet, bool materialize)
 /// </summary>
 public ref struct FieldFlatEnumerator
 {
+    /// <summary>The packet that owns the fields.</summary>
     private readonly Packet _Packet;
+
+    /// <summary>Whether lazy fields are populated while iterating.</summary>
     private readonly bool _Materialize;
+
+    /// <summary>Storage index of the current field; -1 before the first element.</summary>
     private int _CurrentIndex;
 
     /// <summary>Creates a flat enumerator over all fields in the packet.</summary>
@@ -643,7 +717,7 @@ public ref struct FieldFlatEnumerator
         _CurrentIndex = -1; // pre-first sentinel
     }
 
-    /// <summary>The current field.</summary>
+    /// <summary>The current field. Valid only after <see cref="MoveNext"/> returned <see langword="true"/>.</summary>
     public readonly Field Current
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -651,6 +725,7 @@ public ref struct FieldFlatEnumerator
     }
 
     /// <summary>Advances to the next field in storage order.</summary>
+    /// <returns><see langword="false"/> when there is no further field.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
@@ -680,7 +755,7 @@ public ref struct FieldFlatEnumerator
 
 #endregion
 
-#region Private Helpers
+#region Inline stack for the depth-first enumerators
 
 /// <summary>
 /// Lightweight inline stack for <see cref="ushort"/> values.
@@ -704,6 +779,7 @@ internal ref struct InlineStack16
     internal int Count { get; private set; }
 
     /// <summary>Pushes a value onto the stack.</summary>
+    /// <param name="value">The storage index to push.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Push(ushort value)
     {
@@ -721,6 +797,7 @@ internal ref struct InlineStack16
     }
 
     /// <summary>Pops the top value from the stack.</summary>
+    /// <returns>The most recently pushed value that has not been popped.</returns>
     /// <exception cref="InvalidOperationException">Thrown when the stack is empty.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ushort Pop()
@@ -741,6 +818,7 @@ internal ref struct InlineStack16
     /// Slow path: spills to heap when inline capacity is exceeded, and keeps writing to the heap afterwards (the heap buffer stays
     /// authoritative even when the stack shrinks below the inline capacity again).
     /// </summary>
+    /// <param name="value">The storage index to push; <c>Count</c> is incremented by the caller.</param>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _PushSlow(ushort value)
     {
@@ -761,6 +839,7 @@ internal ref struct InlineStack16
     [InlineArray(_InlineCapacity)]
     private struct InlineBuffer16
     {
+        /// <summary>The first element; the <see cref="InlineArrayAttribute"/> repeats it to the declared length.</summary>
         private ushort _Element0;
     }
 }

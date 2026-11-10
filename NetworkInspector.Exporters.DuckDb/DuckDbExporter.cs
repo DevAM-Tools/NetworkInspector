@@ -318,7 +318,7 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, IP
         }
         catch (Exception ex)
         {
-            _Core.ReportStartFailure(ExportErrorKind.IoError, $"DuckDB output initialization failed: {ex.Message}");
+            _Core.ReportStartFailure(ExportErrorKind.IoError, Invariant($"DuckDB output initialization failed: {ex.Message}"));
             return false;
         }
     }
@@ -522,8 +522,8 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, IP
                 throw new ArgumentOutOfRangeException(
                     nameof(count),
                     count,
-                    $"Target packet count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
-                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+                    Invariant($"Target packet count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} ") +
+                    Invariant($"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)})."));
             }
 
             _TargetPacketCount = count;
@@ -661,7 +661,7 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, IP
                 throw new ArgumentOutOfRangeException(
                     nameof(version),
                     version,
-                    $"Storage version must be one of {DuckDbStorageVersions.AllowedText}.");
+                    Invariant($"Storage version must be one of {DuckDbStorageVersions.AllowedText}."));
             }
 
             _StorageVersionSetting = setting;

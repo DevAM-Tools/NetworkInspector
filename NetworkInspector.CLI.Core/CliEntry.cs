@@ -85,11 +85,11 @@ internal static class CliEntry
             // with an opaque .NET stack trace. Per README §Exit Codes, 3 indicates
             // a runtime failure that aborted the run. Only type and message are printed, one line per exception of the
             // InnerException chain; the stack trace is left out on purpose, like in every other error line of the CLI.
-            io.Error.WriteLine($"Fatal ({ex.GetType().Name}): {ex.Message}");
+            io.Error.WriteLine(Invariant($"Fatal ({ex.GetType().Name}): {ex.Message}"));
             Exception? inner = ex.InnerException;
             while (inner is not null)
             {
-                io.Error.WriteLine($"  Caused by ({inner.GetType().Name}): {inner.Message}");
+                io.Error.WriteLine(Invariant($"  Caused by ({inner.GetType().Name}): {inner.Message}"));
                 inner = inner.InnerException;
             }
 
@@ -135,7 +135,7 @@ internal static class CliEntry
     /// <returns><see cref="ExitCode.ArgumentError"/>.</returns>
     private static int _PrintUnknownCommand(TextWriter error, string command)
     {
-        error.WriteLine($"Unknown command: '{command}'");
+        error.WriteLine(Invariant($"Unknown command: '{command}'"));
         error.WriteLine();
         _PrintUsage(error);
         return (int)ExitCode.ArgumentError;

@@ -16,12 +16,12 @@ namespace NetworkInspector.Core;
 /// </summary>
 internal static class ThrowHelpers
 {
-    #region Guard Helpers
-
     /// <summary>
     /// Throws a <see cref="Errors.FieldAppendException"/> wrapping the given parse error.
     /// Called when a field tree mutation fails (e.g., maximum field count exceeded).
     /// </summary>
+    /// <param name="error">The error that stopped the mutation; carried by the exception as its <c>ParseError</c>.</param>
+    /// <exception cref="Errors.FieldAppendException">Always.</exception>
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void ThrowFieldAppend(ParseError error)
@@ -31,12 +31,18 @@ internal static class ThrowHelpers
     /// Throws when accessing Value on a failed ParseResult. Callers that must not throw use the success check first
     /// (expected parse failures are results, not exceptions); this guards only the misuse of reading the wrong side.
     /// </summary>
+    /// <typeparam name="T">The type the caller returns; no value is ever produced.</typeparam>
+    /// <returns>Never returns.</returns>
+    /// <exception cref="InvalidOperationException">Always.</exception>
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static T ThrowParseResultNoValue<T>()
         => throw new InvalidOperationException("Cannot access Value on a failed ParseResult.");
 
     /// <summary>Throws when accessing Error on a successful ParseResult.</summary>
+    /// <typeparam name="T">The type the caller returns; no value is ever produced.</typeparam>
+    /// <returns>Never returns.</returns>
+    /// <exception cref="InvalidOperationException">Always.</exception>
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static T ThrowParseResultNoError<T>()
@@ -47,6 +53,8 @@ internal static class ThrowHelpers
     /// This is a broken contract of the calling dissector, not an expected failure: custom text is final at append, and a
     /// sealed packet is read by other threads. The message names the rule and the remedy.
     /// </summary>
+    /// <param name="fieldId">The field whose text was changed; named in the message.</param>
+    /// <exception cref="InvalidOperationException">Always.</exception>
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void ThrowCustomTextAfterSeal(FieldId fieldId)
@@ -56,29 +64,19 @@ internal static class ThrowHelpers
                 $"Custom text cannot change after the packet is sealed (field id {fieldId.Value}). Set the text when appending the field."));
 
     /// <summary>
-    /// Throws when a non-finite F64 setting value is encountered during JSON serialization. JSON has no NaN or infinity, and
-    /// settings are validated to be finite, so reaching this is a broken invariant (a bug), not an expected failure.
-    /// </summary>
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    internal static void ThrowNonFiniteF64(double value)
-        => throw new InvalidOperationException(
-            string.Create(
-                CultureInfo.InvariantCulture,
-                $"F64 setting value must be finite, got {value}."));
-
-    /// <summary>
     /// Throws when a skip-tree cursor is read outside the synthetic root or an in-flight lazy populator.
     /// </summary>
+    /// <exception cref="InvalidOperationException">Always.</exception>
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void ThrowSkipFieldTreeValue()
         => throw new InvalidOperationException(
-            string.Create(
-                CultureInfo.InvariantCulture,
-                $"Field values are not available on a packet parsed with FieldTreeMode.Skip except at the root and during an in-flight skip-tree lazy populator."));
+            "Field values are not available on a packet parsed with FieldTreeMode.Skip except at the root and during an "
+            + "in-flight skip-tree lazy populator.");
 
     /// <summary>Throws when a parse factory receives a <see cref="FieldTreeMode"/> other than Build or Skip.</summary>
+    /// <param name="fieldTree">The rejected mode; reported as the actual value of the exception.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Always.</exception>
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void ThrowInvalidFieldTreeMode(FieldTreeMode fieldTree)
@@ -86,7 +84,4 @@ internal static class ThrowHelpers
             nameof(fieldTree),
             fieldTree,
             "fieldTree must be FieldTreeMode.Build or FieldTreeMode.Skip.");
-
-    #endregion
-
 }

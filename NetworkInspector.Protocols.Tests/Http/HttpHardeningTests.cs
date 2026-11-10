@@ -38,7 +38,7 @@ internal sealed class HttpHardeningTests
     {
         // Content-Length: 0 keeps the framing explicit; a response without a length runs until the connection closes, and
         // this test is about the status code, not about framing.
-        byte[] frame = _BuildHttpFrame($"HTTP/1.1 {code} Odd\r\nContent-Length: 0\r\n\r\n");
+        byte[] frame = _BuildHttpFrame(Invariant($"HTTP/1.1 {code} Odd\r\nContent-Length: 0\r\n\r\n"));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -55,7 +55,7 @@ internal sealed class HttpHardeningTests
     [Arguments("65535", 65535UL)]
     public async Task StatusCodeShortNumberIsShown(string code, ulong expected)
     {
-        byte[] frame = _BuildHttpFrame($"HTTP/1.1 {code} Fine\r\nContent-Length: 0\r\n\r\n");
+        byte[] frame = _BuildHttpFrame(Invariant($"HTTP/1.1 {code} Fine\r\nContent-Length: 0\r\n\r\n"));
 
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
         using (stack)
@@ -77,7 +77,7 @@ internal sealed class HttpHardeningTests
         // 0x80000000 and above do not fit an int. They must be refused (body shown undecoded), not wrapped to a negative
         // size that makes the decoder index with a negative position. Called directly: the stream detector already
         // refuses such a size, so the full stack never hands this body to the HTTP parser.
-        byte[] body = Encoding.ASCII.GetBytes($"{size}\r\nAAAA\r\n0\r\n\r\n");
+        byte[] body = Encoding.ASCII.GetBytes(Invariant($"{size}\r\nAAAA\r\n0\r\n\r\n"));
 
         ReadOnlyMemory<byte>? decoded = HttpProtocol.DechunkBody(body);
 
@@ -116,7 +116,7 @@ internal sealed class HttpHardeningTests
     [Arguments(" 5")]
     public async Task ContentLengthWithSurroundingBlanksIsShownAndIndexedConsistently(string value)
     {
-        byte[] frame = _BuildHttpFrame($"POST / HTTP/1.1\r\nContent-Length: {value}\r\n\r\nHello");
+        byte[] frame = _BuildHttpFrame(Invariant($"POST / HTTP/1.1\r\nContent-Length: {value}\r\n\r\nHello"));
 
         await EagerIndex.AssertAllEmittedFieldGroupsRecordedEagerly(frame).ConfigureAwait(false);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
@@ -132,7 +132,7 @@ internal sealed class HttpHardeningTests
     [Arguments("")]
     public async Task InvalidContentLengthIsNeitherShownNorIndexed(string value)
     {
-        byte[] frame = _BuildHttpFrame($"POST / HTTP/1.1\r\nContent-Length: {value}\r\n\r\n");
+        byte[] frame = _BuildHttpFrame(Invariant($"POST / HTTP/1.1\r\nContent-Length: {value}\r\n\r\n"));
 
         await EagerIndex.AssertAllEmittedFieldGroupsRecordedEagerly(frame).ConfigureAwait(false);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);
@@ -190,7 +190,7 @@ internal sealed class HttpHardeningTests
     public async Task HeaderLineLongerThan8192BytesReportsTheLimit()
     {
         string longValue = new('a', 9000);
-        byte[] frame = _BuildHttpFrame($"GET / HTTP/1.1\r\nHost: x\r\nX-Long: {longValue}\r\n\r\n");
+        byte[] frame = _BuildHttpFrame(Invariant($"GET / HTTP/1.1\r\nHost: x\r\nX-Long: {longValue}\r\n\r\n"));
 
         await EagerIndex.AssertAllEmittedFieldGroupsRecordedEagerly(frame).ConfigureAwait(false);
         (Stack stack, Packet packet) = ProtocolTestHelper.BuildAndParse(frame);

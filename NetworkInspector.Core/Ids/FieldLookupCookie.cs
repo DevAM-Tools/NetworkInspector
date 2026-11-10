@@ -26,20 +26,12 @@ namespace NetworkInspector.Core.Ids;
 [StructLayout(LayoutKind.Sequential)]
 public struct FieldLookupCookie
 {
-    #region Properties
-
     /// <summary>Returns a cookie positioned at the beginning of the field array.</summary>
     public static FieldLookupCookie Start => default;
-
-    #endregion
-
-    #region Fields
 
     /// <summary>
     /// Internal position in the flat field array. Only <see cref="Packet"/> reads/writes this.
     /// Zero-initialized by <see cref="Start"/> (scans from the first field).
     /// </summary>
     internal int Position;
-
-    #endregion
 }

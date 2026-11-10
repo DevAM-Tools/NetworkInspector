@@ -39,7 +39,7 @@ internal sealed class ConvertCommandLoopTests
         FilterResult<PacketFilter> result = PacketFilter.Compile(expression, stack);
         if (!result.TryGetValue(out PacketFilter? filter))
         {
-            throw new InvalidOperationException($"Expected '{expression}' to compile but got {result.Error}.");
+            throw new InvalidOperationException(Invariant($"Expected '{expression}' to compile but got {result.Error}."));
         }
 
         return filter;

@@ -95,7 +95,7 @@ internal sealed class EagerIndexGroupRegistrationTests
             "User-Agent: ni-test\r\n" +
             "Content-Type: application/json\r\n" +
             "Connection: keep-alive\r\n" +
-            $"Content-Length: {jsonBody.Length}\r\n" +
+            Invariant($"Content-Length: {jsonBody.Length}\r\n") +
             "\r\n" +
             jsonBody;
 
@@ -474,7 +474,8 @@ internal sealed class EagerIndexGroupRegistrationTests
             string fieldName = stack.GetField(field.FieldId)?.Name ?? field.FieldId.Value.ToString(CultureInfo.InvariantCulture);
             string groupName = stack.GetIndexGroup(groupId)?.Name ?? groupId.Value.ToString(CultureInfo.InvariantCulture);
             await Assert.That(eagerGroups.Contains(groupId.Value)).IsTrue()
-                .Because($"emitted field '{fieldName}' has index group '{groupName}' ({groupId.Value}), which must be recorded eagerly during ParseFrameIndexed (not only on materialization)");
+                .Because(Invariant($"emitted field '{fieldName}' has index group '{groupName}' ({groupId.Value}), ") +
+                    Invariant($"which must be recorded eagerly during ParseFrameIndexed (not only on materialization)"));
         }
 
         await Assert.That(materializedGroups.Count > 0).IsTrue()
@@ -485,7 +486,8 @@ internal sealed class EagerIndexGroupRegistrationTests
         {
             string eagerGroupName = stack.GetIndexGroup(new IndexGroupId(eagerGroup))?.Name ?? eagerGroup.ToString(CultureInfo.InvariantCulture);
             await Assert.That(materializedGroups.Contains(eagerGroup)).IsTrue()
-                .Because($"index group '{eagerGroupName}' ({eagerGroup}) was recorded eagerly but no materialized field carries it — a false positive the presence index must never produce");
+                .Because(Invariant($"index group '{eagerGroupName}' ({eagerGroup}) was recorded eagerly but no materialized field carries it — ") +
+                    Invariant($"a false positive the presence index must never produce"));
         }
     }
 }

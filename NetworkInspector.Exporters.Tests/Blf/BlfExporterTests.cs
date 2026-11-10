@@ -975,7 +975,7 @@ internal sealed class BlfExporterTests
         await Assert.That(exporter.SkippedCount).IsEqualTo(1);
         await Assert.That(events.Count).IsEqualTo(1);
         await Assert.That(events[0].Kind).IsEqualTo(ExportErrorKind.MalformedData);
-        await Assert.That(events[0].Message).Contains(FormattableString.Invariant($"channel {channel} is above 255"));
+        await Assert.That(events[0].Message).Contains(Invariant($"channel {channel} is above 255"));
     }
 
     [Test]

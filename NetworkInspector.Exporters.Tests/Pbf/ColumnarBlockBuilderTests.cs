@@ -201,13 +201,18 @@ internal sealed class ColumnarBlockBuilderTests
             _ = builder.Build();
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 20; i++)
+        // Run alone, 400 repetitions of this test under the load of two other test projects gave one run with about 17 KB more in
+        // the window than all others (858 B per build); the builder does not repeat that allocation. A per-column object appears
+        // in every build, so the smallest single build keeps the proof and drops every build that hit a one-off.
+        // Rounds of 20 builds were not enough: under load a whole 20-build round could carry one-off bytes.
+        long perBuild = long.MaxValue;
+        for (int round = 0; round < 100 && perBuild >= 512; round++)
         {
+            long before = GC.GetAllocatedBytesForCurrentThread();
             _ = builder.Build();
+            perBuild = Math.Min(perBuild, GC.GetAllocatedBytesForCurrentThread() - before);
         }
 
-        long perBuild = (GC.GetAllocatedBytesForCurrentThread() - before) / 20;
         int columns = builder.Batch.FieldBags.Count;
         builder.Dispose();
 

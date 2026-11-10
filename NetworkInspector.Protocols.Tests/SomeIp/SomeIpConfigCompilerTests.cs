@@ -23,13 +23,13 @@ internal sealed class SomeIpConfigCompilerTests
 
     /// <summary>One service with the given members and types (JSON fragments).</summary>
     private static string _Service(string members, string types = "", int id = 4097, int major = 1, string name = "Svc") =>
-        $$"""{ "service_id": {{id}}, "major_version": {{major}}, "name": "{{name}}", "methods": [ {{members}} ], "data_types": [ {{types}} ] }""";
+        Invariant($$"""{ "service_id": {{id}}, "major_version": {{major}}, "name": "{{name}}", "methods": [ {{members}} ], "data_types": [ {{types}} ] }""");
 
     private static string _File(params string[] services) =>
-        $$"""{ "schema_version": "1.0", "services": [ {{string.Join(", ", services)}} ] }""";
+        Invariant($$"""{ "schema_version": "1.0", "services": [ {{string.Join(", ", services)}} ] }""");
 
     private static string _Method(int id, string name, string inList = "[]", string outList = "[]", string extra = "") =>
-        $$"""{ "kind": "method", "id": {{id}}, "name": "{{name}}", "in": {{inList}}, "out": {{outList}}{{extra}} }""";
+        Invariant($$"""{ "kind": "method", "id": {{id}}, "name": "{{name}}", "in": {{inList}}, "out": {{outList}}{{extra}} }""");
 
     private static List<string> _Names(SomeIpCompiledModel model) =>
         [.. model.Sites.ToArray().Select(static site => site.RegisteredName)];
@@ -533,7 +533,7 @@ internal sealed class SomeIpConfigCompilerTests
         List<string> services = [];
         for (int i = 0; i < 10; i++)
         {
-            services.Add(_Service(_Method(1, "Get", "[]", "[ \"uint8\" ]"), id: 5000 + i, name: $"Ok{i}"));
+            services.Add(_Service(_Method(1, "Get", "[]", "[ \"uint8\" ]"), id: 5000 + i, name: Invariant($"Ok{i}")));
         }
 
         services.Add(_Service(_Method(1, "Broken", "[ \"uint8\", { \"name\": \"p\", \"type_reference\": \"missing\" }, \"uint16\" ]"), id: 6000, name: "Defective"));
@@ -676,7 +676,7 @@ internal sealed class SomeIpConfigCompilerTests
         {
             string next = i == Levels - 1
                 ? "uint8"
-                : $"L{i + 1}";
+                : Invariant($"L{i + 1}");
             types.Append(CultureInfo.InvariantCulture, $$"""{ "category": "structure", "name": "L{{i}}", "members": [ """);
             types.Append(CultureInfo.InvariantCulture, $$"""{ "name": "a", "type_reference": "{{next}}" }, """);
             types.Append(CultureInfo.InvariantCulture, $$"""{ "name": "b", "type_reference": "{{next}}" } ] },""");
@@ -734,7 +734,8 @@ internal sealed class SomeIpConfigCompilerTests
     [Test]
     public async Task TheSchemaVersionOfEveryExampleHasTheMajorTheLoaderSupports()
     {
-        foreach (string path in ShippedConfigFixture.AllExamplePaths().Where(static p => p.Contains($"{Path.DirectorySeparatorChar}someip{Path.DirectorySeparatorChar}", StringComparison.Ordinal)))
+        foreach (string path in ShippedConfigFixture.AllExamplePaths()
+            .Where(static p => p.Contains(Invariant($"{Path.DirectorySeparatorChar}someip{Path.DirectorySeparatorChar}"), StringComparison.Ordinal)))
         {
             using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
             string version = document.RootElement.GetProperty("schema_version").GetString()!;
@@ -750,7 +751,8 @@ internal sealed class SomeIpConfigCompilerTests
     {
         int variants = 0;
         List<string> failures = [];
-        foreach (string path in ShippedConfigFixture.AllExamplePaths().Where(static p => p.Contains($"{Path.DirectorySeparatorChar}someip{Path.DirectorySeparatorChar}", StringComparison.Ordinal)))
+        foreach (string path in ShippedConfigFixture.AllExamplePaths()
+            .Where(static p => p.Contains(Invariant($"{Path.DirectorySeparatorChar}someip{Path.DirectorySeparatorChar}"), StringComparison.Ordinal)))
         {
             string text = File.ReadAllText(path);
             int slots = _CountSlots(System.Text.Json.Nodes.JsonNode.Parse(text)!);
@@ -772,7 +774,8 @@ internal sealed class SomeIpConfigCompilerTests
                     }
                     catch (Exception ex)
                     {
-                        failures.Add($"{Path.GetFileName(path)} slot {slot} {mutation}: {ex.GetType().Name} at {ex.StackTrace?.Split((char)10)[0].Trim()}");
+                        failures.Add(Invariant($"{Path.GetFileName(path)} slot {slot} {mutation}: ") +
+                            Invariant($"{ex.GetType().Name} at {ex.StackTrace?.Split((char)10)[0].Trim()}"));
                     }
 
                     variants++;

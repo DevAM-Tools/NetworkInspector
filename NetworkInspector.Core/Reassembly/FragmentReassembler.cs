@@ -44,10 +44,10 @@ namespace NetworkInspector.Core.Reassembly;
 /// </typeparam>
 public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TKey>
 {
-    #region Fields
+    #region Configuration and state
 
-    /// <summary>The validated options; fixed for the lifetime of the reassembler.</summary>
-    private readonly FragmentReassemblyOptions _Options;
+    /// <summary>The validated options; replaced only by <see cref="ApplyLimits"/> before the first fragment.</summary>
+    private FragmentReassemblyOptions _Options;
 
     /// <summary>The pools fragment copies and fragment lists are rented from.</summary>
     private readonly FragmentPools _Pools;
@@ -70,13 +70,12 @@ public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TK
     /// <summary>Datagrams dropped because a count or byte limit was reached. Volatile like <see cref="_ReassembledCount"/>.</summary>
     private volatile int _EvictedCount;
 
-    #endregion
-
-    #region Constructor
-
     /// <summary>Initialises a reassembler with validated options.</summary>
     /// <param name="options">The limits and policies; the presets reproduce IPv4 and IPv6.</param>
-    /// <exception cref="ArgumentException"><paramref name="options"/> fail <see cref="FragmentReassemblyOptions.TryValidate"/>; the message names the option. A bad value is a programming error of the owner, not input.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="options"/> fail <see cref="FragmentReassemblyOptions.TryValidate"/>; the message names the option. A bad value is a
+    /// programming error of the owner, not input.
+    /// </exception>
     public FragmentReassembler(in FragmentReassemblyOptions options)
         : this(in options, FragmentPools.Shared)
     {
@@ -86,6 +85,10 @@ public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TK
     /// Initialises a reassembler that rents from <paramref name="pools"/>. Internal: only a test replaces the shared pools,
     /// to make the allocation measurement independent of how many arrays the shared pools happen to retain.
     /// </summary>
+    /// <param name="options">The limits and policies; validated like in the public constructor.</param>
+    /// <param name="pools">The pools fragment copies and lists are rented from; not null.</param>
+    /// <exception cref="ArgumentException"><paramref name="options"/> fail <see cref="FragmentReassemblyOptions.TryValidate"/>.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="pools"/> is null.</exception>
     internal FragmentReassembler(in FragmentReassemblyOptions options, FragmentPools pools)
     {
         if (!options.TryValidate(out string? problem))
@@ -98,9 +101,30 @@ public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TK
         _Pools = pools;
     }
 
+    /// <summary>
+    /// Replaces the open-datagram, stored-byte, and fragment bounds by the current values of the limits of a stack
+    /// (<see cref="FragmentReassemblyOptions.WithLimits"/>); the formats and policies of the options stay. Call it once when the
+    /// owner starts, before the first <c>Add</c>: it is not synchronized with a running parse.
+    /// </summary>
+    /// <param name="limits">The limits of the stack (<see cref="Stack.Limits"/>).</param>
+    /// <exception cref="ArgumentNullException"><paramref name="limits"/> is <see langword="null"/>.</exception>
+    public void ApplyLimits(CoreLimitSet limits)
+    {
+        FragmentReassemblyOptions updated = _Options.WithLimits(limits);
+
+        // The ranges of the limits keep every bound at least 1, so the options stay valid; the check names the option if a range ever
+        // changes in a way that breaks this.
+        if (!updated.TryValidate(out string? problem))
+        {
+            throw new InvalidOperationException(problem);
+        }
+
+        _Options = updated;
+    }
+
     #endregion
 
-    #region Properties
+    #region Counters
 
     /// <summary>Number of open datagrams. Valid on the owner thread.</summary>
     public int PendingCount => _Buffers.Count;
@@ -137,7 +161,7 @@ public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TK
 
     #endregion
 
-    #region Public API
+    #region Fragment intake
 
     /// <summary>
     /// Processes one fragment and reports what happened.
@@ -149,7 +173,10 @@ public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TK
     /// </param>
     /// <param name="moreFragments">False for the last fragment of the datagram.</param>
     /// <param name="data">The fragment bytes; copied, the span is only valid for this call.</param>
-    /// <param name="contributor">An opaque tag kept per stored fragment and returned in offset order on delivery (the owner passes the packet id, which makes the tags the list of contributing packets).</param>
+    /// <param name="contributor">
+    /// An opaque tag kept per stored fragment and returned in offset order on delivery (the owner passes the packet id, which makes the
+    /// tags the list of contributing packets).
+    /// </param>
     /// <returns>The outcome; see <see cref="FragmentOutcome"/>. Never throws for fragment content.</returns>
     public FragmentOutcome Add(in TKey key, long offset, bool moreFragments, ReadOnlySpan<byte> data, int contributor)
     {
@@ -303,13 +330,19 @@ public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TK
 
     #endregion
 
-    #region Private Helpers
+    #region Release and eviction order
 
     /// <summary>
     /// Handles a refusal from the buffer. A datagram that held nothing before is removed again, so a refused fragment never
     /// leaves an empty datagram that occupies a slot. Whether an open datagram survives depends on the reason: a refusal that
     /// makes the datagram impossible releases it, a refusal of only this fragment keeps it.
     /// </summary>
+    /// <param name="buffer">The datagram the fragment was added to; still linked and in the table.</param>
+    /// <param name="created">Whether this call created the datagram.</param>
+    /// <param name="reason">Why the buffer refused the fragment; not <see cref="FragmentDiscardReason.None"/>.</param>
+    /// <param name="flags">Facts collected by the call so far.</param>
+    /// <param name="evicted">Number of datagrams the call evicted so far.</param>
+    /// <returns>The discarded outcome that <see cref="Add"/> returns.</returns>
     private FragmentOutcome _Refuse(
         FragmentBuffer<TKey> buffer,
         bool created,
@@ -329,6 +362,7 @@ public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TK
     }
 
     /// <summary>Releases and unlinks the open datagram of <paramref name="key"/>, if there is one.</summary>
+    /// <param name="key">The datagram identification; a key without an open datagram changes nothing.</param>
     private void _RemoveKey(in TKey key)
     {
         if (_Buffers.TryGetValue(key, out FragmentBuffer<TKey>? buffer))
@@ -338,6 +372,7 @@ public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TK
     }
 
     /// <summary>Releases a datagram: returns its pooled arrays, removes it from the table and from the eviction order.</summary>
+    /// <param name="buffer">An open datagram that is in the table and linked in the eviction order.</param>
     private void _Remove(FragmentBuffer<TKey> buffer)
     {
         _ = _Buffers.Remove(buffer.Key);
@@ -349,6 +384,7 @@ public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TK
     /// <summary>
     /// Evicts the first datagram in eviction order that is not <paramref name="exclude"/> and counts the eviction.
     /// </summary>
+    /// <param name="exclude">The datagram that is being filled and must not be the victim; <see langword="null"/> excludes none.</param>
     /// <returns>False when no other datagram is open.</returns>
     private bool _EvictOne(FragmentBuffer<TKey>? exclude)
     {
@@ -369,6 +405,7 @@ public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TK
     }
 
     /// <summary>Appends a datagram at the tail of the eviction order.</summary>
+    /// <param name="buffer">A datagram that is not linked yet.</param>
     private void _Link(FragmentBuffer<TKey> buffer)
     {
         buffer.Previous = _Tail;
@@ -385,7 +422,8 @@ public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TK
         _Tail = buffer;
     }
 
-    /// <summary>Removes a datagram from the eviction order.</summary>
+    /// <summary>Removes a datagram from the eviction order and clears its links.</summary>
+    /// <param name="buffer">A datagram that is linked.</param>
     private void _Unlink(FragmentBuffer<TKey> buffer)
     {
         if (buffer.Previous is null)
@@ -411,6 +449,7 @@ public sealed class FragmentReassembler<TKey> where TKey : struct, IEquatable<TK
     }
 
     /// <summary>Moves a datagram to the tail of the eviction order (most recently used or newly created).</summary>
+    /// <param name="buffer">A datagram that is linked.</param>
     private void _MoveToTail(FragmentBuffer<TKey> buffer)
     {
         if (ReferenceEquals(_Tail, buffer))

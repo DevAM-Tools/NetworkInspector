@@ -1,0 +1,53 @@
+﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+
+namespace NetworkInspector.Settings;
+
+/// <summary>
+/// Read-only view of a setting group.
+/// <para>
+/// Exposes group metadata and setting enumeration without allowing mutation
+/// (no <see cref="SettingGroup.AddSetting"/>, and settings are returned as
+/// <see cref="ReadOnlySettingView"/> so <see cref="Setting.SetPendingValue"/> is not
+/// reachable). Returned as <see cref="ReadOnlySettingGroupView"/> by
+/// <see cref="IReadOnlySettingsManager"/> so consumers cannot modify groups through
+/// the read-only surface.
+/// </para>
+/// </summary>
+public interface IReadOnlySettingGroup
+{
+    /// <summary>The unique machine-readable name (empty string for default group).</summary>
+    string Name
+    {
+        get;
+    }
+
+    /// <summary>The human-readable display name.</summary>
+    string UiName
+    {
+        get;
+    }
+
+    /// <summary>Optional description.</summary>
+    string? Description
+    {
+        get;
+    }
+
+    /// <summary>Returns true if this is the default group.</summary>
+    bool IsDefaultGroup
+    {
+        get;
+    }
+
+    /// <summary>Returns the number of settings in this group.</summary>
+    int SettingCount
+    {
+        get;
+    }
+
+    /// <summary>Gets a snapshot of all settings in this group as read-only struct views.</summary>
+    IReadOnlyList<ReadOnlySettingView> Settings
+    {
+        get;
+    }
+}

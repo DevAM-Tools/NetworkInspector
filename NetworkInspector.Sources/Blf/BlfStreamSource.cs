@@ -244,7 +244,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
 
         if (!_Started)
         {
-            throw new InvalidOperationException($"{UiName} has not been started. Call Start() first.");
+            throw new InvalidOperationException(Invariant($"{UiName} has not been started. Call Start() first."));
         }
 
         if (_Exhausted)
@@ -344,7 +344,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         if (extraHeaderBytesLong > int.MaxValue)
         {
             throw new BlfException(
-                $"Invalid BLF stream: file header size {fileInfo.HeaderSize} is larger than {int.MaxValue} bytes.");
+                Invariant($"Invalid BLF stream: file header size {fileInfo.HeaderSize} is larger than {int.MaxValue} bytes."));
         }
 
         int extraHeaderBytes = (int)extraHeaderBytesLong;
@@ -465,7 +465,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
                 Kind = FrameReadErrorKind.Other,
-                Message = $"LOBJ object size {rawObjectSize} exceeds maximum buffer size."
+                Message = Invariant($"LOBJ object size {rawObjectSize} exceeds maximum buffer size.")
             });
 
             // The 16-byte header is already consumed. Do not skip the claimed body:
@@ -495,7 +495,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
                 Kind = FrameReadErrorKind.TruncatedStream,
-                Message = $"Stream truncated while reading LOBJ body (type=0x{objectType:X}, expected {bodySize} bytes)."
+                Message = Invariant($"Stream truncated while reading LOBJ body (type=0x{objectType:X}, expected {bodySize} bytes).")
             });
             return false;
         }
@@ -542,7 +542,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
                 Kind = FrameReadErrorKind.MalformedHeader,
-                Message = $"Invalid container header offset {containerHeaderOffset} (headerSize={headerSize})."
+                Message = Invariant($"Invalid container header offset {containerHeaderOffset} (headerSize={headerSize}).")
             });
             return;
         }
@@ -592,7 +592,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                 FrameIndex = _FrameIndex,
                 FileOffset = -1,
                 Kind = FrameReadErrorKind.DecompressionFailure,
-                Message = $"Container decompression failed: {(ex is OutOfMemoryException ? "OutOfMemoryException" : ex.Message)}."
+                Message = Invariant($"Container decompression failed: {(ex is OutOfMemoryException ? "OutOfMemoryException" : ex.Message)}.")
             });
             _PendingContainer = null;
         }
@@ -645,7 +645,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
                         FrameIndex = _FrameIndex,
                         FileOffset = -1,
                         Kind = FrameReadErrorKind.CorruptedBlock,
-                        Message = $"Corrupt object at container offset {_ContainerOffset}, attempting LOBJ magic scan recovery."
+                        Message = Invariant($"Corrupt object at container offset {_ContainerOffset}, attempting LOBJ magic scan recovery.")
                     });
                     // Strict mode: _HandleSkip exhausted the source; drop the container state so nothing is read further.
                     if (_Exhausted)
@@ -795,7 +795,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             FrameIndex = frameId,
             FileOffset = -1,
             Kind = FrameReadErrorKind.Other,
-            Message = $"Frame creation failed for object type 0x{frameResult.ObjectType:X}, channel {frameResult.Channel}."
+            Message = Invariant($"Frame creation failed for object type 0x{frameResult.ObjectType:X}, channel {frameResult.Channel}.")
         });
 
         return null;
@@ -872,7 +872,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
             FrameIndex = _FrameIndex,
             FileOffset = -1,
             Kind = FrameReadErrorKind.MalformedHeader,
-            Message = $"Frame object of type {objectType} could not be parsed (header or payload cut off).",
+            Message = Invariant($"Frame object of type {objectType} could not be parsed (header or payload cut off)."),
         });
     }
 
@@ -1004,7 +1004,7 @@ public sealed class BlfStreamSource : IFrameSource, IErrorTolerantFrameSource
         if (minSize > BlfConstants.MaxBlockReadSize)
         {
             throw new BlfException(
-                $"Object size {minSize} exceeds maximum buffer size of {BlfConstants.MaxBlockReadSize} bytes. The stream data may be corrupt.");
+                Invariant($"Object size {minSize} exceeds maximum buffer size of {BlfConstants.MaxBlockReadSize} bytes. The stream data may be corrupt."));
         }
 
         if (_ReadBuffer.Length < minSize)

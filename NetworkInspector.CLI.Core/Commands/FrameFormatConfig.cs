@@ -129,13 +129,16 @@ internal sealed class FrameFormatConfig
     /// <summary>Creates the listener after <c>ExportTargets.TryPrepare</c>; the option texts go through the Core codec.</summary>
     /// <param name="fullPath">The prepared output path.</param>
     /// <param name="stack">The stack of the session (frame formats do not use it).</param>
+    /// <param name="storedLimit">Returns the stored value of a limit key, or <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the export.</param>
     /// <param name="listener">The listener; <see langword="null"/> on failure.</param>
     /// <param name="error">Why no listener was created; <see langword="null"/> on success.</param>
+    /// <param name="onIgnoredStoredValue">Receives each stored limit that was refused and replaced by the definition default.</param>
     /// <returns><see langword="true"/> when <paramref name="listener"/> is set.</returns>
-    internal bool TryCreate(string fullPath, IStack stack, CancellationToken cancellationToken,
-        [NotNullWhen(true)] out IFrameListener? listener, [NotNullWhen(false)] out PluginError? error) =>
-        FormatSpec.TryCreate(Registration, OptionTexts, fullPath, stack, cancellationToken, out listener, out error);
+    internal bool TryCreate(string fullPath, IStack stack, Func<string, LimitValue?> storedLimit, Action<PluginError> onIgnoredStoredValue,
+        [NotNullWhen(true)] out IFrameListener? listener, [NotNullWhen(false)] out PluginError? error, CancellationToken cancellationToken) =>
+        FormatSpec.TryCreate(Registration, OptionTexts, fullPath, stack, storedLimit, onIgnoredStoredValue, out listener, out error,
+            cancellationToken);
 
     #endregion
 }

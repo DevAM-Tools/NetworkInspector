@@ -596,13 +596,13 @@ internal static class ConvertCommand
 
                 // Sources are plugin code: a failure to open one ends the command with the exit code of OpenSources; the sources
                 // opened so far are in the list and are disposed below.
-                int sourceExit = CliCommandSupport.OpenSources(configs, stack, frames, sources, io);
+                int sourceExit = CliCommandSupport.OpenSources(configs, stack, session.StoredLimit, frames, sources, io);
                 if (sourceExit != (int)ExitCode.Success)
                 {
                     return sourceExit;
                 }
 
-                return _RunLoop(arguments, format, sources, stack, filter, io, token);
+                return _RunLoop(arguments, format, sources, stack, session.StoredLimit, filter, io, token);
             }
             finally
             {
@@ -620,12 +620,13 @@ internal static class ConvertCommand
     /// <param name="format">The output format.</param>
     /// <param name="sources">The opened sources.</param>
     /// <param name="stack">The stack of the session.</param>
+    /// <param name="storedLimit">Returns the stored value of a limit key, or <see langword="null"/>; the format's options start there.</param>
     /// <param name="filter">The compiled filter, or <see langword="null"/>.</param>
     /// <param name="io">Output and error writers.</param>
     /// <param name="token">Cancels the run (Ctrl+C).</param>
     /// <returns>The exit code.</returns>
     private static int _RunLoop(ConvertArguments arguments, FrameFormatConfig format, List<IFrameSource> sources, Stack stack,
-        CliRunFilter? filter, CliIo io, CancellationToken token)
+        Func<string, LimitValue?> storedLimit, CliRunFilter? filter, CliIo io, CancellationToken token)
     {
         // Old outputs that --overwrite moved aside; they are settled in the finally block below, whatever the run did.
         List<TargetReplacement> replacements = [];
@@ -634,7 +635,7 @@ internal static class ConvertCommand
             SplitOutputManager splitManager = new(arguments.OutputPath, arguments.SplitSizeBytes, arguments.SplitCount);
             long totalFrames = RunConvertLoop(
                 sources,
-                path => _CreateListener(format, path, stack, arguments.Overwrite, replacements, token),
+                path => _CreateListener(format, path, stack, storedLimit, arguments.Overwrite, replacements, io, token),
                 splitManager,
                 stack,
                 filter,
@@ -670,7 +671,7 @@ internal static class ConvertCommand
         }
         catch (Exception ex)
         {
-            io.Error.WriteLine($"Error during conversion: {ex.Message}");
+            io.Error.WriteLine(Invariant($"Error during conversion: {ex.Message}"));
             return (int)ExitCode.RuntimeError;
         }
         finally
@@ -690,14 +691,16 @@ internal static class ConvertCommand
     /// <param name="format">The output format.</param>
     /// <param name="path">The path of the output (a split path when splitting).</param>
     /// <param name="stack">The stack of the session.</param>
+    /// <param name="storedLimit">Returns the stored value of a limit key, or <see langword="null"/>; the format's options start there.</param>
     /// <param name="overwrite">Whether an existing output may be replaced.</param>
     /// <param name="replacements">Collects the old outputs that were moved aside; settled after the run.</param>
+    /// <param name="io">Receives the warning lines of stored limits that were ignored.</param>
     /// <param name="token">Cancels the export.</param>
     /// <returns>The listener.</returns>
     /// <exception cref="InvalidOperationException">The target cannot be used or the listener cannot be created.</exception>
     /// <exception cref="CliUsageException">An option text of the format is invalid.</exception>
-    private static IFrameListener _CreateListener(FrameFormatConfig format, string path, Stack stack, bool overwrite,
-        List<TargetReplacement> replacements, CancellationToken token)
+    private static IFrameListener _CreateListener(FrameFormatConfig format, string path, Stack stack,
+        Func<string, LimitValue?> storedLimit, bool overwrite, List<TargetReplacement> replacements, CliIo io, CancellationToken token)
     {
         if (!ExportTargets.TryPrepare(path, isDirectory: false, overwrite, out string? fullPath, out TargetReplacement? replacement,
             out PluginError? targetError))
@@ -710,7 +713,8 @@ internal static class ConvertCommand
             replacements.Add(replacement);
         }
 
-        if (!format.TryCreate(fullPath, stack, token, out IFrameListener? listener, out PluginError? error))
+        if (!format.TryCreate(fullPath, stack, storedLimit, ignored => io.Error.WriteLine("Warning: " + ignored.Message),
+            out IFrameListener? listener, out PluginError? error, token))
         {
             // Nothing was written: the leftover is removed, and the settling after the run gives the old output back.
             string message = CliCommandSupport.AbandonTarget(fullPath, isDirectory: false, error.Value.Message);
@@ -743,10 +747,8 @@ internal static class ConvertCommand
         error.WriteLine("                        (frames are parsed only when a filter is set)");
         error.WriteLine("  --profile <name>      Settings profile (must exist; 'default' is created on first use)");
         error.WriteLine("  --settings-path <dir> Base directory for settings storage");
-        error.WriteLine("  --settings-max-config-file-bytes <bytes>");
-        error.WriteLine("                        Max settings/referenced config JSON size in bytes (default 1073741824). <=0 disables.");
-        error.WriteLine("  --settings-max-json-depth <n>");
-        error.WriteLine("                        Max JSON nesting depth for settings/referenced config (default 1024). <=0 disables.");
+        error.WriteLine("  --set <key>=<value>   Override one setting for this run only, e.g. --set settings.maxFileSize=1GiB (repeatable;");
+        error.WriteLine("                        a limit takes a number with a unit, or off; see ni settings describe --limits)");
         error.WriteLine("  --blf-cache-size <MB> Container cache budget for BLF sources (MiB)");
         error.WriteLine("  --progress <N>        Report progress every N frames");
         error.WriteLine("  --tolerant            Skip malformed frames instead of aborting");

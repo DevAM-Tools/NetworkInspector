@@ -106,7 +106,7 @@ internal sealed class SignalMessageMuxTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_mux_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_mux_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try

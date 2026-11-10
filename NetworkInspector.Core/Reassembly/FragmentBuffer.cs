@@ -8,7 +8,7 @@ namespace NetworkInspector.Core.Reassembly;
 /// on the stored fragments (extent, alignment, datagram count, byte budget) before it calls <see cref="Add"/>.
 /// <para>
 /// <b>Overlap policies.</b> <see cref="FragmentOverlapPolicy.KeepLargestDuplicate"/> keeps the larger of two fragments at the
-/// same offset. This deviates from Linux and BSD (first wins) but matches the historical behavior of several traffic
+/// same offset. This deviates from Linux and BSD (first wins) but matches the behavior of several traffic
 /// analysers: it tolerates a sender that switches to a smaller MTU and re-emits a longer fragment that supersedes the old one.
 /// RFC 791 leaves the strategy open. <see cref="FragmentOverlapPolicy.DiscardDatagram"/> adds the RFC 5722 rule: bytes that
 /// intersect a stored fragment at a different offset poison the buffer and the owner discards the datagram.
@@ -33,7 +33,7 @@ namespace NetworkInspector.Core.Reassembly;
 /// <typeparam name="TKey">The datagram identification key; kept here so the owner can unlink the buffer without a lookup.</typeparam>
 internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
 {
-    #region Fields
+    #region Configuration and state
 
     /// <summary>The pools the fragment copies and the fragment list are rented from (the shared pools unless a test injects its own).</summary>
     private readonly FragmentPools _Pools;
@@ -41,12 +41,17 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
     /// <summary>Stored fragments sorted by start offset; the first <see cref="_Count"/> entries are valid. Pooled, see the class remarks.</summary>
     private FragmentSlot[] _Items = [];
 
+    /// <summary>Number of valid entries at the start of <see cref="_Items"/> (pieces under the first-wins policy).</summary>
     private int _Count;
 
     /// <summary>Total datagram length in bytes; -1 while no last fragment arrived.</summary>
     private int _TotalLength = -1;
 
-    /// <summary>Sum of the stored fragment lengths. Counts overlapping bytes twice under the legacy overlap policies.</summary>
+    /// <summary>
+    /// Sum of the stored fragment lengths. Counts overlapping bytes twice under <see cref="FragmentOverlapPolicy.KeepLargestDuplicate"/>,
+    /// which stores overlaps at different offsets as they are; <see cref="FragmentOverlapPolicy.DiscardDatagram"/> refuses
+    /// them and <see cref="FragmentOverlapPolicy.KeepFirst"/> stores disjoint pieces.
+    /// </summary>
     private long _StoredBytes;
 
     /// <summary>Set when the buffer was contradicted; every later fragment reports the same discard until the owner removes the buffer.</summary>
@@ -54,10 +59,6 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
 
     /// <summary>True when one fragment was stored as several pieces, so a contributor can appear more than once in the list.</summary>
     private bool _HasSplitContributors;
-
-    #endregion
-
-    #region Constructor
 
     /// <summary>Creates an empty buffer for <paramref name="key"/>.</summary>
     /// <param name="key">The datagram identification the owner stores the buffer under.</param>
@@ -67,10 +68,6 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
         Key = key;
         _Pools = pools;
     }
-
-    #endregion
-
-    #region Properties
 
     /// <summary>The datagram identification the owner stores the buffer under.</summary>
     internal TKey Key { get; }
@@ -102,7 +99,7 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
 
     #endregion
 
-    #region Internal API
+    #region Fragment storage
 
     /// <summary>
     /// Stores a fragment according to the overlap policy of <paramref name="options"/>.
@@ -141,6 +138,10 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
 
         return _AddLegacy(start, moreFragments, data, contributor, in options, out totalFixed);
     }
+
+    #endregion
+
+    #region Completion, assembly and release
 
     /// <summary>
     /// Whether the stored fragments cover the byte range <c>[0, total)</c> without a hole. Requires a known total length.
@@ -195,7 +196,7 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
         // Holes cannot occur here because IsComplete reported contiguous coverage, so every byte is written.
         byte[] result = new byte[_TotalLength];
 
-        // Copy each fragment into its position; under the legacy policies a later fragment overwrites overlapping bytes.
+        // Copy each fragment into its position; under KeepLargestDuplicate a later fragment overwrites overlapping bytes.
         for (int i = 0; i < _Count; i++)
         {
             FragmentSlot fragment = _Items[i];
@@ -379,12 +380,20 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
 
     #endregion
 
-    #region Private Helpers
+    #region Overlap policies
 
     /// <summary>
-    /// The legacy rules of IPv4 (largest duplicate wins, overlaps stored as they are) and IPv6 (an overlap discards the
-    /// datagram, RFC 5722), moved here unchanged.
+    /// Stores a fragment under <see cref="FragmentOverlapPolicy.KeepLargestDuplicate"/> (largest duplicate wins, overlaps
+    /// at different offsets are stored as they are) or <see cref="FragmentOverlapPolicy.DiscardDatagram"/> (an overlap at a
+    /// different offset poisons the buffer, RFC 5722). The two differ only in the overlap check.
     /// </summary>
+    /// <param name="start">Byte offset of the fragment.</param>
+    /// <param name="moreFragments">False for the last fragment of the datagram.</param>
+    /// <param name="data">The fragment bytes; copied.</param>
+    /// <param name="contributor">The opaque tag stored with the fragment.</param>
+    /// <param name="options">The options of the owner (fragment count limit and overlap policy are read here).</param>
+    /// <param name="totalFixed">True when this call fixed the total length.</param>
+    /// <returns><see cref="FragmentDiscardReason.None"/> when accepted, otherwise the reason it was refused.</returns>
     private FragmentDiscardReason _AddLegacy(
         int start,
         bool moreFragments,
@@ -484,6 +493,14 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
     /// First-wins storage: only the parts of the fragment that no stored fragment covers are stored, so the stored fragments
     /// stay pairwise disjoint and the result never depends on a later arrival.
     /// </summary>
+    /// <param name="start">Byte offset of the fragment.</param>
+    /// <param name="moreFragments">False for the last fragment of the datagram.</param>
+    /// <param name="data">The fragment bytes; the uncovered parts are copied.</param>
+    /// <param name="contributor">The opaque tag stored with every piece.</param>
+    /// <param name="options">The options of the owner (the fragment count limit is read here).</param>
+    /// <param name="overlapConflict">True when covered bytes differ from the kept bytes.</param>
+    /// <param name="totalFixed">True when this call fixed the total length.</param>
+    /// <returns><see cref="FragmentDiscardReason.None"/> when accepted, otherwise the reason it was refused.</returns>
     private FragmentDiscardReason _AddKeepFirst(
         int start,
         bool moreFragments,
@@ -558,6 +575,13 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
     /// Stores the uncovered pieces of <c>[start, end)</c>, compares the covered bytes with the kept ones, and enforces the
     /// fragment count limit before it changes anything.
     /// </summary>
+    /// <param name="start">Offset of the first byte of the fragment.</param>
+    /// <param name="end">Offset behind the last byte of the fragment; greater than <paramref name="start"/>.</param>
+    /// <param name="data">The fragment bytes; the uncovered parts are copied.</param>
+    /// <param name="contributor">The opaque tag stored with every piece.</param>
+    /// <param name="options">The options of the owner (the fragment count limit is read here).</param>
+    /// <param name="overlapConflict">True when covered bytes differ from the kept bytes.</param>
+    /// <returns><see cref="FragmentDiscardReason.None"/> when stored (or fully covered), otherwise the reason it was refused.</returns>
     private FragmentDiscardReason _StoreUncovered(
         int start,
         int end,
@@ -652,6 +676,17 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
         return FragmentDiscardReason.None;
     }
 
+    #endregion
+
+    #region Sorted list maintenance
+
+    /// <summary>Inserts the part <c>[pieceStart, pieceEnd)</c> of a fragment as its own entry.</summary>
+    /// <param name="index">Position in the sorted list where the entry is inserted.</param>
+    /// <param name="pieceStart">Datagram offset of the first byte of the piece.</param>
+    /// <param name="pieceEnd">Datagram offset behind the last byte of the piece.</param>
+    /// <param name="dataStart">Datagram offset of the first byte of <paramref name="data"/>.</param>
+    /// <param name="data">The whole fragment; the piece is a slice of it and is copied.</param>
+    /// <param name="contributor">The opaque tag stored with the piece.</param>
     private void _InsertPiece(int index, int pieceStart, int pieceEnd, int dataStart, ReadOnlySpan<byte> data, int contributor) =>
         _Insert(index, pieceStart, data.Slice(pieceStart - dataStart, pieceEnd - pieceStart), contributor);
 
@@ -659,6 +694,9 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
     /// The insert position for <paramref name="start"/> scanning from the tail, or the index of the fragment that already
     /// starts there.
     /// </summary>
+    /// <param name="start">The datagram offset to find.</param>
+    /// <param name="duplicate">True when a stored fragment starts at <paramref name="start"/>; the result is then its index.</param>
+    /// <returns>The index of the duplicate, or the index where a fragment at <paramref name="start"/> is inserted.</returns>
     private int _FindPosition(int start, out bool duplicate)
     {
         int i = _Count;
@@ -677,6 +715,10 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
     /// Copies <paramref name="data"/> into a pooled array and inserts it at <paramref name="index"/>. The array may be longer
     /// than the data, so the real length is kept in the fragment; it is returned (and zeroed) in <see cref="Release"/>.
     /// </summary>
+    /// <param name="index">Position in the sorted list; later entries move up by one.</param>
+    /// <param name="start">Datagram offset of the first byte of <paramref name="data"/>.</param>
+    /// <param name="data">The bytes to store; copied.</param>
+    /// <param name="contributor">The opaque tag stored with the entry.</param>
     private void _Insert(int index, int start, ReadOnlySpan<byte> data, int contributor)
     {
         if (_Count == _Items.Length)
@@ -708,6 +750,7 @@ internal sealed class FragmentBuffer<TKey> where TKey : struct, IEquatable<TKey>
     /// Returns a fragment copy to its pool, zeroed first (<c>clearArray: true</c>) so captured payload bytes do
     /// not linger in pooled arrays that other code may rent later.
     /// </summary>
+    /// <param name="buffer">A fragment copy rented from <see cref="FragmentPools.Bytes"/>; not used after this call.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _ReturnData(byte[] buffer) =>
         _Pools.Bytes.Return(buffer, clearArray: true);

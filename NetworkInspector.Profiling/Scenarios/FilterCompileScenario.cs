@@ -36,7 +36,7 @@ internal sealed class FilterCompileScenario : IProfilingScenario
     public string Name => "filter-compile";
 
     /// <inheritdoc/>
-    public string Description => FormattableString.Invariant(
+    public string Description => Invariant(
         $"Filter.Compile of four expressions in rotation, {CompilesPerIteration} compiles per iteration.");
 
     /// <inheritdoc/>
@@ -63,7 +63,7 @@ internal sealed class FilterCompileScenario : IProfilingScenario
             if (!compiled.IsSuccess)
             {
                 throw new InvalidOperationException(
-                    FormattableString.Invariant($"Failed to compile '{expression}': {compiled.Error.Message}"));
+                    Invariant($"Failed to compile '{expression}': {compiled.Error.Message}"));
             }
         }
     }

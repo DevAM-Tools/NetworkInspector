@@ -11,13 +11,11 @@ namespace NetworkInspector.Core.Reassembly;
 /// </summary>
 public sealed class PatternResyncHeuristic : IResyncHeuristic
 {
-    #region Fields
-
+    /// <summary>
+    /// The byte sequence that marks a sync point. A private copy that is never written after construction, so the
+    /// heuristic stays immutable and thread-safe.
+    /// </summary>
     private readonly byte[] _Pattern;
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>Creates a new <see cref="PatternResyncHeuristic"/> that searches for <paramref name="pattern"/>.</summary>
     /// <param name="pattern">The byte sequence to search for. Must be non-null and non-empty. The array is copied defensively.</param>
@@ -33,10 +31,6 @@ public sealed class PatternResyncHeuristic : IResyncHeuristic
         // Defensive copy: caller-side mutations must not alter the heuristic after construction.
         _Pattern = (byte[])pattern.Clone();
     }
-
-    #endregion
-
-    #region Public API
 
     /// <inheritdoc/>
     public ResyncResult Resync(ReadOnlySpan<byte> data)
@@ -56,6 +50,4 @@ public sealed class PatternResyncHeuristic : IResyncHeuristic
         }
         return ResyncResult.Failure;
     }
-
-    #endregion
 }

@@ -32,7 +32,7 @@ internal sealed class ExportJsonScenario : ExportScenarioBase<Packet>
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Export {_Batch:N0} parsed IPv6/UDP packets as JSON (Compact) → MemoryStream per iteration.");
 
     /// <inheritdoc/>

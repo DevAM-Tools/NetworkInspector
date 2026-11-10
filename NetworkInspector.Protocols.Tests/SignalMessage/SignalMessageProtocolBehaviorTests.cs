@@ -26,7 +26,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
             }
             """;
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_short_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_short_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
@@ -84,7 +84,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_lazy_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_lazy_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
@@ -158,7 +158,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_raw_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_raw_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
@@ -228,7 +228,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_enum_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_enum_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
@@ -293,14 +293,14 @@ internal sealed class SignalMessageProtocolBehaviorTests
             }
             """;
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_desc_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_desc_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
 
-            using SettingsManager settings = new(Path.GetTempPath());
+            using SettingsManager settings = new(Path.GetTempPath(), CoreSettingsLayout.Instance);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             _ = SignalMessageRegistration.Register(builder);
@@ -349,13 +349,13 @@ internal sealed class SignalMessageProtocolBehaviorTests
             }
             """;
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_ftype_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_ftype_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new(Path.GetTempPath());
+            using SettingsManager settings = new(Path.GetTempPath(), CoreSettingsLayout.Instance);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             _ = SignalMessageRegistration.Register(builder);
@@ -393,13 +393,13 @@ internal sealed class SignalMessageProtocolBehaviorTests
             }
             """;
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_copy_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_copy_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new(Path.GetTempPath());
+            using SettingsManager settings = new(Path.GetTempPath(), CoreSettingsLayout.Instance);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             _ = SignalMessageRegistration.Register(builder);
@@ -449,7 +449,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_left_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_left_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
@@ -510,7 +510,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_muxmiss_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_muxmiss_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
@@ -566,7 +566,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_txt_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_txt_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
@@ -618,7 +618,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_txtu_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_txtu_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
@@ -669,7 +669,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_txtw_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_txtw_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
@@ -721,7 +721,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_txtm_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_txtm_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
@@ -764,13 +764,13 @@ internal sealed class SignalMessageProtocolBehaviorTests
     public async Task Register_MaxEnumValuesZero_ReturnsWarning()
     {
         string json = """{ "messages": [] }""";
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_max0_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_max0_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new(Path.GetTempPath());
+            using SettingsManager settings = new(Path.GetTempPath(), CoreSettingsLayout.Instance);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             settings.PreloadValue(SignalMessageRegistration.MaxEnumValuesSetting, 0UL);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
@@ -804,13 +804,13 @@ internal sealed class SignalMessageProtocolBehaviorTests
             }
             """;
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_diag_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_diag_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new(Path.GetTempPath());
+            using SettingsManager settings = new(Path.GetTempPath(), CoreSettingsLayout.Instance);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             List<SettingsLoadWarning> warnings = [.. SignalMessageRegistration.Register(builder)];
@@ -865,7 +865,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_wide_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_wide_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
@@ -926,7 +926,7 @@ internal sealed class SignalMessageProtocolBehaviorTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_widemiss_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_widemiss_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
@@ -970,13 +970,13 @@ internal sealed class SignalMessageProtocolBehaviorTests
             }
             """;
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_dupname_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_spdu_dupname_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new(Path.GetTempPath());
+            using SettingsManager settings = new(Path.GetTempPath(), CoreSettingsLayout.Instance);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             builder.RegisterProtocol(new NamedStubProtocol("dup_sm"));

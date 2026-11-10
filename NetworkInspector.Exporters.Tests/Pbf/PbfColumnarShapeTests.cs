@@ -91,7 +91,7 @@ internal sealed class PbfColumnarShapeTests
 
         foreach ((ExportShape shape, bool expectTopology) in new[] { (ExportShape.AllFields, false), (ExportShape.Hierarchy, true) })
         {
-            string path = dir.FilePath($"{shape}.pbf");
+            string path = dir.FilePath(Invariant($"{shape}.pbf"));
             using (PbfExporter exporter = _Build(path, new ExportContent { Shape = shape }))
             {
                 _ = TreeFreeFeed.Run(exporter, ShapeFrames.TunnelUdpCan());

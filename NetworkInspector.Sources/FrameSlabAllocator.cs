@@ -98,7 +98,7 @@ internal sealed class FrameSlabAllocator
             throw new ArgumentOutOfRangeException(
                 paramName,
                 slabSize,
-                $"FrameSlabSize must be 0 (off) or between {MinSlabSize} and {MaxSlabSize} bytes.");
+                Invariant($"FrameSlabSize must be 0 (off) or between {MinSlabSize} and {MaxSlabSize} bytes."));
         }
 
         return slabSize;

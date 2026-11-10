@@ -214,12 +214,12 @@ internal sealed class CachedFrameSourceTests
                     Frame? cached = source.FrameById(frames[i].Id);
                     if (cached is null)
                     {
-                        throw new InvalidOperationException($"FrameById returned null for frame {i}");
+                        throw new InvalidOperationException(Invariant($"FrameById returned null for frame {i}"));
                     }
 
                     if (!cached.Value.Data.Span.SequenceEqual(frames[i].Data.Span))
                     {
-                        throw new InvalidOperationException($"Frame data mismatch at index {i}");
+                        throw new InvalidOperationException(Invariant($"Frame data mismatch at index {i}"));
                     }
                 }
             }));

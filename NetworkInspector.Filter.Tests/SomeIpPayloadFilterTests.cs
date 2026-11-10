@@ -47,7 +47,7 @@ internal sealed class SomeIpPayloadFilterTests
         Directory.CreateDirectory(directory);
         File.WriteAllText(Path.Combine(directory, "someip.json"), _Config);
 #pragma warning disable CA2000 // Ownership of the settings manager transfers to the stack.
-        SettingsManager manager = new(directory);
+        SettingsManager manager = new(directory, CoreSettingsLayout.Instance);
 #pragma warning restore CA2000
         manager.PreloadValue("someip.config_file", "someip.json");
         StackBuilder builder = new(manager, new FrameInterfaceRegistry());
@@ -71,7 +71,7 @@ internal sealed class SomeIpPayloadFilterTests
     [Test]
     public async Task TheNamesOfTheDescriptionSelectTheRequestAndOtherValuesDoNot()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         using Stack stack = _Build(directory);
         try
         {
@@ -100,7 +100,7 @@ internal sealed class SomeIpPayloadFilterTests
     [Test]
     public async Task AServiceAndAMethodNameSelectTheirMessagesAndCombineWithTheMessageType()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         using Stack stack = _Build(directory);
         try
         {
@@ -133,7 +133,7 @@ internal sealed class SomeIpPayloadFilterTests
     [Test]
     public async Task AFilterOnServiceOrMethodLeavesThePayloadUnmaterializedAndAValueFilterOpensIt()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         using Stack stack = _Build(directory);
         try
         {
@@ -165,7 +165,7 @@ internal sealed class SomeIpPayloadFilterTests
     [Test]
     public async Task TheFilterInputCompletesServiceMethodAndElementNames()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         using Stack stack = _Build(directory);
         try
         {
@@ -190,7 +190,7 @@ internal sealed class SomeIpPayloadFilterTests
     [Test]
     public async Task AFilterOnATlvMemberSelectsOnlyTheMessageThatCarriesItAndOpensNoOtherPayload()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-filter-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         using Stack stack = _Build(directory);
         try
         {

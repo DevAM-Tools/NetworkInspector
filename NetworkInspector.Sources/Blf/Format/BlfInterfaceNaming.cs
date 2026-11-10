@@ -99,7 +99,7 @@ internal static class BlfInterfaceNaming
             return name;
         }
 
-        return $"{BusName(objectType)} {channel}";
+        return Invariant($"{BusName(objectType)} {channel}");
     }
 
     /// <summary>Interface properties: channel, object type, bus type, and the Ethernet hardware channel when present.</summary>

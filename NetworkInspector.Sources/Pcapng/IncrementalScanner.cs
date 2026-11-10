@@ -327,19 +327,19 @@ internal sealed class IncrementalScanner
         // here a violation throws because a file whose first block is unusable has no frames to keep.
         if (!PcapPadding.TryRoundBlockLength(blockLength, out uint roundedLength))
         {
-            throw new PcapException($"SHB block length {blockLength} cannot be rounded to a multiple of 4.");
+            throw new PcapException(Invariant($"SHB block length {blockLength} cannot be rounded to a multiple of 4."));
         }
 
         blockLength = roundedLength;
         if (blockLength < PcapConstants.ShbFixedSize)
         {
-            throw new PcapException($"SHB block length {blockLength} is less than minimum {PcapConstants.ShbFixedSize}.");
+            throw new PcapException(Invariant($"SHB block length {blockLength} is less than minimum {PcapConstants.ShbFixedSize}."));
         }
 
         if (blockLength > PcapConstants.MaxBlockSize)
         {
             throw new PcapException(
-                $"SHB block length {blockLength} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap.");
+                Invariant($"SHB block length {blockLength} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap."));
         }
 
         // Fetch the complete SHB. Length is already capped and aligned.
@@ -533,7 +533,7 @@ internal sealed class IncrementalScanner
             if (!PcapPadding.TryRoundBlockLength(blockLength, out uint roundedLength))
             {
                 return _ExhaustCorrupt(
-                    $"PCAPNG block length {blockLength} cannot be rounded to a multiple of 4.",
+                    Invariant($"PCAPNG block length {blockLength} cannot be rounded to a multiple of 4."),
                     FrameReadErrorKind.CorruptedBlock,
                     out frame);
             }
@@ -542,7 +542,7 @@ internal sealed class IncrementalScanner
             if (blockLength < PcapConstants.MinBlockSize)
             {
                 return _ExhaustCorrupt(
-                    $"PCAPNG block length {blockLength} is below the minimum block size.",
+                    Invariant($"PCAPNG block length {blockLength} is below the minimum block size."),
                     FrameReadErrorKind.CorruptedBlock,
                     out frame);
             }
@@ -555,7 +555,7 @@ internal sealed class IncrementalScanner
             if (blockLength > PcapConstants.MaxBlockSize)
             {
                 return _ExhaustCorrupt(
-                    $"Block length {blockLength} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap.",
+                    Invariant($"Block length {blockLength} exceeds the {PcapConstants.MaxBlockSize / (1024 * 1024)} MiB safety cap."),
                     FrameReadErrorKind.CorruptedBlock,
                     out frame);
             }

@@ -340,15 +340,18 @@ public static class ProtocolRegistration
         // accepted only when its type is defined and its payload fits the frame size limit of the direction (16384 until the
         // peer announces more), so encrypted bytes on a port that usually carries TLS are not buffered as a "frame".
         // Limits: MaxPduSize is header plus the largest payload the format allows (2^24 - 1, a format fact: the peer may
-        // announce a larger frame size limit in SETTINGS); MaxBufferSize 16 MiB bounds the bytes held per direction (threat:
-        // a peer that announces a huge limit and never completes a frame). Constants of this registration code, not
-        // user-configurable; open by default compared with the defaults, like HTTP/1, because frames above 16 KiB are legal
-        // once announced. Exceeding the buffer limit drops the frame in progress and reports tcp.error.reassembly_limit.
+        // announce a larger frame size limit in SETTINGS); MaxBufferSize bounds the bytes held per direction (threat: a peer
+        // that announces a huge limit and never completes a frame). It is 16 MiB, raised to the PDU size because a maximal
+        // frame (16 MiB + 8 bytes) could never complete in a buffer of exactly 16 MiB: the registration refuses a buffer
+        // smaller than the PDU. Constants of this registration code, not user-configurable; open by default compared with
+        // the defaults, like HTTP/1, because frames above 16 KiB are legal once announced. Exceeding the buffer limit drops
+        // the frame in progress and reports tcp.error.reassembly_limit.
+        const int http2MaxPduSize = Http2FrameHeader.Size + Http2FrameDetector.AbsoluteMaxFrameSize;
         builder.RegisterStreamReassemblyConfig(http2Id, new StreamReassemblyConfig
         {
             BoundaryDetector = new Http2FrameDetector(),
-            MaxPduSize = Http2FrameHeader.Size + Http2FrameDetector.AbsoluteMaxFrameSize,
-            MaxBufferSize = 16 * 1024 * 1024,
+            MaxPduSize = http2MaxPduSize,
+            MaxBufferSize = Math.Max(16 * 1024 * 1024, http2MaxPduSize),
         });
         #endregion
 

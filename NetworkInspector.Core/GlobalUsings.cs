@@ -35,10 +35,18 @@ global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Index;
 global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Interfaces;
+global using NetworkInspector.Core.Limits;
+global using NetworkInspector.Limits;
+global using NetworkInspector.Limits.Utility;
 global using NetworkInspector.Core.Protocols;
 global using NetworkInspector.Core.Reassembly;
 global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Settings;
 global using NetworkInspector.Core.Tables;
 global using NetworkInspector.Core.ValueCaches;
 global using NetworkInspector.Values;
+#endregion
+
+#region Formatting
+global using static InvariantStringHelper.InvariantText;
 #endregion

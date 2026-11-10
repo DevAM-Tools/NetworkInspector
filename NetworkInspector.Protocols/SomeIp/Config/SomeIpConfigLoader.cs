@@ -69,8 +69,8 @@ internal static class SomeIpConfigLoader
     }
 
     /// <summary>
-    /// Deserializes a document from a caller-owned stream; the stream is not closed. The host does not bound a caller-owned
-    /// stream (documented on <see cref="JsonConfigStream"/>): a caller that passes untrusted bytes bounds them first.
+    /// Deserializes a document from a caller-owned stream; the stream is not closed. The read is bounded by the default limits of
+    /// <see cref="JsonConfigStream"/> (the largest file and the deepest nesting).
     /// </summary>
     /// <param name="stream">Readable stream at the start of the JSON.</param>
     /// <param name="config">The deserialized document on success.</param>
@@ -81,32 +81,21 @@ internal static class SomeIpConfigLoader
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(warnings);
 
-        try
+        // JsonConfigStream turns every refusal of the content into the warning, including an unknown type discriminator and a
+        // token of the wrong type, so a refused document never becomes an exception at registration.
+        if (!JsonConfigStream.TryLoad(
+                stream,
+                SomeIpConfigJsonContext.Default.SomeIpConfig,
+                GroupName,
+                ConfigFileSetting,
+                out config,
+                out SettingsLoadWarning? warning))
         {
-            if (!JsonConfigStream.TryLoad(
-                    stream,
-                    SomeIpConfigJsonContext.Default.SomeIpConfig,
-                    GroupName,
-                    ConfigFileSetting,
-                    out config,
-                    out SettingsLoadWarning? warning))
-            {
-                warnings.Add(warning!.Value); // TryLoad sets the warning whenever it returns false
-                return false;
-            }
-
-            return true;
-        }
-        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or FormatException)
-        {
-            // Defense in depth for file content: the serializer can report an unknown type discriminator as
-            // NotSupportedException, and a token of the wrong type from a reader accessor as InvalidOperationException or
-            // FormatException. The converters check their tokens, but a refused document must never become an exception
-            // at registration, whichever layer notices it, so it is the same class of defect as any other refused structure.
-            config = null;
-            warnings.Add(_Warning(SettingsLoadWarningKind.DeserializationError, ex.Message));
+            warnings.Add(warning!.Value); // TryLoad sets the warning whenever it returns false
             return false;
         }
+
+        return true;
     }
 
     /// <summary>

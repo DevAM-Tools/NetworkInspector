@@ -11,8 +11,6 @@ namespace NetworkInspector.Core.Errors;
 /// </summary>
 public abstract class RegistrationException : Exception
 {
-    #region Constructors
-
     /// <summary>Creates a new registration exception with the specified message.</summary>
     /// <param name="message">Message text; must not contain secrets.</param>
     protected RegistrationException(string message) : base(message) { }
@@ -22,6 +20,4 @@ public abstract class RegistrationException : Exception
     /// <param name="innerException">The exception that caused this one.</param>
     protected RegistrationException(string message, Exception innerException)
         : base(message, innerException) { }
-
-    #endregion
 }

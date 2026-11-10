@@ -204,7 +204,7 @@ internal sealed class SampleTextListener : IPacketListener, IExporterStatistics,
             return written;
         }
 
-        string text = value.ToString();
+        string text = value.ToString(null, CultureInfo.InvariantCulture);
         writer.Write(text);
         return text.Length;
     }

@@ -3,7 +3,8 @@
 namespace NetworkInspector.Core.Protocols;
 
 /// <summary>
-/// Packet protocol — the top-level entry point called by <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>.
+/// Packet protocol — the top-level entry point called by
+/// <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>.
 /// <para>Responsibilities:</para>
 /// <list type="number">
 ///   <item>Appends packet metadata fields (id, timestamp, frame source id) eagerly to the tree.</item>
@@ -26,14 +27,10 @@ namespace NetworkInspector.Core.Protocols;
 /// </summary>
 internal sealed class PacketProtocol : IProtocol
 {
-    #region Protocol Name Constants
+    #region Configuration and state
 
     /// <summary>Machine-readable protocol name constant. Matches <see cref="Name"/>.</summary>
     internal const string ProtocolName = "packet";
-
-    #endregion
-
-    #region Index Group
 
     /// <summary>Index group for always-present packet fields.</summary>
     private const string _PacketIndexGroup = ProtocolName;
@@ -41,29 +38,25 @@ internal sealed class PacketProtocol : IProtocol
     /// <summary>Index group for leftover bytes the frame protocol did not consume.</summary>
     private const string _UnparsedIndexGroup = "packet.unparsed";
 
-    #endregion
-
-    #region Field IDs
-
-    /// <summary>Container field for the packet metadata subtree.</summary>
+    /// <summary>The <c>packet</c> container field: parent of the packet metadata fields.</summary>
     private FieldId _PacketFieldId;
 
-    /// <summary>Unique packet identifier.</summary>
+    /// <summary>The <c>packet.id</c> field: the id under which the stack counted this parse.</summary>
     private FieldId _IdFieldId;
 
-    /// <summary>Packet capture timestamp.</summary>
+    /// <summary>The <c>packet.timestamp</c> field: the capture time of the frame.</summary>
     private FieldId _TimestampFieldId;
 
-    /// <summary>Frame source identifier (maps to capture interface/source).</summary>
+    /// <summary>The <c>packet.frame_source_id</c> field: the capture interface or source that delivered the frame.</summary>
     private FieldId _FrameSourceIdFieldId;
 
-    /// <summary>Packet info/summary string (set by sub-protocols during parsing).</summary>
+    /// <summary>The <c>packet.info</c> field: the lazy summary line that sub-protocols fill through the packet info setters.</summary>
     private FieldId _InfoFieldId;
 
-    /// <summary>Trailing bytes the frame protocol did not consume.</summary>
+    /// <summary>The <c>packet.unparsed_data</c> field: the trailing bytes the frame protocol did not consume.</summary>
     private FieldId _UnparsedDataFieldId;
 
-    /// <summary>Index group ID for cross-packet indexing.</summary>
+    /// <summary>Id of the index group that records presence of the always-present packet fields.</summary>
     private IndexGroupId _PacketGroupId;
 
     /// <summary>Index group recorded only when <c>packet.unparsed_data</c> is appended.</summary>
@@ -71,7 +64,7 @@ internal sealed class PacketProtocol : IProtocol
 
     #endregion
 
-    #region IProtocol Implementation
+    #region Registration
 
     /// <inheritdoc/>
     public string Name => ProtocolName;
@@ -86,6 +79,9 @@ internal sealed class PacketProtocol : IProtocol
     /// Registers packet-level fields and the index group.
     /// Called during stack building from <see cref="StackBuilder"/>.
     /// </summary>
+    /// <param name="builder">The builder that registers the fields and index groups.</param>
+    /// <param name="protocolId">The id this protocol received; the owner of the registered fields.</param>
+    /// <remarks>Runs once per stack build, before any parse; <see cref="Parse"/> reads the stored ids without further checks.</remarks>
     internal void RegisterWith(IStackBuilder builder, ProtocolId protocolId)
     {
         _PacketGroupId = builder.GetOrCreateIndexGroup(_PacketIndexGroup);
@@ -116,11 +112,15 @@ internal sealed class PacketProtocol : IProtocol
             "Trailing bytes the frame protocol did not consume");
     }
 
+    #endregion
+
+    #region Parse
+
     /// <inheritdoc/>
     public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
     {
         Packet packet = parentField.Packet;
-        Stack stack = context.Stack!;
+        Stack stack = context.Stack!; // Invariant: the packet protocol is only called by Packet, which always passes its stack.
 
         // Record index group presence for cross-packet indexing (no-op when the parse has no index).
         context.RecordGroupPresence(_PacketGroupId);
@@ -160,7 +160,7 @@ internal sealed class PacketProtocol : IProtocol
                     frameSucceeded = true;
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException) // Error policy: see Packet.MaterializeLazyField.
             {
                 // Record main-dispatch exception as a packet error using the same
                 // IncludeExceptionStackTrace policy as the outer parse guard (Packet.BuildCaughtExceptionText).
@@ -186,31 +186,44 @@ internal sealed class PacketProtocol : IProtocol
                     packet.SetError(postError.ToString());
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException) // Error policy: see Packet.MaterializeLazyField.
             {
                 packet.RecordCaughtError(0, Packet.BuildCaughtExceptionText(ex, stack.IncludeExceptionStackTrace));
             }
         }
 
-        // Keep the bytes the frame protocol left over (only after a successful dispatch: after an error the consumed
-        // count is unknown, so no tail can be derived). The slice shares the frame memory, no copy.
-        if (frameSucceeded && frameConsumed < data.Length)
+        // The tree can be at the regular field limit here: a dissector hit it and its error was recorded above. The two trailing
+        // fields of this protocol must then not throw. A throw would leave Parse and reach the outer guard of the parse, which
+        // treats it as an aborted parse and rolls back the index entry of a packet that was parsed. Rejected: reserving two more
+        // slots below the limit for every packet (it would lower the capacity of all packets for a rare case). Residual: such a
+        // packet has no packet.info field; Packet.Info falls back to InfoLazy.
+        try
         {
-            context.RecordGroupPresence(_UnparsedGroupId);
-            packetContainer.Append(_UnparsedDataFieldId, FieldValue.NewBytes(data[frameConsumed..]));
-        }
+            // Keep the bytes the frame protocol left over (only after a successful dispatch: after an error the consumed
+            // count is unknown, so no tail can be derived). The slice shares the frame memory, no copy.
+            if (frameSucceeded && frameConsumed < data.Length)
+            {
+                context.RecordGroupPresence(_UnparsedGroupId);
+                packetContainer.Append(_UnparsedDataFieldId, FieldValue.NewBytes(data[frameConsumed..]));
+            }
 
-        // After dispatch and post-parsers: append packet.info as a lazy string value.
-        // Sub-protocols set Packet.InfoLazy (a LazyString) via SetPacketInfo during parsing.
-        // The LazyString is stored boxed in the field value (a heap-resident reference), so its factory is not
-        // evaluated here: the summary text is built only on first access via Packet.Info,
-        // TryGetFieldValue("packet.info"), or any exporter that reads the field value, and packets whose info is never
-        // read never pay for the string. The boxed LazyString caches the result in-heap, so all copies of the
-        // FieldValueData share one factory invocation.
-        // The storage index is recorded so Packet.Info can read the field directly; in Skip mode this is a no-op and
-        // Info falls back to Packet.InfoLazy.
-        MutField infoField = packetContainer.Append(_InfoFieldId, FieldValue.NewLazyString(packet.InfoLazy));
-        packet.SetInfoFieldIndex(infoField.StorageIndex);
+            // After dispatch and post-parsers: append packet.info as a lazy string value.
+            // Sub-protocols set Packet.InfoLazy (a LazyString) via SetPacketInfo during parsing.
+            // The LazyString is stored boxed in the field value (a heap-resident reference), so its factory is not
+            // evaluated here: the summary text is built only on first access via Packet.Info,
+            // TryGetFieldValue("packet.info"), or any exporter that reads the field value, and packets whose info is never
+            // read never pay for the string. The boxed LazyString caches the result in-heap, so all copies of the
+            // FieldValueData share one factory invocation.
+            // The storage index is recorded so Packet.Info can read the field directly; in Skip mode this is a no-op and
+            // Info falls back to Packet.InfoLazy.
+            MutField infoField = packetContainer.Append(_InfoFieldId, FieldValue.NewLazyString(packet.InfoLazy));
+            packet.SetInfoFieldIndex(infoField.StorageIndex);
+        }
+        catch (FieldAppendException ex)
+        {
+            // Uses the slot that the regular limit keeps free; when that slot is taken, the earlier limit error stands.
+            packet.RecordCaughtError(0, Packet.BuildCaughtExceptionText(ex, stack.IncludeExceptionStackTrace));
+        }
 
         // The packet protocol accounts for the whole buffer: the unconsumed tail (if any) is stored as packet.unparsed_data
         // above and dispatch errors are stored as packet.error fields, so the full length is reported as consumed.

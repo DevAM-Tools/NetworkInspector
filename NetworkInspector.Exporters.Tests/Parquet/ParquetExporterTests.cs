@@ -254,13 +254,13 @@ internal sealed class ParquetExporterTests
         await Assert.That(dnsNameFieldId).IsGreaterThanOrEqualTo(0)
             .Because("the DNS query packets must produce a dns.qry.name string field");
 
-        string fieldPath = Path.Combine(outputPath, "fields", $"field_{dnsNameFieldId}.parquet");
+        string fieldPath = Path.Combine(outputPath, "fields", Invariant($"field_{dnsNameFieldId}.parquet"));
         string[] values = await _ReadStringColumn(fieldPath, "value");
         await Assert.That(values.Length).IsEqualTo(3);
         await Assert.That(values[0]).IsEqualTo("example.com");
         await Assert.That(values[1]).IsEqualTo("example.com");
         await Assert.That(values[2]).IsEqualTo("other.example.org");
-        await Assert.That(File.Exists(Path.Combine(outputPath, "fields", $"field_{dnsNameFieldId}_value_dict.parquet"))).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(outputPath, "fields", Invariant($"field_{dnsNameFieldId}_value_dict.parquet")))).IsFalse();
     }
 
     [Test]
@@ -506,8 +506,8 @@ internal sealed class ParquetExporterTests
 
         await Assert.That(fieldId).IsGreaterThanOrEqualTo(0);
         await Assert.That(row).IsGreaterThanOrEqualTo(0);
-        await Assert.That(tableNames[row]).IsEqualTo($"field_{fieldId}");
-        await Assert.That(File.Exists(Path.Combine(outputPath, "fields", $"field_{fieldId}.parquet"))).IsTrue();
+        await Assert.That(tableNames[row]).IsEqualTo(Invariant($"field_{fieldId}"));
+        await Assert.That(File.Exists(Path.Combine(outputPath, "fields", Invariant($"field_{fieldId}.parquet")))).IsTrue();
     }
 
     /// <summary>The other write order: the structure row comes first, then the batch with the value; the value row replaces it.</summary>
@@ -536,7 +536,7 @@ internal sealed class ParquetExporterTests
         int row = Array.IndexOf(names, ValueOrStructureFieldCapture.FieldName);
 
         await Assert.That(row).IsGreaterThanOrEqualTo(0);
-        await Assert.That(tableNames[row]).IsEqualTo($"field_{fieldId}");
+        await Assert.That(tableNames[row]).IsEqualTo(Invariant($"field_{fieldId}"));
     }
 
     #endregion
@@ -641,11 +641,11 @@ internal sealed class ParquetExporterTests
         await Assert.That(ids.Length).IsEqualTo(protocols.Length);
 
         // A recurrence must be explainable from the failure message alone: the whole read column next to the whole expectation.
-        string idContext = $"read ids [{string.Join(',', ids)}], stack ids [{string.Join(',', _ProtocolIds(protocols))}]";
+        string idContext = Invariant($"read ids [{string.Join(',', ids)}], stack ids [{string.Join(',', _ProtocolIds(protocols))}]");
         for (int i = 0; i < ids.Length; i++)
         {
             ProtocolInfo info = protocols.Span[i];
-            await Assert.That(ids[i]).IsEqualTo(info.Id.Value).Because($"row {i} of protocol_id; {idContext}");
+            await Assert.That(ids[i]).IsEqualTo(info.Id.Value).Because(Invariant($"row {i} of protocol_id; {idContext}"));
             await Assert.That(names[i]).IsEqualTo(info.Name);
             await Assert.That(uiNames[i]).IsEqualTo(info.UiName);
         }

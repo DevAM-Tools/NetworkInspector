@@ -35,7 +35,7 @@ internal sealed class ExportShapeEquivalenceTests
     private static List<string> _Rows(string path, bool hierarchy)
     {
         List<string> lines = [];
-        using DuckDBConnection connection = new($"Data Source={path}");
+        using DuckDBConnection connection = new(Invariant($"Data Source={path}"));
         connection.Open();
         foreach (string name in _Names)
         {
@@ -45,7 +45,7 @@ internal sealed class ExportShapeEquivalenceTests
             command.CommandText =
                 "SELECT DENSE_RANK() OVER (ORDER BY packet_id) - 1, ROW_NUMBER() OVER (PARTITION BY packet_id ORDER BY " + order + ") - 1, "
                 + "CAST(value AS VARCHAR), custom_repr, custom_text "
-                + $"FROM field_{id} ORDER BY packet_id, 2";
+                + Invariant($"FROM field_{id} ORDER BY packet_id, 2");
             using DuckDBDataReader reader = command.ExecuteReader();
             while (reader.Read())
             {

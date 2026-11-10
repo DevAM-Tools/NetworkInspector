@@ -134,7 +134,7 @@ internal sealed class SignalMessageFlexRayTests
             .CreateWithFixedValues()
             .EmitFrame(ReadOnlySpan<byte>.Empty);
 
-        string jsonDir = Path.Combine(Path.GetTempPath(), "ni_signal_message_flexray_" + Guid.NewGuid().ToString("N"));
+        string jsonDir = Path.Combine(Path.GetTempPath(), "ni_signal_message_flexray_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(jsonDir);
         string jsonPath = Path.Combine(jsonDir, "signal_message.json");
         try

@@ -157,7 +157,7 @@ internal sealed class ParsePlanCliTests
         long[] lengths = [.. File.ReadAllLines(all).Skip(1).Select(static line => long.Parse(line.Split(',')[^1], CultureInfo.InvariantCulture))];
         long threshold = lengths.OrderBy(static length => length).ElementAt(lengths.Length / 2);
         CliResult filtered = await sandbox.RunAsync("export", _Source, "-o", some, "-f", "csv:fields=udp.length,text=false,repr=false",
-            "--filter", $"udp.length >= {threshold}");
+            "--filter", Invariant($"udp.length >= {threshold}"));
 
         long[] kept = [.. File.ReadAllLines(some).Skip(1).Select(static line => long.Parse(line.Split(',')[^1], CultureInfo.InvariantCulture))];
 

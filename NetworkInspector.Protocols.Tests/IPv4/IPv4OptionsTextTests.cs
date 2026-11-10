@@ -38,7 +38,7 @@ internal sealed class IPv4OptionsTextTests
 
         string name = Protocols.Helpers.DisplayTables.GetIpOptionTypeName(0x07);
 
-        await _AssertText(_Ipv4WithOptions(options), "ip.opt.record_route", $"{name} (11 bytes, 2 entries)").ConfigureAwait(false);
+        await _AssertText(_Ipv4WithOptions(options), "ip.opt.record_route", Invariant($"{name} (11 bytes, 2 entries)")).ConfigureAwait(false);
     }
 
     [Test]
@@ -48,7 +48,7 @@ internal sealed class IPv4OptionsTextTests
 
         string name = Protocols.Helpers.DisplayTables.GetIpOptionTypeName(0x94);
 
-        await _AssertText(_Ipv4WithOptions(options), "ip.opt.router_alert", $"{name}: Unknown (4660)").ConfigureAwait(false);
+        await _AssertText(_Ipv4WithOptions(options), "ip.opt.router_alert", Invariant($"{name}: Unknown (4660)")).ConfigureAwait(false);
     }
 
     [Test]
@@ -75,7 +75,7 @@ internal sealed class IPv4OptionsTextTests
 
         string name = Protocols.Helpers.DisplayTables.GetIpOptionTypeName(0x82);
 
-        await _AssertText(_Ipv4WithOptions(options), "ip.opt.security", $"{name} (4 bytes)").ConfigureAwait(false);
+        await _AssertText(_Ipv4WithOptions(options), "ip.opt.security", Invariant($"{name} (4 bytes)")).ConfigureAwait(false);
     }
 
     [Test]
@@ -85,7 +85,7 @@ internal sealed class IPv4OptionsTextTests
 
         string name = Protocols.Helpers.DisplayTables.GetIpOptionTypeName(0x88);
 
-        await _AssertText(_Ipv4WithOptions(options), "ip.opt.stream_id", $"{name}: 4660").ConfigureAwait(false);
+        await _AssertText(_Ipv4WithOptions(options), "ip.opt.stream_id", Invariant($"{name}: 4660")).ConfigureAwait(false);
     }
 
     // The FrameBuilder has no AH layer, so the frame is written out: Ethernet II (IPv6), a fixed IPv6 header whose

@@ -61,6 +61,8 @@ public interface IStack
     #region Protocol Access
 
     /// <summary>Gets protocol info by ID. Returns <c>null</c> if the ID is out of range.</summary>
+    /// <param name="id">The protocol id.</param>
+    /// <returns>The protocol metadata, or <see langword="null"/> when <paramref name="id"/> is out of range.</returns>
     ProtocolInfo? GetProtocol(ProtocolId id);
 
     /// <summary>
@@ -68,6 +70,9 @@ public interface IStack
     /// A null <paramref name="name"/> throws <see cref="ArgumentNullException"/>; a name that is
     /// not registered returns <see langword="null"/>.
     /// </summary>
+    /// <param name="name">The registered protocol name (exact, case-sensitive).</param>
+    /// <returns>The protocol id, or <see langword="null"/> when no protocol has that name.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
     ProtocolId? GetProtocolId(string name);
 
     /// <summary>All registered protocols.</summary>
@@ -87,6 +92,8 @@ public interface IStack
     #region Field Access
 
     /// <summary>Gets field info by ID. Returns <c>null</c> if the ID is out of range.</summary>
+    /// <param name="id">The field id.</param>
+    /// <returns>The field metadata, or <see langword="null"/> when <paramref name="id"/> is out of range.</returns>
     FieldInfo? GetField(FieldId id);
 
     /// <summary>
@@ -102,6 +109,9 @@ public interface IStack
     /// fallback.
     /// </para>
     /// </summary>
+    /// <param name="name">The canonical field name (exact, case-sensitive); an alias name is not found.</param>
+    /// <returns>The field id, or <see langword="null"/> when no canonical field has that name.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
     FieldId? GetFieldId(string name);
 
     /// <summary>All registered fields.</summary>
@@ -120,6 +130,8 @@ public interface IStack
     /// Gets the index group assigned to a field. Returns <see cref="IndexGroupId.Invalid"/> if the field has no group
     /// or the ID is out of range, so callers that need to tell the two apart must check the field ID first.
     /// </summary>
+    /// <param name="fieldId">The field id.</param>
+    /// <returns>The index group id, or <see cref="IndexGroupId.Invalid"/> when the field has no group or the id is out of range.</returns>
     IndexGroupId GetFieldIndexGroup(FieldId fieldId);
 
     #endregion
@@ -134,6 +146,8 @@ public interface IStack
     /// <see cref="GetFieldId(string)"/> is unaffected and never resolves alias names.
     /// </para>
     /// </summary>
+    /// <param name="id">The alias group id.</param>
+    /// <returns>The alias group metadata, or <see langword="null"/> when <paramref name="id"/> is out of range.</returns>
     FieldAliasGroupInfo? GetFieldAliasGroup(FieldAliasGroupId id);
 
     /// <summary>
@@ -141,6 +155,9 @@ public interface IStack
     /// A null <paramref name="name"/> throws <see cref="ArgumentNullException"/>; a name that is
     /// not registered returns <see langword="null"/>.
     /// </summary>
+    /// <param name="name">The alias name (exact, case-sensitive).</param>
+    /// <returns>The alias group id, or <see langword="null"/> when no alias group has that name.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
     FieldAliasGroupId? GetFieldAliasGroupId(string name);
 
     /// <summary>All registered field alias groups.</summary>
@@ -160,6 +177,8 @@ public interface IStack
     #region Index Group Access
 
     /// <summary>Gets index group info by ID. Returns <c>null</c> if the ID is out of range.</summary>
+    /// <param name="id">The index group id.</param>
+    /// <returns>The index group metadata, or <see langword="null"/> when <paramref name="id"/> is out of range.</returns>
     IndexGroupInfo? GetIndexGroup(IndexGroupId id);
 
     /// <summary>
@@ -167,6 +186,9 @@ public interface IStack
     /// A null <paramref name="name"/> throws <see cref="ArgumentNullException"/>; a name that is
     /// not registered returns <see langword="null"/>.
     /// </summary>
+    /// <param name="name">The index group name (exact, case-sensitive).</param>
+    /// <returns>The index group id, or <see langword="null"/> when no group has that name.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
     IndexGroupId? GetIndexGroupId(string name);
 
     /// <summary>All registered index groups.</summary>
@@ -186,6 +208,8 @@ public interface IStack
     #region Protocol Table Access
 
     /// <summary>Gets protocol table info by ID. Returns <c>null</c> if the ID is out of range.</summary>
+    /// <param name="id">The protocol table id.</param>
+    /// <returns>The table metadata, or <see langword="null"/> when <paramref name="id"/> is out of range.</returns>
     ProtocolTableInfo? GetProtocolTableInfo(ProtocolTableId id);
 
     /// <summary>
@@ -193,6 +217,9 @@ public interface IStack
     /// A null <paramref name="name"/> throws <see cref="ArgumentNullException"/>; a name that is
     /// not registered returns <see langword="null"/>.
     /// </summary>
+    /// <param name="name">The protocol table name (exact, case-sensitive).</param>
+    /// <returns>The table id, or <see langword="null"/> when no table has that name.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
     ProtocolTableId? GetProtocolTableId(string name);
 
     /// <summary>All registered protocol tables.</summary>
@@ -246,6 +273,8 @@ public interface IStack
     #region Heuristic Table Access
 
     /// <summary>Gets heuristic table info by ID. Returns <c>null</c> if the ID is out of range.</summary>
+    /// <param name="id">The heuristic table id.</param>
+    /// <returns>The table metadata, or <see langword="null"/> when <paramref name="id"/> is out of range.</returns>
     HeuristicProtocolTableInfo? GetHeuristicProtocolTableInfo(HeuristicProtocolTableId id);
 
     /// <summary>
@@ -253,6 +282,9 @@ public interface IStack
     /// A null <paramref name="name"/> throws <see cref="ArgumentNullException"/>; a name that is
     /// not registered returns <see langword="null"/>.
     /// </summary>
+    /// <param name="name">The heuristic table name (exact, case-sensitive).</param>
+    /// <returns>The table id, or <see langword="null"/> when no heuristic table has that name.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
     HeuristicProtocolTableId? GetHeuristicProtocolTableId(string name);
 
     /// <summary>All registered heuristic protocol tables.</summary>
@@ -291,6 +323,7 @@ public interface IStack
     /// Returns <c>null</c> if the protocol has no reassembly config registered.
     /// </summary>
     /// <param name="protocolId">The protocol to query.</param>
+    /// <returns>The configuration, or <see langword="null"/> when the protocol registered none.</returns>
     StreamReassemblyConfig? GetStreamReassemblyConfig(ProtocolId protocolId);
 
     #endregion
@@ -308,6 +341,9 @@ public interface IStack
     /// the table-entry iterators (<see cref="Stack.GetU64TableEntries"/> etc.).
     /// </para>
     /// </summary>
+    /// <param name="tableId">The u64-keyed dispatch table.</param>
+    /// <param name="key">The key to look up.</param>
+    /// <returns>The protocols registered for the key in registration order; empty when there are none. A view into the stack's data.</returns>
     ReadOnlySpan<ProtocolId> GetProtocolsFromU64ProtocolTable(ProtocolTableId tableId, ulong key);
 
     /// <summary>
@@ -320,6 +356,9 @@ public interface IStack
     /// the table-entry iterators (<see cref="Stack.GetStringTableEntries"/> etc.).
     /// </para>
     /// </summary>
+    /// <param name="tableId">The string-keyed dispatch table.</param>
+    /// <param name="key">The key to look up.</param>
+    /// <returns>The protocols registered for the key in registration order; empty when there are none. A view into the stack's data.</returns>
     ReadOnlySpan<ProtocolId> GetProtocolsFromStringProtocolTable(ProtocolTableId tableId, string key);
 
     /// <summary>
@@ -332,6 +371,9 @@ public interface IStack
     /// the table-entry iterators (<see cref="Stack.GetBytesTableEntries"/> etc.).
     /// </para>
     /// </summary>
+    /// <param name="tableId">The bytes-keyed dispatch table.</param>
+    /// <param name="key">The key to look up.</param>
+    /// <returns>The protocols registered for the key in registration order; empty when there are none. A view into the stack's data.</returns>
     ReadOnlySpan<ProtocolId> GetProtocolsFromBytesProtocolTable(ProtocolTableId tableId, BytesKey key);
 
     /// <summary>
@@ -344,6 +386,9 @@ public interface IStack
     /// the table-entry iterators (<see cref="Stack.GetBoolTableEntries"/> etc.).
     /// </para>
     /// </summary>
+    /// <param name="tableId">The bool-keyed dispatch table.</param>
+    /// <param name="key">The key to look up.</param>
+    /// <returns>The protocols registered for the key in registration order; empty when there are none. A view into the stack's data.</returns>
     ReadOnlySpan<ProtocolId> GetProtocolsFromBoolProtocolTable(ProtocolTableId tableId, bool key);
 
     /// <summary>
@@ -355,18 +400,24 @@ public interface IStack
     /// <see cref="Stack.GetAnyTableProtocolIds"/>.
     /// </para>
     /// </summary>
+    /// <param name="tableId">The Any-keyed dispatch table.</param>
+    /// <returns>The protocols registered in the table in registration order; empty when there are none. A view into the stack's data.</returns>
     ReadOnlySpan<ProtocolId> GetProtocolsFromAnyProtocolTable(ProtocolTableId tableId);
 
     /// <summary>
     /// Runs all registered heuristic parsers in the given heuristic dispatch table against
     /// <paramref name="data"/> and returns the <see cref="ProtocolId"/> of the first match,
-    /// or <see langword="null"/> if the table does not exist or no parser matches.
+    /// or reports no match when the table does not exist or no parser matches.
     /// <para>
     /// Intended for per-packet use in protocols that need to cache the detected protocol ID
     /// on connection state before dispatching.
     /// </para>
     /// </summary>
-    ProtocolId? TryMatchHeuristic(HeuristicProtocolTableId tableId, ReadOnlyMemory<byte> data);
+    /// <param name="tableId">The heuristic table; an unknown id finds nothing.</param>
+    /// <param name="data">The bytes to test.</param>
+    /// <param name="protocolId">The matching protocol on success; <see cref="ProtocolId.Invalid"/> otherwise.</param>
+    /// <returns><see langword="true"/> when a parser matched; <see langword="false"/> when the table does not exist or nothing matched.</returns>
+    bool TryMatchHeuristic(HeuristicProtocolTableId tableId, ReadOnlyMemory<byte> data, out ProtocolId protocolId);
 
     /// <summary>
     /// Resolves a <see cref="ProtocolId"/> to its concrete <see cref="ParseDelegate"/>.
@@ -378,6 +429,8 @@ public interface IStack
     /// the stack.
     /// </para>
     /// </summary>
+    /// <param name="id">The protocol id.</param>
+    /// <returns>The delegate, or <see langword="null"/> when the id is invalid or the protocol has no parse delegate.</returns>
     ParseDelegate? ResolveParseDelegate(ProtocolId id);
 
     #endregion
@@ -393,6 +446,8 @@ public interface IStack
     /// of <see cref="ProtocolId"/> values registered for that key (usually one entry).
     /// </para>
     /// </summary>
+    /// <param name="tableId">The u64-keyed dispatch table.</param>
+    /// <returns>The entries, or <see langword="null"/> when the table does not exist or is not u64-keyed.</returns>
     IEnumerable<KeyValuePair<ulong, ReadOnlyMemory<ProtocolId>>>? GetU64TableEntries(ProtocolTableId tableId);
 
     /// <summary>
@@ -403,6 +458,8 @@ public interface IStack
     /// dispatch caches.
     /// </para>
     /// </summary>
+    /// <param name="tableId">The string-keyed dispatch table.</param>
+    /// <returns>The entries, or <see langword="null"/> when the table does not exist or is not string-keyed.</returns>
     IEnumerable<KeyValuePair<string, ReadOnlyMemory<ProtocolId>>>? GetStringTableEntries(ProtocolTableId tableId);
 
     /// <summary>
@@ -413,6 +470,8 @@ public interface IStack
     /// dispatch caches.
     /// </para>
     /// </summary>
+    /// <param name="tableId">The bytes-keyed dispatch table.</param>
+    /// <returns>The entries, or <see langword="null"/> when the table does not exist or is not bytes-keyed.</returns>
     IEnumerable<KeyValuePair<BytesKey, ReadOnlyMemory<ProtocolId>>>? GetBytesTableEntries(ProtocolTableId tableId);
 
     /// <summary>
@@ -424,6 +483,8 @@ public interface IStack
     /// dispatch caches.
     /// </para>
     /// </summary>
+    /// <param name="tableId">The bool-keyed dispatch table.</param>
+    /// <returns>The entries, or <see langword="null"/> when the table does not exist or is not bool-keyed.</returns>
     IEnumerable<KeyValuePair<bool, ReadOnlyMemory<ProtocolId>>>? GetBoolTableEntries(ProtocolTableId tableId);
 
     /// <summary>
@@ -434,6 +495,8 @@ public interface IStack
     /// dispatch caches.
     /// </para>
     /// </summary>
+    /// <param name="tableId">The Any-keyed dispatch table.</param>
+    /// <returns>The protocol ids in registration order, or <see langword="null"/> when the table does not exist or is not Any-keyed.</returns>
     ReadOnlyMemory<ProtocolId>? GetAnyTableProtocolIds(ProtocolTableId tableId);
 
     #endregion

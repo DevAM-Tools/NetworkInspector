@@ -59,8 +59,8 @@ internal sealed class BuiltInPluginTests
         await Assert.That(report.Plugins.Count).IsEqualTo(4);
         foreach (PluginRecord record in report.Plugins)
         {
-            await Assert.That($"{record.Name}:{record.State}:{record.BuiltIn}:{record.Tier}:{record.License}:{record.Version}")
-                .IsEqualTo($"{record.Name}:Loaded:True:Core:MIT:{_ExpectedVersion()}");
+            await Assert.That(Invariant($"{record.Name}:{record.State}:{record.BuiltIn}:{record.Tier}:{record.License}:{record.Version}"))
+                .IsEqualTo(Invariant($"{record.Name}:Loaded:True:Core:MIT:{_ExpectedVersion()}"));
             await Assert.That(record.Dependencies).IsEmpty();
         }
 

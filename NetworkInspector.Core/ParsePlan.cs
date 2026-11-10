@@ -22,18 +22,30 @@ namespace NetworkInspector.Core;
 /// </summary>
 public sealed class ParsePlan
 {
-    #region Fields
+    #region Configuration and state
 
-    // Distinct requested field ids over all watches; -1 when a watch accepts everything. Describes the plan only.
+    /// <summary>
+    /// Number of distinct requested field ids over all watches; -1 when a watch accepts everything. Describes the plan for
+    /// <see cref="ToString"/> only; the parse itself reads <see cref="Options"/>.
+    /// </summary>
     private readonly int _RequestedFieldCount;
+
+    /// <summary>Number of demands that carry an observer; the length of <c>Options.Observers</c>.</summary>
     private readonly int _ObserverCount;
+
+    /// <summary>Whether <see cref="Options"/> carries a value cache; read by <see cref="ToString"/>.</summary>
     private readonly bool _HasCache;
+
+    /// <summary>Whether <see cref="Options"/> carries a packet index; read by <see cref="ToString"/>.</summary>
     private readonly bool _HasIndex;
 
-    #endregion
-
-    #region Construction
-
+    /// <summary>Creates a plan from the combined result of <see cref="TryCreate"/>; nothing is validated here.</summary>
+    /// <param name="depth">The combined depth.</param>
+    /// <param name="options">The options every parse of the run uses.</param>
+    /// <param name="observerCount">Number of observers in <paramref name="options"/>.</param>
+    /// <param name="requestedFieldCount">Distinct requested field ids, or -1 when a watch accepts everything.</param>
+    /// <param name="hasCache">Whether <paramref name="options"/> carries a value cache.</param>
+    /// <param name="hasIndex">Whether <paramref name="options"/> carries a packet index.</param>
     private ParsePlan(ParseDepth depth, ParseOptions options, int observerCount, int requestedFieldCount, bool hasCache, bool hasIndex)
     {
         Depth = depth;
@@ -43,10 +55,6 @@ public sealed class ParsePlan
         _HasCache = hasCache;
         _HasIndex = hasIndex;
     }
-
-    #endregion
-
-    #region Properties
 
     /// <summary>The combined depth.</summary>
     public ParseDepth Depth { get; }
@@ -62,7 +70,7 @@ public sealed class ParsePlan
 
     #endregion
 
-    #region Public API
+    #region Combining demands
 
     /// <summary>
     /// Combines <paramref name="demands"/>. Expected failures (two different caches or indexes, a cache of another stack, a
@@ -71,7 +79,7 @@ public sealed class ParsePlan
     /// </summary>
     /// <param name="stack">The stack every packet of the run is parsed on.</param>
     /// <param name="demands">Zero or more demands; order defines the observer order.</param>
-    /// <param name="plan">The plan on success.</param>
+    /// <param name="plan">The plan on success; null on false.</param>
     /// <param name="error">The failure on false; <see cref="ParsePlanErrorCode.None"/> on success.</param>
     /// <returns><see langword="true"/> when a plan was created.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="stack"/> is null.</exception>
@@ -152,6 +160,16 @@ public sealed class ParsePlan
 
             if (demand.Index is { } demandIndex)
             {
+                // Same rule as for the cache: the parser refuses an index of another stack per packet
+                // (ParseFailure.IndexStackMismatch), so the plan refuses it once, before the run starts.
+                if (!ReferenceEquals(demandIndex.Stack, stack))
+                {
+                    error = new ParsePlanError(
+                        ParsePlanErrorCode.IndexStackMismatch,
+                        string.Create(CultureInfo.InvariantCulture, $"Demand {i} has a packet index of another stack."));
+                    return false;
+                }
+
                 if (index is not null && !ReferenceEquals(index, demandIndex))
                 {
                     error = new ParsePlanError(
@@ -215,6 +233,10 @@ public sealed class ParsePlan
         return true;
     }
 
+    #endregion
+
+    #region Description
+
     /// <summary>
     /// One line for verbose output: <c>none</c>, <c>fields only, no tree (2 fields, 1 observer)</c>,
     /// <c>fields only, no tree (all fields, 1 observer)</c>, <c>packet only, no tree</c> (depth Packet without observer:
@@ -222,6 +244,7 @@ public sealed class ParsePlan
     /// (<c>field tree</c> when no observer exists), followed by <c>, value cache</c> and <c>, index</c> when present. The field
     /// count is the number of requested fields (before the extraction watch widens them), distinct over all observers.
     /// </summary>
+    /// <returns>The description line; allocates a few small strings, so it belongs to verbose output, not to a per-packet path.</returns>
     public override string ToString()
     {
         if (Depth == ParseDepth.None)
@@ -293,4 +316,7 @@ public enum ParsePlanErrorCode
 
     /// <summary>Two demands carry the same observer instance.</summary>
     DuplicateObserver = 6,
+
+    /// <summary>A demand's packet index was created for another stack.</summary>
+    IndexStackMismatch = 7,
 }

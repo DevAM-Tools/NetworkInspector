@@ -1,5 +1,10 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
+#region Formatting
+// netstandard2.0 has no interpolated string handler overload: FormattableString.Invariant is the invariant form here.
+global using static System.FormattableString;
+#endregion
+
 #region System
 global using System;
 global using System.Collections.Generic;

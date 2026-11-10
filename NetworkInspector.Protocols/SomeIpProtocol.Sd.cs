@@ -481,10 +481,12 @@ public sealed partial class SomeIpProtocol
             string summary = eventgroupEntry
                 ? string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{typeName} (Service ID {new HexId(service)}{serviceSuffix}, Instance ID {new HexId(instance)}, Eventgroup ID {new HexId(eventgroup)}{_EventgroupSuffix(eventgroup, eventgroupName)}, Options: {references})")
+                    $"{typeName} (Service ID {new HexId(service)}{serviceSuffix}, Instance ID {new HexId(instance)}, Eventgroup ID {new HexId(
+                        eventgroup)}{_EventgroupSuffix(eventgroup, eventgroupName)}, Options: {references})")
                 : string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{typeName} (Service ID {new HexId(service)}{serviceSuffix}, Instance ID {new HexId(instance)}, Version {major}.{BinaryPrimitives.ReadUInt32BigEndian(entry[12..])}, Options: {references})");
+                    $"{typeName} (Service ID {new HexId(service)}{serviceSuffix}, Instance ID {new HexId(
+                        instance)}, Version {major}.{BinaryPrimitives.ReadUInt32BigEndian(entry[12..])}, Options: {references})");
 
             MutField field = _Entries.AppendWithCustomText(
                 _Owner._SdEntryFieldId, FieldValue.NewBytes(_Bytes.Slice(offset, entry.Length)), new LazyString(summary));
@@ -552,7 +554,8 @@ public sealed partial class SomeIpProtocol
                     IPv4Address address = IPv4Address.FromBytes(option.Slice(4, 4));
                     byte protocol = option[9];
                     ushort port = BinaryPrimitives.ReadUInt16BigEndian(option[10..]);
-                    field = _AppendOptionContainer(offset, option.Length, string.Create(CultureInfo.InvariantCulture, $"{typeName} ({address}:{port} ({_ProtocolWord(protocol)}))"));
+                    field = _AppendOptionContainer(offset, option.Length,
+                        string.Create(CultureInfo.InvariantCulture, $"{typeName} ({address}:{port} ({_ProtocolWord(protocol)}))"));
                     _AppendOptionHead(in field, option, type);
                     field.Append(_Owner._SdOptionIpv4FieldId, FieldValue.NewIPv4(address));
 
@@ -568,7 +571,8 @@ public sealed partial class SomeIpProtocol
                     IPv6Address address = IPv6Address.FromBytes(option.Slice(4, 16));
                     byte protocol = option[21];
                     ushort port = BinaryPrimitives.ReadUInt16BigEndian(option[22..]);
-                    field = _AppendOptionContainer(offset, option.Length, string.Create(CultureInfo.InvariantCulture, $"{typeName} ([{address}]:{port} ({_ProtocolWord(protocol)}))"));
+                    field = _AppendOptionContainer(offset, option.Length,
+                        string.Create(CultureInfo.InvariantCulture, $"{typeName} ([{address}]:{port} ({_ProtocolWord(protocol)}))"));
                     _AppendOptionHead(in field, option, type);
                     field.Append(_Owner._SdOptionIpv6FieldId, FieldValue.NewIPv6(address));
 

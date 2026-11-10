@@ -126,7 +126,7 @@ internal sealed class CliRunFilter
                 reason = failure.Message;
             }
 
-            error.WriteLine($"Error: filter evaluation failed: {reason}");
+            error.WriteLine(Invariant($"Error: filter evaluation failed: {reason}"));
             matched = false;
             return false;
         }

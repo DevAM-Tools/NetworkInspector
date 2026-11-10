@@ -30,7 +30,7 @@ internal sealed class ExportBlfScenario : ExportScenarioBase<Frame>
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Export {_Batch:N0} IPv6/UDP frames as BLF → MemoryStream per iteration.");
 
     /// <inheritdoc/>

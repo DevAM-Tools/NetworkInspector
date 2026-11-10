@@ -260,7 +260,7 @@ internal sealed class CacheTests
         // Fill A1in beyond its 25-entry limit (with unit weigher)
         for (int i = 0; i < 50; i++)
         {
-            cache.Put(i, $"v{i}");
+            cache.Put(i, Invariant($"v{i}"));
         }
 
         // Total should not exceed 100
@@ -359,7 +359,7 @@ internal sealed class CacheTests
         // Insert 5 entries
         for (int i = 1; i <= 5; i++)
         {
-            cache.Put(i, $"v{i}");
+            cache.Put(i, Invariant($"v{i}"));
         }
 
         // Evict key 1 by inserting key 6
@@ -385,7 +385,7 @@ internal sealed class CacheTests
     {
         TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(10);
 
-        string value = cache.GetOrAdd(42, static key => $"value-{key}");
+        string value = cache.GetOrAdd(42, static key => Invariant($"value-{key}"));
 
         await Assert.That(value).IsEqualTo("value-42");
         await Assert.That(cache.Count).IsEqualTo(1);
@@ -410,7 +410,7 @@ internal sealed class CacheTests
     {
         TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(10);
 
-        string value = cache.GetOrAdd(7, static (key, prefix) => $"{prefix}-{key}", "prefix");
+        string value = cache.GetOrAdd(7, static (key, prefix) => Invariant($"{prefix}-{key}"), "prefix");
 
         await Assert.That(value).IsEqualTo("prefix-7");
         await Assert.That(cache.TryGet(7, out string? cached)).IsTrue();
@@ -621,16 +621,6 @@ internal sealed class CacheTests
     }
 
     [Test]
-    public async Task LinkedMap_MoveToFront_MissAndHit()
-    {
-        LinkedMap<string, int> map = new();
-        map.InsertFront("a", 1);
-
-        await Assert.That(map.MoveToFront("missing")).IsFalse();
-        await Assert.That(map.MoveToFront("a")).IsTrue();
-    }
-
-    [Test]
     public async Task LinkedMap_ContainsKey_ReflectsMembership()
     {
         LinkedMap<string, int> map = new();
@@ -674,7 +664,7 @@ internal sealed class CacheTests
         TwoQueueCache<int, string> cache = TwoQueueCache.CreateBounded<int, string>(10);
         cache.Put(7, "cached");
 
-        string value = cache.GetOrAdd(7, static (_, arg) => $"new-{arg}", "ignored");
+        string value = cache.GetOrAdd(7, static (_, arg) => Invariant($"new-{arg}"), "ignored");
 
         await Assert.That(value).IsEqualTo("cached");
     }

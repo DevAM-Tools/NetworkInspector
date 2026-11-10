@@ -13,7 +13,7 @@ internal sealed class FilterIndexedNomatchScenario : FilterScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Classic no-match \"{Expression}\" with index prune on UDP-only traffic.");
 
     /// <inheritdoc/>

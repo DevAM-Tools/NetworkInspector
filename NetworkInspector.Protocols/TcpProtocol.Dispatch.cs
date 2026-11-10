@@ -358,9 +358,19 @@ public sealed partial class TcpProtocol
         // owner's, so the segments that follow are framed too.
         if (!result.TryGetConsumed(out _) && _HeuristicTableId.IsValid)
         {
-            ProtocolId? matched = analysis.ConnectionState?.HeuristicProtocolId
-                ?? context.Stack?.TryMatchHeuristic(_HeuristicTableId, payload);
-            if (matched is ProtocolId heuristicOwner)
+            ProtocolId? cached = analysis.ConnectionState?.HeuristicProtocolId;
+            ProtocolId heuristicOwner = ProtocolId.Invalid;
+            bool matched = cached is not null;
+            if (cached is ProtocolId connectionOwner)
+            {
+                heuristicOwner = connectionOwner;
+            }
+            else if (context.Stack is { } contentStack)
+            {
+                matched = contentStack.TryMatchHeuristic(_HeuristicTableId, payload, out heuristicOwner);
+            }
+
+            if (matched)
             {
                 if (analysis.ConnectionState is not null)
                 {
@@ -876,7 +886,7 @@ public sealed partial class TcpProtocol
     {
         parentField.Append(_ReassemblyLimitFieldId, FieldValue.NewString(string.Create(
             CultureInfo.InvariantCulture,
-            $"TCP reassembly limit (MaxBufferSize or MaxPduSize) reached: {discardedBytes} buffered bytes of the message in progress were dropped")));
+            $"TCP reassembly limit reached (settings reassembly.maxStreamBufferSize, reassembly.maxStreamPduSize, reassembly.maxStreamRebases): {discardedBytes} buffered bytes of the message in progress were dropped")));
         context.RecordGroupPresence(_TcpErrorGroupId);
     }
 

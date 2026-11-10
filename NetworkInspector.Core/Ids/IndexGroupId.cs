@@ -23,18 +23,11 @@ namespace NetworkInspector.Core.Ids;
 [method: MethodImpl(MethodImplOptions.AggressiveInlining)]
 public readonly struct IndexGroupId(int value) : IEquatable<IndexGroupId>, IComparable<IndexGroupId>
 {
-    #region Constants
-
     /// <summary>Sentinel value representing an invalid/unassigned index group ID.</summary>
     public static readonly IndexGroupId Invalid = new(-1);
 
-    #endregion
-
-    #region Properties
-
     /// <summary>The raw numeric value of this identifier.</summary>
     public int Value { get; } = _StoreValidated(value);
-
 
     /// <summary>Whether this ID represents a valid (assigned) identifier.</summary>
     public bool IsValid
@@ -42,10 +35,6 @@ public readonly struct IndexGroupId(int value) : IEquatable<IndexGroupId>, IComp
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => ArrayIndexIdRange.IsValidIndex(Value);
     }
-
-    #endregion
-
-    #region Equality & Formatting
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -66,32 +55,47 @@ public readonly struct IndexGroupId(int value) : IEquatable<IndexGroupId>, IComp
     /// <inheritdoc/>
     public override string ToString() => Value.ToString(CultureInfo.InvariantCulture);
 
-    #endregion
-
-    #region Operators
-
-    /// <inheritdoc/>
+    /// <summary>Whether the first id is smaller than the second. Compares the numbers only.</summary>
+    /// <param name="left">The first id.</param>
+    /// <param name="right">The second id.</param>
+    /// <returns><see langword="true"/> when the number of <paramref name="left"/> is smaller than that of <paramref name="right"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator <(IndexGroupId left, IndexGroupId right) => left.Value < right.Value;
-    /// <inheritdoc/>
+
+    /// <summary>Whether the first id is larger than the second. Compares the numbers only.</summary>
+    /// <param name="left">The first id.</param>
+    /// <param name="right">The second id.</param>
+    /// <returns><see langword="true"/> when the number of <paramref name="left"/> is larger than that of <paramref name="right"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >(IndexGroupId left, IndexGroupId right) => left.Value > right.Value;
-    /// <inheritdoc/>
+
+    /// <summary>Whether the first id is smaller than or equal to the second. Compares the numbers only.</summary>
+    /// <param name="left">The first id.</param>
+    /// <param name="right">The second id.</param>
+    /// <returns><see langword="true"/> when the number of <paramref name="left"/> is not larger than that of <paramref name="right"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator <=(IndexGroupId left, IndexGroupId right) => left.Value <= right.Value;
-    /// <inheritdoc/>
+
+    /// <summary>Whether the first id is larger than or equal to the second. Compares the numbers only.</summary>
+    /// <param name="left">The first id.</param>
+    /// <param name="right">The second id.</param>
+    /// <returns><see langword="true"/> when the number of <paramref name="left"/> is not smaller than that of <paramref name="right"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >=(IndexGroupId left, IndexGroupId right) => left.Value >= right.Value;
-    /// <inheritdoc/>
+
+    /// <summary>Whether two ids have the same value. Ids of different stacks compare equal when their numbers match.</summary>
+    /// <param name="left">The first id.</param>
+    /// <param name="right">The second id.</param>
+    /// <returns><see langword="true"/> when both hold the same number.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator ==(IndexGroupId left, IndexGroupId right) => left.Value == right.Value;
-    /// <inheritdoc/>
+
+    /// <summary>Whether two ids have different values. Ids of different stacks compare equal when their numbers match.</summary>
+    /// <param name="left">The first id.</param>
+    /// <param name="right">The second id.</param>
+    /// <returns><see langword="true"/> when the numbers differ.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator !=(IndexGroupId left, IndexGroupId right) => left.Value != right.Value;
-
-    #endregion
-
-    #region Private helpers
 
     /// <summary>
     /// Validates the raw value once, at construction, so every existing id is either <see cref="Invalid"/> or a usable
@@ -108,6 +112,4 @@ public readonly struct IndexGroupId(int value) : IEquatable<IndexGroupId>, IComp
 
         return value;
     }
-
-    #endregion
 }

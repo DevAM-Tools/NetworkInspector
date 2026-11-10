@@ -565,7 +565,7 @@ internal sealed class SomeIpCoreTests
         // The datagram without SOME/IP carries the same number of bytes through the same lower layers; what remains is the
         // parser itself, which may allocate the state box of the lazy packet info and nothing else.
         long extra = withSomeIp - withoutSomeIp;
-        await Assert.That(extra).IsLessThanOrEqualTo(64).Because($"SOME/IP parse allocated {extra} bytes more than the same datagram without it");
+        await Assert.That(extra).IsLessThanOrEqualTo(64).Because(Invariant($"SOME/IP parse allocated {extra} bytes more than the same datagram without it"));
     }
 
     private static long _AllocatedPerSkipParse(SomeIpTestStack s, byte[] frame)

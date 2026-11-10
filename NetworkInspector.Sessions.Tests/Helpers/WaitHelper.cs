@@ -18,7 +18,7 @@ internal static class WaitHelper
             if (sw.ElapsedMilliseconds > timeoutMs)
             {
                 throw new TimeoutException(
-                    $"Condition was not met within {timeoutMs.ToString(CultureInfo.InvariantCulture)} ms.");
+                    Invariant($"Condition was not met within {timeoutMs.ToString(CultureInfo.InvariantCulture)} ms."));
             }
 
             wait.SpinOnce();

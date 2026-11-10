@@ -133,7 +133,7 @@ internal static class SampleFrames
             if (!result.TryGetValue(out Frame frame))
             {
                 throw new InvalidOperationException(
-                    FormattableString.Invariant(
+                    Invariant(
                         $"Failed to create flank frame {i}: {result.Error.Message}"));
             }
 
@@ -169,7 +169,7 @@ internal static class SampleFrames
             if (!result.TryGetValue(out Frame frame))
             {
                 throw new InvalidOperationException(
-                    FormattableString.Invariant(
+                    Invariant(
                         $"Failed to create synthetic frame {i}: {result.Error.Message}"));
             }
 
@@ -420,7 +420,7 @@ internal static class SampleFrames
         if (!result.TryGetValue(out Frame frame))
         {
             throw new InvalidOperationException(
-                FormattableString.Invariant($"Failed to create workload frame {index}: {result.Error.Message}"));
+                Invariant($"Failed to create workload frame {index}: {result.Error.Message}"));
         }
 
         return frame;

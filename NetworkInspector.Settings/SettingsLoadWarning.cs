@@ -1,0 +1,40 @@
+﻿// Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
+
+namespace NetworkInspector.Settings;
+
+/// <summary>
+/// Describes a non-fatal issue detected while loading persisted settings
+/// via <see cref="SettingsManager.Load"/>.
+/// <para>
+/// Load warnings do not prevent the application from starting — invalid or
+/// incompatible persisted values are skipped (not applied, and reported only through these warnings) and the affected
+/// settings keep their default or previously applied values. A damaged file therefore never blocks startup, and the caller
+/// decides how to surface the problem.
+/// </para>
+/// </summary>
+/// <param name="Kind">The category of the load issue.</param>
+/// <param name="GroupName">
+/// The group name associated with the warning (derived from the JSON file name,
+/// or the setting's registered group).
+/// </param>
+/// <param name="SettingName">
+/// The name of the setting that caused the warning, or an empty string when
+/// the issue affects a whole group (e.g. <see cref="SettingsLoadWarningKind.InvalidGroupName"/>).
+/// </param>
+/// <param name="Message">Human-readable description of the issue.</param>
+public readonly record struct SettingsLoadWarning(
+    SettingsLoadWarningKind Kind,
+    string GroupName,
+    string SettingName,
+    string Message)
+{
+    #region Formatting
+
+    /// <inheritdoc/>
+    public override string ToString() =>
+        SettingName.Length == 0
+            ? Invariant($"[{Kind}] Group '{GroupName}': {Message}")
+            : Invariant($"[{Kind}] Setting '{SettingName}' (group '{GroupName}'): {Message}");
+
+    #endregion
+}

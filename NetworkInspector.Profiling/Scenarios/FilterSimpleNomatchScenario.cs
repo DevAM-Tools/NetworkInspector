@@ -13,7 +13,7 @@ internal sealed class FilterSimpleNomatchScenario : FilterScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Classic no-match \"{Expression}\" without index (full eval, value miss).");
 
     /// <inheritdoc/>

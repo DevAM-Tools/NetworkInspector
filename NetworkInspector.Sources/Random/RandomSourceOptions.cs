@@ -119,8 +119,8 @@ public sealed class RandomSourceOptions
             throw new ArgumentOutOfRangeException(
                 nameof(FrameCount),
                 FrameCount,
-                $"FrameCount must not exceed {maxFrameCount.ToString(CultureInfo.InvariantCulture)} " +
-                $"(valid frame indices 0..{ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)}).");
+                Invariant($"FrameCount must not exceed {maxFrameCount.ToString(CultureInfo.InvariantCulture)} ") +
+                Invariant($"(valid frame indices 0..{ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)})."));
         }
 
         if (MinFrameSize < 1)
@@ -138,7 +138,7 @@ public sealed class RandomSourceOptions
         if (MinFrameSize > MaxFrameSize)
         {
             throw new ArgumentException(
-                $"MinFrameSize ({MinFrameSize}) must not exceed MaxFrameSize ({MaxFrameSize}).");
+                Invariant($"MinFrameSize ({MinFrameSize}) must not exceed MaxFrameSize ({MaxFrameSize})."));
         }
 
         // Upper bound of the frame size per mode (a fact of the format, hence a constant, not a setting): the IPv4 total
@@ -150,7 +150,7 @@ public sealed class RandomSourceOptions
         if (MaxFrameSize > maxFrameSizeForMode)
         {
             throw new ArgumentOutOfRangeException(nameof(MaxFrameSize), MaxFrameSize,
-                $"MaxFrameSize must be at most {maxFrameSizeForMode.ToString(CultureInfo.InvariantCulture)} for mode {Mode} " +
+                Invariant($"MaxFrameSize must be at most {maxFrameSizeForMode.ToString(CultureInfo.InvariantCulture)} for mode {Mode} ") +
                 "(the 16-bit length fields of the headers must not wrap).");
         }
 

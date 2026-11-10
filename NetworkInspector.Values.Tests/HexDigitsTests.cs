@@ -88,10 +88,10 @@ internal sealed class HexDigitsTests
     [Test]
     public async Task ToStringWithoutFormatIsUppercase()
     {
-        await Assert.That(_Mac.ToString()).IsEqualTo("AB:CD:EF:01:23:45");
-        await Assert.That(_Eui.ToString()).IsEqualTo("00:11:AA:BB:CC:DD:EE:FF");
-        await Assert.That(_Uuid.ToString()).IsEqualTo("01234567-89AB-CDEF-FEDC-BA9876543210");
-        await Assert.That(_Ipv6.ToString()).IsEqualTo("2001:DB8:ABCD:EF00::AF");
+        await Assert.That(_Mac.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("AB:CD:EF:01:23:45");
+        await Assert.That(_Eui.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("00:11:AA:BB:CC:DD:EE:FF");
+        await Assert.That(_Uuid.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("01234567-89AB-CDEF-FEDC-BA9876543210");
+        await Assert.That(_Ipv6.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("2001:DB8:ABCD:EF00::AF");
     }
 
     #endregion
@@ -119,11 +119,11 @@ internal sealed class HexDigitsTests
     [Test]
     public async Task ToStringAndInterpolationHonourTheSpecifier()
     {
-        await Assert.That(_Mac.ToString("x", null)).IsEqualTo("ab:cd:ef:01:23:45");
-        await Assert.That(_Mac.ToString("X", null)).IsEqualTo("AB:CD:EF:01:23:45");
-        await Assert.That($"{_Ipv6:x}").IsEqualTo("2001:db8:abcd:ef00::af");
-        await Assert.That($"{_Uuid:x}").IsEqualTo("01234567-89ab-cdef-fedc-ba9876543210");
-        await Assert.That($"{_Eui:X}").IsEqualTo("00:11:AA:BB:CC:DD:EE:FF");
+        await Assert.That(_Mac.ToString("x", CultureInfo.InvariantCulture)).IsEqualTo("ab:cd:ef:01:23:45");
+        await Assert.That(_Mac.ToString("X", CultureInfo.InvariantCulture)).IsEqualTo("AB:CD:EF:01:23:45");
+        await Assert.That(Invariant($"{_Ipv6:x}")).IsEqualTo("2001:db8:abcd:ef00::af");
+        await Assert.That(Invariant($"{_Uuid:x}")).IsEqualTo("01234567-89ab-cdef-fedc-ba9876543210");
+        await Assert.That(Invariant($"{_Eui:X}")).IsEqualTo("00:11:AA:BB:CC:DD:EE:FF");
     }
 
     [Test]
@@ -191,8 +191,8 @@ internal sealed class HexDigitsTests
         char[] tooSmall = new char[1];
 
         await Assert.That(() => _Mac.TryFormat(tooSmall, out _, "D", null)).Throws<FormatException>();
-        await Assert.That(() => _Uuid.ToString("N", null)).Throws<FormatException>();
-        await Assert.That(() => _Ipv6.ToString("G", null)).Throws<FormatException>();
+        await Assert.That(() => _Uuid.ToString("N", CultureInfo.InvariantCulture)).Throws<FormatException>();
+        await Assert.That(() => _Ipv6.ToString("G", CultureInfo.InvariantCulture)).Throws<FormatException>();
     }
 
     [Test]

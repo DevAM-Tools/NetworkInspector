@@ -194,7 +194,7 @@ internal sealed class DuckDbExporterTests
         await Assert.That(dnsNameFieldId).IsGreaterThanOrEqualTo(0)
             .Because("the DNS query packets must produce a dns.qry.name string field");
 
-        string fieldTableName = FormattableString.Invariant($"field_{dnsNameFieldId}");
+        string fieldTableName = Invariant($"field_{dnsNameFieldId}");
         string[] values = _ReadStringColumn(connection, fieldTableName, "value");
 
         await Assert.That(values.Length).IsEqualTo(3);
@@ -642,7 +642,7 @@ internal sealed class DuckDbExporterTests
             seenTypes.Add(actual);
             if (!string.Equals(expected, actual, StringComparison.Ordinal))
             {
-                wrong.Add(FormattableString.Invariant($"{tableName}: expected {expected}, was {actual}"));
+                wrong.Add(Invariant($"{tableName}: expected {expected}, was {actual}"));
             }
         }
 
@@ -770,11 +770,11 @@ internal sealed class DuckDbExporterTests
         using DuckDBConnection connection = new(Invariant($"Data Source={outputPath}"));
         connection.Open();
         byte[] stored = _ReadBlob(
-            connection, FormattableString.Invariant($"SELECT value FROM field_{factory.BytesFieldId.Value}"));
+            connection, Invariant($"SELECT value FROM field_{factory.BytesFieldId.Value}"));
         using DuckDBConnection udpConnection = new(Invariant($"Data Source={udpPath}"));
         udpConnection.Open();
         int sourceFieldId = _FindFieldIdByName(udpConnection, "eth.src");
-        ulong mac = (ulong)_ScalarObject(udpConnection, FormattableString.Invariant($"SELECT value FROM field_{sourceFieldId}"));
+        ulong mac = (ulong)_ScalarObject(udpConnection, Invariant($"SELECT value FROM field_{sourceFieldId}"));
 
         // The source address of an Ethernet frame is bytes 6 to 11 of the frame; the stored integer is those six bytes, most
         // significant first (a UBIGINT with the upper two bytes zero).
@@ -796,10 +796,10 @@ internal sealed class DuckDbExporterTests
         _Export(DuckDbExporter.CreateBuilder().ToFile(outputPath), [factory.Create(10, null, numberCount: 2)]);
         using DuckDBConnection connection = new(Invariant($"Data Source={outputPath}"));
         connection.Open();
-        string table = FormattableString.Invariant($"field_{factory.NumberFieldId.Value}");
+        string table = Invariant($"field_{factory.NumberFieldId.Value}");
         long rows = _CountRows(connection, table);
-        long distinctNodes = DuckDbReadBack.Scalar(connection, FormattableString.Invariant($"SELECT COUNT(DISTINCT node_id) FROM {table}"));
-        long values = DuckDbReadBack.Scalar(connection, FormattableString.Invariant($"SELECT CAST(SUM(value) AS BIGINT) FROM {table}"));
+        long distinctNodes = DuckDbReadBack.Scalar(connection, Invariant($"SELECT COUNT(DISTINCT node_id) FROM {table}"));
+        long values = DuckDbReadBack.Scalar(connection, Invariant($"SELECT CAST(SUM(value) AS BIGINT) FROM {table}"));
 
         await Assert.That(rows).IsEqualTo(2);
         await Assert.That(distinctNodes).IsEqualTo(2);
@@ -1137,7 +1137,7 @@ internal sealed class DuckDbExporterTests
     private static List<string> _RunTreeQuery(DuckDBConnection connection, int packetId)
     {
         using DuckDBCommand command = connection.CreateCommand();
-        command.CommandText = FormattableString.Invariant(
+        command.CommandText = Invariant(
             $"""
             WITH RECURSIVE tree AS (
                 SELECT t.packet_id, t.node_id, t.field_id, 0 AS depth
@@ -1245,7 +1245,7 @@ internal sealed class DuckDbExporterTests
     private static long _CountRows(DuckDBConnection connection, string tableName)
     {
         using DuckDBCommand command = connection.CreateCommand();
-        command.CommandText = FormattableString.Invariant($"SELECT COUNT(*) FROM {tableName};");
+        command.CommandText = Invariant($"SELECT COUNT(*) FROM {tableName};");
         object? result = command.ExecuteScalar();
         return Convert.ToInt64(result, CultureInfo.InvariantCulture);
     }
@@ -1276,7 +1276,7 @@ internal sealed class DuckDbExporterTests
     {
         using DuckDBCommand command = connection.CreateCommand();
         // Row order is not defined by SQL without ORDER BY, so the read is ordered by the row key.
-        command.CommandText = FormattableString.Invariant($"SELECT {columnName} FROM {tableName} ORDER BY packet_id, node_id;");
+        command.CommandText = Invariant($"SELECT {columnName} FROM {tableName} ORDER BY packet_id, node_id;");
         using DuckDBDataReader reader = command.ExecuteReader();
         List<string> values = [];
         while (reader.Read())

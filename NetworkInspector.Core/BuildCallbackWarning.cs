@@ -28,8 +28,6 @@ public sealed record BuildCallbackWarning(
     string Name,
     int CallbackCount) : BuildDiagnostic
 {
-    #region BuildDiagnostic
-
     /// <inheritdoc/>
     public override BuildDiagnosticSeverity Severity => BuildDiagnosticSeverity.Warning;
 
@@ -43,16 +41,10 @@ public sealed record BuildCallbackWarning(
             : string.Create(CultureInfo.InvariantCulture,
                 $"Unresolved deferred callback(s) ({CallbackCount}) for {EntityKind} '{Name}'.");
 
-    #endregion
-
-    #region Formatting
-
     /// <inheritdoc/>
     /// <remarks>
-    /// Replaces the compiler-generated record <c>ToString</c> (which would print every member, including the
-    /// callback count) with the compact "[Severity] message" form used for diagnostics output.
+    /// Gives the compact "[Severity] message" form used for diagnostics output instead of the compiler-generated record text,
+    /// which would print every member, including the callback count.
     /// </remarks>
-    public override string ToString() => $"[{Severity}] {Message}";
-
-    #endregion
+    public override string ToString() => Invariant($"[{Severity}] {Message}");
 }

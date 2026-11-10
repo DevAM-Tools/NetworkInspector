@@ -2,6 +2,10 @@
 <Solution>
   <Project Path="NetworkInspector.Values.Tests/NetworkInspector.Values.Tests.csproj" />
   <Project Path="NetworkInspector.Values/NetworkInspector.Values.csproj" />
+  <Project Path="NetworkInspector.Limits.Tests/NetworkInspector.Limits.Tests.csproj" />
+  <Project Path="NetworkInspector.Limits/NetworkInspector.Limits.csproj" />
+  <Project Path="NetworkInspector.Settings.Tests/NetworkInspector.Settings.Tests.csproj" />
+  <Project Path="NetworkInspector.Settings/NetworkInspector.Settings.csproj" />
   <Project Path="NetworkInspector.Generators.Tests/NetworkInspector.Generators.Tests.csproj" />
   <Project Path="NetworkInspector.Generators/NetworkInspector.Generators.csproj" />
   <Project Path="NetworkInspector.Core/NetworkInspector.Core.csproj" />

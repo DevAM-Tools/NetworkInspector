@@ -36,7 +36,7 @@ internal sealed class CapabilitySanityTests
             bool present = System.Linq.Enumerable.Any(all, i => i.Name == slotLocal);
             await Assert.That(present)
                 .IsFalse()
-                .Because($"{layer.Name} must not implement removed slot interface {slot}");
+                .Because(Invariant($"{layer.Name} must not implement removed slot interface {slot}"));
         }
     }
 
@@ -44,7 +44,7 @@ internal sealed class CapabilitySanityTests
     {
         await Assert.That(typeof(TIface).IsAssignableFrom(layer))
             .IsTrue()
-            .Because($"{layer.Name} must implement {typeof(TIface).Name}");
+            .Because(Invariant($"{layer.Name} must implement {typeof(TIface).Name}"));
     }
 
     [Test]

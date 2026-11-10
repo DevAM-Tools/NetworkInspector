@@ -31,7 +31,7 @@ internal sealed class FrameBuilderSingleFrameScenario : FrameBuilderScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Build {_FrameCount:N0} Eth/IPv4/UDP frames with a {PayloadSize}-byte payload via the new FrameStack API.");
 
     /// <inheritdoc/>

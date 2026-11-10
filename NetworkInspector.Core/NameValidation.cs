@@ -9,13 +9,14 @@ namespace NetworkInspector.Core;
 /// </summary>
 public static class NameValidation
 {
-    #region Public Validation API
+    #region Name grammar
 
     /// <summary>
     /// Checks whether the given name is a valid protocol/field identifier.
     /// </summary>
     /// <param name="name">The name to validate.</param>
-    /// <returns>True if the name is a non-empty ASCII C-style identifier, optionally dot-separated.</returns>
+    /// <returns><see langword="true"/> if the name is a non-empty ASCII C-style identifier, optionally dot-separated.</returns>
+    /// <remarks>Sync: <see cref="SettingNames.IsValidName"/> holds the same grammar for setting names; a change is made in both.</remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsValidName(ReadOnlySpan<char> name)
     {
@@ -57,55 +58,13 @@ public static class NameValidation
     }
 
     /// <summary>
-    /// Checks whether the given name is a valid setting group name.
-    /// Group names follow the same dot-separated ASCII C-style identifier rules as
-    /// protocol/field names, but are additionally restricted to lowercase letters,
-    /// digits, underscores, and dots — no uppercase letters allowed.
-    /// The empty string is a valid group name (the default/root group). The name <c>default</c> is reserved: the
-    /// default group is saved as <c>default.json</c>, so a group of that name would share its file.
-    /// </summary>
-    /// <param name="name">The group name to validate.</param>
-    /// <returns><see langword="true"/> for the empty string or a lowercase, dot-separated ASCII identifier other than <c>default</c>.</returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsValidGroupName(ReadOnlySpan<char> name)
-    {
-        // Empty string is the default group — always valid.
-        if (name.IsEmpty)
-        {
-            return true;
-        }
-
-        // Must satisfy the general name rules first.
-        if (!IsValidName(name))
-        {
-            return false;
-        }
-
-        // Reserved for the default group's file (default.json).
-        if (name.SequenceEqual("default"))
-        {
-            return false;
-        }
-
-        // Additionally: no uppercase letters allowed in group names.
-        for (int i = 0; i < name.Length; i++)
-        {
-            if (char.IsUpper(name[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /// <summary>
     /// Checks whether the given UI name is valid: non-empty and free of control characters (<see cref="char.IsControl(char)"/>,
     /// which includes line breaks and tabs). Unlike <see cref="IsValidName"/>, any other Unicode text is allowed because
     /// a UI name is human-readable display text, not an identifier.
     /// </summary>
     /// <param name="name">The display name to validate.</param>
     /// <returns><see langword="true"/> when the name is non-empty and contains no control character.</returns>
+    /// <remarks>Sync: <see cref="SettingNames.IsValidUiName"/> holds the same rule for the UI names of settings; a change is made in both.</remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsValidUiName(ReadOnlySpan<char> name)
     {
@@ -127,12 +86,14 @@ public static class NameValidation
 
     #endregion
 
-    #region Private helpers
+    #region ASCII character classes
 
     /// <summary>
     /// ASCII <c>A-Z</c> / <c>a-z</c> only. <see cref="char.IsLetter(char)"/> accepts Unicode letters
     /// and would disagree with the documented C-style alphabet.
     /// </summary>
+    /// <param name="c">The character to test.</param>
+    /// <returns><see langword="true"/> for <c>A-Z</c> and <c>a-z</c>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsAsciiLetter(char c) =>
         (uint)(c - 'A') <= 'Z' - 'A' || (uint)(c - 'a') <= 'z' - 'a';
@@ -140,6 +101,8 @@ public static class NameValidation
     /// <summary>
     /// ASCII letter or <c>0-9</c>. Full-width and other Unicode digits are rejected.
     /// </summary>
+    /// <param name="c">The character to test.</param>
+    /// <returns><see langword="true"/> for an ASCII letter or <c>0-9</c>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsAsciiLetterOrDigit(char c) =>
         _IsAsciiLetter(c) || (uint)(c - '0') <= 9;

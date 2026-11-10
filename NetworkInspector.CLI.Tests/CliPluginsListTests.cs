@@ -111,7 +111,7 @@ internal sealed class CliPluginsListTests
         string expected = Path.GetFullPath(relative, sandbox.Root);
 
         await Assert.That(set.Exit).IsEqualTo(0);
-        await Assert.That(set.OutLines).IsEquivalentTo([$"plugins.paths = [{JsonSerializer.Serialize(expected)}]"], CollectionOrdering.Matching);
+        await Assert.That(set.OutLines).IsEquivalentTo([Invariant($"plugins.paths = [{JsonSerializer.Serialize(expected)}]")], CollectionOrdering.Matching);
         await Assert.That(list.Out).Contains("Sample.Protocol  0.1.0  core  Loaded");
     }
 

@@ -50,7 +50,7 @@ internal sealed class JsonHardeningTests
             "POST /api HTTP/1.1\r\n" +
             "Host: example.com\r\n" +
             "Content-Type: application/json\r\n" +
-            $"Content-Length: {body.Length}\r\n" +
+            Invariant($"Content-Length: {body.Length}\r\n") +
             "\r\n";
         byte[] message = [.. Encoding.ASCII.GetBytes(head), .. body];
 

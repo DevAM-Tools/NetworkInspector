@@ -11,28 +11,68 @@ internal sealed class IngestGateTests
     private readonly record struct TestEffect(int Value);
 
     // The scope is a ref struct, so it cannot live across an await: the scoped work sits in synchronous helpers.
+    /// <summary>Whether the gate treats <paramref name="id"/> as a replay when the stack gave no verdict (an empty context).</summary>
+    private static bool _IsReplay(IngestGate gate, int id)
+    {
+        ParseContext context = default;
+        return gate.IsReplay(in context, id);
+    }
+
+    /// <summary>Whether the gate treats <paramref name="id"/> as a replay when the stack classified the parse as <paramref name="stackVerdict"/>.</summary>
+    private static bool _IsReplayWithStackVerdict(IngestGate gate, int id, bool stackVerdict)
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        using Stack stack = builder.Build();
+        ParseContext context = new(stack, isReplay: stackVerdict);
+        return gate.IsReplay(in context, id);
+    }
+
+    /// <summary>Enters the gate under a stack verdict of "replay"; the gate must refuse.</summary>
+    private static void _EnterUnderStackReplayVerdict(IngestGate gate, int id)
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        using Stack stack = builder.Build();
+        ParseContext context = new(stack, isReplay: true);
+        using IngestScope scope = gate.Enter(in context, id);
+    }
+
+    /// <summary>Opens a scope and disposes a copy of it twice; the second dispose must throw.</summary>
+    private static void _DisposeScopeCopyTwice(IngestGate gate, int id)
+    {
+        ParseContext context = default;
+        IngestScope scope = gate.Enter(in context, id);
+        IngestScope copy = scope;
+        scope.Dispose();
+        copy.Dispose();
+    }
+
     private static void _EnterAndLeave(IngestGate gate, int id)
     {
-        using IngestScope scope = gate.Enter(id);
+        ParseContext context = default;
+        using IngestScope scope = gate.Enter(in context, id);
     }
 
     private static (bool DuringInner, bool AfterInner) _NestedReplayStates(IngestGate gate, int id)
     {
-        using IngestScope outer = gate.Enter(id);
+        ParseContext context = default;
+        using IngestScope outer = gate.Enter(in context, id);
         bool duringInner;
         bool afterInner;
-        using (IngestScope inner = gate.Enter(id))
+        using (IngestScope inner = gate.Enter(in context, id))
         {
-            duringInner = gate.IsReplay(id);
+            duringInner = gate.IsReplay(in context, id);
         }
 
-        afterInner = gate.IsReplay(id);
+        afterInner = gate.IsReplay(in context, id);
         return (duringInner, afterInner);
     }
 
     private static void _EnterAndThrow(IngestGate gate, int id)
     {
-        using IngestScope scope = gate.Enter(id);
+        ParseContext context = default;
+        using IngestScope scope = gate.Enter(in context, id);
         throw new InvalidOperationException("parse failed");
     }
 
@@ -42,20 +82,20 @@ internal sealed class IngestGateTests
         IngestGate gate = new();
 
         await Assert.That(gate.Watermark).IsEqualTo(-1);
-        await Assert.That(gate.IsReplay(0)).IsFalse();
+        await Assert.That(_IsReplay(gate, 0)).IsFalse();
     }
 
     [Test]
     public async Task APacketBecomesAReplayWhenItsScopeEnds()
     {
         IngestGate gate = new();
-        bool before = gate.IsReplay(0);
+        bool before = _IsReplay(gate, 0);
 
         _EnterAndLeave(gate, 0);
 
         await Assert.That(before).IsFalse();
-        await Assert.That(gate.IsReplay(0)).IsTrue();
-        await Assert.That(gate.IsReplay(1)).IsFalse();
+        await Assert.That(_IsReplay(gate, 0)).IsTrue();
+        await Assert.That(_IsReplay(gate, 1)).IsFalse();
         await Assert.That(gate.Watermark).IsEqualTo(0);
     }
 
@@ -69,7 +109,7 @@ internal sealed class IngestGateTests
         // An inner scope of the same packet must not turn the packet's remaining layers into replays.
         await Assert.That(duringInner).IsFalse();
         await Assert.That(afterInner).IsFalse();
-        await Assert.That(gate.IsReplay(0)).IsTrue();
+        await Assert.That(_IsReplay(gate, 0)).IsTrue();
     }
 
     [Test]
@@ -88,7 +128,7 @@ internal sealed class IngestGateTests
         }
 
         await Assert.That(thrown).IsNotNull();
-        await Assert.That(gate.IsReplay(0)).IsTrue();
+        await Assert.That(_IsReplay(gate, 0)).IsTrue();
     }
 
     [Test]
@@ -112,6 +152,64 @@ internal sealed class IngestGateTests
         // The refused Enter opened no scope: the next packet is still a first parse and the watermark is unchanged.
         await Assert.That(gate.Watermark).IsEqualTo(0);
         _EnterAndLeave(gate, 1);
+        await Assert.That(gate.Watermark).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task AStackReplayIsAReplayAlsoWhenTheGateNeverSawThePacket()
+    {
+        IngestGate gate = new();
+
+        // The stack completed id 5 on its own (the packet never reached this gate): the gate must still answer "replay".
+        bool replay = _IsReplayWithStackVerdict(gate, 5, stackVerdict: true);
+        bool firstParse = _IsReplayWithStackVerdict(gate, 5, stackVerdict: false);
+
+        await Assert.That(gate.Watermark).IsEqualTo(-1);
+        await Assert.That(replay).IsTrue();
+        await Assert.That(firstParse).IsFalse();
+    }
+
+    [Test]
+    public async Task EnteringUnderAStackReplayVerdictThrowsAndOpensNoScope()
+    {
+        IngestGate gate = new();
+
+        InvalidOperationException? thrown = null;
+        try
+        {
+            _EnterUnderStackReplayVerdict(gate, 0);
+        }
+        catch (InvalidOperationException ex)
+        {
+            thrown = ex;
+        }
+
+        // The refused Enter opened no scope: the next first parse raises the watermark normally.
+        _EnterAndLeave(gate, 0);
+
+        await Assert.That(thrown).IsNotNull();
+        await Assert.That(gate.Watermark).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task ADoubleDisposeOfAScopeCopyThrowsAndKeepsTheGateUsable()
+    {
+        IngestGate gate = new();
+
+        InvalidOperationException? thrown = null;
+        try
+        {
+            _DisposeScopeCopyTwice(gate, 0);
+        }
+        catch (InvalidOperationException ex)
+        {
+            thrown = ex;
+        }
+
+        // The nesting counter stayed at zero, so the next packet still raises the watermark.
+        _EnterAndLeave(gate, 1);
+
+        await Assert.That(thrown).IsNotNull();
         await Assert.That(gate.Watermark).IsEqualTo(1);
     }
 
@@ -142,7 +240,8 @@ internal sealed class IngestGateTests
         {
             for (int id = 0; id < Count; id++)
             {
-                using IngestScope scope = gate.Enter(id);
+                ParseContext context = default;
+                using IngestScope scope = gate.Enter(in context, id);
                 effects.Record(id, 0, new TestEffect(id));
             }
 
@@ -159,7 +258,7 @@ internal sealed class IngestGateTests
                 while (!Volatile.Read(ref writerDone))
                 {
                     int id = random.Next(Count);
-                    if (gate.IsReplay(id))
+                    if (_IsReplay(gate, id))
                     {
                         Interlocked.Increment(ref observedReplays);
                         if (!effects.TryGet(id, 0, out TestEffect effect) || effect.Value != id)

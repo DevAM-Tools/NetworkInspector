@@ -38,7 +38,7 @@ namespace NetworkInspector.Core.ValueCaches;
 /// </summary>
 public sealed class ValueCache : IReadOnlyValueCache
 {
-    #region Nested types
+    #region Probe slot and live series lists
 
     /// <summary>
     /// Compact or dense probe slot. Payload type is stored so getters and
@@ -53,9 +53,31 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// </summary>
     private struct ValueCacheProbeSlot
     {
+        /// <summary>
+        /// The payload series of the field (a <c>ValueCacheSeries&lt;T&gt;</c> whose <c>T</c> is fixed by <see cref="PayloadType"/>),
+        /// or <see langword="null"/> when the field has no payload series (yet). Under <see cref="RecordAllFields"/> the writer
+        /// fills it once with a release write after <see cref="PayloadType"/> is stored; readers load it with acquire
+        /// semantics before they copy the slot.
+        /// </summary>
         public object? Payload;
+
+        /// <summary>
+        /// The custom-text series of the field, or <see langword="null"/> when the cache records no custom text for it.
+        /// Fixed at construction.
+        /// </summary>
         public ValueCacheSeries<string>? CustomText;
+
+        /// <summary>
+        /// The custom-representation series of the field, or <see langword="null"/> when the cache records none for it.
+        /// Fixed at construction.
+        /// </summary>
         public ValueCacheSeries<string>? CustomRepresentation;
+
+        /// <summary>
+        /// The stack field type that fixed the generic argument of <see cref="Payload"/>. Meaningful only while
+        /// <see cref="Payload"/> is not <see langword="null"/>; stored before the payload is published, so a reader that sees
+        /// a payload also sees its type.
+        /// </summary>
         public FieldType PayloadType;
 
         /// <summary>
@@ -72,9 +94,11 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// </summary>
     private sealed class GrowingSeriesList : IReadOnlyList<ValueCacheSeries>
     {
+        /// <summary>The cache whose published series array and count this list reads.</summary>
         private readonly ValueCache _Cache;
 
         /// <summary>Aliases the owning cache. Construction only.</summary>
+        /// <param name="cache">The cache to read; not null.</param>
         internal GrowingSeriesList(ValueCache cache) => _Cache = cache;
 
         /// <inheritdoc />
@@ -127,9 +151,11 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// </summary>
     private sealed class GrowingReadOnlySeriesList : IReadOnlyList<ReadOnlyValueCacheSeries>
     {
+        /// <summary>The cache whose published series array and count this list reads.</summary>
         private readonly ValueCache _Cache;
 
         /// <summary>Aliases the owning cache. Construction only.</summary>
+        /// <param name="cache">The cache to read; not null.</param>
         internal GrowingReadOnlySeriesList(ValueCache cache) => _Cache = cache;
 
         /// <inheritdoc />
@@ -173,7 +199,7 @@ public sealed class ValueCache : IReadOnlyValueCache
 
     #endregion
 
-    #region Constants
+    #region Configuration and state
 
     /// <summary>
     /// Linear-scan probe when the recorded field-id set is this size or smaller.
@@ -184,62 +210,130 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// </summary>
     private const int _CompactRecordLimit = 16;
 
-    #endregion
-    #region Fields
-
-    // Probe structures, built once in the constructor and never reassigned (the slots inside are updated in place by the
-    // writer under RecordAllFields). Three shapes, chosen in the constructor:
+    // The probe structures below are built once in the constructor and never reassigned (the slots inside are updated in place
+    // by the writer under RecordAllFields). Three shapes, chosen in the constructor:
     //  - compact: _CompactFieldIds[i] is the field id of _Probe[i]; found by linear scan. Chosen for few explicit fields.
     //  - dense + bitset: _Probe is indexed by field id; _RecordedBits has one bit per stack field and rejects fields that
     //    are not recorded before the (large) slot is touched.
     //  - dense, everything recorded (_AllSlotsRecorded, and always for RecordAllFields): no bit test; a first-seen field
     //    grows its series in place without rebuilding anything.
+
+    /// <summary>
+    /// The probe slots: indexed like <see cref="_CompactFieldIds"/> in the compact shape, by raw field id in the dense shapes.
+    /// The array and its length are fixed; the slot contents change in place under <see cref="RecordAllFields"/>.
+    /// </summary>
     private readonly ValueCacheProbeSlot[] _Probe;
+
+    /// <summary>Compact shape only: raw field id of <c>_Probe[i]</c>; empty in the dense shapes.</summary>
     private readonly int[] _CompactFieldIds;
+
+    /// <summary>
+    /// Dense shape with a subset recorded: one bit per stack field id, set when the field has at least one series. Empty when
+    /// no bit test is needed (compact shape, <see cref="RecordAllFields"/>, or every field recorded).
+    /// </summary>
     private readonly ulong[] _RecordedBits;
+
+    /// <summary>Whether the probe is the compact shape (linear scan over <see cref="_CompactFieldIds"/>).</summary>
     private readonly bool _UseCompactRecord;
+
+    /// <summary>Dense shape only: whether every slot belongs to a recorded field, so the lookup needs neither a bit test nor a slot check.</summary>
     private readonly bool _AllSlotsRecorded;
+
+    /// <summary>Capture mode for payload series created on first sight under <see cref="RecordAllFields"/>.</summary>
     private readonly ValueCaptureMode _DefaultCaptureMode;
+
+    /// <summary>Whether <see cref="RecordAllFields"/> also creates presence series for <see cref="FieldType.None"/> containers.</summary>
     private readonly bool _RecordContainerPresence;
+
+    /// <summary>The stable list object returned by <see cref="Series"/>.</summary>
     private readonly GrowingSeriesList _SeriesList;
+
+    /// <summary>The stable list object returned by <see cref="AllSeries"/>.</summary>
     private readonly GrowingReadOnlySeriesList _ReadOnlySeriesList;
+
+    /// <summary>Custom-text series fixed at construction, for the pull fill (<see cref="RecordPacket"/>); writer-only.</summary>
     private readonly ValueCacheSeries<string>[] _CustomTextSeries;
+
+    /// <summary>Custom-representation series fixed at construction, for the pull fill (<see cref="RecordPacket"/>); writer-only.</summary>
     private readonly ValueCacheSeries<string>[] _CustomRepresentationSeries;
+
+    /// <summary>Index groups whose lazily populated containers are expanded before a record (all groups under <see cref="RecordAllFields"/>).</summary>
     private readonly IndexGroupId[] _MaterializeGroups;
 
-    // One flag per stack index group: whether lazily populated containers of that group must be expanded so that the
-    // configured fields exist when the cache records. Indexed by group id; read by _ShouldMaterialize.
+    /// <summary>
+    /// One flag per stack index group: whether lazily populated containers of that group must be expanded so that the
+    /// configured fields exist when the cache records. Indexed by group id; read by <see cref="_ShouldMaterialize"/>.
+    /// </summary>
     private readonly bool[] _MaterializeGroupMask;
 
-    // Writer-grown under RecordAllFields. _AllSeries / _AllSeriesCount are published to readers
-    // (volatile: array swap then count). _PayloadSeries is writer-only.
+    // _PayloadSeries, _AllSeries, and _AllSeriesCount grow under RecordAllFields. _AllSeries / _AllSeriesCount are published
+    // to readers (volatile: array swap, then count). _PayloadSeries is writer-only.
+
+    /// <summary>Payload series for the pull fill, in creation order; the first <see cref="_PayloadSeriesCount"/> entries are valid. Writer-only.</summary>
     private ValueCacheSeries[] _PayloadSeries;
+
+    /// <summary>Number of valid entries of <see cref="_PayloadSeries"/>. Writer-only.</summary>
     private int _PayloadSeriesCount;
+
+    /// <summary>
+    /// Every series (payload, custom text, custom representation) in creation order; the first <see cref="_AllSeriesCount"/>
+    /// entries are valid. Replaced by a larger copy when full, never resized in place, and published before the count that
+    /// needs it.
+    /// </summary>
     private volatile ValueCacheSeries[] _AllSeries;
+
+    /// <summary>Number of series readers may see in <see cref="_AllSeries"/>; published with a volatile write after the entry is stored.</summary>
     private volatile int _AllSeriesCount;
 
     // Cache-level sticky flags, 1 = still true. Written only by the single writer, read by anyone, hence volatile ints
     // (plain loads and stores are enough: there is no read-modify-write). They only ever go from 1 to 0 (and _Abandoned
     // and _MaterializationIncomplete only from 0 to 1), so a reader that sees the changed value needs no further ordering.
+
+    /// <summary>1 while recorded packet ids have been strictly increasing; see <see cref="PacketIdsStrictlyIncreasing"/>.</summary>
     private volatile int _PacketIdsStrict = 1;
+
+    /// <summary>1 while recorded timestamps have been strictly increasing; see <see cref="TimestampsStrictlyIncreasing"/>.</summary>
     private volatile int _TimestampsStrict = 1;
+
+    /// <summary>1 after <see cref="Abandon"/>; every write path checks it.</summary>
     private volatile int _Abandoned;
+
+    /// <summary>1 after <see cref="EnsureMaterialized(Packet, int)"/> hit its pass cap; see <see cref="IsMaterializationIncomplete"/>.</summary>
     private volatile int _MaterializationIncomplete;
 
-    // Writer-only state of the strictly-increasing flags: the previous recorded packet id and timestamp.
+    /// <summary>
+    /// The live limit of recorded rows (<see cref="CoreLimits.MaxValueCacheRows"/>, setting <c>valuecache.maxRows</c>) of this
+    /// cache's stack. Read once per appended row (<see cref="Limit.Ceiling"/>: one volatile read).
+    /// </summary>
+    private readonly Limit _RowLimit;
+
+    /// <summary>
+    /// Writer-only: the series rows this cache appended so far, over all its series. The single writer of a cache is the only
+    /// thread that changes it; other threads read it only through <see cref="RecordingLimitMessage"/> with an interlocked read.
+    /// </summary>
+    private long _Rows;
+
+    /// <summary>1 once the row limit stopped the recording; sticky, see <see cref="IsRecordingIncomplete"/>.</summary>
+    private volatile int _RecordingIncomplete;
+
+    /// <summary>Writer-only: whether a first packet was recorded, so <see cref="_LastPacketId"/> and <see cref="_LastTimestampNanos"/> are valid.</summary>
     private bool _MonotonicInitialized;
+
+    /// <summary>Writer-only: packet id of the previous recorded packet, the reference of the strictly-increasing packet-id flag.</summary>
     private int _LastPacketId;
+
+    /// <summary>Writer-only: timestamp (nanoseconds) of the previous recorded packet, the reference of the strictly-increasing timestamp flag.</summary>
     private long _LastTimestampNanos;
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>
     /// Creates a RAM value cache for <paramref name="stack"/>. Throws on unknown field or group ids,
     /// empty configuration without <see cref="ValueCacheBuildOptions.RecordAllFields"/>,
     /// duplicate payload series, or a field/group config with all record flags false.
     /// </summary>
+    /// <param name="stack">The stack whose fields are recorded; the cache keeps it.</param>
+    /// <param name="fields">Explicit per-field configs; a duplicate series for one field is an error. May be empty.</param>
+    /// <param name="groups">Group configs expanded to every member field at construction; an explicit field config wins. May be empty.</param>
+    /// <param name="options">Build options, or <see langword="null"/> for the defaults (not <c>default(ValueCacheBuildOptions)</c>).</param>
     /// <exception cref="ArgumentNullException"><paramref name="stack"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">Configuration is empty, contradictory, or out of range for <paramref name="stack"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><see cref="ValueCacheBuildOptions.ChunkShift"/> or capture mode is out of range.</exception>
@@ -254,6 +348,7 @@ public sealed class ValueCache : IReadOnlyValueCache
         // Options: a null argument means the defaults. A default(ValueCacheBuildOptions) struct bypasses the parameterless
         // constructor and has ChunkShift 0, which the range check below rejects instead of silently building tiny chunks.
         Stack = stack;
+        _RowLimit = stack.Limits.MaxValueCacheRows;
         ValueCacheBuildOptions resolved = options ?? new ValueCacheBuildOptions();
         RecordAllFields = resolved.RecordAllFields;
         _DefaultCaptureMode = resolved.DefaultCaptureMode;
@@ -363,11 +458,21 @@ public sealed class ValueCache : IReadOnlyValueCache
         int uniqueUpper = payloadCount + textCount + repCount;
         bool useCompact = !RecordAllFields && uniqueUpper > 0 && uniqueUpper <= _CompactRecordLimit;
 
-        ValueCacheProbeSlot[] dense = useCompact ? [] : new ValueCacheProbeSlot[stack.FieldCount];
-        Dictionary<int, ValueCacheProbeSlot>? compactSlots = useCompact ? [] : null;
-        ValueCacheSeries[] payloadSeries = payloadCount == 0 ? [] : new ValueCacheSeries[payloadCount];
-        ValueCacheSeries<string>[] textSeries = textCount == 0 ? [] : new ValueCacheSeries<string>[textCount];
-        ValueCacheSeries<string>[] repSeries = repCount == 0 ? [] : new ValueCacheSeries<string>[repCount];
+        ValueCacheProbeSlot[] dense = useCompact
+            ? []
+            : new ValueCacheProbeSlot[stack.FieldCount];
+        Dictionary<int, ValueCacheProbeSlot>? compactSlots = useCompact
+            ? []
+            : null;
+        ValueCacheSeries[] payloadSeries = payloadCount == 0
+            ? []
+            : new ValueCacheSeries[payloadCount];
+        ValueCacheSeries<string>[] textSeries = textCount == 0
+            ? []
+            : new ValueCacheSeries<string>[textCount];
+        ValueCacheSeries<string>[] repSeries = repCount == 0
+            ? []
+            : new ValueCacheSeries<string>[repCount];
         ValueCacheSeries[] all = new ValueCacheSeries[payloadCount + textCount + repCount];
         int allIndex = 0;
         HashSet<int>? materializeGroups = null;
@@ -527,7 +632,7 @@ public sealed class ValueCache : IReadOnlyValueCache
 
     #endregion
 
-    #region Properties
+    #region Cache state
 
     /// <summary>Stack this cache was built against.</summary>
     public Stack Stack { get; }
@@ -562,6 +667,32 @@ public sealed class ValueCache : IReadOnlyValueCache
     public bool IsMaterializationIncomplete => _MaterializationIncomplete != 0;
 
     /// <summary>
+    /// Sticky: the row limit (<see cref="CoreLimits.MaxValueCacheRows"/>) stopped the recording. The rows recorded before the stop
+    /// stay readable; later occurrences were not recorded, so the columns are incomplete. <see cref="RecordingLimitMessage"/>
+    /// says which limit and how to change it.
+    /// </summary>
+    public bool IsRecordingIncomplete => _RecordingIncomplete != 0;
+
+    /// <summary>
+    /// The sentence of the row-limit hit with the name of the limit and the way to change it, or <see langword="null"/> while the
+    /// cache has not hit the limit. Thread-safe.
+    /// </summary>
+    public string? RecordingLimitMessage
+    {
+        get
+        {
+            if (_RecordingIncomplete == 0)
+            {
+                return null;
+            }
+
+            return CoreLimits.MaxValueCacheRows.HitMessage(
+                Invariant($"Value cache stopped recording after {Interlocked.Read(ref _Rows)} rows"),
+                _RowLimit.Value);
+        }
+    }
+
+    /// <summary>
     /// All payload and optional custom-text / custom-representation series.
     /// Explicit field/group configs are present after construction. Under
     /// <see cref="RecordAllFields"/>, payload series are created when a field first appears
@@ -575,7 +706,7 @@ public sealed class ValueCache : IReadOnlyValueCache
 
     #endregion
 
-    #region Public API
+    #region Series lookup and read-only view
 
     /// <summary>
     /// Gets a zero-allocation read-only view of this cache.
@@ -586,16 +717,23 @@ public sealed class ValueCache : IReadOnlyValueCache
     public ReadOnlyValueCache ReadOnly => new(this);
 
     /// <summary>Alias for <see cref="ReadOnly"/>.</summary>
+    /// <returns>A view over this cache.</returns>
     public ReadOnlyValueCache AsReadOnlyView() => new(this);
 
     /// <summary>
     /// Returns the payload series for <paramref name="fieldId"/>.
     /// Custom text and custom representation use the named getters instead of this method.
     /// </summary>
+    /// <typeparam name="T">
+    /// The CLR type the cache stores for the field's <see cref="FieldType"/> (for example <c>ulong</c> for U64, MAC, and EUI-64
+    /// fields); a different type finds no series.
+    /// </typeparam>
+    /// <param name="fieldId">The recorded field.</param>
+    /// <returns>The live writer series; never <see langword="null"/>.</returns>
     /// <exception cref="ArgumentException">No series, or <typeparamref name="T"/> does not match the stack <see cref="FieldType"/>.</exception>
     public ValueCacheSeries<T> GetSeries<T>(FieldId fieldId)
     {
-        if (!TryGetSeries(fieldId, out ValueCacheSeries<T>? series) || series is null)
+        if (!TryGetSeries(fieldId, out ValueCacheSeries<T>? series))
         {
             throw new ArgumentException("No payload series of the requested type for this field.", nameof(fieldId));
         }
@@ -604,7 +742,14 @@ public sealed class ValueCache : IReadOnlyValueCache
     }
 
     /// <summary>Try-get counterpart of <see cref="GetSeries{T}(FieldId)"/>.</summary>
-    public bool TryGetSeries<T>(FieldId fieldId, out ValueCacheSeries<T>? series)
+    /// <typeparam name="T">See <see cref="GetSeries{T}(FieldId)"/>.</typeparam>
+    /// <param name="fieldId">The recorded field; any value is accepted (an unknown id finds nothing).</param>
+    /// <param name="series">The live writer series when found; otherwise <see langword="null"/>.</param>
+    /// <returns>
+    /// <see langword="true"/> when the payload series exists and <typeparamref name="T"/> matches its type;
+    /// <paramref name="series"/> is then not null.
+    /// </returns>
+    public bool TryGetSeries<T>(FieldId fieldId, [NotNullWhen(true)] out ValueCacheSeries<T>? series)
     {
         series = null;
         if (!_TryGetSlot(fieldId.Value, out ValueCacheProbeSlot slot) || slot.Payload is null)
@@ -625,7 +770,14 @@ public sealed class ValueCache : IReadOnlyValueCache
     }
 
     /// <summary>Looks up a field by ordinal name, then <see cref="TryGetSeries{T}(FieldId, out ValueCacheSeries{T})"/>.</summary>
-    public bool TryGetSeries<T>(string fieldName, out ValueCacheSeries<T>? series)
+    /// <typeparam name="T">See <see cref="GetSeries{T}(FieldId)"/>.</typeparam>
+    /// <param name="fieldName">The ordinal (case-sensitive) field name; <see langword="null"/> or unknown finds nothing.</param>
+    /// <param name="series">The live writer series when found; otherwise <see langword="null"/>.</param>
+    /// <returns>
+    /// <see langword="true"/> when the name is known and its payload series exists with a matching <typeparamref name="T"/>;
+    /// <paramref name="series"/> is then not null.
+    /// </returns>
+    public bool TryGetSeries<T>(string fieldName, [NotNullWhen(true)] out ValueCacheSeries<T>? series)
     {
         series = null;
         if (fieldName is null)
@@ -642,11 +794,13 @@ public sealed class ValueCache : IReadOnlyValueCache
         return TryGetSeries(id.Value, out series);
     }
 
-    /// <summary>Custom-text series for <paramref name="fieldId"/>.</summary>
+    /// <summary>Custom-text series (the display text of each recorded occurrence) for <paramref name="fieldId"/>.</summary>
+    /// <param name="fieldId">The recorded field.</param>
+    /// <returns>The live writer series; never <see langword="null"/>.</returns>
     /// <exception cref="ArgumentException">No custom-text series for this field.</exception>
     public ValueCacheSeries<string> GetCustomTextSeries(FieldId fieldId)
     {
-        if (!TryGetCustomTextSeries(fieldId, out ValueCacheSeries<string>? series) || series is null)
+        if (!TryGetCustomTextSeries(fieldId, out ValueCacheSeries<string>? series))
         {
             throw new ArgumentException("No custom-text series for this field.", nameof(fieldId));
         }
@@ -655,22 +809,35 @@ public sealed class ValueCache : IReadOnlyValueCache
     }
 
     /// <summary>Try-get counterpart of <see cref="GetCustomTextSeries(FieldId)"/>.</summary>
-    public bool TryGetCustomTextSeries(FieldId fieldId, out ValueCacheSeries<string>? series) =>
+    /// <param name="fieldId">The recorded field; any value is accepted (an unknown id finds nothing).</param>
+    /// <param name="series">The live writer series when found; otherwise <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when the cache records custom text for the field; <paramref name="series"/> is then not null.</returns>
+    public bool TryGetCustomTextSeries(FieldId fieldId, [NotNullWhen(true)] out ValueCacheSeries<string>? series) =>
         _TryGetStringSeries(fieldId.Value, customText: true, out series);
 
     /// <summary>Looks up custom-text series by field name.</summary>
-    public bool TryGetCustomTextSeries(string fieldName, out ValueCacheSeries<string>? series)
+    /// <param name="fieldName">The ordinal (case-sensitive) field name; <see langword="null"/> or unknown finds nothing.</param>
+    /// <param name="series">The live writer series when found; otherwise <see langword="null"/>.</param>
+    /// <returns>
+    /// <see langword="true"/> when the name is known and the cache records custom text for the field;
+    /// <paramref name="series"/> is then not null.
+    /// </returns>
+    public bool TryGetCustomTextSeries(string fieldName, [NotNullWhen(true)] out ValueCacheSeries<string>? series)
     {
         series = null;
-        FieldId? id = fieldName is null ? null : Stack.GetFieldId(fieldName);
+        FieldId? id = fieldName is null
+            ? null
+            : Stack.GetFieldId(fieldName);
         return id is not null && TryGetCustomTextSeries(id.Value, out series);
     }
 
-    /// <summary>Custom-representation series for <paramref name="fieldId"/>.</summary>
+    /// <summary>Custom-representation series (the alternative text of each recorded value) for <paramref name="fieldId"/>.</summary>
+    /// <param name="fieldId">The recorded field.</param>
+    /// <returns>The live writer series; never <see langword="null"/>.</returns>
     /// <exception cref="ArgumentException">No custom-representation series for this field.</exception>
     public ValueCacheSeries<string> GetCustomRepresentationSeries(FieldId fieldId)
     {
-        if (!TryGetCustomRepresentationSeries(fieldId, out ValueCacheSeries<string>? series) || series is null)
+        if (!TryGetCustomRepresentationSeries(fieldId, out ValueCacheSeries<string>? series))
         {
             throw new ArgumentException("No custom-representation series for this field.", nameof(fieldId));
         }
@@ -679,14 +846,25 @@ public sealed class ValueCache : IReadOnlyValueCache
     }
 
     /// <summary>Try-get counterpart of <see cref="GetCustomRepresentationSeries(FieldId)"/>.</summary>
-    public bool TryGetCustomRepresentationSeries(FieldId fieldId, out ValueCacheSeries<string>? series) =>
+    /// <param name="fieldId">The recorded field; any value is accepted (an unknown id finds nothing).</param>
+    /// <param name="series">The live writer series when found; otherwise <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when the cache records a custom representation for the field; <paramref name="series"/> is then not null.</returns>
+    public bool TryGetCustomRepresentationSeries(FieldId fieldId, [NotNullWhen(true)] out ValueCacheSeries<string>? series) =>
         _TryGetStringSeries(fieldId.Value, customText: false, out series);
 
     /// <summary>Looks up custom-representation series by field name.</summary>
-    public bool TryGetCustomRepresentationSeries(string fieldName, out ValueCacheSeries<string>? series)
+    /// <param name="fieldName">The ordinal (case-sensitive) field name; <see langword="null"/> or unknown finds nothing.</param>
+    /// <param name="series">The live writer series when found; otherwise <see langword="null"/>.</param>
+    /// <returns>
+    /// <see langword="true"/> when the name is known and the cache records a custom representation for the field;
+    /// <paramref name="series"/> is then not null.
+    /// </returns>
+    public bool TryGetCustomRepresentationSeries(string fieldName, [NotNullWhen(true)] out ValueCacheSeries<string>? series)
     {
         series = null;
-        FieldId? id = fieldName is null ? null : Stack.GetFieldId(fieldName);
+        FieldId? id = fieldName is null
+            ? null
+            : Stack.GetFieldId(fieldName);
         return id is not null && TryGetCustomRepresentationSeries(id.Value, out series);
     }
 
@@ -732,15 +910,18 @@ public sealed class ValueCache : IReadOnlyValueCache
 
     #endregion
 
-    #region Mutation
+    #region Pull record and eviction
 
     /// <summary>
     /// Pull ingest for a caller who owns the writer. Walks the sealed packet in storage order
     /// when <see cref="RecordAllFields"/> is set (grows payload series on first sight);
     /// otherwise walks the pre-created series arrays.
     /// </summary>
+    /// <param name="packet">A finalized packet of this cache's stack, parsed with a field tree; lazy containers of the recorded groups are expanded.</param>
     /// <exception cref="ArgumentNullException"><paramref name="packet"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">Stack mismatch, the packet is not finalized, or the packet was parsed with <see cref="FieldTreeMode.Skip"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// Stack mismatch, the packet is not finalized, or the packet was parsed with <see cref="FieldTreeMode.Skip"/>.
+    /// </exception>
     /// <exception cref="InvalidOperationException">This cache was evicted.</exception>
     public void RecordPacket(Packet packet)
     {
@@ -799,13 +980,19 @@ public sealed class ValueCache : IReadOnlyValueCache
 
     #endregion
 
-    #region Internal API
+    #region Parse-time record and materialization
 
     /// <summary>
     /// Parse-time record. Compact linear scan when few fields are recorded; otherwise a bitset miss
     /// before the dense slot is loaded. Predicted not-taken when this field has no series.
     /// Called only from <c>Packet</c>'s NoInlining stub so the probe cannot inflate <c>AppendChild</c>.
     /// </summary>
+    /// <param name="packetId">Id of the packet being parsed.</param>
+    /// <param name="timestampNanos">Packet timestamp in nanoseconds.</param>
+    /// <param name="fieldId">The appended field.</param>
+    /// <param name="value">The field value, passed by reference to avoid copying the struct per field.</param>
+    /// <param name="customText">The field's custom text; a null text records no custom-text row.</param>
+    /// <exception cref="InvalidOperationException">This cache was evicted.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal void Record(int packetId, long timestampNanos, FieldId fieldId, in FieldValue value, in LazyString customText)
     {
@@ -826,6 +1013,11 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// Custom-text record after <see cref="MutField.SetCustomText"/> / append / clear.
     /// Null text is a no-op.
     /// </summary>
+    /// <param name="packetId">Id of the packet being parsed.</param>
+    /// <param name="timestampNanos">Packet timestamp in nanoseconds.</param>
+    /// <param name="fieldId">The field whose custom text changed.</param>
+    /// <param name="customText">The new custom text; a null text records nothing.</param>
+    /// <exception cref="InvalidOperationException">This cache was evicted.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal void RecordCustomText(int packetId, long timestampNanos, FieldId fieldId, in LazyString customText)
     {
@@ -841,7 +1033,7 @@ public sealed class ValueCache : IReadOnlyValueCache
             return;
         }
 
-        if (_Probe[slotIndex].CustomText is { } series)
+        if (_Probe[slotIndex].CustomText is { } series && _TryReserveRow())
         {
             series.Record(packetId, timestampNanos, customText.AsString);
         }
@@ -852,12 +1044,20 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// <see cref="RecordAllFields"/>). Caps outer repeats at <see cref="ushort.MaxValue"/> and
     /// sets <see cref="IsMaterializationIncomplete"/> instead of throwing.
     /// </summary>
+    /// <param name="packet">The packet whose lazy fields are expanded; a packet without a field tree is left alone.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="packet"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">This cache was evicted.</exception>
     internal void EnsureMaterialized(Packet packet) => EnsureMaterialized(packet, ushort.MaxValue);
 
     /// <summary>
     /// Materializes lazy fields, capping outer repeats at <paramref name="maxPasses"/>.
     /// Production callers use <see cref="EnsureMaterialized(Packet)"/> (<see cref="ushort.MaxValue"/>).
     /// </summary>
+    /// <param name="packet">The packet whose lazy fields are expanded; a packet without a field tree is left alone.</param>
+    /// <param name="maxPasses">Maximum number of passes, greater than zero; hitting it sets <see cref="IsMaterializationIncomplete"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="packet"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">This cache was evicted.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxPasses"/> is not greater than zero (checked after the tree test).</exception>
     internal void EnsureMaterialized(Packet packet, int maxPasses)
     {
         ArgumentNullException.ThrowIfNull(packet);
@@ -915,6 +1115,8 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// <summary>
     /// Whether skip-tree should invoke the lazy populator for this container so configured series can record.
     /// </summary>
+    /// <param name="fieldId">The lazy container field.</param>
+    /// <returns><see langword="true"/> when the container must be expanded for this cache; see <c>_ShouldMaterialize</c>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool ShouldMaterialize(FieldId fieldId) => _ShouldMaterialize(fieldId);
 
@@ -922,6 +1124,8 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// True when this cache records custom text or custom representation for <paramref name="fieldId"/>.
     /// <see cref="RecordAllFields"/> does not force display text for every field.
     /// </summary>
+    /// <param name="fieldId">The field to test.</param>
+    /// <returns><see langword="true"/> when a custom-text or custom-representation series exists for the field.</returns>
     internal bool WantsDisplayText(FieldId fieldId)
     {
         if (!_TryGetRecordedSlot(fieldId.Value, out int slotIndex))
@@ -935,7 +1139,7 @@ public sealed class ValueCache : IReadOnlyValueCache
 
     #endregion
 
-    #region Private helpers
+    #region Read-only wrapping
 
     /// <summary>Wraps a live series as <see cref="ReadOnlyValueCacheSeries{T}"/> when <paramref name="found"/>.</summary>
     /// <param name="found">Whether the writer lookup succeeded.</param>
@@ -956,11 +1160,20 @@ public sealed class ValueCache : IReadOnlyValueCache
         return true;
     }
 
+    #endregion
+
+    #region Probe construction
+
     // The _Set*Slot helpers write into whichever probe form is being built: the compact dictionary (a struct value, so it is
     // read, modified, and stored back) or the dense array (updated in place through a ref). A payload slot is marked
     // PayloadGrowResolved because its series exists; a text/representation slot has no growth question.
 
     /// <summary>Registers the payload series of one field in the probe being built.</summary>
+    /// <param name="dense">The dense probe array, or an empty array when the compact shape is built.</param>
+    /// <param name="compactSlots">The construction-time map of the compact shape, or <see langword="null"/> for the dense shapes.</param>
+    /// <param name="fieldId">Raw field id; for the dense shape it must be below <c>dense.Length</c>.</param>
+    /// <param name="series">The payload series object to store.</param>
+    /// <param name="fieldType">The stack field type that fixed the series' generic argument.</param>
     private static void _SetPayloadSlot(
         ValueCacheProbeSlot[] dense,
         Dictionary<int, ValueCacheProbeSlot>? compactSlots,
@@ -985,6 +1198,10 @@ public sealed class ValueCache : IReadOnlyValueCache
     }
 
     /// <summary>Registers the custom-text series of one field in the probe being built.</summary>
+    /// <param name="dense">The dense probe array, or an empty array when the compact shape is built.</param>
+    /// <param name="compactSlots">The construction-time map of the compact shape, or <see langword="null"/> for the dense shapes.</param>
+    /// <param name="fieldId">Raw field id; for the dense shape it must be below <c>dense.Length</c>.</param>
+    /// <param name="series">The custom-text series to store.</param>
     private static void _SetCustomTextSlot(
         ValueCacheProbeSlot[] dense,
         Dictionary<int, ValueCacheProbeSlot>? compactSlots,
@@ -1003,6 +1220,10 @@ public sealed class ValueCache : IReadOnlyValueCache
     }
 
     /// <summary>Registers the custom-representation series of one field in the probe being built.</summary>
+    /// <param name="dense">The dense probe array, or an empty array when the compact shape is built.</param>
+    /// <param name="compactSlots">The construction-time map of the compact shape, or <see langword="null"/> for the dense shapes.</param>
+    /// <param name="fieldId">Raw field id; for the dense shape it must be below <c>dense.Length</c>.</param>
+    /// <param name="series">The custom-representation series to store.</param>
     private static void _SetCustomRepresentationSlot(
         ValueCacheProbeSlot[] dense,
         Dictionary<int, ValueCacheProbeSlot>? compactSlots,
@@ -1080,6 +1301,10 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// Sets the bit of every field id in <paramref name="map"/> and returns the running count of distinct set bits (a field
     /// that appears in several maps is counted once, which is what the all-recorded test compares with the field count).
     /// </summary>
+    /// <param name="bits">The recorded-field bitset to extend; sized for the stack's field count.</param>
+    /// <param name="map">The fields of one series kind; every key is a valid field id.</param>
+    /// <param name="recordedCount">Number of distinct bits set before this call.</param>
+    /// <returns>The number of distinct bits set after this call.</returns>
     private static int _OrRecordedKeys(
         ulong[] bits,
         Dictionary<int, (FieldInfo Info, ValueCaptureMode Mode)> map,
@@ -1109,6 +1334,9 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// <c>ulong</c> (addresses as their raw 64-bit value); IPv4 is the raw <c>uint</c>; the remaining types are stored as
     /// they are. Typed series keep the columns unboxed and contiguous (SoA), which the chunk scans rely on.
     /// </summary>
+    /// <param name="info">The stack field the series records.</param>
+    /// <param name="mode">Capture mode of the series.</param>
+    /// <returns>A <see cref="ValueCacheSeries{T}"/> of the CLR type mapped from the field type, as <see cref="object"/>.</returns>
     /// <exception cref="ArgumentException">The field type has no series representation.</exception>
     private object _CreatePayloadSeries(FieldInfo info, ValueCaptureMode mode)
     {
@@ -1135,11 +1363,16 @@ public sealed class ValueCache : IReadOnlyValueCache
         };
     }
 
+    #endregion
+
+    #region Pull fill
+
     /// <summary>
     /// Pull fill of the payload series (no RecordAllFields): for every configured series, visits each occurrence of its
     /// field in the packet via the field lookup cookie. Reads fields without materializing; the lazy containers that matter
     /// were expanded by <see cref="EnsureMaterialized(Packet)"/> before. Writer thread only.
     /// </summary>
+    /// <param name="packet">A finalized packet of this cache's stack with a field tree.</param>
     private void _RecordPayloadSeries(Packet packet)
     {
         ValueCacheSeries[] series = _PayloadSeries;
@@ -1154,14 +1387,31 @@ public sealed class ValueCache : IReadOnlyValueCache
             FieldLookupCookie cookie = FieldLookupCookie.Start;
             while (packet.TryGetNextField(fieldId, ref cookie, out Field field, materialize: false))
             {
-                _RecordPayload(item, fieldType, packetId, timestampNanos, field.Value);
+                if (_TryReserveRow())
+                {
+                    _RecordPayload(item, fieldType, packetId, timestampNanos, field.Value);
+                }
             }
         }
     }
 
+    /// <summary>
+    /// Pull fill of the custom-text series configured at construction: for each of them, records the custom text of every
+    /// occurrence of its field in the packet (see <see cref="_RecordStringSeries"/>). Needs a finalized packet of this cache's stack
+    /// whose lazy containers were expanded by <see cref="EnsureMaterialized(Packet)"/>; changes only the custom-text series.
+    /// Writer thread only.
+    /// </summary>
+    /// <param name="packet">A finalized packet of this cache's stack with a field tree.</param>
     private void _RecordCustomTextSeries(Packet packet) =>
         _RecordStringSeries(_CustomTextSeries, packet, customText: true);
 
+    /// <summary>
+    /// Pull fill of the custom-representation series configured at construction: for each of them, records the custom
+    /// representation of every occurrence of its field in the packet (see <see cref="_RecordStringSeries"/>). Needs a finalized
+    /// packet of this cache's stack whose lazy containers were expanded by <see cref="EnsureMaterialized(Packet)"/>; changes only
+    /// the custom-representation series. Writer thread only.
+    /// </summary>
+    /// <param name="packet">A finalized packet of this cache's stack with a field tree.</param>
     private void _RecordCustomRepresentationSeries(Packet packet) =>
         _RecordStringSeries(_CustomRepresentationSeries, packet, customText: false);
 
@@ -1169,7 +1419,12 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// Pull fill of the custom-text or custom-representation series: records the display text of each occurrence of the
     /// field, skipping occurrences that have none (a null text is not a row). Writer thread only.
     /// </summary>
-    private static void _RecordStringSeries(ValueCacheSeries<string>[] series, Packet packet, bool customText)
+    /// <param name="series">The string series to fill; each one's field id selects the occurrences.</param>
+    /// <param name="packet">A finalized packet with a field tree.</param>
+    /// <param name="customText">
+    /// <see langword="true"/> to read the field's custom text; <see langword="false"/> to read the value's custom representation.
+    /// </param>
+    private void _RecordStringSeries(ValueCacheSeries<string>[] series, Packet packet, bool customText)
     {
         int packetId = packet.Id.Value;
         long timestampNanos = packet.Timestamp.AsNanos;
@@ -1185,7 +1440,7 @@ public sealed class ValueCache : IReadOnlyValueCache
                 if (customText)
                 {
                     ref readonly LazyString text = ref field.CustomText;
-                    if (!text.IsNull)
+                    if (!text.IsNull && _TryReserveRow())
                     {
                         column.Record(packetId, timestampNanos, text.AsString);
                     }
@@ -1194,7 +1449,7 @@ public sealed class ValueCache : IReadOnlyValueCache
                 }
 
                 ref readonly LazyString representation = ref field.Value.CustomRepresentation;
-                if (!representation.IsNull)
+                if (!representation.IsNull && _TryReserveRow())
                 {
                     column.Record(packetId, timestampNanos, representation.AsString);
                 }
@@ -1275,7 +1530,9 @@ public sealed class ValueCache : IReadOnlyValueCache
                 {
                     // The series keeps the bytes for the lifetime of the cache, so it must own them: the value may alias the
                     // frame or packet buffer, whose lifetime is not tied to the cache (packets are recycled).
-                    byte[] copy = bytes.Length == 0 ? [] : bytes.ToArray();
+                    byte[] copy = bytes.Length == 0
+                        ? []
+                        : bytes.ToArray();
                     Unsafe.As<ValueCacheSeries<byte[]>>(boxed).Record(packetId, timestampNanos, copy);
                 }
 
@@ -1340,11 +1597,17 @@ public sealed class ValueCache : IReadOnlyValueCache
         }
     }
 
+    #endregion
+
+    #region Materialization and monotonic flags
+
     /// <summary>
     /// Whether the lazy container <paramref name="fieldId"/> has to be expanded for this cache: always under
     /// <see cref="RecordAllFields"/>, otherwise only when its index group is one of the groups of the recorded fields.
     /// Lazy containers outside those groups stay unexpanded, which keeps the fill cheap.
     /// </summary>
+    /// <param name="fieldId">The lazy container field.</param>
+    /// <returns><see langword="true"/> when the container has to be expanded.</returns>
     private bool _ShouldMaterialize(FieldId fieldId)
     {
         if (RecordAllFields)
@@ -1366,6 +1629,8 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// Maintains the cache-level strictly-increasing flags. Writer thread only (plain state, no synchronization); the flags
     /// themselves are volatile ints that only ever change from 1 to 0.
     /// </summary>
+    /// <param name="packetId">Id of the packet being recorded; repeated calls with the same id (one per field) are one packet.</param>
+    /// <param name="timestampNanos">Packet timestamp in nanoseconds.</param>
     private void _UpdateMonotonicFlags(int packetId, long timestampNanos)
     {
         // The first record only sets the baseline.
@@ -1400,11 +1665,41 @@ public sealed class ValueCache : IReadOnlyValueCache
         _LastTimestampNanos = timestampNanos;
     }
 
+    #endregion
+
+    #region Probe hit and series growth
+
+    /// <summary>
+    /// Counts one series row against <see cref="CoreLimits.MaxValueCacheRows"/> and says whether it may be appended. At the limit
+    /// the answer is no for every later row, <see cref="IsRecordingIncomplete"/> is set for good, and nothing is dropped
+    /// silently: the flag and <see cref="RecordingLimitMessage"/> report it. Writer thread only.
+    /// </summary>
+    /// <returns><see langword="true"/> when the row may be appended; <see langword="false"/> once the limit is reached.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool _TryReserveRow()
+    {
+        if (_Rows >= _RowLimit.Ceiling)
+        {
+            _RecordingIncomplete = 1;
+            return false;
+        }
+
+        // Interlocked only because RecordingLimitMessage reads the value from other threads; there is one writer.
+        _ = Interlocked.Increment(ref _Rows);
+        return true;
+    }
+
     /// <summary>
     /// Records the value, the custom representation, and the custom text of a field that has a probe slot. A first-seen
     /// field under <see cref="RecordAllFields"/> creates its payload series here (once, then the slot is resolved). Each
     /// part is optional: a slot may hold only a custom-text series, for example. Inlined only into <c>_RecordHitCold</c>.
     /// </summary>
+    /// <param name="fieldId">The appended field.</param>
+    /// <param name="packetId">Id of the packet being parsed.</param>
+    /// <param name="timestampNanos">Packet timestamp in nanoseconds.</param>
+    /// <param name="value">The field value.</param>
+    /// <param name="customText">The field's custom text; a null text records no custom-text row.</param>
+    /// <param name="slot">The field's probe slot, updated in place when a payload series is created.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _RecordHit(FieldId fieldId, int packetId, long timestampNanos, in FieldValue value, in LazyString customText, ref ValueCacheProbeSlot slot)
     {
@@ -1413,17 +1708,17 @@ public sealed class ValueCache : IReadOnlyValueCache
             _GrowPayloadSeriesOnRecord(fieldId, ref slot);
         }
 
-        if (slot.Payload is not null)
+        if (slot.Payload is not null && _TryReserveRow())
         {
             _RecordPayload(slot.Payload, slot.PayloadType, packetId, timestampNanos, in value);
         }
 
-        if (slot.CustomRepresentation is { } representation && !value.CustomRepresentation.IsNull)
+        if (slot.CustomRepresentation is { } representation && !value.CustomRepresentation.IsNull && _TryReserveRow())
         {
             representation.Record(packetId, timestampNanos, value.CustomRepresentation.AsString);
         }
 
-        if (slot.CustomText is { } text && !customText.IsNull)
+        if (slot.CustomText is { } text && !customText.IsNull && _TryReserveRow())
         {
             text.Record(packetId, timestampNanos, customText.AsString);
         }
@@ -1433,6 +1728,12 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// Out-of-line wrapper around <c>_RecordHit</c>: the hit logic is compiled once into this method instead of being
     /// inlined into <c>Record</c>, so the frequent miss path in <c>Record</c> stays small.
     /// </summary>
+    /// <param name="fieldId">The appended field.</param>
+    /// <param name="packetId">Id of the packet being parsed.</param>
+    /// <param name="timestampNanos">Packet timestamp in nanoseconds.</param>
+    /// <param name="value">The field value.</param>
+    /// <param name="customText">The field's custom text; a null text records no custom-text row.</param>
+    /// <param name="slot">The field's probe slot, updated in place when a payload series is created.</param>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _RecordHitCold(FieldId fieldId, int packetId, long timestampNanos, in FieldValue value, in LazyString customText, ref ValueCacheProbeSlot slot)
         => _RecordHit(fieldId, packetId, timestampNanos, in value, in customText, ref slot);
@@ -1442,6 +1743,8 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// <see cref="FieldType.None"/> unless <see cref="ValueCacheBuildOptions.RecordContainerPresence"/>
     /// or an explicit config already filled the slot.
     /// </summary>
+    /// <param name="fieldId">The first-seen field.</param>
+    /// <param name="slot">The field's probe slot; <c>PayloadType</c> and <c>PayloadGrowResolved</c> are stored, then <c>Payload</c> is published.</param>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _GrowPayloadSeriesOnRecord(FieldId fieldId, ref ValueCacheProbeSlot slot)
     {
@@ -1467,6 +1770,7 @@ public sealed class ValueCache : IReadOnlyValueCache
     /// Order: grow arrays, store the item, then volatile-write count so readers never
     /// observe a count past a live slot.
     /// </summary>
+    /// <param name="series">The new payload series; added to both the reader-visible list and the writer-only payload list.</param>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _AppendSeries(ValueCacheSeries series)
     {
@@ -1498,6 +1802,8 @@ public sealed class ValueCache : IReadOnlyValueCache
     }
 
     /// <summary>Returns a copy of <paramref name="current"/> in an array of twice the length (4 when empty): amortized O(1) per append.</summary>
+    /// <param name="current">The full buffer to grow; left unchanged so readers that hold it keep a valid snapshot.</param>
+    /// <returns>The larger array holding the same entries.</returns>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static ValueCacheSeries[] _GrowSeriesBuffer(ValueCacheSeries[] current)
     {
@@ -1514,6 +1820,10 @@ public sealed class ValueCache : IReadOnlyValueCache
 
         return next;
     }
+
+    #endregion
+
+    #region Probe lookup
 
     /// <summary>
     /// Finds the probe slot of a field id, or reports that the field is not recorded. This is the per-field gate of the fill
@@ -1636,7 +1946,16 @@ public sealed class ValueCache : IReadOnlyValueCache
         return true;
     }
 
-    private bool _TryGetStringSeries(int fieldId, bool customText, out ValueCacheSeries<string>? series)
+    /// <summary>
+    /// Finds the custom-text or custom-representation series of a field through the reader-side slot lookup. Needs nothing
+    /// but a field id; changes nothing. Safe for any thread: both string series are fixed at construction, so the slot copy
+    /// of <see cref="_TryGetSlot"/> always carries the final references.
+    /// </summary>
+    /// <param name="fieldId">Raw field id; any value is accepted (an unrecorded or out-of-range id finds nothing).</param>
+    /// <param name="customText"><see langword="true"/> to look up the custom-text series; <see langword="false"/> for the custom-representation series.</param>
+    /// <param name="series">The series when found; otherwise <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when the field has the requested series; <paramref name="series"/> is then not null.</returns>
+    private bool _TryGetStringSeries(int fieldId, bool customText, [NotNullWhen(true)] out ValueCacheSeries<string>? series)
     {
         series = null;
         if (!_TryGetSlot(fieldId, out ValueCacheProbeSlot slot))
@@ -1644,9 +1963,39 @@ public sealed class ValueCache : IReadOnlyValueCache
             return false;
         }
 
-        series = customText ? slot.CustomText : slot.CustomRepresentation;
+        series = customText
+            ? slot.CustomText
+            : slot.CustomRepresentation;
         return series is not null;
     }
+
+    /// <summary>
+    /// Whether <paramref name="type"/> is the CLR type that <c>_CreatePayloadSeries</c> stores for
+    /// <paramref name="fieldType"/>. This is the gate in front of <c>Unsafe.As</c> in <see cref="TryGetSeries{T}(FieldId, out ValueCacheSeries{T})"/>: it
+    /// must list exactly the mapping of <c>_CreatePayloadSeries</c>, and any field type that is missing here (the default
+    /// arm) can never be looked up.
+    /// </summary>
+    /// <param name="fieldType">The stack field type recorded in the probe slot.</param>
+    /// <param name="type">The CLR type the caller asks for.</param>
+    /// <returns><see langword="true"/> when the series stored for <paramref name="fieldType"/> has the payload type <paramref name="type"/>.</returns>
+    private static bool _PayloadTypeMatches(FieldType fieldType, Type type) =>
+        fieldType switch
+        {
+            FieldType.None or FieldType.Bool => type == typeof(byte),
+            FieldType.I64 or FieldType.Timestamp => type == typeof(long),
+            FieldType.U64 or FieldType.MacAddress or FieldType.Eui64 => type == typeof(ulong),
+            FieldType.F64 => type == typeof(double),
+            FieldType.IPv4Address => type == typeof(uint),
+            FieldType.String => type == typeof(string),
+            FieldType.Bytes => type == typeof(byte[]),
+            FieldType.IPv6Address => type == typeof(IPv6Address),
+            FieldType.Uuid => type == typeof(Uuid),
+            _ => false,
+        };
+
+    #endregion
+
+    #region Guards and construction checks
 
     /// <summary>
     /// Guards every write path: after <see cref="Abandon"/> (Session restart) a stale writer must not keep appending to a
@@ -1662,6 +2011,14 @@ public sealed class ValueCache : IReadOnlyValueCache
         }
     }
 
+    /// <summary>
+    /// Rejects a capture mode that is not a defined <see cref="ValueCaptureMode"/> member, so a cast from an arbitrary byte
+    /// cannot create a series with an undefined recording rule. Needs only the value; changes nothing.
+    /// </summary>
+    /// <param name="mode">The capture mode of a field config, a group config, or the build options.</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="mode"/> is not <see cref="ValueCaptureMode.FirstOccurrence"/> or <see cref="ValueCaptureMode.AllOccurrences"/>.
+    /// </exception>
     private static void _ValidateCaptureMode(ValueCaptureMode mode)
     {
         if ((uint)mode > (uint)ValueCaptureMode.AllOccurrences)
@@ -1670,6 +2027,15 @@ public sealed class ValueCache : IReadOnlyValueCache
         }
     }
 
+    /// <summary>
+    /// Rejects a field or group config that records nothing: such a config would create no series and almost certainly
+    /// signals a caller mistake. Needs only the three flags; changes nothing.
+    /// </summary>
+    /// <param name="recordValue">Whether the config records the payload.</param>
+    /// <param name="recordText">Whether the config records the custom text.</param>
+    /// <param name="recordRep">Whether the config records the custom representation.</param>
+    /// <param name="paramName">Name of the constructor argument that held the config, reported in the exception.</param>
+    /// <exception cref="ArgumentException">All three flags are false.</exception>
     private static void _ValidateRecordFlags(bool recordValue, bool recordText, bool recordRep, string paramName)
     {
         if (!recordValue && !recordText && !recordRep)
@@ -1680,6 +2046,15 @@ public sealed class ValueCache : IReadOnlyValueCache
         }
     }
 
+    /// <summary>
+    /// Resolves a field id of a config to its stack field, so an id that the stack does not know fails at construction
+    /// instead of silently recording nothing. Changes nothing.
+    /// </summary>
+    /// <param name="stack">The stack the cache is built for.</param>
+    /// <param name="fieldId">The field id from a field config.</param>
+    /// <param name="paramName">Name of the constructor argument that held the config, reported in the exception.</param>
+    /// <returns>The stack's descriptor of the field; never null.</returns>
+    /// <exception cref="ArgumentException">The stack has no field with this id.</exception>
     private static FieldInfo _RequireField(Stack stack, FieldId fieldId, string paramName)
     {
         FieldInfo? info = stack.GetField(fieldId);
@@ -1693,6 +2068,15 @@ public sealed class ValueCache : IReadOnlyValueCache
         return info;
     }
 
+    /// <summary>
+    /// Resolves an index group id of a group config to its stack group, so an id that the stack does not know fails at
+    /// construction instead of expanding to nothing. Changes nothing.
+    /// </summary>
+    /// <param name="stack">The stack the cache is built for.</param>
+    /// <param name="groupId">The group id from a group config.</param>
+    /// <param name="paramName">Name of the constructor argument that held the config, reported in the exception.</param>
+    /// <returns>The stack's descriptor of the group; never null.</returns>
+    /// <exception cref="ArgumentException">The stack has no index group with this id.</exception>
     private static IndexGroupInfo _RequireGroup(Stack stack, IndexGroupId groupId, string paramName)
     {
         IndexGroupInfo? info = stack.GetIndexGroup(groupId);
@@ -1706,6 +2090,13 @@ public sealed class ValueCache : IReadOnlyValueCache
         return info;
     }
 
+    /// <summary>
+    /// Adds the index group of a recorded field to the set of groups whose lazily populated containers must be expanded
+    /// for the configured fields to exist when a packet is recorded. A field without a valid index group adds nothing.
+    /// Construction only (explicit configs; <see cref="RecordAllFields"/> materializes every group).
+    /// </summary>
+    /// <param name="groups">The set under construction; created on the first group found, so it stays <see langword="null"/> when no field has one.</param>
+    /// <param name="info">The stack field of a series being created.</param>
     private static void _CollectMaterializeGroup(ref HashSet<int>? groups, FieldInfo info)
     {
         if (info.IndexGroup is IndexGroupId group && group.IsValid)
@@ -1714,27 +2105,6 @@ public sealed class ValueCache : IReadOnlyValueCache
             _ = groups.Add(group.Value);
         }
     }
-
-    /// <summary>
-    /// Whether <paramref name="type"/> is the CLR type that <c>_CreatePayloadSeries</c> stores for
-    /// <paramref name="fieldType"/>. This is the gate in front of <c>Unsafe.As</c> in <see cref="TryGetSeries{T}(FieldId, out ValueCacheSeries{T})"/>: it
-    /// must list exactly the mapping of <c>_CreatePayloadSeries</c>, and any field type that is missing here (the default
-    /// arm) can never be looked up.
-    /// </summary>
-    private static bool _PayloadTypeMatches(FieldType fieldType, Type type) =>
-        fieldType switch
-        {
-            FieldType.None or FieldType.Bool => type == typeof(byte),
-            FieldType.I64 or FieldType.Timestamp => type == typeof(long),
-            FieldType.U64 or FieldType.MacAddress or FieldType.Eui64 => type == typeof(ulong),
-            FieldType.F64 => type == typeof(double),
-            FieldType.IPv4Address => type == typeof(uint),
-            FieldType.String => type == typeof(string),
-            FieldType.Bytes => type == typeof(byte[]),
-            FieldType.IPv6Address => type == typeof(IPv6Address),
-            FieldType.Uuid => type == typeof(Uuid),
-            _ => false,
-        };
 
     #endregion
 }

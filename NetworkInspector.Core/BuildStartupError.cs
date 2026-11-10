@@ -23,8 +23,6 @@ public sealed record BuildStartupError(
     string ProtocolUiName,
     Exception Exception) : BuildDiagnostic
 {
-    #region BuildDiagnostic
-
     /// <inheritdoc/>
     public override BuildDiagnosticSeverity Severity => BuildDiagnosticSeverity.Error;
 
@@ -36,13 +34,7 @@ public sealed record BuildStartupError(
             CultureInfo.InvariantCulture,
             $"Protocol '{ProtocolName}' failed during startup: {Exception.Message}");
 
-    #endregion
-
-    #region Formatting
-
     /// <inheritdoc/>
-    /// <remarks>Replaces the compiler-generated record <c>ToString</c> with the compact "[Severity] message" form.</remarks>
-    public override string ToString() => $"[{Severity}] {Message}";
-
-    #endregion
+    /// <remarks>Gives the compact "[Severity] message" form instead of the compiler-generated record text.</remarks>
+    public override string ToString() => Invariant($"[{Severity}] {Message}");
 }

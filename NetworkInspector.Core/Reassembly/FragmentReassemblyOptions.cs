@@ -82,9 +82,10 @@ public readonly record struct FragmentReassemblyOptions
     /// unbounded. Must be greater than 0.
     /// <para>
     /// Threat: the per-datagram length and the datagram count each look small, but they multiply (1,024 datagrams of 10 MiB
-    /// are 10 GiB). Configurable by the owner. Posture: the IP presets are open by default (unbounded, unchanged behavior; the
-    /// residual risk is bounded by <see cref="MaxPending"/> times <see cref="MaxFragments"/> fragments), other owners choose
-    /// a finite value. The counter measures stored payload bytes; the pooled arrays behind them can be up to twice as large.
+    /// are 10 GiB). Configurable by the owner; the IP presets use the live value of <c>reassembly.maxFragmentStorage</c>
+    /// (<see cref="CoreLimits.MaxFragmentStorage"/>, default 64 MiB). Posture: secure by default, a finite value. At the limit the
+    /// datagram chosen by <see cref="EvictionPolicy"/> is evicted and counted. The counter measures stored payload bytes; the
+    /// pooled arrays behind them can be up to twice as large.
     /// </para>
     /// </summary>
     public long MaxBufferedBytes { get; init; }
@@ -133,16 +134,18 @@ public readonly record struct FragmentReassemblyOptions
     public FragmentGapPolicy GapPolicy { get; init; }
 
     /// <summary>
-    /// IPv4 reassembly exactly as it behaved before the generic type existed: 1,024 open datagrams, 65,535 bytes, 8,192
-    /// fragments, largest duplicate wins, oldest created is evicted first, no byte budget (tightening it belongs to the
-    /// limits concept, not to a refactoring).
+    /// IPv4 reassembly: the defaults of <see cref="CoreLimits.MaxPendingDatagrams"/> (1,024 open datagrams),
+    /// <see cref="CoreLimits.MaxFragmentStorage"/> (64 MiB over all open datagrams), and
+    /// <see cref="CoreLimits.MaxFragmentsPerDatagram"/> (8,192), 65,535 bytes per datagram, the largest duplicate wins, and the
+    /// oldest created datagram is evicted first. Posture: secure by default, every limit is finite. An owner that has a stack
+    /// applies the live values with <see cref="WithLimits"/>.
     /// </summary>
     public static FragmentReassemblyOptions IPv4 { get; } = new()
     {
-        MaxPending = 1024,
-        MaxBufferedBytes = long.MaxValue,
+        MaxPending = (int)CoreLimits.MaxPendingDatagrams.Default,
+        MaxBufferedBytes = CoreLimits.MaxFragmentStorage.Default,
         MaxDatagramLength = 65535,
-        MaxFragments = 8192,
+        MaxFragments = (int)CoreLimits.MaxFragmentsPerDatagram.Default,
         NonLastAlignment = 1,
         OverlapPolicy = FragmentOverlapPolicy.KeepLargestDuplicate,
         EvictionPolicy = FragmentEvictionPolicy.OldestCreated,
@@ -150,8 +153,30 @@ public readonly record struct FragmentReassemblyOptions
         GapPolicy = FragmentGapPolicy.WaitForCompletion,
     };
 
-    /// <summary>IPv6 reassembly exactly as before: the IPv4 values with the RFC 5722 rule that an overlap discards the datagram.</summary>
+    /// <summary>
+    /// IPv6 reassembly: the <see cref="IPv4"/> values with the RFC 5722 rule that an overlap discards the datagram
+    /// (<see cref="FragmentOverlapPolicy.DiscardDatagram"/>).
+    /// </summary>
     public static FragmentReassemblyOptions IPv6 { get; } = IPv4 with { OverlapPolicy = FragmentOverlapPolicy.DiscardDatagram };
+
+    /// <summary>
+    /// Returns a copy whose open-datagram, stored-byte, and fragment bounds are the current values of the live limits. A limit
+    /// that is switched off reads as the largest value.
+    /// </summary>
+    /// <param name="limits">The limits of the stack (<see cref="Stack.Limits"/>).</param>
+    /// <returns>These options with <see cref="MaxPending"/>, <see cref="MaxBufferedBytes"/>, and <see cref="MaxFragments"/> replaced.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="limits"/> is <see langword="null"/>.</exception>
+    /// <remarks>Cost: three volatile reads; no allocation. The other values are formats and policies of the owner and stay.</remarks>
+    public FragmentReassemblyOptions WithLimits(CoreLimitSet limits)
+    {
+        ArgumentNullException.ThrowIfNull(limits);
+        return this with
+        {
+            MaxPending = CoreLimitSet.IntCeiling(limits.MaxPendingDatagrams),
+            MaxBufferedBytes = limits.MaxFragmentStorage.Ceiling,
+            MaxFragments = CoreLimitSet.IntCeiling(limits.MaxFragmentsPerDatagram),
+        };
+    }
 
     /// <summary>Checks every value; the problem names the offending option and its allowed range.</summary>
     /// <param name="problem">The first problem found, or <see langword="null"/> when the options are valid.</param>

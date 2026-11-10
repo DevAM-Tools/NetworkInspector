@@ -22,29 +22,30 @@ internal abstract class SomeIpPayloadKit
     #region Description helpers
 
     protected static string Json(string methods, string types = "") =>
-        $$"""
+        Invariant($$"""
         {"schema_version":"1.0","services":[{"service_id":16385,"major_version":1,"name":"Svc","methods":[{{methods}}],"data_types":[{{types}}]}]}
-        """;
+        """);
 
     protected static string Method(int id, string name, string inList, string outList, string extra = "") =>
-        $$"""{"kind":"method","id":{{id}},"name":"{{name}}","in":{{inList}},"out":{{outList}}{{extra}}}""";
+        Invariant($$"""{"kind":"method","id":{{id}},"name":"{{name}}","in":{{inList}},"out":{{outList}}{{extra}}}""");
 
     protected static string Site(string name, string type, string extra = "") =>
-        $$"""{"name":"{{name}}","type_reference":"{{type}}"{{extra}}}""";
+        Invariant($$"""{"name":"{{name}}","type_reference":"{{type}}"{{extra}}}""");
 
     protected static string Sites(params string[] sites) => "[" + string.Join(",", sites) + "]";
 
     protected static string Transform(int stringLength = 4, int arrayLength = 4, int structLength = 4) =>
-        $$""","transformation_properties":{"size_of_string_length":{{stringLength}},"size_of_array_length":{{arrayLength}},"size_of_struct_length":{{structLength}}}""";
+        Invariant($$""","transformation_properties":{"size_of_string_length":{{stringLength}},"size_of_array_length":{{arrayLength}}""") +
+        Invariant($$""","size_of_struct_length":{{structLength}}}""");
 
     protected static string BaseType(string name, string primitive, string extra = "") =>
-        $$"""{"category":"base_type","name":"{{name}}","type_reference":"{{primitive}}"{{extra}}}""";
+        Invariant($$"""{"category":"base_type","name":"{{name}}","type_reference":"{{primitive}}"{{extra}}}""");
 
     protected static string ArrayType(string name, string element, string extra = "") =>
-        $$"""{"category":"array","name":"{{name}}","type_reference":"{{element}}"{{extra}}}""";
+        Invariant($$"""{"category":"array","name":"{{name}}","type_reference":"{{element}}"{{extra}}}""");
 
     protected static string StructType(string name, params string[] members) =>
-        $$"""{"category":"structure","name":"{{name}}","members":[{{string.Join(",", members)}}]}""";
+        Invariant($$"""{"category":"structure","name":"{{name}}","members":[{{string.Join(",", members)}}]}""");
 
     protected static string Join(params string[] parts) => string.Join(",", parts);
 

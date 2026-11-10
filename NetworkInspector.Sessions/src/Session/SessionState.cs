@@ -120,7 +120,7 @@ internal sealed class SessionState
             {
                 throw new SessionException(
                     code,
-                    FormattableString.Invariant($"Maximum {what} ID count exceeded (valid range 0..{maxId.ToString(CultureInfo.InvariantCulture)})."));
+                    Invariant($"Maximum {what} ID count exceeded (valid range 0..{maxId.ToString(CultureInfo.InvariantCulture)})."));
             }
 
             int replacement = current == maxId ? _IdsExhaustedSentinel : current + 1;

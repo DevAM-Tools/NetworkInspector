@@ -457,7 +457,7 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
 
         if (!_Started)
         {
-            throw new InvalidOperationException($"{UiName} has not been started.");
+            throw new InvalidOperationException(Invariant($"{UiName} has not been started."));
         }
 
         if (_Aborted)
@@ -1112,7 +1112,7 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
                 FrameIndex = frameId,
                 FileOffset = fileOffset,
                 Kind = FrameReadErrorKind.UnresolvedInterface,
-                Message = $"Unresolved interface: section={sectionIndex}, interface={interfaceId}.",
+                Message = Invariant($"Unresolved interface: section={sectionIndex}, interface={interfaceId}."),
             });
             return null;
         }
@@ -1138,7 +1138,7 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
             FrameIndex = frameId,
             FileOffset = fileOffset,
             Kind = FrameReadErrorKind.Other,
-            Message = $"Frame creation failed at offset {fileOffset}.",
+            Message = Invariant($"Frame creation failed at offset {fileOffset}."),
         });
         return null;
     }
@@ -1201,7 +1201,7 @@ public sealed class PcapngSource : IRandomAccessFrameSource, IErrorTolerantFrame
 
         // if_name comes from the file: a name the registry would reject (empty, control characters) falls back to the
         // positional name instead of failing the whole read.
-        string name = info.Name is { } ifName && NameValidation.IsValidUiName(ifName) ? ifName : $"Interface {interfaceIndex}";
+        string name = info.Name is { } ifName && NameValidation.IsValidUiName(ifName) ? ifName : Invariant($"Interface {interfaceIndex}");
         FrameInterfaceId id = registry.Register(
             _SourceId, name, info.Description, info.LinkType, PcapInterfaceProperties.ForPcapng(info, section));
 

@@ -575,7 +575,7 @@ internal sealed class DuckDbBulkWriter : IColumnarBatchSink, IDisposable
         // Security: the table name is built from an int through the invariant culture and the column types from a
         // fixed switch, so no caller-supplied text reaches the SQL string (injection-safe by construction). Identifiers
         // cannot be passed as SQL parameters, which is why string building is used at all.
-        string tableName = FormattableString.Invariant($"field_{fieldIdValue}");
+        string tableName = Invariant($"field_{fieldIdValue}");
 
         // Sync: README § Table Layout (types) and EXPORTER_GUIDE.md § Rebuilding the display line (integer address forms).
         // The unsigned integer types keep the numeric order equal to the address order (a signed type would sort the upper half of
@@ -639,7 +639,7 @@ internal sealed class DuckDbBulkWriter : IColumnarBatchSink, IDisposable
     /// </remarks>
     private void _WriteFieldRows(int fieldIdValue, FieldColumnBag bag)
     {
-        string tableName = FormattableString.Invariant($"field_{fieldIdValue}");
+        string tableName = Invariant($"field_{fieldIdValue}");
         bool staged = bag.FieldType == FieldType.IPv6Address;
         string appendTable = tableName;
         if (staged)

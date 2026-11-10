@@ -12,7 +12,7 @@ internal sealed class FilterScopedScenario : FilterScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Scoped match \"{Expression}\" over fresh lazily parsed, indexed packets.");
 
     /// <inheritdoc/>

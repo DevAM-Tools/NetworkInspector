@@ -377,6 +377,8 @@ public sealed partial class IPv6Protocol : IProtocol
     /// </summary>
     partial void _OnStartCustom(Stack stack)
     {
+        // The reassembly bounds are the limits of this stack (settings reassembly.*): read when the stack starts.
+        _Defragmenter.ApplyLimits(stack.Limits);
         _Populator = _PopulateIPv6;
         _ExtHeaderFieldIds = _BuildExtHeaderFieldIds();
         // IPv6 next-header is also an 8-bit IP protocol number; share the same ip.proto table.
@@ -499,10 +501,10 @@ public sealed partial class IPv6Protocol : IProtocol
         // parses only (replays never write protocol state, they hold the inert default scope), and only the outermost
         // scope raises the watermark: raising it earlier would make a later layer of the same packet look like a replay
         // and skip the defragmenter.
-        bool isReplay = _Gate.IsReplay(packet.Id);
+        bool isReplay = _Gate.IsReplay(in context, packet.Id);
         IngestScope scope = isReplay
             ? default
-            : _Gate.Enter(packet.Id);
+            : _Gate.Enter(in context, packet.Id);
 
         // The finally block runs on every exit (error results and exceptions included), so the scope cannot leak and the
         // packet is always marked as parsed once, even when its first parse failed.
@@ -555,7 +557,7 @@ public sealed partial class IPv6Protocol : IProtocol
         byte version = header.Version;
         if (version != IPv6Header.ExpectedVersion)
         {
-            return ParseError.InvalidData(ProtocolName, $"Expected version 6, got {version}");
+            return ParseError.InvalidData(ProtocolName, Invariant($"Expected version 6, got {version}"));
         }
 
         // Only extract fields needed for: version check, extension-header walk, dispatch, index recording,

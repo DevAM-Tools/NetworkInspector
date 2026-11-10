@@ -63,7 +63,7 @@ internal static class WebSocketDisplayTables
             1013 => "Try Again Later (1013)",
             1014 => "Bad Gateway (1014)",
             1015 => "TLS Handshake (1015)",
-            _ => $"{code}",
+            _ => Invariant($"{code}"),
         };
     #endregion
 }

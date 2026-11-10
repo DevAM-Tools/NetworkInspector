@@ -31,8 +31,12 @@ internal sealed class PacketExitPointTests
         return builder.Build();
     }
 
-    /// <summary>How long a gated test waits for the other side before it gives up; only a failing test ever waits this long.</summary>
-    private static readonly TimeSpan _GateTimeout = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// How long a gated test waits for the other side before it gives up; only a failing test ever waits this long. Generous on
+    /// purpose: a full parallel test run can starve a racer thread for tens of seconds, and a short limit would then fail a
+    /// correct test.
+    /// </summary>
+    private static readonly TimeSpan _GateTimeout = TimeSpan.FromSeconds(120);
 
     /// <summary>
     /// Runs <paramref name="body"/> on a thread of its own. The gated tests park their threads (barrier, populator gate), so they
@@ -1151,7 +1155,8 @@ internal sealed class PacketExitPointTests
         await Assert.That(setError).IsNotNull();
         setError!.Invoke(packet, ["ignored"]);
 
-        await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(packet.FieldCount(materialize: false)); // materialize: false — current materialized count only
+        await Assert.That(packet.FieldCount(materialize: false))
+            .IsEqualTo(packet.FieldCount(materialize: false)); // materialize: false — current materialized count only
     }
 
     [Test]
@@ -1183,7 +1188,8 @@ internal sealed class PacketExitPointTests
         await Assert.That(setFieldError).IsNotNull();
         setFieldError!.Invoke(packet, [(ushort)0, "ignored"]);
 
-        await Assert.That(packet.FieldCount(materialize: false)).IsEqualTo(packet.FieldCount(materialize: false)); // materialize: false — current materialized count only
+        await Assert.That(packet.FieldCount(materialize: false))
+            .IsEqualTo(packet.FieldCount(materialize: false)); // materialize: false — current materialized count only
     }
 
     [Test]
@@ -2221,6 +2227,81 @@ internal sealed class PacketExitPointTests
         await Assert.That(_ErrorTexts(packet, stack)).Contains("Maximum field count exceeded");
     }
 
+    [Test]
+    public async Task TryParse_FieldLimitReached_KeepsTheIndexEntry()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        FillToLimitProtocol proto = new();
+        ProtocolId protoId = builder.RegisterProtocol(proto);
+        proto.RegisterFields(builder, protoId);
+        using Stack stack = builder.Build();
+        PacketIndex index = new(stack);
+        ParseOptions options = new(FieldTreeMode.Build, index: index, firstProtocol: protoId);
+
+        bool parsed = Packet.TryParse(0, stack, _MakeFrame(stack, new byte[14]), in options, out Packet? _, out ParseFailure _);
+
+        // packet.id is in the index group that PacketProtocol records for every packet.
+        FieldId packetIdField = stack.GetFieldId("packet.id")!.Value; // Invariant: PacketProtocol registers packet.id for every stack.
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(index.GetFieldBitmap(packetIdField).Contains(0u)).IsTrue();
+    }
+
+    [Test]
+    public async Task SkipParse_DissectorThrows_ErrorCountIsOne()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new ThrowingProtocol());
+        using Stack stack = builder.Build();
+        ParseOptions options = new(FieldTreeMode.Skip, firstProtocol: protoId);
+
+        bool parsed = Packet.TryParse(0, stack, _MakeFrame(stack, new byte[14]), in options, out Packet? packet, out ParseFailure _);
+
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(packet?.ErrorCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task CleanParseHasNoErrorsAndARecycledPacketStartsAtZero()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId throwingId = builder.RegisterProtocol(new ThrowingProtocol());
+        ProtocolId cleanId = builder.RegisterProtocol(new OpenPacketProtocol());
+        using Stack stack = builder.Build();
+        ParseOptions failing = new(FieldTreeMode.Build, firstProtocol: throwingId);
+        ParseOptions passing = new(FieldTreeMode.Build, firstProtocol: cleanId);
+
+        bool first = Packet.TryParse(0, stack, _MakeFrame(stack, new byte[14]), in failing, out Packet? parsedPacket, out ParseFailure _);
+        Packet packet = parsedPacket ?? throw new InvalidOperationException("The first parse failed.");
+        int afterFailure = packet.ErrorCount;
+        bool second = Packet.TryParse(packet, 1, stack, _MakeFrame(stack, new byte[14], 2), in passing, out ParseFailure _);
+
+        await Assert.That(first).IsTrue();
+        await Assert.That(afterFailure).IsEqualTo(1);
+        await Assert.That(second).IsTrue();
+        await Assert.That(packet.ErrorCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryParse_IndexOfAnotherStack_ReturnsIndexStackMismatch()
+    {
+        using SettingsManager firstSettings = new();
+        FrameInterfaceRegistry registry = new();
+        using Stack first = new StackBuilder(firstSettings, registry).Build();
+        using SettingsManager secondSettings = new();
+        using Stack second = new StackBuilder(secondSettings, registry).Build();
+        PacketIndex foreignIndex = new(second);
+        ParseOptions options = new(FieldTreeMode.Build, index: foreignIndex);
+
+        bool parsed = Packet.TryParse(0, first, _MakeFrame(first, new byte[14]), in options, out Packet? packet, out ParseFailure failure);
+
+        await Assert.That(parsed).IsFalse();
+        await Assert.That(packet).IsNull();
+        await Assert.That(failure).IsEqualTo(ParseFailure.IndexStackMismatch);
+    }
+
     /// <summary>Every <c>packet.error</c> text of the packet, joined; tombstones have no text.</summary>
     private static string _ErrorTexts(Packet packet, Stack stack)
     {
@@ -3015,6 +3096,16 @@ internal sealed class PacketExitPointTests
                 parentField.Append(_LeafId, FieldValue.NewU64(i));
             }
         }
+    }
+
+    /// <summary>A dissector that throws an ordinary exception on every parse.</summary>
+    private sealed class ThrowingProtocol : IProtocol
+    {
+        public string Name => "throwing";
+        public string UiName => "Throwing";
+
+        public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
+            => throw new InvalidOperationException("ThrowingProtocol failed");
     }
 
     private sealed class ThrowingFrameProto : IProtocol

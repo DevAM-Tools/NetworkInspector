@@ -52,7 +52,7 @@ internal static class ConfigLoader
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            error = $"Invalid configuration path: {ex.Message}";
+            error = Invariant($"Invalid configuration path: {ex.Message}");
             return null;
         }
 
@@ -60,7 +60,7 @@ internal static class ConfigLoader
         // it is opened; that race surfaces as an IOException below and is reported as a read failure, not thrown.
         if (!File.Exists(resolvedPath))
         {
-            error = $"Configuration file not found: {resolvedPath}";
+            error = Invariant($"Configuration file not found: {resolvedPath}");
             return null;
         }
 
@@ -77,17 +77,17 @@ internal static class ConfigLoader
         }
         catch (JsonException ex)
         {
-            error = $"Failed to parse JSON in '{resolvedPath}': {ex.Message}";
+            error = Invariant($"Failed to parse JSON in '{resolvedPath}': {ex.Message}");
             return null;
         }
         catch (UnauthorizedAccessException ex)
         {
-            error = $"Access to '{resolvedPath}' is denied: {ex.Message}";
+            error = Invariant($"Access to '{resolvedPath}' is denied: {ex.Message}");
             return null;
         }
         catch (IOException ex)
         {
-            error = $"Failed to read '{resolvedPath}': {ex.Message}";
+            error = Invariant($"Failed to read '{resolvedPath}': {ex.Message}");
             return null;
         }
     }

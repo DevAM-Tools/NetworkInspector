@@ -920,7 +920,7 @@ internal sealed class FieldWriterState : IDisposable
         // The file is created on the first batch that has rows for this field, with a schema derived from the
         // content; later batches must write the same columns, which holds because the content never changes.
         _Writer ??= new ParquetFileWriter(
-            Path.Combine(fieldsDirectory, $"field_{_FieldIdValue}.parquet"), _BuildSchema(content), _Options);
+            Path.Combine(fieldsDirectory, Invariant($"field_{_FieldIdValue}.parquet")), _BuildSchema(content), _Options);
 
         // Pooled copies of the two key columns (see PooledColumn); one closure per row group, not per value.
         using PooledColumn<int> packetIds = PooledColumn<int>.CopyOf(bag.PacketIdSpan);

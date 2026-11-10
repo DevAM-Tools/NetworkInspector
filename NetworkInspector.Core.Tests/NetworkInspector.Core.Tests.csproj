@@ -4,4 +4,11 @@
     <ProjectReference Include="..\NetworkInspector.Core\NetworkInspector.Core.csproj" />
     <ProjectReference Include="..\NetworkInspector.Protocols\NetworkInspector.Protocols.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- One source of the limit builders for every test project that needs a valid LimitDefinition; the helper is internal to each assembly. -->
+    <Compile Include="..\NetworkInspector.Limits.Tests\LimitTestDefinitions.cs" Link="Helpers\LimitTestDefinitions.cs" />
+    <!-- The temporary settings folder of the settings tests; the NetworkInspector settings tests (disk format, integration) use it too. -->
+    <Compile Include="..\NetworkInspector.Settings.Tests\SettingsTempFolder.cs" Link="Helpers\SettingsTempFolder.cs" />
+  </ItemGroup>
 </Project>

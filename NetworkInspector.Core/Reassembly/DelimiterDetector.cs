@@ -14,13 +14,11 @@ namespace NetworkInspector.Core.Reassembly;
 /// </summary>
 public sealed class DelimiterDetector : IPduBoundaryDetector
 {
-    #region Fields
-
+    /// <summary>
+    /// The byte sequence that terminates a PDU. A private copy that is never written after construction, so the detector
+    /// stays immutable and thread-safe.
+    /// </summary>
     private readonly byte[] _Delimiter;
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>Creates a delimiter-based PDU boundary detector. The array is copied defensively.</summary>
     /// <param name="delimiter">The byte sequence that terminates a PDU.</param>
@@ -41,10 +39,6 @@ public sealed class DelimiterDetector : IPduBoundaryDetector
         _Delimiter = (byte[])delimiter.Clone();
     }
 
-    #endregion
-
-    #region Public API
-
     /// <inheritdoc/>
     public PduBoundaryResult Detect(ReadOnlySpan<byte> data)
     {
@@ -56,6 +50,4 @@ public sealed class DelimiterDetector : IPduBoundaryDetector
             ? PduBoundaryResult.Complete(idx + _Delimiter.Length)
             : PduBoundaryResult.Incomplete;
     }
-
-    #endregion
 }

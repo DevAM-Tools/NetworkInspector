@@ -341,8 +341,8 @@ internal sealed class RecordingStackBuilder : IStackBuilder
         _Inner.GetProtocolsFromAnyProtocolTable(tableId);
 
     /// <inheritdoc/>
-    public ProtocolId? TryMatchHeuristic(HeuristicProtocolTableId tableId, ReadOnlyMemory<byte> data) =>
-        _Inner.TryMatchHeuristic(tableId, data);
+    public bool TryMatchHeuristic(HeuristicProtocolTableId tableId, ReadOnlyMemory<byte> data, out ProtocolId protocolId) =>
+        _Inner.TryMatchHeuristic(tableId, data, out protocolId);
 
     /// <inheritdoc/>
     public ParseDelegate? ResolveParseDelegate(ProtocolId id) => _Inner.ResolveParseDelegate(id);

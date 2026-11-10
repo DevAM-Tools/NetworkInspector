@@ -58,7 +58,7 @@ internal sealed class RandomAccessSourceTableTests
         {
             if (!table.TryGet(new FrameSourceId(id), out IRandomAccessFrameSource? found) || !ReferenceEquals(found, source))
             {
-                problems.Add(FormattableString.Invariant($"id {id} not found"));
+                problems.Add(Invariant($"id {id} not found"));
             }
         }
 
@@ -71,7 +71,7 @@ internal sealed class RandomAccessSourceTableTests
         {
             if (history[i].Table.Count != history[i].Count)
             {
-                problems.Add(FormattableString.Invariant($"table {i} changed to {history[i].Table.Count}"));
+                problems.Add(Invariant($"table {i} changed to {history[i].Table.Count}"));
             }
         }
 
@@ -121,13 +121,13 @@ internal sealed class RandomAccessSourceTableTests
                 bool expectedPresent = id != removed;
                 if (smaller.TryGet(new FrameSourceId(id), out _) != expectedPresent || !table.TryGet(new FrameSourceId(id), out _))
                 {
-                    problems.Add(FormattableString.Invariant($"removing {removed}, id {id}"));
+                    problems.Add(Invariant($"removing {removed}, id {id}"));
                 }
             }
 
             if (smaller.Count != 3 || ReferenceEquals(smaller, table))
             {
-                problems.Add(FormattableString.Invariant($"removing {removed}: count {smaller.Count}"));
+                problems.Add(Invariant($"removing {removed}: count {smaller.Count}"));
             }
         }
 

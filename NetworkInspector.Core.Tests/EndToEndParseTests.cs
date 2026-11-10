@@ -229,7 +229,8 @@ internal sealed class EndToEndParseTests
 
             Field root = packet.RootField();
             // Root has 2 children: packet container + eth container
-            bool hasPacketContainer = root.TryGetFirstChild(out Field packetContainer, materialize: true); // materialize: true — navigate/populate children including lazy
+            bool hasPacketContainer = root.TryGetFirstChild(out Field packetContainer,
+                materialize: true); // materialize: true — navigate/populate children including lazy
             bool hasEthContainer = packetContainer.TryGetNext(out Field ethContainer);
             bool hasThirdRootChild = ethContainer.TryGetNext(out _);
 

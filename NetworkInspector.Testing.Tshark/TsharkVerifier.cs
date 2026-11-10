@@ -124,7 +124,7 @@ public static class TsharkVerifier
 
         throw new InvalidOperationException(
             "tshark is required for protocol cross-validation but was not found on PATH. " +
-            $"Install tshark or set {AllowMissingEnvVar}=1 to skip cross-validation locally. " +
+            Invariant($"Install tshark or set {AllowMissingEnvVar}=1 to skip cross-validation locally. ") +
             "Release and CI runs must execute with tshark available.");
     }
 
@@ -187,14 +187,14 @@ public static class TsharkVerifier
             return new string?[tsharkFieldNames.Length];
         }
 
-        string tempFile = Path.Combine(Path.GetTempPath(), $"ni_test_{Guid.NewGuid():N}.pcap");
+        string tempFile = Path.Combine(Path.GetTempPath(), Invariant($"ni_test_{Guid.NewGuid():N}.pcap"));
         try
         {
             TsharkPcapWriter.Write(tempFile, frameData, dlt);
 
-            string fieldArgs = string.Join(" ", tsharkFieldNames.Select(f => $"-e {f}"));
-            string decodeArg = string.IsNullOrEmpty(decodeAs) ? string.Empty : $" -d {decodeAs}";
-            string arguments = $"-r \"{tempFile}\"{decodeArg} -T fields {fieldArgs} -c 1";
+            string fieldArgs = string.Join(" ", tsharkFieldNames.Select(f => Invariant($"-e {f}")));
+            string decodeArg = string.IsNullOrEmpty(decodeAs) ? string.Empty : Invariant($" -d {decodeAs}");
+            string arguments = Invariant($"-r \"{tempFile}\"{decodeArg} -T fields {fieldArgs} -c 1");
 
             (int exit, string output, string stderrOut, _) = TsharkProcess.Run(arguments, _ExtractionTimeoutMs, profileDir);
             if (exit != 0)
@@ -367,17 +367,17 @@ public static class TsharkVerifier
     /// </summary>
     private static string _RunPdml(byte[] frameData, int dlt, string? decodeAs, string? profileDir = null)
     {
-        string tempFile = Path.Combine(Path.GetTempPath(), $"ni_test_{Guid.NewGuid():N}.pcap");
+        string tempFile = Path.Combine(Path.GetTempPath(), Invariant($"ni_test_{Guid.NewGuid():N}.pcap"));
         try
         {
             TsharkPcapWriter.Write(tempFile, frameData, dlt);
-            string decodeArg = string.IsNullOrEmpty(decodeAs) ? string.Empty : $" -d {decodeAs}";
-            string arguments = $"-r \"{tempFile}\"{decodeArg} -T pdml -c 1";
+            string decodeArg = string.IsNullOrEmpty(decodeAs) ? string.Empty : Invariant($" -d {decodeAs}");
+            string arguments = Invariant($"-r \"{tempFile}\"{decodeArg} -T pdml -c 1");
             (int exit, string output, string stderrOut, _) = TsharkProcess.Run(arguments, _ExtractionTimeoutMs, profileDir);
             if (exit != 0)
             {
                 throw new InvalidOperationException(
-                    $"tshark -T pdml failed with exit code {exit}. stderr:\n{stderrOut}");
+                    Invariant($"tshark -T pdml failed with exit code {exit}. stderr:\n{stderrOut}"));
             }
 
             return output;
@@ -407,7 +407,7 @@ public static class TsharkVerifier
             if (!char.IsAsciiLetterLower(c) && !char.IsAsciiDigit(c) && c != '.' && c != '_')
             {
                 throw new ArgumentException(
-                    $"Invalid tshark field name '{fieldName}': character '{c}' is not allowed. " +
+                    Invariant($"Invalid tshark field name '{fieldName}': character '{c}' is not allowed. ") +
                     "Only lowercase ASCII letters, digits, dots, and underscores are permitted.",
                     nameof(fieldName));
             }
@@ -436,14 +436,14 @@ public static class TsharkVerifier
                     // Windows can hold a file open briefly after async stream draining.
                     // Retry with a short delay before giving up.
                     Debug.WriteLine(
-                        $"[TsharkVerifier] Temp file '{path}' still locked (attempt {attempt + 1}/3): {ex.Message}. Retrying...");
+                        Invariant($"[TsharkVerifier] Temp file '{path}' still locked (attempt {attempt + 1}/3): {ex.Message}. Retrying..."));
                     Thread.Sleep(50);
                 }
                 else
                 {
                     // All three attempts exhausted — log and abandon cleanup.
                     Debug.WriteLine(
-                        $"[TsharkVerifier] Failed to delete temp file '{path}' after 3 attempts: {ex.Message}");
+                        Invariant($"[TsharkVerifier] Failed to delete temp file '{path}' after 3 attempts: {ex.Message}"));
                     return;
                 }
             }
@@ -451,7 +451,7 @@ public static class TsharkVerifier
             {
                 // Log to debug output so permissions issues are visible during development
                 // without surfacing as test failures.
-                Debug.WriteLine($"[TsharkVerifier] Failed to delete temp file '{path}': {ex.Message}");
+                Debug.WriteLine(Invariant($"[TsharkVerifier] Failed to delete temp file '{path}': {ex.Message}"));
                 return;
             }
         }
@@ -506,24 +506,24 @@ public static class TsharkVerifier
             return [];
         }
 
-        string tempFile = Path.Combine(Path.GetTempPath(), $"ni_test_{Guid.NewGuid():N}.pcap");
+        string tempFile = Path.Combine(Path.GetTempPath(), Invariant($"ni_test_{Guid.NewGuid():N}.pcap"));
         try
         {
             TsharkPcapWriter.Write(tempFile, frames, dlt);
 
-            string fieldArgs = string.Join(" ", tsharkFieldNames.Select(f => $"-e {f}"));
-            string decodeArg = string.IsNullOrEmpty(decodeAs) ? string.Empty : $" -d {decodeAs}";
+            string fieldArgs = string.Join(" ", tsharkFieldNames.Select(f => Invariant($"-e {f}")));
+            string decodeArg = string.IsNullOrEmpty(decodeAs) ? string.Empty : Invariant($" -d {decodeAs}");
             // -E header=n: never emit a header row.  -E occurrence=f: when a field appears
             // multiple times in a frame (TCP option lists, repeated TLS records, …),
             // take the first occurrence so the column count stays stable.
             string arguments =
-                $"-r \"{tempFile}\"{decodeArg} -T fields -E header=n -E separator=/t -E occurrence=f {fieldArgs}";
+                Invariant($"-r \"{tempFile}\"{decodeArg} -T fields -E header=n -E separator=/t -E occurrence=f {fieldArgs}");
 
             (int exit, string output, string stderr, _) = TsharkProcess.Run(arguments, 15_000, profileDir);
             if (exit != 0)
             {
                 throw new InvalidOperationException(
-                    $"tshark failed (exit {exit}) while extracting per-packet fields: {stderr.Trim()}");
+                    Invariant($"tshark failed (exit {exit}) while extracting per-packet fields: {stderr.Trim()}"));
             }
 
             List<string?[]> rows = [];
@@ -589,16 +589,16 @@ public static class TsharkVerifier
             return string.Empty;
         }
 
-        string tempFile = Path.Combine(Path.GetTempPath(), $"ni_test_{Guid.NewGuid():N}.pcap");
+        string tempFile = Path.Combine(Path.GetTempPath(), Invariant($"ni_test_{Guid.NewGuid():N}.pcap"));
         try
         {
             TsharkPcapWriter.Write(tempFile, frames, timestampsMicros, dlt);
-            string arguments = $"-r \"{tempFile}\" {argumentsAfterReader}";
+            string arguments = Invariant($"-r \"{tempFile}\" {argumentsAfterReader}");
             (int exit, string output, string stderr, _) = TsharkProcess.Run(arguments, 15_000, profileDir);
             if (exit != 0)
             {
                 throw new InvalidOperationException(
-                    $"tshark failed (exit {exit}) for arguments '{argumentsAfterReader}': {stderr.Trim()}");
+                    Invariant($"tshark failed (exit {exit}) for arguments '{argumentsAfterReader}': {stderr.Trim()}"));
             }
             return output;
         }
@@ -621,18 +621,18 @@ public static class TsharkVerifier
     public static int GetPacketCount(string filePath, int timeoutMs = 30_000)
     {
         (int exit, string output, string stderr, bool timedOut) = TsharkProcess.Run(
-            $"-r \"{filePath}\" -T fields -e frame.number",
+            Invariant($"-r \"{filePath}\" -T fields -e frame.number"),
             timeoutMs);
 
         if (timedOut)
         {
             throw new InvalidOperationException(
-                $"tshark timed out after {timeoutMs} ms while counting packets in '{filePath}'.");
+                Invariant($"tshark timed out after {timeoutMs} ms while counting packets in '{filePath}'."));
         }
         if (exit != 0)
         {
             throw new InvalidOperationException(
-                $"tshark failed with exit code {exit}: {stderr}");
+                Invariant($"tshark failed with exit code {exit}: {stderr}"));
         }
 
         // Count only numeric lines so any stray non-packet output is ignored.
@@ -656,7 +656,7 @@ public static class TsharkVerifier
     public static List<TsharkRecord> GetPacketRecords(string filePath, int timeoutMs = 60_000)
     {
         (int exit, string stdout, string stderr, bool timedOut) = TsharkProcess.Run(
-            $"-r \"{filePath}\" -n -T fields " +
+            Invariant($"-r \"{filePath}\" -n -T fields ") +
             "-E separator=/t -E quote=n -E header=n " +
             "-e frame.number -e frame.time_epoch -e frame.len " +
             "-e frame.interface_name -e frame.interface_id -e frame.encap_type",
@@ -665,14 +665,14 @@ public static class TsharkVerifier
         if (timedOut)
         {
             throw new InvalidOperationException(
-                $"tshark timed out after {timeoutMs} ms while reading '{filePath}'.");
+                Invariant($"tshark timed out after {timeoutMs} ms while reading '{filePath}'."));
         }
         if (exit != 0)
         {
             string copyPath = _PreserveCaptureForDiagnostics(filePath);
             throw new InvalidOperationException(
-                $"tshark failed with exit code {exit}: {stderr.Trim()}\n" +
-                $"Capture preserved at: {copyPath}");
+                Invariant($"tshark failed with exit code {exit}: {stderr.Trim()}\n") +
+                Invariant($"Capture preserved at: {copyPath}"));
         }
 
         List<TsharkRecord> records = [];
@@ -692,8 +692,8 @@ public static class TsharkVerifier
             if (fieldCount < 6)
             {
                 throw new InvalidOperationException(
-                    $"Unexpected tshark output line (need >= 6 tab-separated fields): '{new string(trimmed)}'.\n" +
-                    $"stderr: {stderr}");
+                    Invariant($"Unexpected tshark output line (need >= 6 tab-separated fields): '{new string(trimmed)}'.\n") +
+                    Invariant($"stderr: {stderr}"));
             }
 
             if (!int.TryParse(trimmed[ranges[0]], NumberStyles.Integer, CultureInfo.InvariantCulture, out int frameNumber))
@@ -720,10 +720,10 @@ public static class TsharkVerifier
                 string rowText = new string(trimmed).Replace("\t", "\\t", StringComparison.Ordinal);
                 string copyPath = _PreserveCaptureForDiagnostics(filePath);
                 throw new InvalidOperationException(
-                    $"Failed to parse tshark output row #{frameNumber} from '{filePath}': {ex.Message}\n" +
-                    $"Row (tab-escaped): '{rowText}'\n" +
-                    $"Capture preserved at: {copyPath}\n" +
-                    $"tshark stderr: {stderr.Trim()}", ex);
+                    Invariant($"Failed to parse tshark output row #{frameNumber} from '{filePath}': {ex.Message}\n") +
+                    Invariant($"Row (tab-escaped): '{rowText}'\n") +
+                    Invariant($"Capture preserved at: {copyPath}\n") +
+                    Invariant($"tshark stderr: {stderr.Trim()}"), ex);
             }
 
             string interfaceName = new string(trimmed[ranges[3]]);
@@ -740,19 +740,19 @@ public static class TsharkVerifier
     public static List<string> GetInterfaceNames(string filePath, int timeoutMs = 60_000)
     {
         (int exit, string stdout, string stderr, bool timedOut) = TsharkProcess.Run(
-            $"-r \"{filePath}\" -n -T fields -E separator=/t -E quote=n -E header=n " +
+            Invariant($"-r \"{filePath}\" -n -T fields -E separator=/t -E quote=n -E header=n ") +
             "-e frame.interface_name -e frame.interface_id",
             timeoutMs);
 
         if (timedOut)
         {
             throw new InvalidOperationException(
-                $"tshark timed out after {timeoutMs} ms while reading interfaces from '{filePath}'.");
+                Invariant($"tshark timed out after {timeoutMs} ms while reading interfaces from '{filePath}'."));
         }
         if (exit != 0)
         {
             throw new InvalidOperationException(
-                $"tshark failed with exit code {exit}: {stderr}");
+                Invariant($"tshark failed with exit code {exit}: {stderr}"));
         }
 
         Dictionary<int, string> byId = [];
@@ -842,7 +842,7 @@ public static class TsharkVerifier
                 if (!char.IsAsciiDigit(frac[i]))
                 {
                     throw new InvalidOperationException(
-                        $"Malformed fractional seconds in '{new string(value)}': unexpected character '{frac[i]}' at position {i}.");
+                        Invariant($"Malformed fractional seconds in '{new string(value)}': unexpected character '{frac[i]}' at position {i}."));
                 }
             }
 
@@ -868,7 +868,7 @@ public static class TsharkVerifier
             if (nanos < 0 || nanos >= 1_000_000_000L)
             {
                 throw new InvalidOperationException(
-                    $"Parsed nanoseconds value {nanos} is out of range [0, 999999999] for '{new string(value)}'.");
+                    Invariant($"Parsed nanoseconds value {nanos} is out of range [0, 999999999] for '{new string(value)}'."));
             }
         }
 

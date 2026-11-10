@@ -89,7 +89,7 @@ internal sealed class MmapPool : IDisposable
             // an I/O-level condition of the capture, reported as one before any resource beyond the stream exists.
             if (_FileSize == 0)
             {
-                throw new IOException($"The file '{path}' is empty and cannot be memory-mapped.");
+                throw new IOException(Invariant($"The file '{path}' is empty and cannot be memory-mapped."));
             }
 
             // capacity 0 maps the file at its current length; the stream is closed together with the mapping (leaveOpen false).

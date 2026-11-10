@@ -28,18 +28,17 @@ namespace NetworkInspector.Core.Index;
 /// </summary>
 public readonly struct PacketIndexReaderView : IPacketIndexReader
 {
-    #region Fields
+    #region Wrapped index
 
-    // The only field, so the struct is one reference wide: passing it by value costs the same as passing the class, and a
-    // generic call site specialized for this struct type lets the JIT inline the forwarding bodies below.
-    // Not nullable-annotated because only default(PacketIndexReaderView) can hold null (see the type remarks).
+    /// <summary>
+    /// The wrapped index. The only field, so the struct is one reference wide: passing it by value costs the same as passing the
+    /// class, and a generic call site specialized for this struct type lets the JIT inline the forwarding bodies below.
+    /// Not nullable-annotated because only <c>default(PacketIndexReaderView)</c> can hold null (see the type remarks).
+    /// </summary>
     private readonly PacketIndex _Index;
 
-    #endregion
-
-    #region Lifecycle
-
     /// <summary>Creates a view over <paramref name="index"/>.</summary>
+    /// <param name="index">The live index to alias; not <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException"><paramref name="index"/> is <see langword="null"/>.</exception>
     public PacketIndexReaderView(PacketIndex index)
     {
@@ -47,15 +46,15 @@ public readonly struct PacketIndexReaderView : IPacketIndexReader
         _Index = index;
     }
 
-    #endregion
-
-    #region Properties
-
     /// <summary>
     /// The live index this view aliases, or <see langword="null"/> when the view is
     /// <c>default</c> (not constructed via <see cref="PacketIndexReaderView(PacketIndex)"/>).
     /// </summary>
     public PacketIndex? Source => _Index;
+
+    #endregion
+
+    #region Index shape
 
     /// <inheritdoc/>
     public int GroupCount => _Index.GroupCount;
@@ -66,9 +65,12 @@ public readonly struct PacketIndexReaderView : IPacketIndexReader
     /// <inheritdoc/>
     public Stack Stack => _Index.Stack;
 
+    /// <inheritdoc/>
+    public PresenceQuery Query() => _Index.Query();
+
     #endregion
 
-    #region Methods
+    #region Forwarded lookups
 
     /// <inheritdoc/>
     public ReadOnlyRoaringBitmap GetGroupBitmap(IndexGroupId groupId) =>
@@ -89,9 +91,6 @@ public readonly struct PacketIndexReaderView : IPacketIndexReader
     /// <inheritdoc/>
     public long ProtocolCardinality(ProtocolId protocolId) =>
         _Index.ProtocolCardinality(protocolId);
-
-    /// <inheritdoc/>
-    public PresenceQuery Query() => _Index.Query();
 
     /// <inheritdoc/>
     public bool TryGetGroupBitmap(IndexGroupId groupId, out ReadOnlyRoaringBitmap bitmap) =>

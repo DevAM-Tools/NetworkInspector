@@ -80,7 +80,7 @@ internal sealed class SomeIpParallelRedissectTests
         ];
         foreach (string name in expected)
         {
-            await Assert.That(seen.GetValueOrDefault(name)).IsGreaterThan(0).Because($"the capture contains '{name}'");
+            await Assert.That(seen.GetValueOrDefault(name)).IsGreaterThan(0).Because(Invariant($"the capture contains '{name}'"));
         }
 
         int someIpPackets = seen.GetValueOrDefault("someip");

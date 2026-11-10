@@ -9,8 +9,6 @@ namespace NetworkInspector.Core.Reassembly;
 /// </summary>
 public readonly record struct StreamDetectionContext
 {
-    #region Properties
-
     /// <summary>Unique stream identifier (e.g., TCP stream index).</summary>
     public ulong StreamId { get; init; }
 
@@ -33,6 +31,4 @@ public readonly record struct StreamDetectionContext
     /// while this is <see langword="false"/> it must report such a message as incomplete.
     /// </summary>
     public bool StreamClosed { get; init; }
-
-    #endregion
 }

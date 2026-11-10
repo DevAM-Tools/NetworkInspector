@@ -164,7 +164,7 @@ internal sealed class DerivedBytesLimitConsistencyTests
         {
             bool valid = total.TryValidate(SettingValue.U64(value), out SettingProblem? problem);
 
-            await Assert.That(valid).IsFalse().Because($"{value} is outside the range");
+            await Assert.That(valid).IsFalse().Because(Invariant($"{value} is outside the range"));
             await Assert.That(problem!.ToString()).Contains(_Minimum.ToString(CultureInfo.InvariantCulture))
                 .And.Contains(scenario.Maximum.ToString(CultureInfo.InvariantCulture));
         }

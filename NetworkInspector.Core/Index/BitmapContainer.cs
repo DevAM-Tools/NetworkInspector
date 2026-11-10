@@ -19,25 +19,33 @@ namespace NetworkInspector.Core.Index;
 /// that produces them, so no second pass over the 8 KiB is needed).
 /// </para>
 /// <para>
-/// <b>Thread-safety:</b> not thread-safe; mutated in place by <see cref="Add"/> and the <c>...With</c> methods. Concurrent
-/// readers are made safe one level up by the sequence lock of the owning <see cref="RoaringBitmap"/>, which discards a read
-/// that overlapped a mutation.
+/// <b>Thread-safety:</b> not thread-safe; mutated in place only by <see cref="Add"/> (the set operations return new
+/// containers and never write into an operand; the run container writes range masks into a fresh container that it still owns).
+/// Concurrent readers are made safe one level up by the sequence lock of the owning <see cref="RoaringBitmap"/>, which
+/// discards a read that overlapped a mutation.
 /// </para>
 /// </summary>
 internal sealed class BitmapContainer : IContainer
 {
+
+    #region Configuration and state
+
     /// <summary>Number of 64-bit words in the bit set: 1024 * 64 = 65536 bits, one per possible 16-bit value.</summary>
     internal const int BitmapSize = 1024;
 
     /// <summary>
     /// The bit set: bit <c>v % 64</c> of word <c>v / 64</c> is set when the value <c>v</c> is present. Exposed internally so
-    /// the run container can apply range masks directly and the owning bitmap can run in-place word operations; anything
+    /// the run container can apply range masks directly; anything
     /// that writes it must keep <see cref="Cardinality"/> consistent afterwards.
     /// </summary>
     internal readonly ulong[] Bitmap = new ulong[BitmapSize];
 
     /// <summary>Number of set bits; see the class remarks for how it is kept in sync.</summary>
     public int Cardinality { get; private set; }
+
+    #endregion
+
+    #region Membership, adding and copy
 
     /// <inheritdoc cref="IContainer.Min"/>
     public ushort Min
@@ -74,6 +82,7 @@ internal sealed class BitmapContainer : IContainer
     }
 
     /// <summary>Deep copy: a new 8 KiB word array with the same bits and cardinality.</summary>
+    /// <returns>A new bitmap container that shares no storage with this one.</returns>
     public IContainer Clone()
     {
         BitmapContainer copy = new();
@@ -83,6 +92,8 @@ internal sealed class BitmapContainer : IContainer
     }
 
     /// <summary>O(1) membership test. Every <see cref="ushort"/> maps to a valid word (0..1023), so no range check is needed.</summary>
+    /// <param name="value">The low 16 bits of the id to look up.</param>
+    /// <returns><see langword="true"/> when the bit of <paramref name="value"/> is set.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(ushort value)
     {
@@ -92,6 +103,8 @@ internal sealed class BitmapContainer : IContainer
     }
 
     /// <summary>Sets the bit for <paramref name="value"/> and keeps <see cref="Cardinality"/> in sync. Always returns <see langword="this"/>.</summary>
+    /// <param name="value">The low 16 bits of the id to add.</param>
+    /// <returns><see langword="this"/>; a bitmap container never changes its kind on an add.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IContainer Add(ushort value)
     {
@@ -107,12 +120,18 @@ internal sealed class BitmapContainer : IContainer
         return this;
     }
 
+    #endregion
+
+    #region Set operations
+
     /// <summary>
     /// Intersection into a new container. Bitmap with bitmap is a SIMD word AND whose result is converted to an
     /// <see cref="ArrayContainer"/> when it has at most <see cref="ArrayContainer.MaxCapacity"/> values. Any other operand kind
     /// is delegated to that kind's own intersection (AND is commutative; the array and run containers handle a bitmap operand
     /// themselves without calling back, so this cannot recurse).
     /// </summary>
+    /// <param name="other">The container to intersect with; not <see langword="null"/>; not modified.</param>
+    /// <returns>A new container that holds the values present in both operands.</returns>
     public IContainer And(IContainer other)
     {
         if (other is BitmapContainer bmp)
@@ -137,6 +156,8 @@ internal sealed class BitmapContainer : IContainer
     /// converting it to an array is not attempted). Bitmap with bitmap is a SIMD word OR; a run operand is applied with
     /// word masks; an array operand is added value by value to a clone.
     /// </summary>
+    /// <param name="other">The container to unite with; not <see langword="null"/>; not modified.</param>
+    /// <returns>A new bitmap container that holds the values present in either operand.</returns>
     public IContainer Or(IContainer other)
     {
         if (other is BitmapContainer bmp)
@@ -180,11 +201,13 @@ internal sealed class BitmapContainer : IContainer
 
     /// <summary>
     /// Returns a new container with bits set in this and not in <paramref name="other"/>.
-    /// Neither operand is mutated. For in-place AND-NOT against another
-    /// <see cref="BitmapContainer"/>, use <see cref="AndNotWith"/>. The result is converted to an
+    /// Neither operand is mutated. Against another
+    /// <see cref="BitmapContainer"/> the SIMD result is written into one new container in a single pass. The result is converted to an
     /// <see cref="ArrayContainer"/> when it has at most <see cref="ArrayContainer.MaxCapacity"/> values (a difference can
     /// be much sparser than this bitmap).
     /// </summary>
+    /// <param name="other">The container whose values are removed; not <see langword="null"/>; not modified.</param>
+    /// <returns>A new container that holds the values of this bitmap that are absent from <paramref name="other"/>.</returns>
     public IContainer AndNot(IContainer other)
     {
         if (other is BitmapContainer bmp)
@@ -246,6 +269,8 @@ internal sealed class BitmapContainer : IContainer
     /// Symmetric difference into a new container. The result is converted to an <see cref="ArrayContainer"/> when it has at most
     /// <see cref="ArrayContainer.MaxCapacity"/> values. Neither operand is mutated.
     /// </summary>
+    /// <param name="other">The container to combine with; not <see langword="null"/>; not modified.</param>
+    /// <returns>A new container that holds the values present in exactly one operand.</returns>
     public IContainer Xor(IContainer other)
     {
         if (other is BitmapContainer bmp)
@@ -306,33 +331,16 @@ internal sealed class BitmapContainer : IContainer
         return clone;
     }
 
-    #region In-place mutation methods
-
-    // The In-place variants write the result into this container's words instead of allocating a new 8 KiB result, which
-    // is what lets query accumulations (PresenceQuery, RoaringBitmap's *With operations) chain many operations without
-    // allocating. They never change the container kind: the caller decides whether a sparse result should become an array
-    // (RoaringBitmap does so afterwards via BitmapToArray). The operand is only read, so it may be a shared container.
-
-    /// <summary>In-place AND (this &amp;= other). Updates <see cref="Cardinality"/> from the written words.</summary>
-    internal void AndWith(BitmapContainer other) => Cardinality = _SimdAndInPlace(Bitmap, other.Bitmap);
-
-    /// <summary>In-place OR (this |= other). Updates <see cref="Cardinality"/> from the written words.</summary>
-    internal void OrWith(BitmapContainer other) => Cardinality = _SimdOrInPlace(Bitmap, other.Bitmap);
-
-    /// <summary>In-place ANDNOT (this &amp;= ~other). Updates <see cref="Cardinality"/> from the written words.</summary>
-    internal void AndNotWith(BitmapContainer other) => Cardinality = _SimdAndNotInPlace(Bitmap, other.Bitmap);
-
-    /// <summary>In-place XOR (this ^= other). Updates <see cref="Cardinality"/> from the written words.</summary>
-    internal void XorWith(BitmapContainer other) => Cardinality = _SimdXorInPlace(Bitmap, other.Bitmap);
-
     #endregion
 
-    #region SIMD bulk operations
+    #region Cardinality recount
 
     /// <summary>
     /// Total population count of all bits set in <paramref name="bitmap"/>. Used by the
     /// Bitmap×Run direct paths to recompute cardinality after applying range masks.
     /// </summary>
+    /// <param name="bitmap">The words to count; exactly <see cref="BitmapSize"/> entries.</param>
+    /// <returns>The number of set bits.</returns>
     private static int _PopCountAll(ulong[] bitmap)
     {
         int total = 0;
@@ -346,6 +354,14 @@ internal sealed class BitmapContainer : IContainer
     /// <summary>
     /// Recomputes cardinality from bitmap words and downgrades to <see cref="ArrayContainer"/> when sparse.
     /// </summary>
+    /// <param name="bitmap">
+    /// A container whose words were written directly (for example by the range masks of a run container); its
+    /// <see cref="Cardinality"/> is overwritten with the real bit count.
+    /// </param>
+    /// <returns>
+    /// <paramref name="bitmap"/> itself, or a new <see cref="ArrayContainer"/> when it holds at most
+    /// <see cref="ArrayContainer.MaxCapacity"/> values.
+    /// </returns>
     internal static IContainer FromPopcount(BitmapContainer bitmap)
     {
         bitmap.Cardinality = _PopCountAll(bitmap.Bitmap);
@@ -356,13 +372,17 @@ internal sealed class BitmapContainer : IContainer
         return bitmap;
     }
 
+    #endregion
+
+    #region SIMD bulk operations
+
     /// <summary>
     /// SIMD AND: dst[i] = a[i] &amp; b[i], returns total popcount.
     /// Uses Vector256 (processes 4 ulongs = 256 bits per iteration).
     /// Falls back to scalar loop on platforms without hardware vectors.
     /// </summary>
     /// <remarks>
-    /// This is the pattern shared by all the bulk operations below (and their in-place twins):
+    /// This is the pattern shared by all the bulk operations below:
     /// <list type="bullet">
     /// <item>The 1024-word arrays are reinterpreted as vectors with <see cref="MemoryMarshal.Cast{TFrom, TTo}(ReadOnlySpan{TFrom})"/>
     /// (no copy). 1024 is a multiple of both 4 (Vector256) and 2 (Vector128), so the vector loop covers every word and the
@@ -374,6 +394,10 @@ internal sealed class BitmapContainer : IContainer
     /// The sources and the destination must be distinct arrays of exactly <see cref="BitmapSize"/> words (the container always
     /// allocates them that size). They may not partially overlap.
     /// </remarks>
+    /// <param name="a">The first source words.</param>
+    /// <param name="b">The second source words.</param>
+    /// <param name="dst">The destination words; written completely; a distinct array.</param>
+    /// <returns>The number of set bits in <paramref name="dst"/> afterwards.</returns>
     private static int _SimdAnd(ulong[] a, ulong[] b, ulong[] dst)
     {
         int cardinality = 0;
@@ -427,7 +451,11 @@ internal sealed class BitmapContainer : IContainer
         return cardinality;
     }
 
-    /// <summary>SIMD OR: dst[i] = a[i] | b[i], returns total popcount.</summary>
+    /// <summary>SIMD OR: dst[i] = a[i] | b[i], returns total popcount. Same shape and preconditions as <see cref="_SimdAnd"/>.</summary>
+    /// <param name="a">The first source words.</param>
+    /// <param name="b">The second source words.</param>
+    /// <param name="dst">The destination words; written completely; a distinct array.</param>
+    /// <returns>The number of set bits in <paramref name="dst"/> afterwards.</returns>
     private static int _SimdOr(ulong[] a, ulong[] b, ulong[] dst)
     {
         int cardinality = 0;
@@ -478,7 +506,11 @@ internal sealed class BitmapContainer : IContainer
         return cardinality;
     }
 
-    /// <summary>SIMD ANDNOT: dst[i] = a[i] &amp; ~b[i], returns total popcount.</summary>
+    /// <summary>SIMD ANDNOT: dst[i] = a[i] &amp; ~b[i], returns total popcount. Same shape and preconditions as <see cref="_SimdAnd"/>.</summary>
+    /// <param name="a">The source words to keep.</param>
+    /// <param name="b">The source words whose bits are removed.</param>
+    /// <param name="dst">The destination words; written completely; a distinct array.</param>
+    /// <returns>The number of set bits in <paramref name="dst"/> afterwards.</returns>
     private static int _SimdAndNot(ulong[] a, ulong[] b, ulong[] dst)
     {
         int cardinality = 0;
@@ -529,7 +561,11 @@ internal sealed class BitmapContainer : IContainer
         return cardinality;
     }
 
-    /// <summary>SIMD XOR: dst[i] = a[i] ^ b[i], returns total popcount.</summary>
+    /// <summary>SIMD XOR: dst[i] = a[i] ^ b[i], returns total popcount. Same shape and preconditions as <see cref="_SimdAnd"/>.</summary>
+    /// <param name="a">The first source words.</param>
+    /// <param name="b">The second source words.</param>
+    /// <param name="dst">The destination words; written completely; a distinct array.</param>
+    /// <returns>The number of set bits in <paramref name="dst"/> afterwards.</returns>
     private static int _SimdXor(ulong[] a, ulong[] b, ulong[] dst)
     {
         int cardinality = 0;
@@ -582,199 +618,7 @@ internal sealed class BitmapContainer : IContainer
 
     #endregion
 
-    #region In-place SIMD operations
-
-    /// <summary>In-place AND: this[i] &amp;= other[i], returns total popcount.</summary>
-    private static int _SimdAndInPlace(ulong[] data, ulong[] other)
-    {
-        int cardinality = 0;
-        Span<ulong> spanData = data.AsSpan();
-        ReadOnlySpan<ulong> spanOther = other.AsSpan();
-        int i = 0;
-
-        if (Vector256.IsHardwareAccelerated)
-        {
-            Span<Vector256<ulong>> vecData = MemoryMarshal.Cast<ulong, Vector256<ulong>>(spanData);
-            ReadOnlySpan<Vector256<ulong>> vecOther = MemoryMarshal.Cast<ulong, Vector256<ulong>>(spanOther);
-
-            for (int vi = 0; vi < vecData.Length; vi++)
-            {
-                Vector256<ulong> result = vecData[vi] & vecOther[vi];
-                vecData[vi] = result;
-                cardinality += BitOperations.PopCount(result.GetElement(0));
-                cardinality += BitOperations.PopCount(result.GetElement(1));
-                cardinality += BitOperations.PopCount(result.GetElement(2));
-                cardinality += BitOperations.PopCount(result.GetElement(3));
-            }
-            i = vecData.Length * 4;
-        }
-        else if (Vector128.IsHardwareAccelerated)
-        {
-            Span<Vector128<ulong>> vecData = MemoryMarshal.Cast<ulong, Vector128<ulong>>(spanData);
-            ReadOnlySpan<Vector128<ulong>> vecOther = MemoryMarshal.Cast<ulong, Vector128<ulong>>(spanOther);
-
-            for (int vi = 0; vi < vecData.Length; vi++)
-            {
-                Vector128<ulong> result = vecData[vi] & vecOther[vi];
-                vecData[vi] = result;
-                cardinality += BitOperations.PopCount(result.GetElement(0));
-                cardinality += BitOperations.PopCount(result.GetElement(1));
-            }
-            i = vecData.Length * 2;
-        }
-
-        for (; i < BitmapSize; i++)
-        {
-            ulong val = spanData[i] & spanOther[i];
-            spanData[i] = val;
-            cardinality += BitOperations.PopCount(val);
-        }
-        return cardinality;
-    }
-
-    /// <summary>In-place OR: this[i] |= other[i], returns total popcount.</summary>
-    private static int _SimdOrInPlace(ulong[] data, ulong[] other)
-    {
-        int cardinality = 0;
-        Span<ulong> spanData = data.AsSpan();
-        ReadOnlySpan<ulong> spanOther = other.AsSpan();
-        int i = 0;
-
-        if (Vector256.IsHardwareAccelerated)
-        {
-            Span<Vector256<ulong>> vecData = MemoryMarshal.Cast<ulong, Vector256<ulong>>(spanData);
-            ReadOnlySpan<Vector256<ulong>> vecOther = MemoryMarshal.Cast<ulong, Vector256<ulong>>(spanOther);
-
-            for (int vi = 0; vi < vecData.Length; vi++)
-            {
-                Vector256<ulong> result = vecData[vi] | vecOther[vi];
-                vecData[vi] = result;
-                cardinality += BitOperations.PopCount(result.GetElement(0));
-                cardinality += BitOperations.PopCount(result.GetElement(1));
-                cardinality += BitOperations.PopCount(result.GetElement(2));
-                cardinality += BitOperations.PopCount(result.GetElement(3));
-            }
-            i = vecData.Length * 4;
-        }
-        else if (Vector128.IsHardwareAccelerated)
-        {
-            Span<Vector128<ulong>> vecData = MemoryMarshal.Cast<ulong, Vector128<ulong>>(spanData);
-            ReadOnlySpan<Vector128<ulong>> vecOther = MemoryMarshal.Cast<ulong, Vector128<ulong>>(spanOther);
-
-            for (int vi = 0; vi < vecData.Length; vi++)
-            {
-                Vector128<ulong> result = vecData[vi] | vecOther[vi];
-                vecData[vi] = result;
-                cardinality += BitOperations.PopCount(result.GetElement(0));
-                cardinality += BitOperations.PopCount(result.GetElement(1));
-            }
-            i = vecData.Length * 2;
-        }
-
-        for (; i < BitmapSize; i++)
-        {
-            ulong val = spanData[i] | spanOther[i];
-            spanData[i] = val;
-            cardinality += BitOperations.PopCount(val);
-        }
-        return cardinality;
-    }
-
-    /// <summary>In-place ANDNOT: this[i] &amp;= ~other[i], returns total popcount.</summary>
-    private static int _SimdAndNotInPlace(ulong[] data, ulong[] other)
-    {
-        int cardinality = 0;
-        Span<ulong> spanData = data.AsSpan();
-        ReadOnlySpan<ulong> spanOther = other.AsSpan();
-        int i = 0;
-
-        if (Vector256.IsHardwareAccelerated)
-        {
-            Span<Vector256<ulong>> vecData = MemoryMarshal.Cast<ulong, Vector256<ulong>>(spanData);
-            ReadOnlySpan<Vector256<ulong>> vecOther = MemoryMarshal.Cast<ulong, Vector256<ulong>>(spanOther);
-
-            for (int vi = 0; vi < vecData.Length; vi++)
-            {
-                Vector256<ulong> result = Vector256.AndNot(vecData[vi], vecOther[vi]);
-                vecData[vi] = result;
-                cardinality += BitOperations.PopCount(result.GetElement(0));
-                cardinality += BitOperations.PopCount(result.GetElement(1));
-                cardinality += BitOperations.PopCount(result.GetElement(2));
-                cardinality += BitOperations.PopCount(result.GetElement(3));
-            }
-            i = vecData.Length * 4;
-        }
-        else if (Vector128.IsHardwareAccelerated)
-        {
-            Span<Vector128<ulong>> vecData = MemoryMarshal.Cast<ulong, Vector128<ulong>>(spanData);
-            ReadOnlySpan<Vector128<ulong>> vecOther = MemoryMarshal.Cast<ulong, Vector128<ulong>>(spanOther);
-
-            for (int vi = 0; vi < vecData.Length; vi++)
-            {
-                Vector128<ulong> result = Vector128.AndNot(vecData[vi], vecOther[vi]);
-                vecData[vi] = result;
-                cardinality += BitOperations.PopCount(result.GetElement(0));
-                cardinality += BitOperations.PopCount(result.GetElement(1));
-            }
-            i = vecData.Length * 2;
-        }
-
-        for (; i < BitmapSize; i++)
-        {
-            ulong val = spanData[i] & ~spanOther[i];
-            spanData[i] = val;
-            cardinality += BitOperations.PopCount(val);
-        }
-        return cardinality;
-    }
-
-    /// <summary>In-place XOR: this[i] ^= other[i], returns total popcount.</summary>
-    private static int _SimdXorInPlace(ulong[] data, ulong[] other)
-    {
-        int cardinality = 0;
-        Span<ulong> spanData = data.AsSpan();
-        ReadOnlySpan<ulong> spanOther = other.AsSpan();
-        int i = 0;
-
-        if (Vector256.IsHardwareAccelerated)
-        {
-            Span<Vector256<ulong>> vecData = MemoryMarshal.Cast<ulong, Vector256<ulong>>(spanData);
-            ReadOnlySpan<Vector256<ulong>> vecOther = MemoryMarshal.Cast<ulong, Vector256<ulong>>(spanOther);
-
-            for (int vi = 0; vi < vecData.Length; vi++)
-            {
-                Vector256<ulong> result = vecData[vi] ^ vecOther[vi];
-                vecData[vi] = result;
-                cardinality += BitOperations.PopCount(result.GetElement(0));
-                cardinality += BitOperations.PopCount(result.GetElement(1));
-                cardinality += BitOperations.PopCount(result.GetElement(2));
-                cardinality += BitOperations.PopCount(result.GetElement(3));
-            }
-            i = vecData.Length * 4;
-        }
-        else if (Vector128.IsHardwareAccelerated)
-        {
-            Span<Vector128<ulong>> vecData = MemoryMarshal.Cast<ulong, Vector128<ulong>>(spanData);
-            ReadOnlySpan<Vector128<ulong>> vecOther = MemoryMarshal.Cast<ulong, Vector128<ulong>>(spanOther);
-
-            for (int vi = 0; vi < vecData.Length; vi++)
-            {
-                Vector128<ulong> result = vecData[vi] ^ vecOther[vi];
-                vecData[vi] = result;
-                cardinality += BitOperations.PopCount(result.GetElement(0));
-                cardinality += BitOperations.PopCount(result.GetElement(1));
-            }
-            i = vecData.Length * 2;
-        }
-
-        for (; i < BitmapSize; i++)
-        {
-            ulong val = spanData[i] ^ spanOther[i];
-            spanData[i] = val;
-            cardinality += BitOperations.PopCount(val);
-        }
-        return cardinality;
-    }
+    #region Conversion to an array container
 
     /// <summary>
     /// Converts a bitmap container to an array container by extracting all set bits in ascending order.
@@ -784,6 +628,8 @@ internal sealed class BitmapContainer : IContainer
     /// bulk operation that recomputed the cardinality. A cardinality smaller than the real bit count would overrun the array.
     /// </para>
     /// </summary>
+    /// <param name="bmp">The bitmap to convert; not mutated.</param>
+    /// <returns>A new array container with the same values.</returns>
     internal static ArrayContainer BitmapToArray(BitmapContainer bmp)
     {
         // Allocation is sized exactly from the maintained cardinality, so no counting pass or resize is needed.
@@ -799,7 +645,9 @@ internal sealed class BitmapContainer : IContainer
                 word &= word - 1; // clear lowest set bit
             }
         }
+
         return new ArrayContainer(values, idx);
     }
+
     #endregion
 }

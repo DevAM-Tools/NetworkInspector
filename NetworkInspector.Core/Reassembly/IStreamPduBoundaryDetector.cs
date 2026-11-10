@@ -33,8 +33,6 @@ namespace NetworkInspector.Core.Reassembly;
 /// </summary>
 public interface IStreamPduBoundaryDetector : IPduBoundaryDetector
 {
-    #region Methods
-
     /// <summary>
     /// Attempts to find a complete PDU using stream context (e.g., stream ID, handshake status).
     /// </summary>
@@ -55,6 +53,4 @@ public interface IStreamPduBoundaryDetector : IPduBoundaryDetector
     /// </summary>
     /// <param name="streamId">The stream to reset state for.</param>
     void ResetStream(ulong streamId);
-
-    #endregion
 }

@@ -49,7 +49,7 @@ internal sealed class BlfStructuralVerifier
     {
         if (data.Length < _FileHeaderMinSize)
         {
-            throw new InvalidDataException($"BLF file too small: {data.Length} bytes");
+            throw new InvalidDataException(Invariant($"BLF file too small: {data.Length} bytes"));
         }
 
         uint magic = BinaryPrimitives.ReadUInt32LittleEndian(data);
@@ -57,7 +57,7 @@ internal sealed class BlfStructuralVerifier
 
         if (!HasValidHeader)
         {
-            throw new InvalidDataException($"Invalid BLF magic: 0x{magic:X8}");
+            throw new InvalidDataException(Invariant($"Invalid BLF magic: 0x{magic:X8}"));
         }
 
         uint headerSize = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4));

@@ -24,51 +24,70 @@ namespace NetworkInspector.Core.Protocols;
 /// </summary>
 public readonly ref struct ParseContext
 {
-    #region Fields
+    #region Configuration and state
 
+    /// <summary>The packet index that records group and protocol presence; null for a parse without an index.</summary>
     private readonly PacketIndex? _Index;
+
+    /// <summary>Whether the parse skips the field tree (<see cref="HasFieldTree"/> is the inverse).</summary>
     private readonly bool _SkipFieldTree;
 
-    #endregion
-
-    #region Constructors
+    /// <summary>The stack's verdict for this parse; see <see cref="IsReplay"/>.</summary>
+    private readonly bool _IsReplay;
 
     /// <summary>An empty parse context with no attached index. All record calls are no-ops.</summary>
     public static ParseContext Empty => default;
 
     /// <summary>Creates a non-indexed parse context carrying only the stack (used for unindexed parses).</summary>
-    internal ParseContext(Stack stack, bool skipFieldTree = false)
+    /// <param name="stack">The stack that runs the parse.</param>
+    /// <param name="skipFieldTree">Whether the parse stores no field tree (see <see cref="HasFieldTree"/>).</param>
+    /// <param name="isReplay">The stack's verdict that this packet id completed its first parse earlier (see <see cref="IsReplay"/>).</param>
+    internal ParseContext(Stack stack, bool skipFieldTree = false, bool isReplay = false)
     {
         _Index = null;
         Dispatch = default;
         Stack = stack;
         SelfProtocolId = ProtocolId.Invalid;
         _SkipFieldTree = skipFieldTree;
+        _IsReplay = isReplay;
     }
 
     /// <summary>Creates a parse context with the given packet index and stack.</summary>
-    internal ParseContext(PacketIndex index, Stack stack, bool skipFieldTree = false)
+    /// <param name="index">The index that records presence during this parse.</param>
+    /// <param name="stack">The stack that runs the parse.</param>
+    /// <param name="skipFieldTree">Whether the parse stores no field tree (see <see cref="HasFieldTree"/>).</param>
+    /// <param name="isReplay">The stack's verdict that this packet id completed its first parse earlier (see <see cref="IsReplay"/>).</param>
+    internal ParseContext(PacketIndex index, Stack stack, bool skipFieldTree = false, bool isReplay = false)
     {
         _Index = index;
         Dispatch = default;
         Stack = stack;
         SelfProtocolId = ProtocolId.Invalid;
         _SkipFieldTree = skipFieldTree;
+        _IsReplay = isReplay;
     }
 
     /// <summary>Full private constructor used by <see cref="WithDispatch"/> and <see cref="WithSelfProtocol"/> to produce updated copies.</summary>
-    private ParseContext(PacketIndex? index, DispatchContext dispatch, Stack? stack, ProtocolId selfProtocolId, bool skipFieldTree)
+    /// <param name="index">The packet index, or null.</param>
+    /// <param name="dispatch">The dispatch context to carry.</param>
+    /// <param name="stack">The stack, or null for the empty context.</param>
+    /// <param name="selfProtocolId">The protocol that is parsing.</param>
+    /// <param name="skipFieldTree">Whether the parse stores no field tree.</param>
+    /// <param name="isReplay">The stack's replay verdict.</param>
+    private ParseContext(
+        PacketIndex? index, DispatchContext dispatch, Stack? stack, ProtocolId selfProtocolId, bool skipFieldTree, bool isReplay)
     {
         _Index = index;
         Dispatch = dispatch;
         Stack = stack;
         SelfProtocolId = selfProtocolId;
         _SkipFieldTree = skipFieldTree;
+        _IsReplay = isReplay;
     }
 
     #endregion
 
-    #region Properties
+    #region Parse state queries
 
     /// <summary>Whether a packet index is attached for presence recording.</summary>
     public bool HasIndex
@@ -85,6 +104,18 @@ public readonly ref struct ParseContext
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => !_SkipFieldTree;
+    }
+
+    /// <summary>
+    /// Whether the stack classified this parse as a replay: the packet id completed its first parse earlier, on this or another
+    /// thread. A stateful protocol must not mutate cross-packet state in a replay, also when it never saw the packet before.
+    /// Always <see langword="false"/> for the default/empty context.
+    /// </summary>
+    /// <remarks>Related: <see cref="IngestGate.IsReplay(in ParseContext, PacketId)"/> (the decision a protocol asks for).</remarks>
+    public bool IsReplay
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _IsReplay;
     }
 
     /// <summary>Whether a stack is attached. <see langword="false"/> only for the default/empty context.</summary>
@@ -128,7 +159,7 @@ public readonly ref struct ParseContext
 
     #endregion
 
-    #region Methods
+    #region Derived contexts and presence recording
 
     /// <summary>
     /// Returns a copy of this context with the given <see cref="DispatchContext"/> applied.
@@ -142,9 +173,11 @@ public readonly ref struct ParseContext
     /// <see cref="Dispatch"/>.
     /// </para>
     /// </summary>
+    /// <param name="dispatch">The dispatch that invokes the child protocol; only Core can create one.</param>
+    /// <returns>The updated copy; this context is unchanged.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ParseContext WithDispatch(DispatchContext dispatch)
-        => new(_Index, dispatch, Stack, SelfProtocolId, _SkipFieldTree);
+        => new(_Index, dispatch, Stack, SelfProtocolId, _SkipFieldTree, _IsReplay);
 
     /// <summary>
     /// Returns a copy of this context with <see cref="SelfProtocolId"/> set to
@@ -152,15 +185,18 @@ public readonly ref struct ParseContext
     /// before invoking a protocol's parse delegate so that every protocol can always read
     /// its own <see cref="ProtocolId"/> from the context without storing it manually.
     /// </summary>
+    /// <param name="protocolId">The protocol that is about to parse.</param>
+    /// <returns>The updated copy; this context is unchanged.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ParseContext WithSelfProtocol(ProtocolId protocolId)
-        => new(_Index, Dispatch, Stack, protocolId, _SkipFieldTree);
+        => new(_Index, Dispatch, Stack, protocolId, _SkipFieldTree, _IsReplay);
 
     /// <summary>
     /// Records that the current packet contains the given index group.
     /// No-op when no index is attached (zero overhead).
     /// Called by protocols during <see cref="IProtocol.Parse"/>.
     /// </summary>
+    /// <param name="groupId">The index group that is present in the packet.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void RecordGroupPresence(IndexGroupId groupId)
         => _Index?.RecordGroupPresence(groupId);
@@ -170,6 +206,7 @@ public readonly ref struct ParseContext
     /// No-op when no index is attached (zero overhead).
     /// Called by protocols during <see cref="IProtocol.Parse"/>.
     /// </summary>
+    /// <param name="protocolId">The protocol that is present in the packet.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void RecordProtocolPresence(ProtocolId protocolId)
         => _Index?.RecordProtocolPresence(protocolId);

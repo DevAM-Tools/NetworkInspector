@@ -36,8 +36,8 @@ dotnet add package NetworkInspector.Protocols
 
 ```csharp
 using NetworkInspector.Core;
-using NetworkInspector.Core.Settings;
 using NetworkInspector.Protocols;
+using NetworkInspector.Settings;
 
 StackBuilder builder = new(new SettingsManager(), new FrameInterfaceRegistry());
 IReadOnlyList<SettingsLoadWarning> warnings = builder.RegisterStandardProtocols();
@@ -92,8 +92,8 @@ Settings are read from the stack's `SettingsManager`. Preload or persist them be
 Example: dispatch UDP port 47290 to PDU Transport.
 
 ```csharp
-using NetworkInspector.Core.Settings;
 using NetworkInspector.Protocols.PduTransport;
+using NetworkInspector.Settings;
 
 SettingsManager settings = new();
 settings.PreloadValue(PduTransportRegistration.UdpDispatchPortsSetting, SettingValue.U64Array([47290UL]));
@@ -171,7 +171,7 @@ names (services, methods, clients) and payload decoding. The format is the JSON 
   | Setting | Default | Range | Protects against |
   | --- | --- | --- | --- |
   | `someip.max_messages_per_unit` | 100 | 1–10,000 | a datagram made of tiny messages |
-  | `someip.max_type_depth` | 64 | 1–1,024 | stack exhaustion by deeply nested types |
+  | `someip.max_type_depth` | 64 | 1–128 | stack exhaustion by deeply nested types |
   | `someip.max_payload_nodes` | 16,384 | 16–60,000 | one array filling the field tree of a packet |
   | `someip.tp_max_sessions` | 1,024 | 1–1,000,000 | segmented messages that never complete |
   | `someip.tp_max_message_size` | 10 MiB | 1 KiB–1 GiB | one forged segment position claiming gigabytes |

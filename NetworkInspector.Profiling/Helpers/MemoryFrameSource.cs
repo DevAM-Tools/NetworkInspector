@@ -51,7 +51,7 @@ internal sealed class MemoryFrameSource : IRandomAccessFrameSource
 
     /// <inheritdoc/>
     public string? Description =>
-        FormattableString.Invariant($"In-memory frame source ({_Frames.Length} frames).");
+        Invariant($"In-memory frame source ({_Frames.Length} frames).");
 
     /// <inheritdoc/>
     public int? EstimatedFrameCount

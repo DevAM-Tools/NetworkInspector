@@ -221,7 +221,7 @@ internal sealed class ReparseReassemblyIdentityTests
         if (sequence.Status != BuildStatus.Success || frames.Count < 2)
         {
             throw new InvalidOperationException(
-                FormattableString.Invariant($"Frame build produced {frames.Count} frame(s) with status {sequence.Status}; expected a multi-frame Success."));
+                Invariant($"Frame build produced {frames.Count} frame(s) with status {sequence.Status}; expected a multi-frame Success."));
         }
 
         return frames;

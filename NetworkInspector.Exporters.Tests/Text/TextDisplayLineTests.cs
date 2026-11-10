@@ -62,7 +62,7 @@ internal sealed class TextDisplayLineTests
     {
         foreach (CoreField child in parent.Children(materialize: true))
         {
-            lines.Add(new string(' ', depth * 2) + child.ToString());
+            lines.Add(new string(' ', depth * 2) + child.ToString(null, CultureInfo.InvariantCulture));
             _AddLines(child, depth + 1, lines);
         }
     }
@@ -342,7 +342,7 @@ internal sealed class TextDisplayLineTests
             string? name = field.FieldInfo?.Name;
             if (name is not null && TextProbePacketFactory.Expected.ContainsKey(name))
             {
-                expected[name] = field.ToString();
+                expected[name] = field.ToString(null, CultureInfo.InvariantCulture);
             }
         }
 

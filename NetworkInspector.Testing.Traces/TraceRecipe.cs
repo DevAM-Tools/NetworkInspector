@@ -58,7 +58,7 @@ public abstract class TraceRecipe
     {
         if (count < 1 || count > maximum)
         {
-            throw new ArgumentOutOfRangeException(parameterName, count, $"The count must be between 1 and {maximum}.");
+            throw new ArgumentOutOfRangeException(parameterName, count, Invariant($"The count must be between 1 and {maximum}."));
         }
     }
 

@@ -31,7 +31,7 @@ internal sealed class FrameBuilderTcpIPv6SessionScenario : FrameBuilderScenarioB
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Stream {_FrameCount:N0} TCP/IPv6 segments through a stateful Session with auto-sequence.");
 
     /// <inheritdoc/>

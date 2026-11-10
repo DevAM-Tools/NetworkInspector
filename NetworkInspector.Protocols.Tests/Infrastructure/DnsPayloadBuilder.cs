@@ -80,7 +80,7 @@ internal static class DnsPayloadBuilder
             int len = Encoding.ASCII.GetByteCount(lbl);
             if (len > 63)
             {
-                throw new ArgumentException($"DNS label too long: '{lbl}'");
+                throw new ArgumentException(Invariant($"DNS label too long: '{lbl}'"));
             }
             buf[idx++] = (byte)len;
             Encoding.ASCII.GetBytes(lbl, buf.AsSpan(idx, len));

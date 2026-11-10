@@ -97,7 +97,7 @@ public readonly struct IPv4LayerWithOptions :
         if (padded > _MaxHeaderSize - IPv4Header.Size)
         {
             throw new ArgumentException(
-                $"IPv4 options exceed the maximum length of {_MaxHeaderSize - IPv4Header.Size} bytes.",
+                Invariant($"IPv4 options exceed the maximum length of {_MaxHeaderSize - IPv4Header.Size} bytes."),
                 nameof(options));
         }
 

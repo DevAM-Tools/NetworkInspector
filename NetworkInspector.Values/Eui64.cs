@@ -98,7 +98,7 @@ public readonly record struct Eui64 :
     {
         if (!TryParse(s, out Eui64 result))
         {
-            throw new FormatException($"Input '{s}' is not a valid EUI-64.");
+            throw new FormatException(Invariant($"Input '{s}' is not a valid EUI-64."));
         }
         return result;
     }
@@ -118,7 +118,7 @@ public readonly record struct Eui64 :
         ArgumentNullException.ThrowIfNull(s);
         if (!TryParse(s.AsSpan(), out Eui64 result))
         {
-            throw new FormatException($"Input '{s}' is not a valid EUI-64.");
+            throw new FormatException(Invariant($"Input '{s}' is not a valid EUI-64."));
         }
         return result;
     }
@@ -259,7 +259,10 @@ public readonly record struct Eui64 :
     /// <remarks>
     /// Allocates exactly the result string (the text is built on the stack first). Use <see cref="FormatInto"/> or
     /// <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> when the caller owns a buffer.
-    /// <param name="hexCase">Letter case of the hex digits; <see cref="HexCase.Upper"/> by default. The format specifier <c>x</c> of <c>ToString</c> and of interpolation selects <see cref="HexCase.Lower"/>.</param>
+    /// <param name="hexCase">
+    /// Letter case of the hex digits; <see cref="HexCase.Upper"/> by default. The format specifier <c>x</c> of <c>ToString</c> and of
+    /// interpolation selects <see cref="HexCase.Lower"/>.
+    /// </param>
     /// </remarks>
     public string Format(HexCase hexCase = HexCase.Upper)
     {
@@ -292,7 +295,7 @@ public readonly record struct Eui64 :
     {
         if (obj is null) { return 1; }
         if (obj is Eui64 other) { return CompareTo(other); }
-        throw new ArgumentException($"Object must be of type {nameof(Eui64)}.", nameof(obj));
+        throw new ArgumentException(Invariant($"Object must be of type {nameof(Eui64)}."), nameof(obj));
     }
 
     #endregion

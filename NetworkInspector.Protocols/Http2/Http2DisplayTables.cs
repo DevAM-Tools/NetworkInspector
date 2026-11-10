@@ -76,7 +76,7 @@ internal static class Http2DisplayTables
                 11 => "ENHANCE_YOUR_CALM (0xb)",
                 12 => "INADEQUATE_SECURITY (0xc)",
                 13 => "HTTP_1_1_REQUIRED (0xd)",
-                _ => $"0x{i:x}"
+                _ => Invariant($"0x{i:x}")
             };
         }
 
@@ -98,7 +98,7 @@ internal static class Http2DisplayTables
             return _ErrorCodeDisplayText[errorCode];
         }
 
-        return $"0x{errorCode:x}";
+        return Invariant($"0x{errorCode:x}");
     }
 
     #endregion
@@ -122,7 +122,7 @@ internal static class Http2DisplayTables
                 4 => "INITIAL_WINDOW_SIZE (0x4)",
                 5 => "MAX_FRAME_SIZE (0x5)",
                 6 => "MAX_HEADER_LIST_SIZE (0x6)",
-                _ => $"Unknown (0x{i:x})"
+                _ => Invariant($"Unknown (0x{i:x})")
             };
         }
 
@@ -138,7 +138,7 @@ internal static class Http2DisplayTables
             return _SettingsDisplayText[settingsId];
         }
 
-        return $"Unknown (0x{settingsId:x})";
+        return Invariant($"Unknown (0x{settingsId:x})");
     }
     #endregion
 }

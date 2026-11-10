@@ -33,7 +33,10 @@ public enum FragmentDiscardReason : byte
     /// <summary>The outcome is not a discard.</summary>
     None,
 
-    /// <summary>The fragment's extent (offset plus length) exceeds the maximum datagram length, or its offset is negative. Any open datagram of the key is released.</summary>
+    /// <summary>
+    /// The fragment's extent (offset plus length) exceeds the maximum datagram length, or its offset is negative. Any open datagram of the
+    /// key is released.
+    /// </summary>
     ExtentLimit,
 
     /// <summary>A non-last fragment is empty or not a multiple of the required alignment. Open datagrams stay untouched.</summary>
@@ -94,59 +97,15 @@ public readonly record struct FragmentRange(int Start, int Length);
 /// </summary>
 public readonly struct FragmentOutcome
 {
-    #region Constructors
-
-    private FragmentOutcome(
-        FragmentOutcomeKind kind,
-        FragmentDiscardReason discardReason,
-        FragmentOutcomeFlags flags,
-        int evictedCount)
-    {
-        Kind = kind;
-        DiscardReason = discardReason;
-        Flags = flags;
-        EvictedCount = evictedCount;
-        Payload = null;
-        PrefixLength = 0;
-        DatagramLength = 0;
-        FragmentCount = 0;
-        Contributors = null;
-        Gaps = null;
-        CoveredAfterGap = null;
-    }
-
-    private FragmentOutcome(
-        FragmentOutcomeKind kind,
-        FragmentOutcomeFlags flags,
-        int evictedCount,
-        byte[] payload,
-        int prefixLength,
-        int datagramLength,
-        int[] contributors,
-        FragmentRange[]? gaps,
-        FragmentRange[]? coveredAfterGap)
-    {
-        Kind = kind;
-        DiscardReason = FragmentDiscardReason.None;
-        Flags = flags;
-        EvictedCount = evictedCount;
-        Payload = payload;
-        PrefixLength = prefixLength;
-        DatagramLength = datagramLength;
-        FragmentCount = contributors.Length;
-        Contributors = contributors;
-        Gaps = gaps;
-        CoveredAfterGap = coveredAfterGap;
-    }
-
-    #endregion
-
-    #region Properties
+    #region Outcome data
 
     /// <summary>What the call did.</summary>
     public FragmentOutcomeKind Kind { get; }
 
-    /// <summary>Why the fragment was refused; <see cref="FragmentDiscardReason.None"/> unless <see cref="Kind"/> is <see cref="FragmentOutcomeKind.Discarded"/>.</summary>
+    /// <summary>
+    /// Why the fragment was refused; <see cref="FragmentDiscardReason.None"/> unless <see cref="Kind"/> is
+    /// <see cref="FragmentOutcomeKind.Discarded"/>.
+    /// </summary>
     public FragmentDiscardReason DiscardReason { get; }
 
     /// <summary>Additional facts about the call.</summary>
@@ -188,7 +147,9 @@ public readonly struct FragmentOutcome
     /// </summary>
     public FragmentRange[]? CoveredAfterGap { get; }
 
-    /// <summary>True when the outcome carries a payload (<see cref="FragmentOutcomeKind.Complete"/> or <see cref="FragmentOutcomeKind.PartialPrefix"/>).</summary>
+    /// <summary>
+    /// True when the outcome carries a payload (<see cref="FragmentOutcomeKind.Complete"/> or <see cref="FragmentOutcomeKind.PartialPrefix"/>).
+    /// </summary>
     public bool DeliversPayload => Kind is FragmentOutcomeKind.Complete or FragmentOutcomeKind.PartialPrefix;
 
     /// <summary>The outcome of a replay that has no recorded result (the stateless path); the default value.</summary>
@@ -196,17 +157,107 @@ public readonly struct FragmentOutcome
 
     #endregion
 
-    #region Factories
+    #region Creation by the reassembler
 
+    /// <summary>
+    /// Creates an outcome that carries no payload: the arrays and lengths stay at their empty values, so only the kind, the
+    /// discard reason, the flags, and the eviction count are set.
+    /// </summary>
+    /// <param name="kind"><see cref="FragmentOutcomeKind.Pending"/> or <see cref="FragmentOutcomeKind.Discarded"/>.</param>
+    /// <param name="discardReason">Why the fragment was refused; <see cref="FragmentDiscardReason.None"/> for a pending outcome.</param>
+    /// <param name="flags">Additional facts about the call.</param>
+    /// <param name="evictedCount">Number of other datagrams the call evicted.</param>
+    private FragmentOutcome(
+        FragmentOutcomeKind kind,
+        FragmentDiscardReason discardReason,
+        FragmentOutcomeFlags flags,
+        int evictedCount)
+    {
+        Kind = kind;
+        DiscardReason = discardReason;
+        Flags = flags;
+        EvictedCount = evictedCount;
+        Payload = null;
+        PrefixLength = 0;
+        DatagramLength = 0;
+        FragmentCount = 0;
+        Contributors = null;
+        Gaps = null;
+        CoveredAfterGap = null;
+    }
+
+    /// <summary>
+    /// Creates an outcome that delivers a payload (complete datagram or decodable prefix). It is never a discard, so the
+    /// discard reason is <see cref="FragmentDiscardReason.None"/>, and the fragment count is the length of
+    /// <paramref name="contributors"/>.
+    /// </summary>
+    /// <param name="kind"><see cref="FragmentOutcomeKind.Complete"/> or <see cref="FragmentOutcomeKind.PartialPrefix"/>.</param>
+    /// <param name="flags">Additional facts about the call.</param>
+    /// <param name="evictedCount">Number of other datagrams the call evicted.</param>
+    /// <param name="payload">The datagram bytes, or the prefix followed by the covered ranges behind the first hole; owned by the outcome.</param>
+    /// <param name="prefixLength">Number of leading bytes of <paramref name="payload"/> that form the contiguous prefix.</param>
+    /// <param name="datagramLength">Total datagram length; 0 while unknown.</param>
+    /// <param name="contributors">Contributor tags of the stored fragments in offset order, each tag once; not null.</param>
+    /// <param name="gaps">The holes of a partial prefix in offset order; <see langword="null"/> for a complete datagram.</param>
+    /// <param name="coveredAfterGap">The covered ranges behind the first hole of a partial prefix; <see langword="null"/> for a complete datagram.</param>
+    private FragmentOutcome(
+        FragmentOutcomeKind kind,
+        FragmentOutcomeFlags flags,
+        int evictedCount,
+        byte[] payload,
+        int prefixLength,
+        int datagramLength,
+        int[] contributors,
+        FragmentRange[]? gaps,
+        FragmentRange[]? coveredAfterGap)
+    {
+        Kind = kind;
+        DiscardReason = FragmentDiscardReason.None;
+        Flags = flags;
+        EvictedCount = evictedCount;
+        Payload = payload;
+        PrefixLength = prefixLength;
+        DatagramLength = datagramLength;
+        FragmentCount = contributors.Length;
+        Contributors = contributors;
+        Gaps = gaps;
+        CoveredAfterGap = coveredAfterGap;
+    }
+
+    /// <summary>Creates the outcome of a fragment that was stored (or changed nothing) while the datagram stays incomplete.</summary>
+    /// <param name="flags">Additional facts about the call.</param>
+    /// <param name="evictedCount">Number of other datagrams the call evicted.</param>
+    /// <returns>A pending outcome without arrays; it allocates nothing.</returns>
     internal static FragmentOutcome Pending(FragmentOutcomeFlags flags, int evictedCount) =>
         new(FragmentOutcomeKind.Pending, FragmentDiscardReason.None, flags, evictedCount);
 
+    /// <summary>Creates the outcome of a fragment that was refused.</summary>
+    /// <param name="reason">Why the fragment was refused; not <see cref="FragmentDiscardReason.None"/>.</param>
+    /// <param name="flags">Additional facts about the call.</param>
+    /// <param name="evictedCount">Number of other datagrams the call evicted.</param>
+    /// <returns>A discarded outcome without arrays.</returns>
     internal static FragmentOutcome Discarded(FragmentDiscardReason reason, FragmentOutcomeFlags flags, int evictedCount) =>
         new(FragmentOutcomeKind.Discarded, reason, flags, evictedCount);
 
+    /// <summary>Creates the outcome of a datagram whose last hole closed.</summary>
+    /// <param name="flags">Additional facts about the call.</param>
+    /// <param name="evictedCount">Number of other datagrams the call evicted.</param>
+    /// <param name="payload">The complete datagram; its length is both the prefix length and the datagram length.</param>
+    /// <param name="contributors">Contributor tags of the stored fragments in offset order, each tag once.</param>
+    /// <returns>A complete outcome that takes ownership of both arrays.</returns>
     internal static FragmentOutcome Complete(FragmentOutcomeFlags flags, int evictedCount, byte[] payload, int[] contributors) =>
         new(FragmentOutcomeKind.Complete, flags, evictedCount, payload, payload.Length, payload.Length, contributors, null, null);
 
+    /// <summary>Creates the outcome that hands out the decodable prefix of a datagram that still has a hole.</summary>
+    /// <param name="flags">Additional facts about the call.</param>
+    /// <param name="evictedCount">Number of other datagrams the call evicted.</param>
+    /// <param name="payload">The prefix followed by the bytes of <paramref name="coveredAfterGap"/>.</param>
+    /// <param name="prefixLength">Number of leading bytes of <paramref name="payload"/> that form the contiguous prefix.</param>
+    /// <param name="datagramLength">Total datagram length fixed by the last fragment.</param>
+    /// <param name="contributors">Contributor tags of the stored fragments in offset order, each tag once.</param>
+    /// <param name="gaps">The holes inside the datagram in offset order.</param>
+    /// <param name="coveredAfterGap">The covered ranges behind the first hole (start in the datagram, length).</param>
+    /// <returns>A partial-prefix outcome that takes ownership of the arrays.</returns>
     internal static FragmentOutcome PartialPrefix(
         FragmentOutcomeFlags flags,
         int evictedCount,

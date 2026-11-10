@@ -250,10 +250,10 @@ public sealed partial class UdpProtocol : IProtocol
         // First parse or replay is decided only by the ingest gate (no caller-supplied mode flag). Only the outermost
         // scope raises the watermark, so nested UDP layers of one packet are all first parses. A replay holds the inert
         // default scope.
-        bool isReplay = _Gate.IsReplay(packet.Id);
+        bool isReplay = _Gate.IsReplay(in context, packet.Id);
         IngestScope scope = isReplay
             ? default
-            : _Gate.Enter(packet.Id);
+            : _Gate.Enter(in context, packet.Id);
 
         // The scope ends in finally, also after errors and exceptions, so a later parse of this id can never
         // re-enter the first-parse path and draw a second stream index from the tracker.

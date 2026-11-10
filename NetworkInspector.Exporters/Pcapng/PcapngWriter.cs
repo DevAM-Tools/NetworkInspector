@@ -231,8 +231,8 @@ internal sealed class PcapngWriter
                 if (actualOptionsSize != optionsSize)
                 {
                     throw new InvalidOperationException(
-                        $"PCAPNG SHB options size mismatch: pre-calculated {optionsSize} bytes " +
-                        $"but serialised {actualOptionsSize} bytes. " +
+                        Invariant($"PCAPNG SHB options size mismatch: pre-calculated {optionsSize} bytes ") +
+                        Invariant($"but serialised {actualOptionsSize} bytes. ") +
                         "TotalOptionsSize() and _WriteOption() calls are out of sync.");
                 }
             }
@@ -421,7 +421,7 @@ internal sealed class PcapngWriter
         if ((uint)_BlockBuffer.Length != blockTotalLength)
         {
             throw new InvalidOperationException(
-                $"PCAPNG IDB size mismatch: pre-calculated {blockTotalLength} bytes but serialised {_BlockBuffer.Length} bytes. " +
+                Invariant($"PCAPNG IDB size mismatch: pre-calculated {blockTotalLength} bytes but serialised {_BlockBuffer.Length} bytes. ") +
                 "The IDB size calculation and the option writes are out of sync.");
         }
 
@@ -665,7 +665,7 @@ internal sealed class PcapngWriter
         if (value.Length > ushort.MaxValue)
         {
             throw new ArgumentOutOfRangeException(nameof(value),
-                $"PCAPNG option value length {value.Length} exceeds the 16-bit limit ({ushort.MaxValue}).");
+                Invariant($"PCAPNG option value length {value.Length} exceeds the 16-bit limit ({ushort.MaxValue})."));
         }
 
         Span<byte> header = buffer.Reserve(_OptionHeaderSize);

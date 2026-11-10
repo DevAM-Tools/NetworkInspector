@@ -39,7 +39,7 @@ namespace NetworkInspector.Core.Fields;
 /// </remarks>
 public readonly struct FieldWatch : IEquatable<FieldWatch>
 {
-    #region Constants
+    #region Configuration and state
 
     /// <summary>
     /// Ids at or below this count are scanned as a span. Above it, membership is a bitset.
@@ -50,35 +50,50 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     /// <summary>Representation of a watch. Chosen once by the factory so <see cref="Accepts"/> only switches on it.</summary>
     private enum WatchKind : byte
     {
+        /// <summary>Accepts nothing; the default struct.</summary>
         None = 0,
+
+        /// <summary>Accepts every field.</summary>
         All = 1,
+
+        /// <summary>Accepts one id, kept in <c>_One</c>.</summary>
         One = 2,
+
+        /// <summary>Accepts the ids of <c>_Ids</c> (at most <see cref="SpanLimit"/>), found by a linear scan.</summary>
         Span = 3,
+
+        /// <summary>Accepts the ids of <c>_Ids</c> (more than <see cref="SpanLimit"/>), found by a bit test in <c>_Bits</c>.</summary>
         Bitset = 4,
     }
 
-    #endregion
-
-    #region Fields
-
-    // Only the members that belong to _Kind are populated; the default struct is the None watch (kind 0, all null).
-    // _One: the id of a One watch. _Ids: the id copy for Span and Bitset (Bitset keeps it for Equals and Expands).
-    // _Bits: the membership bitset of a Bitset watch, one bit per field id. The arrays are never mutated after
-    // construction, which is what makes sharing a watch across threads safe.
+    /// <summary>
+    /// The representation of this watch. Only the members that belong to it are populated; the default struct is the None watch
+    /// (kind 0, all null). The arrays are never mutated after construction, which is what makes sharing a watch across threads safe.
+    /// </summary>
     private readonly WatchKind _Kind;
+
+    /// <summary>The id of a One watch.</summary>
     private readonly int _One;
+
+    /// <summary>The id copy for Span and Bitset (Bitset keeps it for <see cref="Equals(FieldWatch)"/> and <c>Expands</c>).</summary>
     private readonly FieldId[]? _Ids;
+
+    /// <summary>The membership bitset of a Bitset watch, one bit per field id.</summary>
     private readonly ulong[]? _Bits;
 
-    // The ids the caller asked for, before ForExtraction widened them to the owning protocols. Used only to describe a parse
-    // plan ("2 fields"); null for None, All, and watches made by Only. Never mutated after construction, so sharing a watch
-    // across threads stays safe. Not part of equality: the accepted ids decide, this list is descriptive.
+    /// <summary>
+    /// The ids the caller asked for, before <see cref="ForExtraction"/> widened them to the owning protocols. Used only to describe
+    /// a parse plan ("2 fields"); null for None, All, and watches made by Only. Never mutated after construction, so sharing a
+    /// watch across threads stays safe. Not part of equality: the accepted ids decide, this list is descriptive.
+    /// </summary>
     private readonly FieldId[]? _Requested;
 
-    #endregion
-
-    #region Construction
-
+    /// <summary>Creates a watch of one representation; only the arguments that belong to <paramref name="kind"/> are non-null.</summary>
+    /// <param name="kind">The representation.</param>
+    /// <param name="one">The id of a One watch; 0 for the other kinds.</param>
+    /// <param name="ids">The id copy for Span and Bitset; null for the other kinds.</param>
+    /// <param name="bits">The membership bitset of a Bitset watch; null for the other kinds.</param>
+    /// <param name="requested">The ids the caller asked for before widening (see <c>_Requested</c>); null when not widened.</param>
     private FieldWatch(WatchKind kind, int one, FieldId[]? ids, ulong[]? bits, FieldId[]? requested = null)
     {
         _Kind = kind;
@@ -87,6 +102,10 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
         _Bits = bits;
         _Requested = requested;
     }
+
+    #endregion
+
+    #region Creating a watch
 
     /// <summary>Accepts nothing. Does not expand a deferred group. This is <c>default(FieldWatch)</c>.</summary>
     public static FieldWatch None => default;
@@ -97,6 +116,7 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     /// <summary>Accepts one field the stack assigned.</summary>
     /// <param name="stack">Stack that assigned <paramref name="fieldId"/>. Null is rejected.</param>
     /// <param name="fieldId">A field id in <c>0 .. stack.FieldCount - 1</c>.</param>
+    /// <returns>A watch of the one-id shape; does not allocate.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="stack"/> is null.</exception>
     /// <exception cref="ArgumentException"><paramref name="fieldId"/> is invalid or was not assigned by <paramref name="stack"/>.</exception>
     public static FieldWatch Only(IStack stack, FieldId fieldId)
@@ -109,6 +129,7 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     /// <summary>Accepts each listed field. An empty list is rejected.</summary>
     /// <param name="stack">Stack that assigned every id. Null is rejected.</param>
     /// <param name="fieldIds">One or more field ids. Copied once.</param>
+    /// <returns>A watch of the one-id shape for one id, the scan shape for up to <see cref="SpanLimit"/> ids, otherwise the bitset shape.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="stack"/> is null.</exception>
     /// <exception cref="ArgumentException">The list is empty, or any id is invalid or was not assigned by <paramref name="stack"/>.</exception>
     public static FieldWatch Only(IStack stack, params ReadOnlySpan<FieldId> fieldIds)
@@ -173,6 +194,7 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     /// </summary>
     /// <param name="stack">Stack that assigned every id.</param>
     /// <param name="fieldIds">One or more field ids of <paramref name="stack"/>.</param>
+    /// <returns>A watch that accepts the widened id set and remembers the requested ids for <c>CollectRequested</c>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="stack"/> is null.</exception>
     /// <exception cref="ArgumentException">The list is empty, or an id was not assigned by <paramref name="stack"/>.</exception>
     public static FieldWatch ForExtraction(IStack stack, params ReadOnlySpan<FieldId> fieldIds)
@@ -212,7 +234,7 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
 
     #endregion
 
-    #region Properties
+    #region Shape queries
 
     /// <summary>Whether this watch accepts nothing.</summary>
     public bool IsNone => _Kind == WatchKind.None;
@@ -248,12 +270,14 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
 
     #endregion
 
-    #region Public API
+    #region Matching and equality
 
     /// <summary>
     /// Whether a produced field with <paramref name="fieldId"/> is delivered. Never throws and never allocates; an id outside
     /// the watched set (including an invalid id) simply answers <see langword="false"/>.
     /// </summary>
+    /// <param name="fieldId">The id of the produced field; any value, including <c>FieldId.Invalid</c>.</param>
+    /// <returns><see langword="true"/> when the watch accepts <paramref name="fieldId"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Accepts(FieldId fieldId)
     {
@@ -300,6 +324,8 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     /// the ids (a, b) therefore differs from one built from (b, a) although they accept the same fields. The bitset is
     /// derived from the ids and is not compared.
     /// </summary>
+    /// <param name="other">The watch to compare with.</param>
+    /// <returns><see langword="true"/> when both watches have the same shape and the same ordered ids.</returns>
     public bool Equals(FieldWatch other)
     {
         if (_Kind != other._Kind || _One != other._One)
@@ -334,6 +360,7 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     public override bool Equals(object? obj) => obj is FieldWatch other && Equals(other);
 
     /// <summary>Hash code consistent with <see cref="Equals(FieldWatch)"/>: shape, single id, and the ordered id list.</summary>
+    /// <returns>The hash code; process-specific, not to be persisted.</returns>
     public override int GetHashCode()
     {
         HashCode hash = new();
@@ -351,15 +378,21 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
         return hash.ToHashCode();
     }
 
-    /// <summary>Value equality.</summary>
+    /// <summary>Whether two watches are equal (see <see cref="Equals(FieldWatch)"/>).</summary>
+    /// <param name="left">The first watch.</param>
+    /// <param name="right">The second watch.</param>
+    /// <returns><see langword="true"/> when both watches have the same shape and the same ordered ids.</returns>
     public static bool operator ==(FieldWatch left, FieldWatch right) => left.Equals(right);
 
-    /// <summary>Value inequality.</summary>
+    /// <summary>Whether two watches differ (see <see cref="Equals(FieldWatch)"/>).</summary>
+    /// <param name="left">The first watch.</param>
+    /// <param name="right">The second watch.</param>
+    /// <returns><see langword="true"/> when the watches differ in shape or ids.</returns>
     public static bool operator !=(FieldWatch left, FieldWatch right) => !left.Equals(right);
 
     #endregion
 
-    #region Helpers
+    #region Deferred group expansion and validation
 
     /// <summary>
     /// Whether a deferred container should expand because this watch names it or a field in its index group.
@@ -374,6 +407,7 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     /// </remarks>
     /// <param name="stack">The stack that owns the field ids; used for the index-group lookup.</param>
     /// <param name="containerFieldId">Field id of the deferred container being registered.</param>
+    /// <returns><see langword="true"/> when the container's populator should run during this parse.</returns>
     internal bool Expands(Stack stack, FieldId containerFieldId)
     {
         // The two constant shapes decide without touching the stack.
@@ -419,6 +453,8 @@ public readonly struct FieldWatch : IEquatable<FieldWatch>
     }
 
     /// <summary>Throws <see cref="ArgumentException"/> unless <paramref name="fieldId"/> is a valid id that <paramref name="stack"/> assigned.</summary>
+    /// <param name="stack">The stack that must have assigned the id.</param>
+    /// <param name="fieldId">The id to check.</param>
     /// <exception cref="ArgumentException">The id is the invalid sentinel or is not below <c>stack.FieldCount</c>.</exception>
     private static void _Reject(IStack stack, FieldId fieldId)
     {

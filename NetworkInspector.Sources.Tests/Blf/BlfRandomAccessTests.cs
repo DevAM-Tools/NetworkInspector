@@ -229,7 +229,7 @@ internal sealed class BlfRandomAccessTests
                 {
                     lock (failures)
                     {
-                        failures.Add($"FrameById({frameIndex}) returned null");
+                        failures.Add(Invariant($"FrameById({frameIndex}) returned null"));
                     }
                     return;
                 }
@@ -239,7 +239,7 @@ internal sealed class BlfRandomAccessTests
                     lock (failures)
                     {
                         failures.Add(
-                            $"FrameById({frameIndex}): expected Id={frameIndex}, got Id={frame.Value.Id.Value}");
+                            Invariant($"FrameById({frameIndex}): expected Id={frameIndex}, got Id={frame.Value.Id.Value}"));
                     }
                     return;
                 }
@@ -248,7 +248,7 @@ internal sealed class BlfRandomAccessTests
                 {
                     lock (failures)
                     {
-                        failures.Add($"FrameById({frameIndex}): data mismatch (possible race corruption)");
+                        failures.Add(Invariant($"FrameById({frameIndex}): data mismatch (possible race corruption)"));
                     }
                 }
 
@@ -347,7 +347,7 @@ internal sealed class BlfRandomAccessTests
         }
 
         byte[] blfData = gen.Build();
-        string path = Path.Combine(Path.GetTempPath(), $"ni-blf-mmap-{Guid.NewGuid():N}.blf");
+        string path = Path.Combine(Path.GetTempPath(), Invariant($"ni-blf-mmap-{Guid.NewGuid():N}.blf"));
         File.WriteAllBytes(path, blfData);
         try
         {

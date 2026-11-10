@@ -30,8 +30,8 @@ internal sealed class LazyStringSemanticsTests
         FieldValue stored = FieldValue.NewU64(1, viaFunc);
         FieldValue storedFormat = FieldValue.NewU64(2, viaFormat);
         int beforeRead = lazyCalls + formatCalls;
-        string first = stored.ToString();
-        string second = storedFormat.ToString();
+        string first = stored.ToString(null, CultureInfo.InvariantCulture);
+        string second = storedFormat.ToString(null, CultureInfo.InvariantCulture);
 
         await Assert.That(beforeRead).IsEqualTo(0);
         await Assert.That(first).IsEqualTo("func");
@@ -281,8 +281,8 @@ internal sealed class LazyStringSemanticsTests
         }));
         FieldValue second = first; // a struct copy shares the one box that holds the cache
 
-        string fromFirst = first.ToString();
-        string fromSecond = second.ToString();
+        string fromFirst = first.ToString(null, CultureInfo.InvariantCulture);
+        string fromSecond = second.ToString(null, CultureInfo.InvariantCulture);
 
         await Assert.That(calls).IsEqualTo(1);
         await Assert.That(ReferenceEquals(fromFirst, fromSecond)).IsTrue();

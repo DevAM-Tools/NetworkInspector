@@ -14,7 +14,7 @@ namespace NetworkInspector.Core.ValueCaches;
 /// </summary>
 public readonly struct ValueCacheBuildOptions
 {
-    #region Constants
+    #region Options and defaults
 
     /// <summary>
     /// Inclusive minimum <see cref="ChunkShift"/> (16 rows per chunk). Same bound as <see cref="ChunkedOuterArray{TChunk}"/>.
@@ -29,16 +29,8 @@ public readonly struct ValueCacheBuildOptions
     /// </summary>
     public const int MaxChunkShift = 20;
 
-    #endregion
-
-    #region Fields
-
     /// <summary>Backing store for <see cref="ChunkShift"/>. Default 12 is set in the parameterless constructor.</summary>
     private readonly int _ChunkShift;
-
-    #endregion
-
-    #region Lifecycle
 
     /// <summary>
     /// Defaults: <see cref="ChunkShift"/> 12, <see cref="DefaultCaptureMode"/> first occurrence, record flags false.
@@ -51,10 +43,6 @@ public readonly struct ValueCacheBuildOptions
         DefaultCaptureMode = ValueCaptureMode.FirstOccurrence;
         _ChunkShift = 12;
     }
-
-    #endregion
-
-    #region Properties
 
     /// <summary>
     /// When true, every field that is recorded into this cache gets a payload series.
@@ -90,7 +78,7 @@ public readonly struct ValueCacheBuildOptions
 
     #endregion
 
-    #region Helpers
+    #region Range check
 
     /// <summary>Throws when <paramref name="chunkShift"/> is outside <see cref="MinChunkShift"/>…<see cref="MaxChunkShift"/>.</summary>
     /// <param name="chunkShift">Candidate log₂ chunk size.</param>

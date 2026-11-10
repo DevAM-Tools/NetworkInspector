@@ -13,7 +13,7 @@ internal sealed class SourceConfigTests
     private static PluginError _CreateFailure(SourceConfig config)
     {
         using SettingsManager session = new();
-        if (config.TryCreateSource(session.ReadOnly, out IFrameSource? source, out PluginError? error))
+        if (config.TryCreateSource(session.ReadOnly, session.GetLimit, out IFrameSource? source, out PluginError? error, static _ => { }))
         {
             source.Dispose();
             throw new InvalidOperationException("The source was created.");
@@ -130,7 +130,7 @@ internal sealed class SourceConfigTests
         ArgumentException exception = Assert.Throws<ArgumentException>(() => SourceConfig.Parse(spec, registry.Registry));
 
         // A dropped pair would silently run the source with a default the user did not ask for.
-        await Assert.That(exception.Message).Contains($"'{pair}'");
+        await Assert.That(exception.Message).Contains(Invariant($"'{pair}'"));
         await Assert.That(exception.Message).Contains("key=value");
     }
 
@@ -222,7 +222,7 @@ internal sealed class SourceConfigTests
         SourceConfig config = SourceConfig.Parse("random:count=3,seed=7,mode=udp4", registry.Registry);
         using SettingsManager session = new();
 
-        bool created = config.TryCreateSource(session.ReadOnly, out IFrameSource? source, out PluginError? error);
+        bool created = config.TryCreateSource(session.ReadOnly, session.GetLimit, out IFrameSource? source, out PluginError? error, static _ => { });
 
         await Assert.That(created).IsTrue();
         await Assert.That(error).IsNull();

@@ -31,7 +31,7 @@ internal static class CliSourceLifetime
             {
                 // Plugin code: whatever a source throws on disposal is reported and the loop goes on with the next source.
                 error.WriteLine(
-                    $"Warning: failed to dispose source '{source.GetType().Name}': {ex.Message}");
+                    Invariant($"Warning: failed to dispose source '{source.GetType().Name}': {ex.Message}"));
                 errors ??= [];
                 errors.Add(ex);
             }

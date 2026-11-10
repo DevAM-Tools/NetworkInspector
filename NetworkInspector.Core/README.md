@@ -27,7 +27,7 @@ way, and query across packets. Pair it with `NetworkInspector.Protocols` for the
   restart, and gap policies), and per-packet effect stores make re-parsing any packet, on any thread, give the same
   result as the first pass. Every call of the reassembler returns a `FragmentOutcome` that names what happened, so a
   refused fragment is a reported reason and not a silent `null`. `IngestGate` is the one first-parse-versus-replay
-  decision a stateful protocol needs: `IsReplay(id)` for the replay path, `Enter(id)` for the scope of the first parse, and
+  decision a stateful protocol needs: `IsReplay(in context, id)` for the replay path (the stack's verdict first), `Enter(in context, id)` for the scope of the first parse, and
   the outermost scope raises the watermark that publishes the packet's recorded effects.
 - **Results instead of exceptions.** Parsing returns `bool` plus a `ParseFailure` code; malformed input becomes
   `packet.error` fields, not crashes.
@@ -41,7 +41,7 @@ dotnet add package NetworkInspector.Core
 dotnet add package NetworkInspector.Protocols
 ```
 
-`NetworkInspector.Values` and the source generator come with Core.
+`NetworkInspector.Values`, `NetworkInspector.Limits`, `NetworkInspector.Settings`, and the source generator come with Core. The limits and settings packages also work without NetworkInspector: [limits](../NetworkInspector.Limits/README.md) · [settings](../NetworkInspector.Settings/README.md).
 
 ## Quick Start
 
@@ -52,8 +52,8 @@ using NetworkInspector.Core;
 using NetworkInspector.Core.Fields;
 using NetworkInspector.Core.Ids;
 using NetworkInspector.Core.Infos;
-using NetworkInspector.Core.Settings;
 using NetworkInspector.Protocols;
+using NetworkInspector.Settings;
 using NetworkInspector.Values;
 
 // Ethernet II / IPv4 192.168.1.1 -> 192.168.1.2 / UDP 12345 -> 53, no payload (42 bytes)
@@ -77,8 +77,7 @@ Frame frame = Frame.Create(
     stack.FrameInterfaceRegistry).Value;
 
 ParseOptions options = new(); // build a field tree
-if (!Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure)
-    || packet is null)
+if (!Packet.TryParse(0, stack, frame, in options, out Packet? packet, out ParseFailure failure))
 {
     throw new InvalidOperationException(failure.ToString());
 }
@@ -127,11 +126,12 @@ an id again is a re-parse and gives the same result.
 | `ParseDemand` / `ParsePlan` | What each consumer needs, combined into one parse per packet (`IParseDemandSource`) |
 | `PacketIndex` | Cross-packet protocol and field presence (Roaring bitmaps) |
 | `ValueCache` | Columnar RAM series of selected field values |
-| `SettingsManager` | Typed, persisted protocol settings with size and depth limits |
-| `SettingsRegistrar` | Registers groups and settings into a `SettingsManager`; the public constructor lets plugins register the option settings of their own short-lived managers |
-| `SettingScope` | The one scope enumeration: `Application`, `Profile`, `Session` |
+| `SettingsManager` | Typed, persisted settings (package `NetworkInspector.Settings`) with size and depth limits |
+| `SettingsRegistrar` | Registers groups and settings into a `SettingsManager`; the public constructor lets plugins register the option settings of their own short-lived managers (package `NetworkInspector.Settings`) |
+| `SettingScope` | The one scope enumeration: `Application`, `Profile`, `Session` (stays in Core) |
+| `CoreSettingsLayout`, `CoreLimitPolicy` | The storage names of NetworkInspector and the hit sentence with the `ni` change hint |
 
-Namespaces: `NetworkInspector.Core` (stack, frame, packet, options), `.Fields`, `.Ids`, `.Infos`, `.Settings`,
+Namespaces: `NetworkInspector.Core` (stack, frame, packet, options), `.Fields`, `.Ids`, `.Infos`, `.Settings` (scope and layout), `.Limits` (hit hint),
 `.Index`, `.ValueCaches`, `.Protocols` (dissector interfaces); value types are in `NetworkInspector.Values`.
 
 ## Common Tasks
@@ -229,7 +229,7 @@ foreach (Frame frame in frames)
     bool parsed = packet is null
         ? Packet.TryParse(nextId, stack, frame, in options, out packet, out ParseFailure failure)
         : Packet.TryParse(packet, nextId, stack, frame, in options, out failure);
-    if (!parsed || packet is null)
+    if (!parsed)
     {
         continue;
     }
@@ -254,6 +254,10 @@ Protocols still decode through the same code. The packet keeps no field bodies (
 not filter, store, or export it. The cache and the index record only on the first parse of an id; pass
 `recordOnReplay: true` to record on a re-parse. Default `new ParseOptions()` builds a tree.
 
+A dissector that fails during a Skip parse stores no `packet.error` field, because there is no tree: `Packet.ErrorCount` is the
+error signal of such a parse. It is zero after a clean parse and counts every dissector error, caught exception, and observer
+failure, in both tree modes.
+
 ### Observe Fields During The Parse
 
 A `ParseObserver` receives the fields of a parse while it runs, with or without a field tree. Pair an `IFieldObserver` with a
@@ -274,7 +278,8 @@ ParseOptions options = new(FieldTreeMode.Skip, observers: observers);
 
 The observer sees `BeginPacket(id, timestamp)`, `OnField(in FieldVisit)` for every accepted field, and then **exactly one**
 `EndPacket(id, complete)` per `BeginPacket` that ran, before the packet is sealed. `complete` is `false` when the observers
-were muted (an observer threw) or the parse aborted; a consumer that staged fields uses this call to close or discard them and to
+were muted (an observer threw) or an exception escaped the dissector boundaries; a dissector error does not clear it (read
+`Packet.ErrorCount`). A consumer that staged fields uses this call to close or discard them and to
 evaluate deferred custom text. `FieldVisit.CustomText` is a `ref readonly` to the text set when the field was appended: with a
 field tree it refers to the field's own slot. A deferred text builds its string once, however many copies of the struct exist, so
 keeping a copy (`LazyString text = visit.CustomText;`) is cheap and never builds the text twice. Read the text in `EndPacket`, not
@@ -322,7 +327,7 @@ Console.WriteLine(plan);                                  // e.g. "fields only, 
 | `ParseDepth.Packet` | parse without field tree | observers, a value cache, or an index |
 | `ParseDepth.FieldTree` | parse with field tree | a consumer walks or queries the tree |
 
-**Why:** the pipeline used to fix the parse work (the CLI always built a tree) and consumers adapted; an export of two values paid
+**Why:** when the pipeline fixes the parse work (always a tree), every consumer pays for it; an export of two values pays
 for the tree of every packet. Observers stay in demand order, so a filter listed first has its verdict before the exporter's
 packet is committed. One plan per stack and per parse thread; the observers are not thread-safe.
 
@@ -340,14 +345,26 @@ Parquet, DuckDB). A packet exporter states what it needs as a `ParseDemand`; onl
 
 ### Read And Change Settings
 
-`SettingsManager` holds typed `Setting` objects. A value has a text form for people and a JSON form for files; both
-validate against the type, range, and enumeration of the setting and never throw for a wrong value:
+Typed, persisted settings are the job of the package `NetworkInspector.Settings` ([README](../NetworkInspector.Settings/README.md),
+[guide](../docs/guides/settings.md)); Core references it and adds what is specific to NetworkInspector:
+
+- **The layout.** `CoreSettingsLayout.Instance` (namespace `NetworkInspector.Core.Settings`) names the application folder
+  `NetworkInspector`, the folders that are no profiles (`logs`, `plugins`, `plugins-data`, `plugin-scan-cache`, `host`, `app`,
+  `presets`), and the two bookkeeping files `.ni-settings.lock` and `.ni-settings-owned`. Every earlier release wrote the same
+  two file names, so a changed name would strand files; pass the layout to `new SettingsManager(folder, layout)`,
+  `SettingsManagerFactory`, `SettingsProfiles`, and `ProfileNames`.
+- **The scope.** `SettingScope` (`Application`, `Profile`, `Session`) says which settings manager of a host a setting of a
+  plugin belongs to. It stays in Core because a session is an idea of the host.
+- **The stack.** `StackBuilder` takes the manager; protocols register their settings through `IStackBuilder.SettingsRegistrar`,
+  and the built `Stack` owns and disposes the manager.
 
 ```csharp
 using NetworkInspector.Core.Settings;
+using NetworkInspector.Settings;
 
-using SettingsManager manager = new(folder);
+using SettingsManager manager = new(folder, CoreSettingsLayout.Instance);
 manager.RegisterSetting(Setting.I64("net.retries", "Retries", "net", 3, min: 0, max: 10, activation: SettingActivation.SessionReset));
+manager.Load();
 
 Setting retries = manager.GetSetting("net.retries")!;   // registered above
 if (!SettingValueText.TryParse(retries, "25", out SettingValue value, out SettingProblem? problem)
@@ -361,30 +378,49 @@ manager.ApplyChanges(["net.retries"]);   // pending → current for this key onl
 manager.SaveChanged(["net.retries"]);    // merges this key into its group file
 ```
 
-- **Two forms.** `SettingValueText` (`TryParse`, `Format`) is the form of command lines and UIs; `SettingValueJson`
-  (`TryRead`, `Write`) is the form of the files. Wrong input gives a `SettingProblem` with a `SettingProblemKind`
-  (`WrongType`, `BelowMinimum`, `AboveMaximum`, `NotFinite`, `UnknownEnum`, `InvalidPath`, `UnknownSetting`) and one
-  message that names the setting and the accepted values. `Setting.TryValidate` and `Setting.TrySetPendingValue` are the
-  non-throwing counterparts of `SetPendingValue`.
-- **Lookup.** `TryGetSetting` finds a setting by name; `FindSimilar` returns the closest names for a "did you mean".
-- **Activation.** `SettingActivation` (`Immediate`, `SessionReset`, `Restart`) says when a host should use a changed value.
-  Core applies every change at once; the host decides about restarts.
-- **Per-key apply.** `ApplyChanges(names)` and `ResetChanges(names)` work on the given keys only; `PendingChanged` is
-  raised for every key whose pending value changes, `SettingsApplied` for the applied ones.
-- **Sparse files.** `Save` writes only values that differ from their default, one file per group, and writes the values
-  of settings that are not registered in this run (`Orphans`, for example a plugin that is not loaded) back unchanged.
-  `Save` writes the whole state of the manager: the key of every registered setting is set, or removed at its default, so a
-  value that another process stored for a registered setting since `Load` is replaced (last writer wins). It deletes only
-  group files that the manager saw at `Load` or wrote itself, never a file another process created after `Load`.
-  `SaveChanged(names)` merges single keys into the files and keeps all other keys, also those another process wrote
-  (names of several groups are written group by group; an error stops at that group and the groups before it stay written);
-  `Unset(name)` removes a stored value so that the default applies again. Writers of several processes are serialized by
-  the lock file `.ni-settings.lock` in the folder; a writer that waits more than two seconds gets a
-  `PersistenceSettingsException` ("in use by another process; try again").
-- **Profiles.** `SettingsProfiles` (`List`, `Exists`, `TryCreate`, `TryRename`, `TryDelete`) manages profile folders under a
-  settings base; `ProfileNames` validates a name and `StorageNames` maps it to a folder name (names up to 120 characters
-  are used as they are, longer ones become a shortened name with a hash and a `.name` file that keeps the full name).
-  `SettingsManagerFactory.ResolvePath(base, profile)` gives the folder of a profile.
+The text and JSON forms, sparse files, the folder lock, profiles, and the load warnings are described in the
+[settings README](../NetworkInspector.Settings/README.md) and its [guide](../docs/guides/settings.md).
+
+### Limits
+
+A limit is a bound at a trust boundary (a file, a network stream, a plugin, a filter expression) whose right value depends on
+the data or on how much the user trusts the input. The package `NetworkInspector.Limits`
+([README](../NetworkInspector.Limits/README.md), [guide](../docs/guides/limits.md)) declares such a bound as one
+`LimitDefinition` that the setting, the option, the protocol field, the command line, the help, and the hit text all read; the
+live value for a hot loop is a `Limit` (`manager.GetLiveLimit(key)`). A bound that is a fact of a format, an internal tuning
+value, or a display rule stays a constant with a comment that says which.
+
+Every default is one fixed number sized for a reference machine of 8 logical processors and 16 GB of memory
+([`docs/decisions/limits-policy.md`](../docs/decisions/limits-policy.md)); no default is read from the machine at run time. Core
+adds one member in `CoreLimitPolicy` (namespace `NetworkInspector.Core.Limits`):
+
+| Member | Policy |
+| --- | --- |
+| `HitMessage(eventText, effective)` | The hit sentence of the library with the change hint of `ni`: `ni settings set <key> <value>` for a stored change and `--set <key>=<value>` for one run |
+
+```csharp
+using NetworkInspector.Core.Limits;
+using NetworkInspector.Limits;
+using NetworkInspector.Settings;
+
+// One catalog per project; a test checks it for duplicate keys.
+IReadOnlyList<LimitCatalogProblem> problems = LimitCatalog.Check(ArchiveLimits.All);
+
+// Expose the limit as a setting (read it with GetLimit) or as a source or format option (RegisterLimitOption).
+registrar.RegisterLimit(ArchiveLimits.MaxEntrySize);
+
+// Enforce: read the ceiling once per decision, and report a hit with the standard sentence.
+long ceiling = options.MaxEntrySize.Ceiling;
+if (entrySize > ceiling)
+{
+    return ArchiveLimits.MaxEntrySize.HitMessage(
+        Invariant($"Entry is {ArchiveLimits.MaxEntrySize.Format(LimitValue.Of(entrySize))}"), options.MaxEntrySize);
+}
+```
+
+`RegistrationOptions.CreateDefaults` seeds a source or format option from the stored limit with the same key, so an inline
+option overrides the stored value for one source or output. Data is never truncated, dropped, or clamped silently: a hit is an
+error, an `ItemSkipped`, or a counted message.
 
 ### Write A Custom Dissector
 

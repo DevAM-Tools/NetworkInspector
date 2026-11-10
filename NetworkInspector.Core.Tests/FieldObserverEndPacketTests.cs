@@ -228,7 +228,7 @@ internal sealed class FieldObserverEndPacketTests
 
         public void BeginPacket(PacketId id, Timestamp timestamp)
         {
-            Events.Add($"{name}:begin:{id.Value}");
+            Events.Add(Invariant($"{name}:begin:{id.Value}"));
             _FieldNumber = 0;
             if (ThrowInBegin)
             {
@@ -239,7 +239,7 @@ internal sealed class FieldObserverEndPacketTests
         public void OnField(in FieldVisit visit)
         {
             _FieldNumber++;
-            Events.Add($"{name}:field:{visit.PacketId.Value}");
+            Events.Add(Invariant($"{name}:field:{visit.PacketId.Value}"));
             FieldIds.Add(visit.FieldId);
 
             // Only packet 0 throws, so the following packet proves that the mute does not leak.
@@ -251,7 +251,7 @@ internal sealed class FieldObserverEndPacketTests
 
         public void EndPacket(PacketId id, bool complete)
         {
-            Events.Add($"{name}:end:{id.Value}:{complete}");
+            Events.Add(Invariant($"{name}:end:{id.Value}:{complete}"));
             if (ThrowInEnd)
             {
                 throw new InvalidOperationException("end failed");

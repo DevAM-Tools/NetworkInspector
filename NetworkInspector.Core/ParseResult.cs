@@ -62,13 +62,29 @@ namespace NetworkInspector.Core;
 [StructLayout(LayoutKind.Auto)]
 public readonly struct ParseResult
 {
-    // Encoding: >0 = Ok (consumed+1), 0 = uninitialized Error, -1 = TLS Error, -2 = NotDispatched
+    #region Configuration and state
+
+    /// <summary>
+    /// The encoded discriminant of <see cref="NotDispatched"/>. The full encoding of <c>_EncodedValue</c> is
+    /// &gt;0 = Ok (consumed + 1), 0 = uninitialized Error, -1 = TLS Error, -2 = NotDispatched.
+    /// </summary>
     private const int _NotDispatchedEncodedValue = -2;
+
+    /// <summary>The tagged value; the only state, so a result is four bytes. See <see cref="_NotDispatchedEncodedValue"/>.</summary>
     private readonly int _EncodedValue;
 
-    #region Constructors
+    /// <summary>
+    /// Named miss variant: a dispatch table was present and the key had no protocol.
+    /// Not an error. Not a successful parse. Does not write TLS and does not allocate.
+    /// </summary>
+    public static readonly ParseResult NotDispatched = new(_NotDispatchedEncodedValue);
 
-    /// <summary>Private — constructible via implicit operators and <see cref="NotDispatched"/>.</summary>
+    /// <summary>Sentinel error for <c>default(ParseResult)</c> / uninitialized results.</summary>
+    private static readonly ParseError _UninitializedError =
+        ParseError.InternalError("Uninitialized ParseResult (missing return statement or return default)");
+
+    /// <summary>Creates a result from an already encoded value; the public way in is the implicit operators and <see cref="NotDispatched"/>.</summary>
+    /// <param name="encodedValue">The encoding described at <see cref="_NotDispatchedEncodedValue"/>.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ParseResult(int encodedValue)
     {
@@ -77,13 +93,7 @@ public readonly struct ParseResult
 
     #endregion
 
-    #region Properties
-
-    /// <summary>
-    /// Named miss variant: a dispatch table was present and the key had no protocol.
-    /// Not an error. Not a successful parse. Does not write TLS and does not allocate.
-    /// </summary>
-    public static readonly ParseResult NotDispatched = new(_NotDispatchedEncodedValue);
+    #region Variant tests
 
     /// <summary>
     /// Whether this result is the Ok variant (consumed ≥ 0), including Ok(0)
@@ -121,7 +131,7 @@ public readonly struct ParseResult
 
     #endregion
 
-    #region Result Helpers
+    #region Two-method contract
 
     /// <summary>
     /// Error-path method of the two-method contract. Returns <see langword="true"/> if and only
@@ -164,6 +174,12 @@ public readonly struct ParseResult
     /// Tries to get the error details. Returns <see langword="false"/> for Ok and for
     /// <see cref="NotDispatched"/>. Internal: packet-level consumers snapshot TLS.
     /// </summary>
+    /// <param name="error">
+    /// The error of an Error result: the uninitialized-result error for encoding 0, otherwise the thread-local last error of the
+    /// calling thread (which must be the thread that produced the result). <c>default</c> when the method returns
+    /// <see langword="false"/>.
+    /// </param>
+    /// <returns><see langword="true"/> for Error; <see langword="false"/> for Ok and <see cref="NotDispatched"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryGetError(out ParseError error)
     {
@@ -196,6 +212,9 @@ public readonly struct ParseResult
     /// <see cref="ArgumentOutOfRangeException"/>.
     /// </para>
     /// </summary>
+    /// <param name="consumed">The number of bytes the protocol consumed, in <c>[0, int.MaxValue - 1]</c>.</param>
+    /// <returns>The Ok result that carries <paramref name="consumed"/>.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="consumed"/> is negative or <see cref="int.MaxValue"/>.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator ParseResult(int consumed)
     {
@@ -203,6 +222,7 @@ public readonly struct ParseResult
         {
             _ThrowConsumedOutOfRange(consumed);
         }
+
         return new(consumed + 1);
     }
 
@@ -217,6 +237,8 @@ public readonly struct ParseResult
     /// synchronously on the producing thread only.
     /// </para>
     /// </summary>
+    /// <param name="error">The error to report; stored in the thread-local slot of the calling thread.</param>
+    /// <returns>The Error result that refers to the thread-local slot.</returns>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static implicit operator ParseResult(ParseError error)
     {
@@ -226,14 +248,12 @@ public readonly struct ParseResult
         return new(-1);
     }
 
-    /// <summary>Sentinel error for <c>default(ParseResult)</c> / uninitialized results.</summary>
-    private static readonly ParseError _UninitializedError =
-        ParseError.InternalError("Uninitialized ParseResult (missing return statement or return default)");
-
     /// <summary>
     /// Throws <see cref="ArgumentOutOfRangeException"/> when consumed is negative or
     /// <see cref="int.MaxValue"/> (not representable as consumed + 1).
     /// </summary>
+    /// <param name="consumed">The rejected consumed byte count.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Always.</exception>
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void _ThrowConsumedOutOfRange(int consumed)
@@ -242,6 +262,10 @@ public readonly struct ParseResult
             consumed,
             "ParseResult: consumed bytes must be in [0, int.MaxValue - 1]. Use ParseError factory methods for errors.");
 
+    #endregion
+
+    #region Formatting and typed results
+
     /// <inheritdoc/>
     public override string ToString()
     {
@@ -249,19 +273,27 @@ public readonly struct ParseResult
         {
             return string.Create(CultureInfo.InvariantCulture, $"Ok({_EncodedValue - 1})");
         }
+
         if (IsNotDispatched)
         {
             return "NotDispatched";
         }
+
         _ = TryGetError(out ParseError error);
         return string.Create(CultureInfo.InvariantCulture, $"Error({error.Message})");
     }
 
     /// <summary>Creates a successful typed result.</summary>
+    /// <typeparam name="T">The success value type.</typeparam>
+    /// <param name="value">The success value.</param>
+    /// <returns>A successful <see cref="ParseResult{T}"/> that holds <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ParseResult<T> Ok<T>(T value) => new(value, default, true);
 
     /// <summary>Creates a failed typed result.</summary>
+    /// <typeparam name="T">The success value type the result would have carried.</typeparam>
+    /// <param name="error">The error to carry inside the result (no thread-local slot is involved).</param>
+    /// <returns>A failed <see cref="ParseResult{T}"/> that holds <paramref name="error"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ParseResult<T> Fail<T>(ParseError error) => new(default, error, false);
 
@@ -279,12 +311,21 @@ public readonly struct ParseResult
 [StructLayout(LayoutKind.Auto)]
 public readonly struct ParseResult<T>
 {
-    #region Constructors
+    #region Configuration and state
 
+    /// <summary>The success value; meaningful only when <see cref="IsSuccess"/> is <see langword="true"/>.</summary>
     private readonly T? _Value;
+
+    /// <summary>The error; meaningful only when <see cref="IsSuccess"/> is <see langword="false"/>.</summary>
     private readonly ParseError _Error;
 
+    /// <summary>Whether this result represents a successful parse.</summary>
+    public bool IsSuccess { get; }
+
     /// <summary>Creates a parse result with the given value, error, and success state.</summary>
+    /// <param name="value">The success value; ignored by readers when <paramref name="isSuccess"/> is <see langword="false"/>.</param>
+    /// <param name="error">The error; ignored by readers when <paramref name="isSuccess"/> is <see langword="true"/>.</param>
+    /// <param name="isSuccess">Which of the two parts is meaningful.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ParseResult(T? value, ParseError error, bool isSuccess)
     {
@@ -295,10 +336,7 @@ public readonly struct ParseResult<T>
 
     #endregion
 
-    #region Properties
-
-    /// <summary>Whether this result represents a successful parse.</summary>
-    public bool IsSuccess { get; }
+    #region Value and error access
 
     /// <summary>Whether this result represents a parse error.</summary>
     public bool IsError
@@ -316,8 +354,9 @@ public readonly struct ParseResult<T>
         {
             if (IsSuccess)
             {
-                return _Value!;
+                return _Value!; // Invariant: a success result was built with a value; T? only adds the nullable annotation.
             }
+
             return ThrowHelpers.ThrowParseResultNoValue<T>();
         }
     }
@@ -333,15 +372,14 @@ public readonly struct ParseResult<T>
             {
                 return _Error;
             }
+
             return ThrowHelpers.ThrowParseResultNoError<ParseError>();
         }
     }
 
-    #endregion
-
-    #region Result Helpers
-
     /// <summary>Tries to get the success value.</summary>
+    /// <param name="value">The success value; <c>default</c> (or null) when the result is an error.</param>
+    /// <returns><see langword="true"/> when this is a success result.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetValue([MaybeNullWhen(false)] out T value)
     {
@@ -350,6 +388,8 @@ public readonly struct ParseResult<T>
     }
 
     /// <summary>Tries to get the error.</summary>
+    /// <param name="error">The error when this is an error result; otherwise the default error value, which carries no information.</param>
+    /// <returns><see langword="true"/> when this is an error result.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetError(out ParseError error)
     {
@@ -359,23 +399,28 @@ public readonly struct ParseResult<T>
 
     #endregion
 
+    #region Conversions and formatting
+
     /// <inheritdoc/>
     public override string ToString()
     {
         if (IsSuccess)
         {
-            return $"Ok({_Value})";
+            return Invariant($"Ok({_Value})");
         }
-        return $"Error({_Error.Message})";
+
+        return Invariant($"Error({_Error.Message})");
     }
 
-    #region Conversions
-
     /// <summary>Implicit conversion from value to success result.</summary>
+    /// <param name="value">The success value.</param>
+    /// <returns>A successful result that holds <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator ParseResult<T>(T value) => ParseResult.Ok(value);
 
     /// <summary>Implicit conversion from ParseError to failed result.</summary>
+    /// <param name="error">The error to carry.</param>
+    /// <returns>A failed result that holds <paramref name="error"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator ParseResult<T>(ParseError error) => ParseResult.Fail<T>(error);
 

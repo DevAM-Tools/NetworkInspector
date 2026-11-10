@@ -75,7 +75,7 @@ internal sealed class PcapngVerifier
             if (blockLen < 12 || offset + (int)blockLen > data.Length)
             {
                 throw new InvalidDataException(
-                    $"Invalid block length {blockLen} at offset {offset}");
+                    Invariant($"Invalid block length {blockLen} at offset {offset}"));
             }
 
             // Verify trailing block length matches header
@@ -85,7 +85,7 @@ internal sealed class PcapngVerifier
             if (trailingLen != blockLen)
             {
                 throw new InvalidDataException(
-                    $"Trailing block length {trailingLen} != header length {blockLen} at offset {offset}");
+                    Invariant($"Trailing block length {trailingLen} != header length {blockLen} at offset {offset}"));
             }
 
             switch (blockType)
@@ -111,7 +111,7 @@ internal sealed class PcapngVerifier
     {
         if (blockLen < 20)
         {
-            throw new InvalidDataException($"IDB too small: {blockLen} bytes at offset {offset}");
+            throw new InvalidDataException(Invariant($"IDB too small: {blockLen} bytes at offset {offset}"));
         }
 
         ushort linkType = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(offset + 8));
@@ -159,14 +159,14 @@ internal sealed class PcapngVerifier
     {
         if (blockLen < 28)
         {
-            throw new InvalidDataException($"SHB too small: {blockLen} bytes at offset {offset}");
+            throw new InvalidDataException(Invariant($"SHB too small: {blockLen} bytes at offset {offset}"));
         }
 
         uint magic = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset + 8));
         if (magic != _ByteOrderMagic)
         {
             throw new InvalidDataException(
-                $"Invalid byte order magic 0x{magic:X8} at offset {offset}");
+                Invariant($"Invalid byte order magic 0x{magic:X8} at offset {offset}"));
         }
 
         SectionCount++;

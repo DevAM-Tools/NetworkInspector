@@ -30,7 +30,9 @@ namespace NetworkInspector.Core.Fields;
 [StructLayout(LayoutKind.Sequential)]
 public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFormattable
 {
-    /// <summary>The owning packet.</summary>
+    #region Identity and construction
+
+    /// <summary>The owning packet; <see langword="null"/> for a default (invalid) field.</summary>
     public Packet Packet { get; }
 
     /// <summary>Index into the packet's flat field list.</summary>
@@ -65,6 +67,8 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
         FieldId = fieldId;
     }
 
+    #endregion
+
     #region Validity
 
     /// <summary>Whether this field reference points to a valid packet and index.</summary>
@@ -75,18 +79,21 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
         get => Packet is not null && StorageIndex != FieldBody.NullIndex;
     }
 
-    /// <summary>False when the owning packet was parsed with <see cref="FieldTreeMode.Skip"/>.</summary>
+    /// <summary>
+    /// False when the owning packet was parsed with <see cref="FieldTreeMode.Skip"/>, and for a default field (no packet): such a
+    /// field has no tree to walk, so the navigation members report no relatives and no children instead of dereferencing a null packet.
+    /// </summary>
     public bool HasFieldTree
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => Packet.HasFieldTree;
+        get => Packet is not null && Packet.HasFieldTree;
     }
 
     #endregion
 
-    #region Public Accessors
+    #region Reading the field
 
-    /// <summary>Gets the field's metadata from the stack registry.</summary>
+    /// <summary>Gets the field's metadata from the stack registry; <see langword="null"/> when the stack does not know <see cref="FieldId"/>.</summary>
     public FieldInfo? FieldInfo => Packet.Stack.GetField(FieldId);
 
     /// <summary>
@@ -207,6 +214,14 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
     /// When <see langword="false"/>, an unmaterialized lazy container reports no children.
     /// </summary>
     /// <param name="materialize">Whether to materialize lazy children before checking.</param>
+    /// <returns>
+    /// <see langword="true"/> when the field has at least one child; always <see langword="false"/> when the packet was parsed
+    /// with <see cref="FieldTreeMode.Skip"/>.
+    /// </returns>
+    /// <remarks>
+    /// With <paramref name="materialize"/> this waits for a lazy field that another thread is materializing; the
+    /// <c>MutField</c> counterpart does not wait (a parse-thread cursor never needs to).
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool HasChildren(bool materialize)
     {
@@ -234,6 +249,7 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
     /// When <see langword="false"/>, an unmaterialized lazy container reports zero children.
     /// </summary>
     /// <param name="materialize">Whether to materialize lazy children before counting.</param>
+    /// <returns>The number of direct children; 0 when the packet was parsed with <see cref="FieldTreeMode.Skip"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ushort ChildCount(bool materialize)
     {
@@ -253,8 +269,10 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
         return Packet.GetFieldRef(StorageIndex).ChildCount;
     }
 
-    /// <summary>Whether this field is lazy (has deferred children that need materialization).
-    /// Internal so the lazy mechanism stays transparent to external consumers.</summary>
+    /// <summary>
+    /// Whether this field is lazy (has deferred children that need materialization).
+    /// Internal so the lazy mechanism stays transparent to external consumers.
+    /// </summary>
     internal bool NeedsLazyMaterialization
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -327,6 +345,15 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
     /// Tries to get the parent field. Returns false if this is a root field (or the packet has no field tree).
     /// The parent was published before its children, so no wait on the published count is needed here.
     /// </summary>
+    /// <param name="parent">The parent when present; the default (invalid) field when the method returns <see langword="false"/>.</param>
+    /// <returns>
+    /// <see langword="true"/> when this field has a parent; <see langword="false"/> for the root and for a packet parsed with
+    /// <see cref="FieldTreeMode.Skip"/>.
+    /// </returns>
+    /// <remarks>
+    /// A default field (see <see cref="IsValid"/>) has no packet and no relatives: the method returns <see langword="false"/>.
+    /// Cost: no allocation; one slab read.
+    /// </remarks>
     public bool TryGetParent(out Field parent)
     {
         if (!HasFieldTree)
@@ -350,8 +377,12 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
     /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are populated first.
     /// Parent/sibling navigation does not take this parameter because it only follows index links.
     /// </summary>
-    /// <param name="firstChild">The first child when present.</param>
+    /// <param name="firstChild">The first child when present; the default (invalid) field when the method returns <see langword="false"/>.</param>
     /// <param name="materialize">Whether to materialize lazy children before reading the child list.</param>
+    /// <returns>
+    /// <see langword="true"/> when the field has a child; <see langword="false"/> when it has none (an unmaterialized lazy
+    /// container without <paramref name="materialize"/> included) and for a packet parsed with <see cref="FieldTreeMode.Skip"/>.
+    /// </returns>
     public bool TryGetFirstChild(out Field firstChild, bool materialize)
     {
         if (!HasFieldTree)
@@ -385,8 +416,12 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
     /// Tries to get the last child field. Returns false if there are no children.
     /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are populated first.
     /// </summary>
-    /// <param name="lastChild">The last child when present.</param>
+    /// <param name="lastChild">The last child when present; the default (invalid) field when the method returns <see langword="false"/>.</param>
     /// <param name="materialize">Whether to materialize lazy children before reading the child list.</param>
+    /// <returns>
+    /// <see langword="true"/> when the field has a child; <see langword="false"/> when it has none (an unmaterialized lazy
+    /// container without <paramref name="materialize"/> included) and for a packet parsed with <see cref="FieldTreeMode.Skip"/>.
+    /// </returns>
     public bool TryGetLastChild(out Field lastChild, bool materialize)
     {
         if (!HasFieldTree)
@@ -414,6 +449,15 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
     }
 
     /// <summary>Tries to get the next sibling field. Returns false if this is the last sibling.</summary>
+    /// <param name="next">The next sibling when present; the default (invalid) field when the method returns <see langword="false"/>.</param>
+    /// <returns>
+    /// <see langword="true"/> when a next sibling exists; <see langword="false"/> for the last sibling and for a packet parsed
+    /// with <see cref="FieldTreeMode.Skip"/>.
+    /// </returns>
+    /// <remarks>
+    /// A default field has no relatives: the method returns <see langword="false"/>. A concurrent materializer may have linked the
+    /// sibling a moment earlier: the read then waits briefly until the sibling's slot is published. No allocation.
+    /// </remarks>
     public bool TryGetNext(out Field next)
     {
         if (!HasFieldTree)
@@ -433,6 +477,12 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
     }
 
     /// <summary>Tries to get the previous sibling field. Returns false if this is the first sibling.</summary>
+    /// <param name="prev">The previous sibling when present; the default (invalid) field when the method returns <see langword="false"/>.</param>
+    /// <returns>
+    /// <see langword="true"/> when a previous sibling exists; <see langword="false"/> for the first sibling and for a packet
+    /// parsed with <see cref="FieldTreeMode.Skip"/>.
+    /// </returns>
+    /// <remarks>Same preconditions and cost as <see cref="TryGetNext"/>.</remarks>
     public bool TryGetPrev(out Field prev)
     {
         if (!HasFieldTree)
@@ -460,6 +510,7 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
     /// When <paramref name="materialize"/> is <see langword="true"/>, lazy children are materialized first.
     /// </summary>
     /// <param name="materialize">Whether to materialize lazy children before iterating.</param>
+    /// <returns>An enumerable of the direct children in order; empty for a packet parsed with <see cref="FieldTreeMode.Skip"/>.</returns>
     public FieldChildEnumerable Children(bool materialize) => new(Packet, StorageIndex, materialize);
 
     /// <summary>
@@ -467,6 +518,7 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
     /// When <paramref name="materialize"/> is <see langword="true"/>, lazy fields are materialized during traversal.
     /// </summary>
     /// <param name="materialize">Whether to materialize lazy fields during traversal.</param>
+    /// <returns>An enumerable of every descendant, this field excluded; empty for a packet parsed with <see cref="FieldTreeMode.Skip"/>.</returns>
     public FieldDescendantEnumerable Descendants(bool materialize) => new(Packet, StorageIndex, materialize);
 
     #endregion
@@ -475,6 +527,8 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
 
     /// <inheritdoc />
     /// <remarks>Two handles are equal when they address the same slot of the same packet instance (reference identity of the packet).</remarks>
+    /// <param name="other">The handle to compare with.</param>
+    /// <returns><see langword="true"/> when both handles address the same slot of the same packet.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(Field other) => ReferenceEquals(Packet, other.Packet) && StorageIndex == other.StorageIndex;
 
@@ -485,10 +539,17 @@ public readonly struct Field : IEquatable<Field>, ISpanFormattable, IUtf8SpanFor
     /// <remarks>Uses the packet's identity hash so the hash matches the reference-identity <see cref="Equals(Field)"/>.</remarks>
     public override int GetHashCode() => HashCode.Combine(RuntimeHelpers.GetHashCode(Packet), StorageIndex);
 
-    /// <summary>Equality operator.</summary>
+    /// <summary>Whether two handles address the same slot of the same packet (see <see cref="Equals(Field)"/>).</summary>
+    /// <param name="left">The first handle.</param>
+    /// <param name="right">The second handle.</param>
+    /// <returns><see langword="true"/> when both handles address the same slot of the same packet.</returns>
     public static bool operator ==(Field left, Field right) => left.Equals(right);
 
-    /// <summary>Inequality operator.</summary>
+    /// <summary>Whether two handles address different slots or different packets (see <see cref="Equals(Field)"/>).</summary>
+    /// <param name="left">The first handle.</param>
+    /// <param name="right">The second handle.</param>
+    /// <returns><see langword="true"/> when the handles do not address the same slot of the same packet.</returns>
     public static bool operator !=(Field left, Field right) => !left.Equals(right);
+
     #endregion
 }

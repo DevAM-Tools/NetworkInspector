@@ -1,0 +1,10 @@
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
+<Project>
+  <!--
+    A solution build evaluates its own generated project, which does not import Directory.Build.props. Directory.Solution.targets
+    needs Version and PackageOutputPath from there to find the package folder of the current version, so they are imported once
+    instead of being repeated. The generated project compiles nothing; the other properties of that file have no effect on it.
+    Sync: Directory.Build.props (PackageOutputPath), Directory.Solution.targets.
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)Directory.Build.props" />
+</Project>

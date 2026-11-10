@@ -123,13 +123,13 @@ internal static class SignalMessageCompiler
         {
             SignalMessageConfig? messageCfg = config.Messages[i];
             string label = messageCfg is null || string.IsNullOrWhiteSpace(messageCfg.Name)
-                ? $"messages[{i.ToString(CultureInfo.InvariantCulture)}]"
+                ? Invariant($"messages[{i.ToString(CultureInfo.InvariantCulture)}]")
                 : messageCfg.Name;
             try
             {
                 if (messageCfg is null)
                 {
-                    _AddWarning(warnings, $"Skipping signal message '{label}': message entry is null.");
+                    _AddWarning(warnings, Invariant($"Skipping signal message '{label}': message entry is null."));
                     continue;
                 }
 
@@ -142,7 +142,7 @@ internal static class SignalMessageCompiler
                     out CompiledSignalMessage msg,
                     out string? error))
                 {
-                    _AddWarning(warnings, $"Skipping signal message '{label}': {error}");
+                    _AddWarning(warnings, Invariant($"Skipping signal message '{label}': {error}"));
                     continue;
                 }
 
@@ -151,7 +151,7 @@ internal static class SignalMessageCompiler
             catch (Exception ex)
             {
                 // Config trust boundary: one malformed message must not abort the rest of the file.
-                _AddWarning(warnings, $"Skipping signal message '{label}': {ex.Message}");
+                _AddWarning(warnings, Invariant($"Skipping signal message '{label}': {ex.Message}"));
             }
         }
 
@@ -193,37 +193,37 @@ internal static class SignalMessageCompiler
 
         if (string.IsNullOrWhiteSpace(cfg.UiName))
         {
-            error = $"Message '{cfg.Name}': ui_name is required.";
+            error = Invariant($"Message '{cfg.Name}': ui_name is required.");
             return false;
         }
 
         if (!NameValidation.IsValidName(cfg.Name))
         {
-            error = $"Message '{cfg.Name}': name is not a valid protocol identifier.";
+            error = Invariant($"Message '{cfg.Name}': name is not a valid protocol identifier.");
             return false;
         }
 
         if (!NameValidation.IsValidUiName(cfg.UiName))
         {
-            error = $"Message '{cfg.Name}': ui_name is invalid.";
+            error = Invariant($"Message '{cfg.Name}': ui_name is invalid.");
             return false;
         }
 
         if (usedProtocolNames.Contains(cfg.Name))
         {
-            error = $"Duplicate message name '{cfg.Name}'.";
+            error = Invariant($"Duplicate message name '{cfg.Name}'.");
             return false;
         }
 
         if (usedFieldNames.Contains(cfg.Name))
         {
-            error = $"container field name '{cfg.Name}' collides with an already reserved field.";
+            error = Invariant($"container field name '{cfg.Name}' collides with an already reserved field.");
             return false;
         }
 
         if (cfg.ByteLength < 1)
         {
-            error = $"Message '{cfg.Name}': byte_length must be >= 1.";
+            error = Invariant($"Message '{cfg.Name}': byte_length must be >= 1.");
             return false;
         }
 
@@ -233,7 +233,7 @@ internal static class SignalMessageCompiler
         HashSet<string> messageFields = new(StringComparer.Ordinal);
         if (!messageFields.Add(cfg.Name))
         {
-            error = $"Message '{cfg.Name}': container field name could not be reserved.";
+            error = Invariant($"Message '{cfg.Name}': container field name could not be reserved.");
             return false;
         }
 
@@ -258,7 +258,7 @@ internal static class SignalMessageCompiler
             {
                 _AddWarning(
                     warnings,
-                    $"Message '{cfg.Name}': mux_groups ignored because mux_signal is missing.");
+                    Invariant($"Message '{cfg.Name}': mux_groups ignored because mux_signal is missing."));
             }
         }
         else
@@ -292,7 +292,7 @@ internal static class SignalMessageCompiler
 
         if (cfg.ByteLength < required)
         {
-            error = $"Message '{cfg.Name}': byte_length ({cfg.ByteLength}) is less than RequiredByteLength ({required}).";
+            error = Invariant($"Message '{cfg.Name}': byte_length ({cfg.ByteLength}) is less than RequiredByteLength ({required}).");
             return false;
         }
 
@@ -304,7 +304,7 @@ internal static class SignalMessageCompiler
         {
             if (usedFieldNames.Contains(fieldName))
             {
-                error = $"Message '{cfg.Name}': field name '{fieldName}' collides with an already reserved field.";
+                error = Invariant($"Message '{cfg.Name}': field name '{fieldName}' collides with an already reserved field.");
                 return false;
             }
         }
@@ -324,7 +324,7 @@ internal static class SignalMessageCompiler
         // impossible here; the Add result is still checked so the invariant cannot break silently.
         if (!usedProtocolNames.Add(cfg.Name))
         {
-            error = $"Duplicate message name '{cfg.Name}'.";
+            error = Invariant($"Duplicate message name '{cfg.Name}'.");
             return false;
         }
 
@@ -368,19 +368,19 @@ internal static class SignalMessageCompiler
 
         if (string.IsNullOrWhiteSpace(muxCfg.Name) || string.IsNullOrWhiteSpace(muxCfg.UiName))
         {
-            _AddWarning(warnings, $"Skipping mux_signal in message '{messageName}': name and ui_name are required.");
+            _AddWarning(warnings, Invariant($"Skipping mux_signal in message '{messageName}': name and ui_name are required."));
             return false;
         }
 
         if (!NameValidation.IsValidName(muxCfg.Name))
         {
-            _AddWarning(warnings, $"Skipping mux_signal '{muxCfg.Name}' in message '{messageName}': invalid name.");
+            _AddWarning(warnings, Invariant($"Skipping mux_signal '{muxCfg.Name}' in message '{messageName}': invalid name."));
             return false;
         }
 
         if (!NameValidation.IsValidUiName(muxCfg.UiName))
         {
-            _AddWarning(warnings, $"Skipping mux_signal '{muxCfg.Name}' in message '{messageName}': invalid ui_name.");
+            _AddWarning(warnings, Invariant($"Skipping mux_signal '{muxCfg.Name}' in message '{messageName}': invalid ui_name."));
             return false;
         }
 
@@ -393,16 +393,16 @@ internal static class SignalMessageCompiler
                 out bool bigEndian,
                 out string? layoutError))
         {
-            _AddWarning(warnings, $"Skipping mux_signal in message '{messageName}': {layoutError}");
+            _AddWarning(warnings, Invariant($"Skipping mux_signal in message '{messageName}': {layoutError}"));
             return false;
         }
 
-        string muxValueName = $"{muxCfg.Name}.value";
+        string muxValueName = Invariant($"{muxCfg.Name}.value");
         if (!_TryReserveFieldNames(priorFieldNames, messageFields, muxCfg.Name, muxValueName, out string? collision))
         {
             _AddWarning(
                 warnings,
-                $"Skipping mux_signal '{muxCfg.Name}' in message '{messageName}': name '{collision}' collides.");
+                Invariant($"Skipping mux_signal '{muxCfg.Name}' in message '{messageName}': name '{collision}' collides."));
             return false;
         }
 
@@ -435,7 +435,7 @@ internal static class SignalMessageCompiler
             {
                 _AddWarning(
                     warnings,
-                    $"Skipping mux_group in message '{messageName}': group entry is null.");
+                    Invariant($"Skipping mux_group in message '{messageName}': group entry is null."));
                 continue;
             }
 
@@ -443,7 +443,9 @@ internal static class SignalMessageCompiler
             {
                 _AddWarning(
                     warnings,
-                    $"Skipping mux_group mux_value {group.MuxValue.ToString(CultureInfo.InvariantCulture)} in message '{messageName}': exceeds max raw {muxMaxRaw.ToString(CultureInfo.InvariantCulture)} for mux bit_length {bitLength.ToString(CultureInfo.InvariantCulture)}.");
+                    Invariant($"Skipping mux_group mux_value {group.MuxValue.ToString(CultureInfo.InvariantCulture)} in message '{messageName}': ")
+                    + Invariant($"exceeds max raw {muxMaxRaw.ToString(CultureInfo.InvariantCulture)} ")
+                    + Invariant($"for mux bit_length {bitLength.ToString(CultureInfo.InvariantCulture)}."));
                 continue;
             }
 
@@ -451,7 +453,8 @@ internal static class SignalMessageCompiler
             {
                 _AddWarning(
                     warnings,
-                    $"Skipping mux_group mux_value {group.MuxValue.ToString(CultureInfo.InvariantCulture)} in message '{messageName}': duplicate mux_value.");
+                    Invariant($"Skipping mux_group mux_value {group.MuxValue.ToString(CultureInfo.InvariantCulture)} in message '{messageName}': ")
+                    + Invariant($"duplicate mux_value."));
                 continue;
             }
 
@@ -494,14 +497,14 @@ internal static class SignalMessageCompiler
             SignalFieldConfig? cfg = configs[i];
             if (cfg is null)
             {
-                _AddWarning(warnings, $"Skipping signal in message '{messageName}': signal entry is null.");
+                _AddWarning(warnings, Invariant($"Skipping signal in message '{messageName}': signal entry is null."));
                 continue;
             }
 
             if (!_TryCompileSignal(cfg, in settings, out SignalInfo compiled, out string? error))
             {
                 string label = string.IsNullOrWhiteSpace(cfg.Name) ? "(unnamed)" : cfg.Name;
-                _AddWarning(warnings, $"Skipping signal '{label}' in message '{messageName}': {error}");
+                _AddWarning(warnings, Invariant($"Skipping signal '{label}' in message '{messageName}': {error}"));
                 continue;
             }
 
@@ -519,7 +522,7 @@ internal static class SignalMessageCompiler
             {
                 _AddWarning(
                     warnings,
-                    $"Skipping signal '{compiled.Name}' in message '{messageName}': name '{collision}' collides.");
+                    Invariant($"Skipping signal '{compiled.Name}' in message '{messageName}': name '{collision}' collides."));
                 continue;
             }
 
@@ -550,13 +553,13 @@ internal static class SignalMessageCompiler
 
         if (!NameValidation.IsValidName(cfg.Name))
         {
-            error = $"invalid name '{cfg.Name}'.";
+            error = Invariant($"invalid name '{cfg.Name}'.");
             return false;
         }
 
         if (!NameValidation.IsValidUiName(cfg.UiName))
         {
-            error = $"invalid ui_name.";
+            error = Invariant($"invalid ui_name.");
             return false;
         }
 
@@ -584,13 +587,14 @@ internal static class SignalMessageCompiler
             {
                 if (!ulong.TryParse(kvp.Key, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong key))
                 {
-                    error = $"invalid value_names key '{kvp.Key}'.";
+                    error = Invariant($"invalid value_names key '{kvp.Key}'.");
                     return false;
                 }
 
                 if (!numericNames.TryAdd(key, kvp.Value))
                 {
-                    error = $"duplicate value_names key '{kvp.Key}': another key denotes the same number {key.ToString(CultureInfo.InvariantCulture)}.";
+                    error = Invariant($"duplicate value_names key '{kvp.Key}': another key denotes the same number ")
+                        + Invariant($"{key.ToString(CultureInfo.InvariantCulture)}.");
                     return false;
                 }
             }
@@ -668,7 +672,7 @@ internal static class SignalMessageCompiler
         }
         else if (!byteOrder.Equals("little_endian", StringComparison.OrdinalIgnoreCase))
         {
-            error = $"unsupported byte_order '{byteOrder}'.";
+            error = Invariant($"unsupported byte_order '{byteOrder}'.");
             return false;
         }
 
@@ -717,14 +721,14 @@ internal static class SignalMessageCompiler
             return false;
         }
 
-        string rawName = $"{fieldName}.raw";
+        string rawName = Invariant($"{fieldName}.raw");
         if (reserveRaw && !_CanUseFieldName(priorFieldNames, messageFields, rawName))
         {
             collision = rawName;
             return false;
         }
 
-        string enumName = $"{fieldName}.enum";
+        string enumName = Invariant($"{fieldName}.enum");
         if (reserveEnum && !_CanUseFieldName(priorFieldNames, messageFields, enumName))
         {
             collision = enumName;

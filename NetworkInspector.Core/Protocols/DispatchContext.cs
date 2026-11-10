@@ -26,7 +26,7 @@ namespace NetworkInspector.Core.Protocols;
 /// </summary>
 public readonly struct DispatchContext
 {
-    #region Fields
+    #region Configuration and state
 
     // Layout chosen to minimise padding on a 64-bit runtime:
     //   offset 0  : object? _RefKey       (8 bytes — string, or BytesKey's byte[])
@@ -38,17 +38,23 @@ public readonly struct DispatchContext
     // The runtime may reorder fields (LayoutKind.Auto for managed structs), but the
     // total size remains 32 bytes regardless of ordering.
 
+    /// <summary>The reference-typed key: the <see cref="string"/> of a string dispatch, the backing array of a bytes dispatch, otherwise null.</summary>
     private readonly object? _RefKey;
+
+    /// <summary>The numeric key: the value of a <see cref="ulong"/> dispatch, 0 or 1 for a bool dispatch, otherwise 0.</summary>
     private readonly ulong _NumericKey;
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>
     /// Full private constructor. All factory methods funnel through here so that
     /// the invariant <c>Kind != None ⇔ TableId.IsValid</c> is enforced in one place.
     /// </summary>
+    /// <param name="kind">The key type of the dispatch; <see cref="DispatchKeyKind.None"/> for no dispatch.</param>
+    /// <param name="tableId">The dispatch table; invalid exactly when <paramref name="kind"/> is <see cref="DispatchKeyKind.None"/>.</param>
+    /// <param name="numericKey">The numeric key, or 0 when the key is not numeric.</param>
+    /// <param name="refKey">The reference-typed key, or null when the key is not a string or byte sequence.</param>
+    /// <param name="callerProtocolId">The protocol that triggered the dispatch, or <see cref="ProtocolId.Invalid"/>.</param>
+    /// <exception cref="ArgumentException"><paramref name="kind"/> is <see cref="DispatchKeyKind.None"/> but the table id is valid.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is not <see cref="DispatchKeyKind.None"/> but the table id is invalid.</exception>
     private DispatchContext(DispatchKeyKind kind, ProtocolTableId tableId, ulong numericKey, object? refKey, ProtocolId callerProtocolId)
     {
         if (kind == DispatchKeyKind.None)
@@ -72,7 +78,7 @@ public readonly struct DispatchContext
 
     #endregion
 
-    #region Internal Factories — write access restricted to NetworkInspector.Core
+    #region Creation (internal, so only Core can write a dispatch)
 
     /// <summary>
     /// Creates a dispatch context for a <see cref="ulong"/> key dispatch
@@ -81,6 +87,7 @@ public readonly struct DispatchContext
     /// <param name="tableId">The dispatch table used for this lookup.</param>
     /// <param name="key">The numeric key used for this lookup.</param>
     /// <param name="callerProtocolId">The <see cref="ProtocolId"/> of the protocol that triggered the dispatch.</param>
+    /// <returns>The context that describes this dispatch.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static DispatchContext ForU64(ProtocolTableId tableId, ulong key, ProtocolId callerProtocolId)
         => new(DispatchKeyKind.U64, tableId, key, null, callerProtocolId);
@@ -89,6 +96,7 @@ public readonly struct DispatchContext
     /// <param name="tableId">The dispatch table used for this lookup.</param>
     /// <param name="key">The string key used for this lookup.</param>
     /// <param name="callerProtocolId">The <see cref="ProtocolId"/> of the protocol that triggered the dispatch.</param>
+    /// <returns>The context that describes this dispatch.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static DispatchContext ForString(ProtocolTableId tableId, string key, ProtocolId callerProtocolId)
         => new(DispatchKeyKind.String, tableId, 0, key, callerProtocolId);
@@ -97,6 +105,7 @@ public readonly struct DispatchContext
     /// <param name="tableId">The dispatch table used for this lookup.</param>
     /// <param name="key">The byte-sequence key used for this lookup.</param>
     /// <param name="callerProtocolId">The <see cref="ProtocolId"/> of the protocol that triggered the dispatch.</param>
+    /// <returns>The context that describes this dispatch.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static DispatchContext ForBytes(ProtocolTableId tableId, BytesKey key, ProtocolId callerProtocolId)
         => new(DispatchKeyKind.Bytes, tableId, 0, key.Data, callerProtocolId);
@@ -105,20 +114,29 @@ public readonly struct DispatchContext
     /// <param name="tableId">The dispatch table used for this lookup.</param>
     /// <param name="key">The bool key used for this lookup.</param>
     /// <param name="callerProtocolId">The <see cref="ProtocolId"/> of the protocol that triggered the dispatch.</param>
+    /// <returns>The context that describes this dispatch.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static DispatchContext ForBool(ProtocolTableId tableId, bool key, ProtocolId callerProtocolId)
-        => new(DispatchKeyKind.Bool, tableId, key ? 1UL : 0UL, null, callerProtocolId);
+        => new(
+            DispatchKeyKind.Bool,
+            tableId,
+            key
+                ? 1UL
+                : 0UL,
+            null,
+            callerProtocolId);
 
     /// <summary>Creates a dispatch context for a wildcard (any-key) dispatch.</summary>
     /// <param name="tableId">The dispatch table used for this lookup.</param>
     /// <param name="callerProtocolId">The <see cref="ProtocolId"/> of the protocol that triggered the dispatch.</param>
+    /// <returns>The context that describes this dispatch.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static DispatchContext ForAny(ProtocolTableId tableId, ProtocolId callerProtocolId)
         => new(DispatchKeyKind.Any, tableId, 0, null, callerProtocolId);
 
     #endregion
 
-    #region Public Properties — read access for protocol implementations
+    #region Dispatch identity (public, read-only for protocol implementations)
 
     /// <summary>
     /// Whether a dispatch context is present.
@@ -155,12 +173,13 @@ public readonly struct DispatchContext
 
     #endregion
 
-    #region Public TryGet Methods — typed key access
+    #region Typed key access
 
     /// <summary>
     /// Retrieves the dispatch key as a <see cref="ulong"/>.
-    /// Returns <see langword="true"/> when <see cref="Kind"/> is <see cref="DispatchKeyKind.U64"/>.
     /// </summary>
+    /// <param name="key">The numeric key; 0 when <see cref="Kind"/> is not <see cref="DispatchKeyKind.U64"/>.</param>
+    /// <returns><see langword="true"/> when <see cref="Kind"/> is <see cref="DispatchKeyKind.U64"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetU64(out ulong key)
     {
@@ -170,10 +189,11 @@ public readonly struct DispatchContext
 
     /// <summary>
     /// Retrieves the dispatch key as a <see cref="string"/>.
-    /// Returns <see langword="true"/> when <see cref="Kind"/> is <see cref="DispatchKeyKind.String"/>.
     /// </summary>
+    /// <param name="key">The string key; null when <see cref="Kind"/> is not <see cref="DispatchKeyKind.String"/>.</param>
+    /// <returns><see langword="true"/> when <see cref="Kind"/> is <see cref="DispatchKeyKind.String"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetString(out string? key)
+    public bool TryGetString([NotNullWhen(true)] out string? key)
     {
         key = _RefKey as string;
         return Kind == DispatchKeyKind.String;
@@ -181,8 +201,12 @@ public readonly struct DispatchContext
 
     /// <summary>
     /// Retrieves the dispatch key as a <see cref="BytesKey"/>.
-    /// Returns <see langword="true"/> when <see cref="Kind"/> is <see cref="DispatchKeyKind.Bytes"/>.
     /// </summary>
+    /// <param name="key">
+    /// The byte-sequence key (wraps the stored array, no copy); the empty key when <see cref="Kind"/> is not
+    /// <see cref="DispatchKeyKind.Bytes"/>.
+    /// </param>
+    /// <returns><see langword="true"/> when <see cref="Kind"/> is <see cref="DispatchKeyKind.Bytes"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetBytes(out BytesKey key)
     {
@@ -199,8 +223,9 @@ public readonly struct DispatchContext
 
     /// <summary>
     /// Retrieves the dispatch key as a <see cref="bool"/>.
-    /// Returns <see langword="true"/> when <see cref="Kind"/> is <see cref="DispatchKeyKind.Bool"/>.
     /// </summary>
+    /// <param name="key">The bool key; <see langword="false"/> when <see cref="Kind"/> is not <see cref="DispatchKeyKind.Bool"/>.</param>
+    /// <returns><see langword="true"/> when <see cref="Kind"/> is <see cref="DispatchKeyKind.Bool"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetBool(out bool key)
     {

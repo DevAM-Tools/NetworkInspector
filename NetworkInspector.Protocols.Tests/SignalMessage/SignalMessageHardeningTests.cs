@@ -81,13 +81,13 @@ internal sealed class SignalMessageHardeningTests
                               "value_names": { "1": "ON" } }]
             }] }
             """;
-        string directory = Path.Combine(Path.GetTempPath(), "ni_spdu_maxenum_" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), "ni_spdu_maxenum_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, "signal_message.json");
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-            using SettingsManager settings = new(Path.GetTempPath());
+            using SettingsManager settings = new(Path.GetTempPath(), CoreSettingsLayout.Instance);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, path);
             settings.PreloadValue(SignalMessageRegistration.MaxEnumValuesSetting, 0UL);
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());

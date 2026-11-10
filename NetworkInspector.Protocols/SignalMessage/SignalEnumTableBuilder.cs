@@ -64,7 +64,7 @@ internal static class SignalEnumTableBuilder
 
         if (valueNames.Count > maxEnumValues)
         {
-            error = $"Enum value count {valueNames.Count} exceeds max_enum_values ({maxEnumValues}).";
+            error = Invariant($"Enum value count {valueNames.Count} exceeds max_enum_values ({maxEnumValues}).");
             return false;
         }
 
@@ -77,13 +77,13 @@ internal static class SignalEnumTableBuilder
         {
             if (kvp.Key > maxRaw)
             {
-                error = $"Enum key {kvp.Key} exceeds max raw value {maxRaw} for bit_length {bitLength}.";
+                error = Invariant($"Enum key {kvp.Key} exceeds max raw value {maxRaw} for bit_length {bitLength}.");
                 return false;
             }
 
             if (string.IsNullOrEmpty(kvp.Value))
             {
-                error = $"Enum name for key {kvp.Key} must be non-empty.";
+                error = Invariant($"Enum name for key {kvp.Key} must be non-empty.");
                 return false;
             }
 
@@ -100,7 +100,7 @@ internal static class SignalEnumTableBuilder
         {
             if (keys[k] == keys[k - 1])
             {
-                error = $"Duplicate enum key {keys[k]}.";
+                error = Invariant($"Duplicate enum key {keys[k]}.");
                 return false;
             }
         }

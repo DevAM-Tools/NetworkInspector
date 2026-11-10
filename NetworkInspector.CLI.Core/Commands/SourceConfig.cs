@@ -117,16 +117,28 @@ internal sealed class SourceConfig
     /// then the registration's factory with the file (if any). The option manager is disposed afterwards; the source copied
     /// what it needs.
     /// </summary>
-    /// <param name="sessionSettings">The settings of the profile (the session settings of the request).</param>
+    /// <param name="sessionSettings">The settings of the request; the source reads its settings from them.</param>
+    /// <param name="storedLimit">
+    /// Returns the stored value of a limit key, or <see langword="null"/>; a limit option takes its default from it.
+    /// </param>
     /// <param name="source">The created, not yet started source; <see langword="null"/> on failure.</param>
     /// <param name="error">Why no source was created; <see langword="null"/> on success.</param>
+    /// <param name="onIgnoredStoredValue">Receives each stored limit that was refused and replaced by the definition default.</param>
     /// <returns><see langword="true"/> when <paramref name="source"/> is set.</returns>
-    internal bool TryCreateSource(ReadOnlySettingsManagerView sessionSettings, [NotNullWhen(true)] out IFrameSource? source,
-        [NotNullWhen(false)] out PluginError? error)
+    internal bool TryCreateSource(ReadOnlySettingsManagerView sessionSettings, Func<string, LimitValue?> storedLimit,
+        [NotNullWhen(true)] out IFrameSource? source, [NotNullWhen(false)] out PluginError? error,
+        Action<PluginError> onIgnoredStoredValue)
     {
         // The option settings live only for this call (the using): the factory reads its option values while it creates the
         // source, so the read-only view handed to it is not valid afterwards. A text the codec rejects returns an error value.
-        using SettingsManager options = RegistrationOptions.CreateDefaults(Registration.RegisterOptions);
+        // A limit option starts at the stored limit; the inline option texts applied next override it.
+        using SettingsManager options = RegistrationOptions.CreateDefaults(
+            Registration.RegisterOptions, storedLimit, out IReadOnlyList<PluginError> ignored);
+        foreach (PluginError ignoredValue in ignored)
+        {
+            onIgnoredStoredValue(ignoredValue);
+        }
+
         if (!RegistrationOptions.TryApplyTexts(options, OptionTexts, out error))
         {
             source = null;
@@ -154,7 +166,7 @@ internal sealed class SourceConfig
             if (spec.Contains(ch, StringComparison.Ordinal))
             {
                 throw new ArgumentException(
-                    $"Source spec contains forbidden character '{ch}': '{spec}'. " +
+                    Invariant($"Source spec contains forbidden character '{ch}': '{spec}'. ") +
                     "Shell metacharacters are not permitted in source specifications.");
             }
         }
@@ -183,8 +195,8 @@ internal sealed class SourceConfig
 
         string known = string.Join(", ", registry.Sources.SelectMany(static r => r.FileExtensions).Distinct(StringComparer.OrdinalIgnoreCase));
         throw new ArgumentException(
-            $"Cannot auto-detect source type for '{path}'. " +
-            $"Use an explicit type prefix (e.g., 'pcap:path=file') or a known extension ({known}).");
+            Invariant($"Cannot auto-detect source type for '{path}'. ") +
+            Invariant($"Use an explicit type prefix (e.g., 'pcap:path=file') or a known extension ({known})."));
     }
 
     /// <summary>Parses <c>kind:key=value,…</c>.</summary>
@@ -217,7 +229,7 @@ internal sealed class SourceConfig
         if (pathIndex < 0 || string.IsNullOrWhiteSpace(pairs[pathIndex].Value))
         {
             string example = registration.Kind.ToLowerInvariant() + ":path=file" + registration.FileExtensions[0];
-            throw new ArgumentException($"{registration.Kind} source requires 'path' parameter (e.g., {example}).");
+            throw new ArgumentException(Invariant($"{registration.Kind} source requires 'path' parameter (e.g., {example})."));
         }
 
         string path = pairs[pathIndex].Value;
@@ -253,7 +265,7 @@ internal sealed class SourceConfig
             if (equals < 0 || pair[..equals].Trim().Length == 0)
             {
                 throw new ArgumentException(
-                    $"Source option '{pair.Trim()}' is not of the form key=value. Source options are written kind:key=value,key=value.");
+                    Invariant($"Source option '{pair.Trim()}' is not of the form key=value. Source options are written kind:key=value,key=value."));
             }
 
             result.Add(new KeyValuePair<string, string>(pair[..equals].Trim(), pair[(equals + 1)..].Trim()));

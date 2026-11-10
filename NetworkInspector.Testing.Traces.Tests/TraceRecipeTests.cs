@@ -247,10 +247,14 @@ internal sealed class TraceRecipeTests
         TraceKit kit = new(folder.Path);
         TraceFile udp = await kit.GetAsync(new SampleProtocolRecipe(30, 40000), CancellationToken.None);
         TraceFile tcp = await kit.GetAsync(new SampleProtocolRecipe(30, 41234, tcp: true), CancellationToken.None);
+
+        // One stack per trace: both traces number their packets from 0, and a stack treats an id it has already parsed as a
+        // replay of the first parse, so the TCP segments would be shown as recorded (no payload dispatch) instead of parsed.
         using Stack stack = TraceReading.BuildStack(withSample: true);
+        using Stack tcpStack = TraceReading.BuildStack(withSample: true);
 
         List<TraceReading.ParsedFrame> udpFrames = TraceReading.ReadAndParse(udp.Path, stack);
-        List<TraceReading.ParsedFrame> tcpFrames = TraceReading.ReadAndParse(tcp.Path, stack);
+        List<TraceReading.ParsedFrame> tcpFrames = TraceReading.ReadAndParse(tcp.Path, tcpStack);
 
         await Assert.That(udpFrames.Count).IsEqualTo(30);
         await Assert.That(tcpFrames.Count).IsEqualTo(30);
@@ -264,7 +268,7 @@ internal sealed class TraceRecipeTests
                     CollectionOrdering.Matching);
             await Assert.That(TraceReading.U64(stack, udpFrames[i].Packet, "sample.counter")).IsEqualTo((ulong)i);
             await Assert.That(TraceReading.U64(stack, udpFrames[i].Packet, "sample.speed")).IsEqualTo((ulong)SampleFrameWriter.SpeedFor(i));
-            await Assert.That(TraceReading.U64(stack, tcpFrames[i].Packet, "sample.counter")).IsEqualTo((ulong)i);
+            await Assert.That(TraceReading.U64(tcpStack, tcpFrames[i].Packet, "sample.counter")).IsEqualTo((ulong)i);
         }
     }
 

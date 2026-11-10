@@ -33,7 +33,7 @@ internal static class FrameEmitting
         // than success and nothing written. The parentheses state the grouping that && over || already gives.
         if (!sequence.MoveNext(buffer, out int written) || (sequence.Status != BuildStatus.Success && written == 0))
         {
-            throw new InvalidOperationException($"The frame could not be built: {sequence.Status}.");
+            throw new InvalidOperationException(Invariant($"The frame could not be built: {sequence.Status}."));
         }
 
         // Normally the frame fills the buffer and is returned without a copy; if the stack wrote less than it reserved,

@@ -474,20 +474,20 @@ public sealed partial class ProtocolGenerator
         bool isKnown = true;
         string fieldType = attrShortName switch
         {
-            "NoneFieldAttribute" => $"{_GloFieldType}.None",
-            "I64FieldAttribute" => $"{_GloFieldType}.I64",
-            "U64FieldAttribute" => $"{_GloFieldType}.U64",
-            "F64FieldAttribute" => $"{_GloFieldType}.F64",
-            "StringFieldAttribute" => $"{_GloFieldType}.String",
-            "BytesFieldAttribute" => $"{_GloFieldType}.Bytes",
-            "MacFieldAttribute" => $"{_GloFieldType}.MacAddress",
-            "IPv4FieldAttribute" => $"{_GloFieldType}.IPv4Address",
-            "IPv6FieldAttribute" => $"{_GloFieldType}.IPv6Address",
-            "Eui64FieldAttribute" => $"{_GloFieldType}.Eui64",
-            "UuidFieldAttribute" => $"{_GloFieldType}.Uuid",
-            "TimestampFieldAttribute" => $"{_GloFieldType}.Timestamp",
-            "BoolFieldAttribute" => $"{_GloFieldType}.Bool",
-            _ => _SetUnknown(out isKnown, $"{_GloFieldType}.None")
+            "NoneFieldAttribute" => Invariant($"{_GloFieldType}.None"),
+            "I64FieldAttribute" => Invariant($"{_GloFieldType}.I64"),
+            "U64FieldAttribute" => Invariant($"{_GloFieldType}.U64"),
+            "F64FieldAttribute" => Invariant($"{_GloFieldType}.F64"),
+            "StringFieldAttribute" => Invariant($"{_GloFieldType}.String"),
+            "BytesFieldAttribute" => Invariant($"{_GloFieldType}.Bytes"),
+            "MacFieldAttribute" => Invariant($"{_GloFieldType}.MacAddress"),
+            "IPv4FieldAttribute" => Invariant($"{_GloFieldType}.IPv4Address"),
+            "IPv6FieldAttribute" => Invariant($"{_GloFieldType}.IPv6Address"),
+            "Eui64FieldAttribute" => Invariant($"{_GloFieldType}.Eui64"),
+            "UuidFieldAttribute" => Invariant($"{_GloFieldType}.Uuid"),
+            "TimestampFieldAttribute" => Invariant($"{_GloFieldType}.Timestamp"),
+            "BoolFieldAttribute" => Invariant($"{_GloFieldType}.Bool"),
+            _ => _SetUnknown(out isKnown, Invariant($"{_GloFieldType}.None"))
         };
 
         if (!isKnown)
@@ -502,7 +502,7 @@ public sealed partial class ProtocolGenerator
     private static ProtocolTableInfo? _ExtractProtocolTableInfo(
         IFieldSymbol fieldSymbol, AttributeData attr, string keyType, string className, List<DiagnosticInfo> diagnostics)
     {
-        string attrShortName = $"ProtocolTable{keyType}Attribute";
+        string attrShortName = Invariant($"ProtocolTable{keyType}Attribute");
         if (attr.ConstructorArguments.Length < 2)
         {
             diagnostics.Add(new DiagnosticInfo(_DiagAttributePayloadIncomplete, attrShortName, fieldSymbol.Name, className));
@@ -562,7 +562,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts a <c>[BoolSetting]</c> descriptor.</summary>
     private static SettingInfo? _ExtractBoolSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!_TryExtractSettingHeader(fieldSymbol, attr, "BoolSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "BoolSettingAttribute", className, diagnostics,
+            out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -588,7 +589,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts a <c>[StringSetting]</c> descriptor.</summary>
     private static SettingInfo? _ExtractStringSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!_TryExtractSettingHeader(fieldSymbol, attr, "StringSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "StringSettingAttribute", className, diagnostics,
+            out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -613,7 +615,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts an <c>[F64Setting]</c> descriptor.</summary>
     private static SettingInfo? _ExtractF64SettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!_TryExtractSettingHeader(fieldSymbol, attr, "F64SettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "F64SettingAttribute", className, diagnostics,
+            out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -652,7 +655,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts a <c>[U64Setting]</c> descriptor.</summary>
     private static SettingInfo? _ExtractU64SettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!_TryExtractSettingHeader(fieldSymbol, attr, "U64SettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "U64SettingAttribute", className, diagnostics,
+            out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -701,7 +705,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts an <c>[I64Setting]</c> descriptor.</summary>
     private static SettingInfo? _ExtractI64SettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!_TryExtractSettingHeader(fieldSymbol, attr, "I64SettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "I64SettingAttribute", className, diagnostics,
+            out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -750,7 +755,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts a <c>[BytesSetting]</c> descriptor and validates <c>DefaultHex</c>.</summary>
     private static SettingInfo? _ExtractBytesSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!_TryExtractSettingHeader(fieldSymbol, attr, "BytesSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "BytesSettingAttribute", className, diagnostics,
+            out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -784,7 +790,8 @@ public sealed partial class ProtocolGenerator
     /// <summary>Extracts an <c>[EnumSetting]</c> descriptor; pre-formats the allowed-values tuple list.</summary>
     private static SettingInfo? _ExtractEnumSettingInfo(IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!_TryExtractSettingHeader(fieldSymbol, attr, "EnumSettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "EnumSettingAttribute", className, diagnostics,
+            out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -820,7 +827,8 @@ public sealed partial class ProtocolGenerator
     private static SettingInfo? _ExtractBoolArraySettingInfo(
         IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!_TryExtractSettingHeader(fieldSymbol, attr, "BoolArraySettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "BoolArraySettingAttribute", className, diagnostics,
+            out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -846,7 +854,8 @@ public sealed partial class ProtocolGenerator
     private static SettingInfo? _ExtractStringArraySettingInfo(
         IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!_TryExtractSettingHeader(fieldSymbol, attr, "StringArraySettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "StringArraySettingAttribute", className, diagnostics,
+            out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -878,7 +887,8 @@ public sealed partial class ProtocolGenerator
     private static SettingInfo? _ExtractF64ArraySettingInfo(
         IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!_TryExtractSettingHeader(fieldSymbol, attr, "F64ArraySettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "F64ArraySettingAttribute", className, diagnostics,
+            out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -916,7 +926,8 @@ public sealed partial class ProtocolGenerator
     private static SettingInfo? _ExtractU64ArraySettingInfo(
         IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!_TryExtractSettingHeader(fieldSymbol, attr, "U64ArraySettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "U64ArraySettingAttribute", className, diagnostics,
+            out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -964,7 +975,8 @@ public sealed partial class ProtocolGenerator
     private static SettingInfo? _ExtractI64ArraySettingInfo(
         IFieldSymbol fieldSymbol, AttributeData attr, string className, List<DiagnosticInfo> diagnostics)
     {
-        if (!_TryExtractSettingHeader(fieldSymbol, attr, "I64ArraySettingAttribute", className, diagnostics, out string name, out string uiName, out string groupName))
+        if (!_TryExtractSettingHeader(fieldSymbol, attr, "I64ArraySettingAttribute", className, diagnostics,
+            out string name, out string uiName, out string groupName))
         {
             return null;
         }
@@ -1366,7 +1378,7 @@ public sealed partial class ProtocolGenerator
                 sb.Append(", ");
             }
 
-            sb.Append($"(\"{_EscapeString(entryName)}\", {entryValue})");
+            sb.Append(Invariant($"(\"{_EscapeString(entryName)}\", {entryValue})"));
         }
 
         return sb.ToString();

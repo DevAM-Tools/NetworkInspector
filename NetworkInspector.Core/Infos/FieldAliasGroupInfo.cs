@@ -24,8 +24,6 @@ namespace NetworkInspector.Core.Infos;
 /// </summary>
 public sealed class FieldAliasGroupInfo
 {
-    #region Constructors
-
     /// <summary>Creates field alias group metadata during stack registration.</summary>
     /// <param name="id">The unique identifier assigned by the builder.</param>
     /// <param name="protocolId">The protocol that owns this alias group.</param>
@@ -50,10 +48,6 @@ public sealed class FieldAliasGroupInfo
         Description = description;
         Members = members;
     }
-
-    #endregion
-
-    #region Properties
 
     /// <summary>Unique alias group identifier.</summary>
     public FieldAliasGroupId Id
@@ -91,6 +85,4 @@ public sealed class FieldAliasGroupInfo
 
     /// <summary>Number of canonical member fields in this alias group.</summary>
     public int MemberCount => Members.Length;
-
-    #endregion
 }

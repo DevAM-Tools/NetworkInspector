@@ -103,7 +103,7 @@ internal sealed class SessionPoolStressTests
             })
             {
                 IsBackground = true,
-                Name = $"SessionPool-Stress-{t}",
+                Name = Invariant($"SessionPool-Stress-{t}"),
             };
         }
 

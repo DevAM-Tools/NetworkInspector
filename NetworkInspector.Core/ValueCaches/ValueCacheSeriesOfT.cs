@@ -16,11 +16,13 @@ namespace NetworkInspector.Core.ValueCaches;
 /// <typeparam name="T">Payload type selected from the stack <see cref="FieldType"/>.</typeparam>
 public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheSeries<T>
 {
-    #region Fields
+    #region Configuration and state
 
-    // Value column of the structure-of-arrays row; the packet-id and timestamp columns live on the base type. Chunked
-    // storage grows without copying already published values, so readers keep spans into old chunks valid while the
-    // writer appends (a single contiguous array would have to be reallocated and copied under concurrent readers).
+    /// <summary>
+    /// Value column of the structure-of-arrays row; the packet-id and timestamp columns live on the base type. Chunked
+    /// storage grows without copying already published values, so readers keep spans into old chunks valid while the
+    /// writer appends (a single contiguous array would have to be reallocated and copied under concurrent readers).
+    /// </summary>
     private readonly ChunkedGrowOnlyStore<T> _Values;
 
     /// <summary>
@@ -32,11 +34,12 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
     /// </summary>
     private volatile int _AppendGate;
 
-    #endregion
-
-    #region Constructors
-
-    /// <summary>Creates an empty series. <paramref name="chunkShift"/> must be in [4, 20].</summary>
+    /// <summary>Creates an empty series.</summary>
+    /// <param name="fieldId">The recorded field.</param>
+    /// <param name="fieldType">Payload type of the stack field, or <see cref="FieldType.String"/> for text series.</param>
+    /// <param name="captureMode">How several occurrences in one packet are captured.</param>
+    /// <param name="chunkShift">Log₂ of rows per inner column chunk, in [4, 20].</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="chunkShift"/> is outside [4, 20] (rejected by the column stores).</exception>
     internal ValueCacheSeries(
         FieldId fieldId,
         FieldType fieldType,
@@ -49,7 +52,7 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
 
     #endregion
 
-    #region Properties
+    #region Reads
 
     /// <summary>
     /// Frozen prefix including the value column. Index, range, and <c>foreach</c> hide chunk layout
@@ -75,6 +78,7 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
     /// <summary>
     /// Gathered row at <paramref name="index"/>. Throws when <paramref name="index"/> is not strictly less than <see cref="ValueCacheSeries.Count"/>.
     /// </summary>
+    /// <param name="index">Row index in <c>[0, Count)</c>.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is negative or not published.</exception>
     public ValueCacheRow<T> this[int index]
     {
@@ -87,15 +91,16 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
 
             // The value is non-null for a published index: the value column is appended before Count is published, and
             // Get only returns its unset default for an unpublished index (excluded by the range check above).
-            return new ValueCacheRow<T>(GetPacketId(index), GetTimestamp(index), _Values.Get(index)!);
+            return new ValueCacheRow<T>(
+                GetPacketId(index),
+                GetTimestamp(index),
+                _Values.Get(index)!); // Invariant: index is below Count, so the value slot was written before Count was published.
         }
     }
 
-    #endregion
-
-    #region Public API
-
     /// <summary>Payload at <paramref name="index"/> against the live published <see cref="ValueCacheSeries.Count"/>.</summary>
+    /// <param name="index">Row index in <c>[0, Count)</c>.</param>
+    /// <returns>The stored payload of that row.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not in <c>[0, Count)</c>.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T GetValue(int index)
@@ -112,9 +117,11 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
     /// Payload with no live-count check. Caller proved <paramref name="index"/> is in a snapshot prefix (a frozen handle
     /// count), which skips the volatile <see cref="ValueCacheSeries.Count"/> load per element in scan loops.
     /// </summary>
+    /// <param name="index">Row index below a count the caller loaded earlier.</param>
+    /// <returns>The stored payload of that row.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal T ValueAt(int index) =>
-        _Values.Get(index)!; // Non-null for a published index: the value column is appended before Count is published.
+        _Values.Get(index)!; // Invariant: index is below a loaded Count, so the value slot was written before Count was published.
 
     /// <summary>
     /// Returns the published value chunk at <paramref name="chunkIndex"/> clipped to
@@ -122,6 +129,10 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
     /// A caller who passes <see cref="int.MaxValue"/> still cannot see unpublished slots.
     /// Prefer <see cref="Handle"/> for scans.
     /// </summary>
+    /// <param name="chunkIndex">Zero-based inner-chunk index (row index shifted right by <see cref="ValueCacheSeries.ChunkShift"/>).</param>
+    /// <param name="observedCount">Exclusive upper bound of the rows to expose. A negative value is treated as 0.</param>
+    /// <param name="span">The values of the chunk below the bound; empty when the method returns <see langword="false"/>.</param>
+    /// <returns><see langword="true"/> when the chunk exists and holds at least one row below the bound.</returns>
     public bool TryGetValueChunk(int chunkIndex, int observedCount, out ReadOnlySpan<T> span) =>
         _Values.TryGetPublishedChunk(chunkIndex, ClipObservedCount(observedCount), out span);
 
@@ -129,11 +140,12 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
     /// Zero-allocation read-only view. Keep the compile-time type as
     /// <see cref="ReadOnlyValueCacheSeries{T}"/>; assigning to <see cref="IReadOnlyValueCacheSeries{T}"/> boxes.
     /// </summary>
+    /// <returns>A view that forwards to this series and offers no writer members.</returns>
     public new ReadOnlyValueCacheSeries<T> AsReadOnlyView() => new(this);
 
     #endregion
 
-    #region Internal API
+    #region Row append and clear
 
     /// <summary>
     /// Appends one occurrence or skips it (FirstOccurrence same consecutive packet id).
@@ -143,6 +155,10 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
     /// appended with <c>AppendOwned</c>, whose precondition is that every append and clear of the store is serialized by
     /// the caller. Never call <c>AppendOwned</c> without this gate.
     /// </summary>
+    /// <param name="packetId">Packet id of the row.</param>
+    /// <param name="timestampNanos">Packet timestamp of the row in nanoseconds.</param>
+    /// <param name="value">The payload to store; reference types are stored as given, so the caller must not change them afterwards.</param>
+    /// <exception cref="InvalidOperationException">The columns reached their maximum number of rows; nothing was appended.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Record(int packetId, long timestampNanos, T value)
     {
@@ -187,10 +203,6 @@ public sealed class ValueCacheSeries<T> : ValueCacheSeries, IReadOnlyValueCacheS
             _ = Interlocked.Exchange(ref _AppendGate, 0);
         }
     }
-
-    #endregion
-
-    #region Private helpers
 
     /// <summary>
     /// Takes the series write gate. Uncontended: one CAS. Contended: spin until free. Only the uncontended CAS is

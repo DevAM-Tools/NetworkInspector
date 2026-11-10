@@ -177,7 +177,7 @@ internal sealed class ContractDefaultsTests
     }
 
     [Test]
-    public async Task ContractAssemblyReferencesOnlyCoreAndTheFramework()
+    public async Task ContractAssemblyReferencesOnlyTheLibrariesOfItsTypesAndTheFramework()
     {
         string[] references =
         [
@@ -186,7 +186,10 @@ internal sealed class ContractDefaultsTests
                 .Where(static name => name.StartsWith("NetworkInspector", StringComparison.Ordinal)),
         ];
 
-        await Assert.That(references.All(static name => name is "NetworkInspector.Core" or "NetworkInspector.Values")).IsTrue();
+        // The contract exposes settings types (the builder registers settings, the context reads them), so it references the settings
+        // library and, through it, the limits library; nothing else of NetworkInspector.
+        await Assert.That(references.All(static name => name is "NetworkInspector.Core" or "NetworkInspector.Values" or "NetworkInspector.Settings"
+            or "NetworkInspector.Limits")).IsTrue();
     }
 
     #endregion

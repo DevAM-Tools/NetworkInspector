@@ -90,7 +90,7 @@ internal sealed class FilterFailureTests
         using Stack stack = FilterTestHelper.BuildStack();
         FilterCompileOptions options = new() { RegexTimeout = TimeSpan.FromTicks(ticks) };
 
-        FilterResult<Filter> compiled = Filter.Compile($"dns.qry.name matches \"{pattern}\"", stack, options);
+        FilterResult<Filter> compiled = Filter.Compile(Invariant($"dns.qry.name matches \"{pattern}\""), stack, options);
 
         await Assert.That(compiled.IsSuccess).IsFalse();
         await Assert.That(compiled.Error.Kind).IsEqualTo(FilterErrorKind.InvalidValue);

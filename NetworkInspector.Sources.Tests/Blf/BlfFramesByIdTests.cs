@@ -28,7 +28,7 @@ internal sealed class BlfFramesByIdTests
                 using (BlfSource memory = BlfSource.FromData(data, name, memoryOptions))
                 {
                     List<Frame> frames = RandomAccessEquivalence.StartAndReadAll(memory);
-                    _CollectMismatches(memory, frames.Count, $"{name}/data/{mode}/{cache}", mismatches);
+                    _CollectMismatches(memory, frames.Count, Invariant($"{name}/data/{mode}/{cache}"), mismatches);
                 }
 
                 // File backends: preloaded and memory-mapped.
@@ -38,7 +38,7 @@ internal sealed class BlfFramesByIdTests
                     BlfSourceOptions options = new() { ScanMode = mode, CacheBudget = cache, PreloadBudget = budget };
                     using BlfSource source = BlfSource.Open(file.Path, options);
                     List<Frame> frames = RandomAccessEquivalence.StartAndReadAll(source);
-                    _CollectMismatches(source, frames.Count, $"{name}/{(budget is null ? "mapped" : "preload")}/{mode}/{cache}", mismatches);
+                    _CollectMismatches(source, frames.Count, Invariant($"{name}/{(budget is null ? "mapped" : "preload")}/{mode}/{cache}"), mismatches);
                 }
             }
         }
@@ -158,7 +158,7 @@ internal sealed class BlfFramesByIdTests
     {
         foreach ((string name, FrameId first, int length) in RandomAccessEquivalence.BatchRanges(frameCount))
         {
-            string? mismatch = RandomAccessEquivalence.FindBatchMismatch(source, first, length, $"{label}/{name}");
+            string? mismatch = RandomAccessEquivalence.FindBatchMismatch(source, first, length, Invariant($"{label}/{name}"));
             if (mismatch is not null)
             {
                 mismatches.Add(mismatch);

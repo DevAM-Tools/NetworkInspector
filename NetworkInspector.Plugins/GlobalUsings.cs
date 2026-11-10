@@ -12,4 +12,5 @@ global using System.Threading.Tasks;
 global using NetworkInspector.Core;
 global using NetworkInspector.Core.Interfaces;
 global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Settings;
 #endregion

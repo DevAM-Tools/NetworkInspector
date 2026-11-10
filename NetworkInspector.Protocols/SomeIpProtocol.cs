@@ -32,7 +32,7 @@ namespace NetworkInspector.Protocols;
 /// ├── someip.error.*                                      [one String field per diagnostic]
 /// ├── ClimateControl.v2: Climate Control                  [service node: the filter name of the service, eager]
 /// │   └── ClimateControl.v2.SetTemperature: SetTemperature  [method node: the payload bytes as value, the decoded values lazy below it]
-/// ├── someip.payload: 16 bytes                            [raw bytes of every payload no other parser took; a discovery message shows <c>someip_sd</c> instead]
+/// ├── someip.payload: 16 bytes                            [raw bytes of each payload no other parser took; a discovery message shows <c>someip_sd</c> instead]
 /// └── someip.trailing: 5 bytes                            [fewer than 16 bytes after the last message]
 /// </code>
 /// </summary>
@@ -244,10 +244,10 @@ public sealed partial class SomeIpProtocol : IProtocol
         // default scope, which keeps the finally below free of a branch; the first parse opens the real one. The scope ends in
         // the using declaration, also after an error or an exception, so a later parse of this id can never take the mutating
         // path a second time.
-        bool isReplay = _Gate.IsReplay(parentField.Packet.Id);
+        bool isReplay = _Gate.IsReplay(in context, parentField.Packet.Id);
         using IngestScope scope = isReplay
             ? default
-            : _Gate.Enter(parentField.Packet.Id);
+            : _Gate.Enter(in context, parentField.Packet.Id);
         return _ParseUnit(in parentField, data, in context, isReplay);
     }
 

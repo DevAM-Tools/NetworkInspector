@@ -1,5 +1,9 @@
 // Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information.
 
+#region Formatting
+global using static InvariantStringHelper.InvariantText;
+#endregion
+
 #region System
 global using System;
 global using System.Buffers;
@@ -25,6 +29,7 @@ global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Infos;
 global using NetworkInspector.Core.Reassembly;
 global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Settings;
 global using NetworkInspector.Core.Interfaces;
 global using NetworkInspector.Core.Protocols;
 global using NetworkInspector.Core.ValueCaches;

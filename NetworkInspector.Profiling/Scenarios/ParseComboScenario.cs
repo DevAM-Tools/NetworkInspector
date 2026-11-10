@@ -113,7 +113,7 @@ internal sealed class ParseComboScenario : IProfilingScenario
     };
 
     /// <inheritdoc />
-    public string Description => FormattableString.Invariant(
+    public string Description => Invariant(
         $"{Name}, {_BatchSize:N0} recycled frames per iteration.");
 
     /// <inheritdoc />

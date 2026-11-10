@@ -435,13 +435,20 @@ internal sealed class PbfAddressTests
             _ = builder.Build();
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 20; i++)
+        // Several rounds, smallest wins: a background allocation on a busy machine (tiering, another test thread's GC bookkeeping)
+        // can inflate one round, but not every round, while a per-value object would inflate all of them.
+        long perBuild = long.MaxValue;
+        for (int round = 0; round < 5; round++)
         {
-            _ = builder.Build();
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 20; i++)
+            {
+                _ = builder.Build();
+            }
+
+            perBuild = Math.Min(perBuild, (GC.GetAllocatedBytesForCurrentThread() - before) / 20);
         }
 
-        long perBuild = (GC.GetAllocatedBytesForCurrentThread() - before) / 20;
         builder.Dispose();
 
         // The block holds 10 000 IPv6 values (5 000 packets, two IPv6 fields). The packed columns are written straight into the pooled

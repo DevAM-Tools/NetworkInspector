@@ -7,24 +7,18 @@ namespace NetworkInspector.Core.Protocols;
 /// </summary>
 public interface IHeuristicParser
 {
-    #region Methods
-
     /// <summary>
     /// Tests whether this parser can handle the given data.
     /// <para>
-    /// The heuristic table calls <c>Test</c> on its parsers in registration order. A single-match query stops at the
-    /// first parser that returns <see langword="true"/>, so registration order decides between overlapping heuristics;
-    /// an all-matches query calls every parser. The result is a plain yes/no without error details, and a rejected
+    /// The heuristic table calls <c>Test</c> on its parsers in registration order and stops at the first parser that
+    /// returns <see langword="true"/>, so registration order decides between overlapping heuristics, and a parser behind
+    /// a match is never called. The result is a plain yes/no without error details, and a rejected
     /// parser is simply skipped, so implementations should be cheap and free of side effects.
     /// </para>
     /// </summary>
     /// <param name="data">The candidate payload bytes to inspect. Must not be stored.</param>
     /// <returns><see langword="true"/> when the data looks like this parser's protocol.</returns>
     bool Test(ReadOnlyMemory<byte> data);
-
-    #endregion
-
-    #region Properties
 
     /// <summary>The protocol this parser identifies.</summary>
     ProtocolId ProtocolId
@@ -46,6 +40,4 @@ public interface IHeuristicParser
 
     /// <summary>Optional description.</summary>
     string? Description => null;
-
-    #endregion
 }

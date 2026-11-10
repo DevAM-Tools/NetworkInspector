@@ -31,7 +31,7 @@ internal sealed class HeuristicParserEntryTests
         HeuristicProtocolTable? table = stack.GetHeuristicProtocolTable(tableId);
         await Assert.That(table).IsNotNull();
 
-        HeuristicParserEntry? entry = table!.FindByName("heur.described");
+        HeuristicParserEntry? entry = table!.Entries.FirstOrDefault(static candidate => candidate.Name == "heur.described");
         await Assert.That(entry).IsNotNull();
         await Assert.That(entry!.UiName).IsEqualTo("Described Heuristic");
         await Assert.That(entry.Description).IsEqualTo("parser description");

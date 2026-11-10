@@ -38,11 +38,11 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario, I
     #region Public API
 
     /// <inheritdoc/>
-    public string Name => FormattableString.Invariant($"session-concurrent-redissect-{_ListenerCount}");
+    public string Name => Invariant($"session-concurrent-redissect-{_ListenerCount}");
 
     /// <inheritdoc/>
     public string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"PrepareIteration: Session RedissectOnly; Run: ingest + {_ListenerCount} redissect listener(s), {FrameCount:N0} frames.");
 
     /// <inheritdoc/>
@@ -75,7 +75,7 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario, I
 
         for (int i = 0; i < _ListenerCount; i++)
         {
-            RedissectListener listener = new(FormattableString.Invariant($"Redissect{i}"));
+            RedissectListener listener = new(Invariant($"Redissect{i}"));
             if (!_Session.TryAddListener(listener, out _, out _))
             {
                 _Session.Dispose();
@@ -138,7 +138,7 @@ internal sealed class SessionConcurrentRedissectScenario : IProfilingScenario, I
                 if (!session.TryGetPacket(i, _Recycle, out Packet? packet, out _) || packet is null)
                 {
                     throw new InvalidOperationException(
-                        FormattableString.Invariant($"Redissect miss for PacketId {i}."));
+                        Invariant($"Redissect miss for PacketId {i}."));
                 }
 
                 _Recycle = packet;

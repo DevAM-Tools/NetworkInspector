@@ -94,7 +94,7 @@ internal sealed class MacAddressTests
     {
         MacAddress addr = new(value);
         await Assert.That(addr.Format()).IsEqualTo(expected);
-        await Assert.That(addr.ToString()).IsEqualTo(expected);
+        await Assert.That(addr.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(expected);
     }
 
     [Test]

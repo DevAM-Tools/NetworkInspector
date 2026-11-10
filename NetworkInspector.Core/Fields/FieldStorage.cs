@@ -26,7 +26,7 @@ namespace NetworkInspector.Core.Fields;
 /// </summary>
 internal struct FieldStorage
 {
-    #region Constants
+    #region Configuration and state
 
     /// <summary>
     /// Slots in the first chunk; at least <see cref="FrameFieldBudget"/> + 1. Chosen by measurement: 16 is the smallest
@@ -48,47 +48,49 @@ internal struct FieldStorage
     /// <summary>Follow-up slots a recycle keeps at most (64 × 64 B = 4 KiB); the surplus goes to the pool.</summary>
     internal const int RetainedSlots = 64;
 
-    // Whole follow-up chunks a recycle keeps, so the kept slots never exceed RetainedSlots.
+    /// <summary>Whole follow-up chunks a recycle keeps, so the kept slots never exceed <see cref="RetainedSlots"/>.</summary>
     private const int _RetainedChunks = RetainedSlots / ChunkSize;
 
-    // Descriptors of the first table. Equal to _RetainedChunks, so the small table a recycle keeps is also the table a
-    // fresh packet starts with, and a packet that stays within the retained chunks never grows it.
+    /// <summary>
+    /// Descriptors of the first table. Equal to <see cref="_RetainedChunks"/>, so the small table a recycle keeps is also the
+    /// table a fresh packet starts with, and a packet that stays within the retained chunks never grows it.
+    /// </summary>
     private const int _InitialDescriptors = 4;
 
-    // Descriptor capacity a recycle keeps: enough for the retained chunks, at least the initial table.
-    private const int _RetainedDescriptors = _RetainedChunks > _InitialDescriptors ? _RetainedChunks : _InitialDescriptors;
+    /// <summary>Descriptor capacity a recycle keeps: enough for the retained chunks, at least the initial table.</summary>
+    private const int _RetainedDescriptors = _RetainedChunks > _InitialDescriptors
+        ? _RetainedChunks
+        : _InitialDescriptors;
 
     /// <summary>Slots per thread-local slab: 1 024 × 64 B = 64 KiB (below the large-object threshold).</summary>
     private const int _SlabCapacity = 1024;
 
-    #endregion
-
-    #region Fields
-
-    // Per-thread bump allocator shared by all packets created or recycled on this thread.
+    /// <summary>Per-thread bump allocator shared by all packets created or recycled on this thread.</summary>
     [ThreadStatic]
     private static SlabAllocator<FieldBody>? _Slab;
 
-    // Per-thread pool of zeroed follow-up chunks; created by the first recycle that releases surplus.
+    /// <summary>Per-thread pool of zeroed follow-up chunks; created by the first recycle that releases surplus.</summary>
     [ThreadStatic]
     private static FieldChunkPool? _Pool;
 
-    // First chunk [_FirstOffset, _FirstOffset + FirstChunkSize) of _First. Written only by Initialize (construction, or
-    // the exclusive recycle that switches a never-built packet to Build).
+    /// <summary>
+    /// The array that holds the first chunk, which is <c>[_FirstOffset, _FirstOffset + FirstChunkSize)</c> of it. Written only by
+    /// <see cref="Initialize"/> (construction, or the exclusive recycle that switches a never-built packet to Build); null
+    /// until then.
+    /// </summary>
     private FieldBody[]? _First;
+
+    /// <summary>Start of the first chunk inside <see cref="_First"/>.</summary>
     private int _FirstOffset;
 
-    // Follow-up descriptors; null until the first follow-up chunk. Volatile: a grown table is published as a new object.
+    /// <summary>Follow-up descriptors; null until the first follow-up chunk. Volatile: a grown table is published as a new object.</summary>
     private volatile ChunkTable? _Chunks;
-
-    #endregion
-
-    #region Nested types
 
     /// <summary>
     /// Follow-up chunk descriptors. A grown table is a new object whose <see cref="Count"/> is set before it is
     /// published, so readers never see a torn (array, count) pair or fewer visible chunks than before.
     /// </summary>
+    /// <param name="chunks">The descriptor array; its length is the table capacity.</param>
     private sealed class ChunkTable(FieldBodyChunk[] chunks)
     {
         /// <summary>Descriptor array; entries below <see cref="Allocated"/> own a slab slice.</summary>
@@ -104,14 +106,10 @@ internal struct FieldStorage
         internal int Allocated;
     }
 
-    #endregion
-
-    #region Properties
-
     /// <summary>Whether <see cref="Initialize"/> ran (Build-mode packets; a Skip-only packet never initializes).</summary>
     internal readonly bool IsInitialized => _First is not null;
 
-    /// <summary>Follow-up chunks that own a buffer. For tests and diagnostics; not synchronized.</summary>
+    /// <summary>Follow-up chunks that own a buffer (kept or in use). For tests and diagnostics; not synchronized.</summary>
     internal readonly int AllocatedChunks
     {
         get
@@ -141,11 +139,12 @@ internal struct FieldStorage
     /// <see cref="RetainedSlots"/> to the thread's pool. Caller holds the recycle gate; no reader exists.
     /// </summary>
     /// <param name="usedSlots">Reserved slots of the previous parse (root included); at least 1.</param>
+    /// <exception cref="NullReferenceException">The storage was never initialized (a caller bug; recycle checks <see cref="IsInitialized"/> first).</exception>
     internal void ResetForReuse(int usedSlots)
     {
         // 1. Clear GC-visible references in the used first-chunk slots (unused tail slots are still zero).
         int firstUsed = Math.Min(usedSlots, FirstChunkSize);
-        Array.Clear(_First!, _FirstOffset, firstUsed);
+        Array.Clear(_First!, _FirstOffset, firstUsed); // Invariant: a packet that is reset was initialized (Build mode) first.
         ChunkTable? table = _Chunks;
         if (table is null)
         {
@@ -180,13 +179,15 @@ internal struct FieldStorage
     /// Reference to slot <paramref name="index"/>. Callers pass only reserved or published indices (below
     /// <c>Packet._AllocatedFieldCount</c>); <see cref="EnsureSlot"/> made follow-up indices addressable first.
     /// </summary>
+    /// <param name="index">Slot index, below the packet's allocated field count.</param>
+    /// <returns>A reference to the slot; stays valid across growth because chunks never move.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal readonly ref FieldBody Slot(int index)
     {
         if ((uint)index < FirstChunkSize)
         {
             // Checked array access on purpose: a torn or stale state stays inside the array or throws.
-            return ref _First![_FirstOffset + index];
+            return ref _First![_FirstOffset + index]; // Invariant: slots are only addressed on an initialized (Build-mode) packet.
         }
 
         return ref _ChunkSlot(index);
@@ -196,6 +197,8 @@ internal struct FieldStorage
     /// Makes <paramref name="reservedIndex"/> addressable. Pre-Seal the single writer appends the next chunk. Post-Seal
     /// the thread that reserved a chunk's first slot appends it after the previous chunk is visible; others spin.
     /// </summary>
+    /// <param name="reservedIndex">The slot index the caller reserved.</param>
+    /// <param name="postSeal">Whether the packet is sealed (other threads may reserve slots concurrently).</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void EnsureSlot(int reservedIndex, bool postSeal)
     {
@@ -215,26 +218,27 @@ internal struct FieldStorage
         _EnsureChunk(chunkIndex, reservedIndex, postSeal);
     }
 
-    #endregion
-
-    #region Private helpers
-
     /// <summary>
     /// Resolves a slot of a follow-up chunk: descriptor lookup, then the slot inside the slab slice. Both steps are
     /// checked array accesses on purpose (see <see cref="Slot"/>). Division and modulo by the constant power-of-two
     /// <see cref="ChunkSize"/> on a <see langword="uint"/> compile to a shift and a mask.
     /// </summary>
     /// <param name="index">Slot index of at least <see cref="FirstChunkSize"/>.</param>
+    /// <returns>A reference to the slot inside its follow-up chunk.</returns>
     // Follow-up path, inlined: with small first chunks most protocol fields live here. A negative index wraps to a huge
     // uint and fails the descriptor bounds check; a missing table or buffer throws NullReferenceException.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private readonly ref FieldBody _ChunkSlot(int index)
     {
         uint relative = (uint)(index - FirstChunkSize);
-        ChunkTable table = _Chunks!;
+        ChunkTable table = _Chunks!; // Invariant: callers pass a published index, so the chunk that holds it was appended before.
         ref FieldBodyChunk chunk = ref table.Chunks[relative / ChunkSize];
         return ref chunk.Buffer[chunk.Offset + (int)(relative % ChunkSize)];
     }
+
+    #endregion
+
+    #region Chunk growth and release
 
     /// <summary>
     /// Slow path of <see cref="EnsureSlot"/>: makes follow-up chunk <paramref name="chunkIndex"/> visible, appending it
@@ -284,6 +288,7 @@ internal struct FieldStorage
     }
 
     /// <summary>Number of follow-up chunks readers may use (acquire read of the published count).</summary>
+    /// <returns>The published chunk count; 0 before the first follow-up chunk.</returns>
     private readonly int _VisibleChunks()
     {
         ChunkTable? table = _Chunks;
@@ -297,12 +302,16 @@ internal struct FieldStorage
     {
         // Count first (acquire), then the plain fields it orders.
         ChunkTable? table = _Chunks;
-        int count = table is null ? 0 : table.Count;
+        int count = table is null
+            ? 0
+            : table.Count;
         if (table is null || count == table.Chunks.Length)
         {
             // Doubling from 4: a packet at the field limit (65 535 slots) needs 4 095 follow-up chunks of 16 slots, so the table
             // grows to 4 096 descriptors × 16 B = 64 KiB — still below the large-object threshold.
-            int capacity = table is null ? _InitialDescriptors : table.Chunks.Length * 2;
+            int capacity = table is null
+                ? _InitialDescriptors
+                : table.Chunks.Length * 2;
             FieldBodyChunk[] chunks = new FieldBodyChunk[capacity];
             int allocated = 0;
             if (table is not null)
@@ -344,6 +353,7 @@ internal struct FieldStorage
     /// Passes kept chunks beyond the retention limit to this thread's pool and replaces a grown descriptor table with a
     /// small one. Caller holds the recycle gate.
     /// </summary>
+    /// <param name="table">The current descriptor table; chunks from <see cref="_RetainedChunks"/> on are released.</param>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void _ReleaseSurplus(ChunkTable table)
     {

@@ -12,8 +12,6 @@ namespace NetworkInspector.Core;
 /// </remarks>
 public enum ParseFailure : byte
 {
-    #region Public API
-
     /// <summary>The parse ran. Dissector and watch failures are stored on the packet instead.</summary>
     None = 0,
 
@@ -54,6 +52,4 @@ public enum ParseFailure : byte
     /// The packet id is <see cref="PacketId.Invalid"/> or otherwise <see cref="PacketId.IsValid"/> is false.
     /// </summary>
     InvalidPacketId = 11,
-
-    #endregion
 }

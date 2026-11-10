@@ -23,7 +23,7 @@ internal sealed class GenerateFramesScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Generate {_FrameCount:N0} random IPv6/UDP frames via RandomFrameSource per iteration.");
 
     /// <inheritdoc/>

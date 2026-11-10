@@ -42,7 +42,7 @@ internal sealed class ValueCacheDeferredTextFaultTests
         await Assert.That(good.Count).IsEqualTo(1);
         await Assert.That(good[0].Value).IsEqualTo("b");
         await Assert.That(hasError).IsTrue();
-        await Assert.That(error.ToString()).Contains("boom");
+        await Assert.That(error.ToString(null, CultureInfo.InvariantCulture)).Contains("boom");
     }
 
     #endregion

@@ -49,11 +49,11 @@ internal sealed class RedissectParallelUdpScenario : IProfilingScenario, IDispos
     #region Public API
 
     /// <inheritdoc/>
-    public string Name => FormattableString.Invariant($"redissect-parallel-udp-{_ThreadCount}");
+    public string Name => Invariant($"redissect-parallel-udp-{_ThreadCount}");
 
     /// <inheritdoc/>
     public string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Parallel TryParse re-parse, {_ThreadCount} threads each re-parse {_BatchSize:N0} packets (cumulative).");
 
     /// <inheritdoc/>
@@ -103,7 +103,7 @@ internal sealed class RedissectParallelUdpScenario : IProfilingScenario, IDispos
             Thread worker = new(() => _WorkerLoop(threadIndex))
             {
                 IsBackground = true,
-                Name = FormattableString.Invariant($"redissect-udp-{threadIndex}"),
+                Name = Invariant($"redissect-udp-{threadIndex}"),
             };
             _Workers[t] = worker;
             worker.Start();

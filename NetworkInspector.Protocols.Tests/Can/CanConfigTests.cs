@@ -12,7 +12,7 @@ internal sealed class CanConfigTests
     {
         string configPath = Path.Combine(directory, "can.json");
         await File.WriteAllTextAsync(configPath, json).ConfigureAwait(false);
-        SettingsManager settings = new(directory);
+        SettingsManager settings = new(directory, CoreSettingsLayout.Instance);
         settings.PreloadValue("can.config_file", "can.json");
         StackBuilder builder = new(settings, new FrameInterfaceRegistry());
         FrameProtocol frame = new();
@@ -25,7 +25,7 @@ internal sealed class CanConfigTests
 
     private static string _NewDirectory()
     {
-        string directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(directory);
         return directory;
     }

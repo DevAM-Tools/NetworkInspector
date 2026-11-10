@@ -39,7 +39,7 @@ internal static class SomeIpConfigCompiler
     /// structure) would recurse as deep as the chain. The value equals the largest allowed <c>someip.max_type_depth</c>,
     /// because a deeper nesting could never be decoded anyway. A site beyond it is unavailable and the service gets one warning.
     /// </summary>
-    private const int _MaxExpansionDepth = 1_024;
+    private const int _MaxExpansionDepth = 128;
 
     private const string _Group = "someip";
     private const string _Setting = "someip.config_file";
@@ -1011,7 +1011,10 @@ internal static class SomeIpConfigCompiler
             return -1;
         }
 
-        /// <summary>The size in bytes of the length field or the type selector of a union; the specification default of 4 when unset or not 1, 2 or 4.</summary>
+        /// <summary>
+        /// The size in bytes of the length field or the type selector of a union; the specification default of 4 when unset
+        /// or not 1, 2 or 4.
+        /// </summary>
         private static byte _UnionFieldSize(int? configured)
         {
             if (configured is 1 or 2 or 4)

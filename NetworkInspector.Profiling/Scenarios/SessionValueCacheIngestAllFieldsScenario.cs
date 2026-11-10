@@ -29,7 +29,7 @@ internal sealed class SessionValueCacheIngestAllFieldsScenario : IProfilingScena
     public string Name => "session-value-cache-ingest-all-fields";
 
     /// <inheritdoc/>
-    public string Description => FormattableString.Invariant(
+    public string Description => Invariant(
         $"PrepareIteration: new Stack+Session (fresh first-parse ids); Run: ingest wait {_FrameCount:N0} frames, ValueCache(RecordAllFields).");
 
     /// <inheritdoc/>

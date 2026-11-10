@@ -404,7 +404,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
             {
                 ItemIndex = FrameCount,
                 Kind = kind,
-                Message = $"Write failed: {ex.Message}",
+                Message = Invariant($"Write failed: {ex.Message}"),
             };
         }
 
@@ -489,7 +489,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         // escaping from OnFrame.
         if (!_Output.TryGetOrCreateUnderlyingStream(out Stream? underlyingStream, out string openFailure))
         {
-            _ReportStartFailure($"PCAPNG output could not be opened: {openFailure}");
+            _ReportStartFailure(Invariant($"PCAPNG output could not be opened: {openFailure}"));
             return false;
         }
 
@@ -502,7 +502,7 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
         }
         catch (Exception ex)
         {
-            _ReportStartFailure($"PCAPNG SHB write failed: {ex.Message}");
+            _ReportStartFailure(Invariant($"PCAPNG SHB write failed: {ex.Message}"));
             return false;
         }
 
@@ -790,8 +790,8 @@ public sealed class PcapngExporter : IFrameListener, IErrorTolerantExporter, IDi
                 throw new ArgumentOutOfRangeException(
                     nameof(count),
                     count,
-                    $"Target frame count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
-                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+                    Invariant($"Target frame count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} ") +
+                    Invariant($"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)})."));
             }
 
             _TargetFrameCount = count;

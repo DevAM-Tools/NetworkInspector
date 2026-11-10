@@ -20,17 +20,11 @@ namespace NetworkInspector.Core.Reassembly;
 /// </summary>
 public readonly record struct PduBoundaryResult
 {
-    #region Constants
-
     /// <summary>Sentinel value indicating incomplete data (need more data).</summary>
     private const int _IncompleteSentinel = -1;
 
     /// <summary>Sentinel value indicating invalid data (trigger resync).</summary>
     private const int _InvalidSentinel = -2;
-
-    #endregion
-
-    #region Properties
 
     /// <summary>The PDU length when complete, or a reserved sentinel otherwise.</summary>
     public int Length { get; }
@@ -44,15 +38,9 @@ public readonly record struct PduBoundaryResult
     /// <summary>Whether the data is invalid (resync needed).</summary>
     public bool IsInvalid => Length == _InvalidSentinel;
 
-    #endregion
-
-    #region Constructors
-
+    /// <summary>Creates a result from a raw length or sentinel; only the factories call it, with a checked value.</summary>
+    /// <param name="length">A PDU length of at least 0, or one of the two negative sentinels.</param>
     private PduBoundaryResult(int length) => Length = length;
-
-    #endregion
-
-    #region Factory Methods
 
     /// <summary>PDU boundary not yet determined — need more data.</summary>
     public static PduBoundaryResult Incomplete => new(_IncompleteSentinel);
@@ -61,14 +49,14 @@ public readonly record struct PduBoundaryResult
     public static PduBoundaryResult Invalid => new(_InvalidSentinel);
 
     /// <summary>A complete PDU of the given length was found.</summary>
+    /// <param name="length">PDU length in bytes, including delimiters or headers the PDU contains; not negative.</param>
+    /// <returns>A complete result that carries <paramref name="length"/>.</returns>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="length"/> is negative.</exception>
     public static PduBoundaryResult Complete(int length)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         return new(length);
     }
-
-    #endregion
 }
 
 /// <summary>

@@ -55,12 +55,12 @@ internal sealed class SomeIpTestStack : IDisposable
         Action<StackBuilder>? customize,
         Action<StackBuilder>? prepare = null)
     {
-        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), "ni-someip-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         Directory.CreateDirectory(directory);
         Directory.CreateDirectory(Path.Combine(directory, "folder"));
 
 #pragma warning disable CA2000 // SettingsManager ownership transfers to Stack via StackBuilder.
-        SettingsManager manager = new(directory);
+        SettingsManager manager = new(directory, CoreSettingsLayout.Instance);
 #pragma warning restore CA2000
         if (configJson is not null)
         {
@@ -308,13 +308,13 @@ internal sealed class SomeIpTestStack : IDisposable
         foreach (int gid in eager)
         {
             await Assert.That(materialized.Contains(gid)).IsTrue()
-                .Because($"group '{Stack.GetIndexGroup(new IndexGroupId(gid))?.Name}' was recorded but no field carries it");
+                .Because(Invariant($"group '{Stack.GetIndexGroup(new IndexGroupId(gid))?.Name}' was recorded but no field carries it"));
         }
 
         foreach (int gid in materialized)
         {
             await Assert.That(eager.Contains(gid)).IsTrue()
-                .Because($"a field of group '{Stack.GetIndexGroup(new IndexGroupId(gid))?.Name}' exists but the group was not recorded");
+                .Because(Invariant($"a field of group '{Stack.GetIndexGroup(new IndexGroupId(gid))?.Name}' exists but the group was not recorded"));
         }
     }
 

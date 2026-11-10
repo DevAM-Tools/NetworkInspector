@@ -57,14 +57,14 @@ internal sealed class AscRandomAccessEquivalenceTests
         using (AscSource memory = AscSource.FromText(text, name))
         {
             List<Frame> frames = RandomAccessEquivalence.StartAndReadAll(memory);
-            await Assert.That(RandomAccessEquivalence.FindMismatch(memory, frames, $"{name}/memory")).IsNull();
+            await Assert.That(RandomAccessEquivalence.FindMismatch(memory, frames, Invariant($"{name}/memory"))).IsNull();
         }
 
         // Disk backend.
         using TempCaptureFile file = new(Encoding.Latin1.GetBytes(text), ".asc");
         using AscSource disk = AscSource.Open(file.Path, new AscSourceOptions { PreloadBudget = null });
         List<Frame> diskFrames = RandomAccessEquivalence.StartAndReadAll(disk);
-        await Assert.That(RandomAccessEquivalence.FindMismatch(disk, diskFrames, $"{name}/disk")).IsNull();
+        await Assert.That(RandomAccessEquivalence.FindMismatch(disk, diskFrames, Invariant($"{name}/disk"))).IsNull();
     }
 
     [Test]
@@ -82,7 +82,7 @@ internal sealed class AscRandomAccessEquivalenceTests
 
         // Assert: same frames in the same order, and by id in reverse order too.
         await Assert.That(_FirstDifference(expected, sequential)).IsNull();
-        await Assert.That(RandomAccessEquivalence.FindMismatch(disk, sequential, $"{name}/disk")).IsNull();
+        await Assert.That(RandomAccessEquivalence.FindMismatch(disk, sequential, Invariant($"{name}/disk"))).IsNull();
     }
 
     #endregion

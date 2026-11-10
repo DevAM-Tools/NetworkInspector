@@ -529,7 +529,7 @@ internal sealed class SomeIpSdTests
 
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         await Assert.That(last.HasEntries).IsTrue();
-        await Assert.That(allocated).IsEqualTo(0).Because($"the scan allocated {allocated} bytes");
+        await Assert.That(allocated).IsEqualTo(0).Because(Invariant($"the scan allocated {allocated} bytes"));
     }
 
     public static IEnumerable<Func<(string, byte[])>> IndexCorpus()

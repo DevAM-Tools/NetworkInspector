@@ -36,7 +36,7 @@ internal sealed class EagerDispatchIndexTests
             "POST /api HTTP/1.1\r\n" +
             "Host: example.com\r\n" +
             "Content-Type: application/json\r\n" +
-            $"Content-Length: {jsonBody.Length}\r\n" +
+            Invariant($"Content-Length: {jsonBody.Length}\r\n") +
             "\r\n" +
             jsonBody;
 
@@ -89,13 +89,15 @@ internal sealed class EagerDispatchIndexTests
 
         // The lazy JSON descriptive field tree must NOT have been materialized yet: querying without
         // materialization must report the field as absent.
-        bool jsonKeyBeforeMaterialize = packet.TryGetFieldValue(jsonKeyFieldId!.Value, out _, materialize: false); // materialize: false — prove field absent without triggering lazy
+        bool jsonKeyBeforeMaterialize = packet.TryGetFieldValue(jsonKeyFieldId!.Value, out _,
+            materialize: false); // materialize: false — prove field absent without triggering lazy
         await Assert.That(jsonKeyBeforeMaterialize).IsFalse()
             .Because("index presence must be recorded without materializing the lazy JSON field tree");
 
         // After explicit materialization, the lazy field tree becomes available.
         packet.MaterializeAll();
-        bool jsonKeyAfterMaterialize = packet.TryGetFieldValue(jsonKeyFieldId!.Value, out _, materialize: false); // materialize: false — already MaterializeAll(); lookup only
+        bool jsonKeyAfterMaterialize = packet.TryGetFieldValue(jsonKeyFieldId!.Value, out _,
+            materialize: false); // materialize: false — already MaterializeAll(); lookup only
         await Assert.That(jsonKeyAfterMaterialize).IsTrue()
             .Because("materialization must build the previously deferred JSON fields");
     }
@@ -118,7 +120,7 @@ internal sealed class EagerDispatchIndexTests
             pduWireId: AutomotivePduBench.PduTransportWireId,
             signalMessage: inner);
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_idx_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_idx_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         string sigJson = Path.Combine(work, "signal_message.json");

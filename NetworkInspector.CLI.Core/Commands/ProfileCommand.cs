@@ -49,7 +49,7 @@ internal static class ProfileCommand
         }
 
         // Positional arguments and the option of this command (--copy-from); the settings options are accepted so scripts can
-        // share them, but only --settings-path has an effect here: --profile and the limits do not apply to folder operations.
+        // share them, but only --settings-path has an effect here: --profile and --set do not apply to folder operations.
         string command = args[0].ToUpperInvariant();
         List<string> positional = [];
         string? copyFrom = null;
@@ -78,7 +78,7 @@ internal static class ProfileCommand
 
         // The base folder is made absolute so that every message and folder operation names one place. No profile name is passed
         // to ResolvePath: the profiles are the folders below the base.
-        string settingsBase = Path.GetFullPath(SettingsManagerFactory.ResolvePath(settings.Build().SettingsPath, null));
+        string settingsBase = Path.GetFullPath(SettingsManagerFactory.ResolvePath(CoreSettingsLayout.Instance, settings.Build().SettingsPath, null));
         return command switch
         {
             "LIST" => _List(settingsBase, positional, io),
@@ -97,7 +97,7 @@ internal static class ProfileCommand
             return _UsageError("'profile list' takes no arguments.", io);
         }
 
-        foreach (string name in SettingsProfiles.List(settingsBase))
+        foreach (string name in SettingsProfiles.List(settingsBase, CoreSettingsLayout.Instance))
         {
             io.Out.WriteLine(name);
         }
@@ -113,7 +113,7 @@ internal static class ProfileCommand
             return _UsageError("'profile create' needs exactly one profile name.", io);
         }
 
-        if (!SettingsProfiles.TryCreate(settingsBase, positional[0], copyFrom, out string? error))
+        if (!SettingsProfiles.TryCreate(settingsBase, CoreSettingsLayout.Instance, positional[0], copyFrom, out string? error))
         {
             return _Refuse(error, io);
         }
@@ -130,7 +130,7 @@ internal static class ProfileCommand
             return _UsageError("'profile rename' needs the old and the new profile name.", io);
         }
 
-        if (!SettingsProfiles.TryRename(settingsBase, positional[0], positional[1], out string? error))
+        if (!SettingsProfiles.TryRename(settingsBase, CoreSettingsLayout.Instance, positional[0], positional[1], out string? error))
         {
             return _Refuse(error, io);
         }
@@ -147,7 +147,7 @@ internal static class ProfileCommand
             return _UsageError("'profile delete' needs exactly one profile name.", io);
         }
 
-        if (!SettingsProfiles.TryDelete(settingsBase, positional[0], out string? error))
+        if (!SettingsProfiles.TryDelete(settingsBase, CoreSettingsLayout.Instance, positional[0], out string? error))
         {
             return _Refuse(error, io);
         }
@@ -159,7 +159,7 @@ internal static class ProfileCommand
     /// <summary>Reports an unknown sub-command with the usage.</summary>
     private static int _Unknown(string command, CliIo io)
     {
-        io.Error.WriteLine($"Unknown profile command: '{command}'");
+        io.Error.WriteLine(Invariant($"Unknown profile command: '{command}'"));
         _PrintUsage(io.Error);
         return (int)ExitCode.ArgumentError;
     }

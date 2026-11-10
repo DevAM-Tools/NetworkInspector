@@ -12,8 +12,6 @@ namespace NetworkInspector.Core.Infos;
 /// </summary>
 public sealed class FieldInfo
 {
-    #region Constructors
-
     /// <summary>Creates field metadata during stack registration.</summary>
     /// <param name="id">The unique identifier assigned by the builder.</param>
     /// <param name="protocolId">The protocol that owns this field.</param>
@@ -39,10 +37,6 @@ public sealed class FieldInfo
         Description = description;
         IndexGroup = indexGroup;
     }
-
-    #endregion
-
-    #region Properties
 
     /// <summary>Unique field identifier.</summary>
     public FieldId Id
@@ -97,6 +91,4 @@ public sealed class FieldInfo
     {
         get; internal set;
     }
-
-    #endregion
 }

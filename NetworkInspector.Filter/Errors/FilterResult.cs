@@ -56,7 +56,7 @@ public readonly struct FilterResult<T> : IEquatable<FilterResult<T>>
     /// <exception cref="InvalidOperationException">When this result carries an error.</exception>
     public T Value => IsSuccess
         ? _Value!
-        : throw new InvalidOperationException($"Cannot read Value from a failed FilterResult: {_Error}");
+        : throw new InvalidOperationException(Invariant($"Cannot read Value from a failed FilterResult: {_Error}"));
 
     /// <summary>
     /// The error.

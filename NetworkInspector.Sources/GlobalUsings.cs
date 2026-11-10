@@ -21,7 +21,7 @@ global using System.Runtime.Intrinsics.X86;
 global using System.Text;
 global using System.Threading;
 global using System.Threading.Tasks;
-global using static System.FormattableString;
+global using static InvariantStringHelper.InvariantText;
 global using Microsoft.Win32.SafeHandles;
 #endregion
 

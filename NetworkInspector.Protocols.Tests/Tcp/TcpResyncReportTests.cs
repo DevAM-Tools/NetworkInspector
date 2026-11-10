@@ -63,7 +63,7 @@ internal sealed class TcpResyncReportTests
 
         Packet carrier = packets[3];
         await ProtocolTestHelper.AssertStringFieldContains(stack, carrier, "tcp.error.resync", "7 bytes skipped");
-        await Assert.That(probe.ParseCount).IsEqualTo(2).Because($"calls {probe.ParseCount}, lengths {string.Join(",", probe.Lengths)}");
+        await Assert.That(probe.ParseCount).IsEqualTo(2).Because(Invariant($"calls {probe.ParseCount}, lengths {string.Join(",", probe.Lengths)}"));
         await Assert.That(probe.Lengths[0]).IsEqualTo(4);
         await Assert.That(probe.Lengths[1]).IsEqualTo(4);
         await ProtocolTestHelper.AssertFieldNotPresent(stack, packets[^1], "tcp.error.resync");

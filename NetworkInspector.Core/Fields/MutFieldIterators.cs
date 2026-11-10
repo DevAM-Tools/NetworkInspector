@@ -18,11 +18,19 @@ namespace NetworkInspector.Core.Fields;
 /// </summary>
 public readonly ref struct MutFieldChildEnumerable
 {
+    /// <summary>The packet whose field storage is walked.</summary>
     private readonly Packet _Packet;
+
+    /// <summary>Storage index of the parent whose direct children are visited.</summary>
     private readonly ushort _ParentIndex;
+
+    /// <summary>Whether a lazy parent is materialized before its child list is read.</summary>
     private readonly bool _Materialize;
 
     /// <summary>Creates a mutable child enumerable.</summary>
+    /// <param name="packet">The owning packet.</param>
+    /// <param name="parentIndex">Storage index of the parent field.</param>
+    /// <param name="materialize">Whether to materialize the parent's lazy children before iterating.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal MutFieldChildEnumerable(Packet packet, ushort parentIndex, bool materialize)
     {
@@ -34,6 +42,7 @@ public readonly ref struct MutFieldChildEnumerable
     /// <summary>
     /// Returns the zero-alloc struct-based enumerator for <see langword="foreach"/> loops.
     /// </summary>
+    /// <returns>An enumerator positioned before the first child; empty on a skip packet.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public MutFieldChildEnumerator GetEnumerator() => new(_Packet, _ParentIndex, _Materialize);
 }
@@ -50,14 +59,19 @@ public readonly ref struct MutFieldChildEnumerable
 /// </summary>
 public ref struct MutFieldChildEnumerator
 {
+    /// <summary>The packet whose field storage is walked.</summary>
     private readonly Packet _Packet;
 
-    // Storage index of the child the cursor is on. Before the first MoveNext it is the parent's first child; NullIndex when
-    // the parent has no children, on a skip packet, and once the last child has been passed.
+    /// <summary>
+    /// Storage index of the child the cursor is on. Before the first <see cref="MoveNext"/> it is the parent's first child;
+    /// <see cref="FieldBody.NullIndex"/> when the parent has no children, on a skip packet, and once the last child has been passed.
+    /// </summary>
     private ushort _CurrentIndex;
 
-    // Distinguishes the first MoveNext (which must yield the first child that the constructor already positioned on)
-    // from later ones (which advance along NextIndex).
+    /// <summary>
+    /// Distinguishes the first <see cref="MoveNext"/> (which must yield the first child that the constructor already positioned
+    /// on) from later ones (which advance along the next-sibling link).
+    /// </summary>
     private bool _Started;
 
     /// <summary>Creates a mutable child enumerator.</summary>
@@ -92,7 +106,7 @@ public ref struct MutFieldChildEnumerator
         _Started = false;
     }
 
-    /// <summary>The current child field as a mutable cursor.</summary>
+    /// <summary>The current child field as a mutable cursor. Valid only after <see cref="MoveNext"/> returned <see langword="true"/>.</summary>
     public readonly MutField Current
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -100,6 +114,7 @@ public ref struct MutFieldChildEnumerator
     }
 
     /// <summary>Advances to the next child. Returns <see langword="false"/> after the last child.</summary>
+    /// <returns><see langword="true"/> when <see cref="Current"/> is a child; <see langword="false"/> when there are no more.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
@@ -131,13 +146,21 @@ public ref struct MutFieldChildEnumerator
 /// When <c>materialize</c> is <see langword="true"/>, lazy fields are materialized during traversal.
 /// <para><b>Thread-safety:</b> stack-only value for the thread that iterates; no synchronization of its own.</para>
 /// </summary>
-public ref struct MutFieldDescendantEnumerable
+public readonly ref struct MutFieldDescendantEnumerable
 {
+    /// <summary>The packet whose field storage is walked.</summary>
     private readonly Packet _Packet;
+
+    /// <summary>Storage index of the root whose descendants are visited.</summary>
     private readonly ushort _RootIndex;
+
+    /// <summary>Whether lazy fields are materialized as the walk reaches them.</summary>
     private readonly bool _Materialize;
 
     /// <summary>Creates a mutable descendant enumerable.</summary>
+    /// <param name="packet">The owning packet.</param>
+    /// <param name="rootIndex">Storage index of the root field (not yielded).</param>
+    /// <param name="materialize">Whether to materialize lazy fields during traversal.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal MutFieldDescendantEnumerable(Packet packet, ushort rootIndex, bool materialize)
     {
@@ -149,6 +172,7 @@ public ref struct MutFieldDescendantEnumerable
     /// <summary>
     /// Returns the zero-alloc struct-based enumerator for <see langword="foreach"/> loops.
     /// </summary>
+    /// <returns>An enumerator positioned before the first descendant; empty on a skip packet.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public MutFieldDescendantEnumerator GetEnumerator() => new(_Packet, _RootIndex, _Materialize);
 }
@@ -172,13 +196,16 @@ public ref struct MutFieldDescendantEnumerable
 /// </summary>
 public ref struct MutFieldDescendantEnumerator
 {
+    /// <summary>The packet whose field storage is walked.</summary>
     private readonly Packet _Packet;
+
+    /// <summary>Whether lazy fields are materialized before the walk descends into them.</summary>
     private readonly bool _Materialize;
 
-    // Pending storage indexes in visit order (top = next to visit). Inline up to 16 entries, then spills to the heap.
+    /// <summary>Pending storage indexes in visit order (top = next to visit). Inline up to 16 entries, then spills to the heap.</summary>
     private InlineStack16 _Stack;
 
-    // Storage index of the field returned by the last successful MoveNext.
+    /// <summary>Storage index of the field returned by the last successful <see cref="MoveNext"/>.</summary>
     private ushort _Current;
 
     /// <summary>Creates a DFS pre-order mutable descendant enumerator.</summary>
@@ -216,7 +243,7 @@ public ref struct MutFieldDescendantEnumerator
         }
     }
 
-    /// <summary>The current descendant field as a mutable cursor.</summary>
+    /// <summary>The current descendant field as a mutable cursor. Valid only after <see cref="MoveNext"/> returned <see langword="true"/>.</summary>
     public readonly MutField Current
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -224,6 +251,7 @@ public ref struct MutFieldDescendantEnumerator
     }
 
     /// <summary>Advances to the next descendant in DFS pre-order.</summary>
+    /// <returns><see langword="true"/> when <see cref="Current"/> is a descendant; <see langword="false"/> when the walk is finished.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {

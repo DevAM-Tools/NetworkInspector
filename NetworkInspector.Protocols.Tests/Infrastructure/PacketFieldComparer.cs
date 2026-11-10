@@ -29,7 +29,8 @@ internal static class PacketFieldComparer
         List<(FieldId Id, FieldValue Value)> fields = new(count);
         foreach (Field field in packet.IterFieldsDfs(materialize: true))
         {
-            // Lazy texts stay unevaluated: the readers race on their first evaluation, which the in-repository LazyString makes safe (compare-exchange publication).
+            // Lazy texts stay unevaluated: the readers race on their first evaluation, which the in-repository LazyString
+            // makes safe (compare-exchange publication).
             fields.Add((field.FieldId, field.Value));
         }
 
@@ -58,10 +59,11 @@ internal static class PacketFieldComparer
             FieldInfo? info = stack.GetField(expectedField.Id);
             string name = info?.Name ?? expectedField.Id.ToString();
 
-            await Assert.That(actualFields[index].Id).IsEqualTo(expectedField.Id).Because($"Re-parsed packet field #{index} is not '{name}'");
+            await Assert.That(actualFields[index].Id).IsEqualTo(expectedField.Id)
+                .Because(Invariant($"Re-parsed packet field #{index} is not '{name}'"));
             await Assert.That(_ValuesEqual(expectedField.Value, actualFields[index].Value))
                 .IsTrue()
-                .Because($"Field '{name}' value mismatch");
+                .Because(Invariant($"Field '{name}' value mismatch"));
         }
     }
 
@@ -101,10 +103,11 @@ internal static class PacketFieldComparer
             FieldInfo? info = stack.GetField(expectedField.Id);
             string name = info?.Name ?? expectedField.Id.ToString();
 
-            await Assert.That(actualFields[index].Id).IsEqualTo(expectedField.Id).Because($"Redissect packet field #{index} is not '{name}'");
+            await Assert.That(actualFields[index].Id).IsEqualTo(expectedField.Id)
+                .Because(Invariant($"Redissect packet field #{index} is not '{name}'"));
             await Assert.That(_ValuesEqual(expectedField.Value, actualFields[index].Value))
                 .IsTrue()
-                .Because($"Field '{name}' value mismatch");
+                .Because(Invariant($"Field '{name}' value mismatch"));
         }
     }
 
@@ -127,7 +130,7 @@ internal static class PacketFieldComparer
             FieldType.Bytes => left.Data.TryGetAsBytes(out ReadOnlyMemory<byte> lb)
                 && right.Data.TryGetAsBytes(out ReadOnlyMemory<byte> rb)
                 && lb.Span.SequenceEqual(rb.Span),
-            _ => left.ToString() == right.ToString(),
+            _ => left.ToString(null, CultureInfo.InvariantCulture) == right.ToString(null, CultureInfo.InvariantCulture),
         };
     }
 }

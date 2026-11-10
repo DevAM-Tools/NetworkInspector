@@ -23,31 +23,34 @@ namespace NetworkInspector.Core.Reassembly;
 /// </summary>
 public sealed class LengthPrefixDetector : IPduBoundaryDetector
 {
-    #region Fields
+    #region Configuration and state
 
+    /// <summary>Byte offset of the length field within the PDU header; not negative, and <c>_LengthOffset + _LengthSize</c> fits an int.</summary>
     private readonly int _LengthOffset;
-    private readonly int _LengthSize; // bytes: 1, 2, or 4
+
+    /// <summary>Width of the length field in bytes: 1, 2, or 4.</summary>
+    private readonly int _LengthSize;
+
+    /// <summary>Byte order of the length field: <see langword="true"/> for big endian.</summary>
     private readonly bool _BigEndian;
+
+    /// <summary>Whether the announced length already covers the header; when false, <see cref="_EffectiveHeaderSize"/> is added.</summary>
     private readonly bool _LengthIncludesHeader;
-    private readonly int _EffectiveHeaderSize;
-    private readonly int _MinPduLength;
-    private readonly int _MaxPduSize;
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>
-    /// Default maximum PDU size (16 MiB).
-    /// Limit record: the length field comes from untrusted stream bytes; without a cap a hostile or corrupt length
-    /// would make the stream wait for and buffer an arbitrarily large PDU. Configurable per detector through the
-    /// <c>maxPduSize</c> constructor parameter (code decides; there is no end-user setting here). A length above the cap
-    /// yields <see cref="PduBoundaryResult.Invalid"/> so the owner resynchronizes instead of waiting. Posture: finite
-    /// default, raising it is an explicit choice. The number 16 MiB itself has no recorded derivation, and the owner's
-    /// own buffer cap (<see cref="StreamReassemblyConfig.MaxBufferSize"/>) must be at least as large for a maximal PDU
-    /// to ever complete.
+    /// Header size that is added to an announced payload length: the explicit header size, or the end of the length field
+    /// when none was given. Resolved once so <see cref="Detect"/> does no recomputation per call.
     /// </summary>
-    public const int DefaultMaxPduSize = 16 * 1024 * 1024;
+    private readonly int _EffectiveHeaderSize;
+
+    /// <summary>Shortest total length that is a valid PDU: the header and at least the bytes up to the end of the length field.</summary>
+    private readonly int _MinPduLength;
+
+    /// <summary>
+    /// Longest total PDU length that this detector accepts; a longer announced PDU is reported as invalid. Positive;
+    /// <see cref="int.MaxValue"/> when the detector has no limit of its own.
+    /// </summary>
+    private readonly int _MaxPduSize;
 
     /// <summary>Creates a length-prefix based PDU boundary detector.</summary>
     /// <param name="lengthOffset">Byte offset of the length field within the PDU header.</param>
@@ -63,8 +66,10 @@ public sealed class LengthPrefixDetector : IPduBoundaryDetector
     /// <see cref="PduBoundaryResult.Invalid"/>). A value of <c>0</c> defaults to <c>lengthOffset + lengthSize</c>.
     /// </param>
     /// <param name="maxPduSize">
-    /// Maximum allowed PDU length in bytes. Length values that exceed this limit or overflow
-    /// when combined with the header size yield <see cref="PduBoundaryResult.Invalid"/>.
+    /// Maximum allowed PDU length in bytes for this detector, or <see langword="null"/> for no limit of its own. Length values
+    /// that exceed it or overflow when combined with the header size yield <see cref="PduBoundaryResult.Invalid"/>. With
+    /// <see langword="null"/> the bound is the PDU limit of the stream (<see cref="StreamReassemblyConfig.MaxPduSize"/>, limit
+    /// <see cref="CoreLimits.MaxStreamPduSize"/>), which the stream checks for every reported PDU length.
     /// </param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="lengthSize"/> is not 1, 2, or 4, when
@@ -74,7 +79,7 @@ public sealed class LengthPrefixDetector : IPduBoundaryDetector
     /// the header), or when <c>lengthOffset + lengthSize</c> exceeds <see cref="int.MaxValue"/>.
     /// </exception>
     public LengthPrefixDetector(int lengthOffset, int lengthSize, bool bigEndian = true,
-        bool lengthIncludesHeader = false, int headerSize = 0, int maxPduSize = DefaultMaxPduSize)
+        bool lengthIncludesHeader = false, int headerSize = 0, int? maxPduSize = null)
     {
         if (lengthSize is not (1 or 2 or 4))
         {
@@ -83,7 +88,10 @@ public sealed class LengthPrefixDetector : IPduBoundaryDetector
         }
         ArgumentOutOfRangeException.ThrowIfNegative(lengthOffset);
         ArgumentOutOfRangeException.ThrowIfNegative(headerSize);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxPduSize);
+        if (maxPduSize is { } explicitMax)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(explicitMax, nameof(maxPduSize));
+        }
 
         // The length field must end inside the int range; otherwise lengthOffset + lengthSize wraps and Detect would
         // fail on every input.
@@ -97,13 +105,15 @@ public sealed class LengthPrefixDetector : IPduBoundaryDetector
         _LengthSize = lengthSize;
         _BigEndian = bigEndian;
         _LengthIncludesHeader = lengthIncludesHeader;
-        _MaxPduSize = maxPduSize;
+        _MaxPduSize = maxPduSize ?? int.MaxValue;
 
         // Resolve the effective header size once at construction so Detect does not recompute it per call.
         // When the caller did not provide a header size, fall back to the minimum data length
         // required to read the length field. Any other choice would be guesswork.
         int minRequired = lengthOffset + lengthSize;
-        _EffectiveHeaderSize = headerSize > 0 ? headerSize : minRequired;
+        _EffectiveHeaderSize = headerSize > 0
+            ? headerSize
+            : minRequired;
 
         // The shortest valid total PDU length: the header, and never less than the bytes up to the end of the length field
         // (a PDU is at least as long as the field it was announced by). Always at least 1.
@@ -115,13 +125,13 @@ public sealed class LengthPrefixDetector : IPduBoundaryDetector
         if (!lengthIncludesHeader && headerSize > 0 && headerSize < minRequired)
         {
             throw new ArgumentOutOfRangeException(nameof(headerSize), headerSize,
-                $"headerSize ({headerSize}) must be >= lengthOffset + lengthSize ({minRequired}) when lengthIncludesHeader is false.");
+                Invariant($"headerSize ({headerSize}) must be >= lengthOffset + lengthSize ({minRequired}) when lengthIncludesHeader is false."));
         }
     }
 
     #endregion
 
-    #region Public API
+    #region Boundary detection
 
     /// <inheritdoc/>
     public PduBoundaryResult Detect(ReadOnlySpan<byte> data)
@@ -169,12 +179,14 @@ public sealed class LengthPrefixDetector : IPduBoundaryDetector
 
     #endregion
 
-    #region Private Helpers
+    #region Length field reading
 
     /// <summary>
     /// Reads the wire length field as a non-negative <see cref="int"/>, or -1 when invalid.
     /// Values above <see cref="int.MaxValue"/> are rejected because PDU buffers are arrays.
     /// </summary>
+    /// <param name="data">Exactly the <see cref="_LengthSize"/> bytes of the length field.</param>
+    /// <returns>The announced length, or -1 when it does not fit a non-negative int.</returns>
     private int _ReadLength(ReadOnlySpan<byte> data)
     {
         if (_LengthSize == 4)
@@ -203,6 +215,8 @@ public sealed class LengthPrefixDetector : IPduBoundaryDetector
     /// and a high first byte makes the intermediate negative; the cast to <see cref="uint"/> reinterprets those bits
     /// (unchecked context), which is why the caller compares against <see cref="int.MaxValue"/> afterwards.
     /// </summary>
+    /// <param name="data">The four bytes of the length field.</param>
+    /// <returns>The four bytes as an unsigned number in the configured byte order.</returns>
     private uint _ReadLengthU32(ReadOnlySpan<byte> data)
         => _BigEndian
             ? (uint)((data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3])

@@ -19,7 +19,7 @@ Filters still read the field tree, not this cache. See [`FILTER_GUIDE.md`](../Ne
 | Presence only (protocol/group “did this appear?”) | `PacketIndex` |
 | Parse for effects, drop the tree | `FieldTreeMode.Skip` plus a cache and/or index |
 
-A cache is grow-only. There is no row cap and no silent drop. Plan `ChunkShift` for capture length (default 12 = 4096 slots in the first inner chunk).
+A cache is grow-only up to its row limit (setting `valuecache.maxRows`, default 100 million recorded series rows over all series of the cache; `off` is allowed). At the limit the cache stops recording, keeps the rows it holds, and sets `IsRecordingIncomplete` for good; `RecordingLimitMessage` names the limit and says how to change it. There is no other cap and no silent drop. Plan `ChunkShift` for capture length (default 12 = 4096 slots in the first inner chunk).
 
 ---
 
@@ -149,15 +149,13 @@ You do not need these for the usual typed scan.
 | `handle.Keys` | Same snapshot without `T` (packet id / timestamp only) | You already have `ValueCacheSeriesHandle<T>` |
 | `handle.ChunkShift` | Same as `series.ChunkShift` | You still hold the series |
 
-They exist so a helper can take a keys-only handle or size SIMD loops from the handle alone (`_Series` is private).
+They exist so a helper can take a keys-only handle or size SIMD loops from the handle alone, without the series.
 
 ---
 
-## 8. Writer gate
+## 8. Writers and clearing
 
-`_AppendGate` is a cheap CAS (not `Monitor`). Uncontended `Record` takes it in one `CompareExchange`. Contended callers **wait** in a `while` + `SpinWait` loop until the gate is free, then run. That serializes the three column appends and the `Count` publish so rows stay untorn. It is not taken on the read path.
-
-Because the series gate is the single writer, `Record` appends to the columns with the internal `AppendOwned`: no second compare-exchange per column and no overlap check. The public `ChunkedGrowOnlyStore.Append` keeps its own gate and still rejects a second overlapping `Append` with an exception. `ClearRows` takes the same series gate and replaces the columns' generation with one volatile write; a reader that already holds the old generation finishes on it, and `Count` of the series is what readers trust.
+One writer per cache is the supported shape. A second writer on the same series waits for the series gate and never tears a row: the three columns and the published `Count` always agree. The internal `ClearRows` swaps in empty columns with one volatile write, so a reader never sees a half-cleared column: a chunk span or enumerator chunk taken before the clear finishes on the rows it already holds, a reader that loads `Count` after the clear sees no rows, and a reader that indexed with a count loaded before the clear reads default values, so take a new handle after a clear.
 
 `AllOccurrences` has no extra per-packet counter: a packet cannot exceed `ushort.MaxValue - 1` fields (`Packet` storage indexes are `ushort`, `NullIndex` is `ushort.MaxValue`).
 

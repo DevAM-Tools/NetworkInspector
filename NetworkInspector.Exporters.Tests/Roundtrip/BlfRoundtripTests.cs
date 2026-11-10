@@ -381,7 +381,7 @@ internal sealed class BlfRoundtripTests
     public async Task CompressionLevelsRoundtrip(BlfCompressionLevel level)
     {
         TsharkVerifier.RequireAvailable();
-        using TestDir dir = new($"rt_blf_cmp_{level}");
+        using TestDir dir = new(Invariant($"rt_blf_cmp_{level}"));
         string path = dir.FilePath("cmp.blf");
 
         RoundtripFrameFactory factory = new();

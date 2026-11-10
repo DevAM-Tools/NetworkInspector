@@ -34,6 +34,9 @@ namespace NetworkInspector.Core.Index;
 /// </summary>
 internal sealed class ArrayContainer : IContainer
 {
+
+    #region Configuration and state
+
     /// <summary>
     /// Largest number of values an array container holds before it becomes a <see cref="BitmapContainer"/>. A format fact
     /// of Roaring bitmaps (array bytes 2n versus the 8 KiB bitmap), so a constant and not a setting. Other containers
@@ -41,13 +44,17 @@ internal sealed class ArrayContainer : IContainer
     /// </summary>
     internal const int MaxCapacity = 4096;
 
-    // Elements ≤ this threshold use SIMD linear scan in Contains instead of binary search.
-    // Below ~32 elements SIMD linear scan outperforms binary search because it avoids
-    // branch-prediction overhead from the log2(n) comparisons.
+    /// <summary>
+    /// Largest cardinality for which <see cref="Contains"/> uses the SIMD linear scan instead of binary search.
+    /// Below ~32 elements the linear scan outperforms binary search because it avoids the branch-prediction cost of the
+    /// log2(n) comparisons.
+    /// </summary>
     private const int _SimdLinearScanThreshold = 32;
 
-    // Backing store; only the first Cardinality slots are valid (strictly ascending). Longer than Cardinality after
-    // growth, exactly Cardinality after a set operation or Clone.
+    /// <summary>
+    /// Backing store; only the first <see cref="Cardinality"/> slots are valid (strictly ascending). Longer than
+    /// <see cref="Cardinality"/> after growth, exactly <see cref="Cardinality"/> after a set operation or <see cref="Clone"/>.
+    /// </summary>
     private ushort[] _Values;
 
     /// <summary>Number of values stored.</summary>
@@ -75,12 +82,19 @@ internal sealed class ArrayContainer : IContainer
         Cardinality = count;
     }
 
+    #endregion
+
+    #region Membership, bounds and copy
+
     /// <inheritdoc cref="IContainer.Min"/>
     public ushort Min => _Values[0]; // caller must ensure Cardinality > 0
+
     /// <inheritdoc cref="IContainer.Max"/>
     public ushort Max => _Values[Cardinality - 1]; // caller must ensure Cardinality > 0
 
     /// <summary>Returns the value at the given index (unchecked for speed).</summary>
+    /// <param name="index">The 0-based position in ascending order, 0 to <see cref="Cardinality"/> - 1; not range-checked.</param>
+    /// <returns>The value stored at <paramref name="index"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ushort ValueAt(int index) => _Values[index];
 
@@ -89,6 +103,8 @@ internal sealed class ArrayContainer : IContainer
     /// Uses SIMD linear scan for small arrays (≤<see cref="_SimdLinearScanThreshold"/> elements)
     /// and binary search for larger ones.
     /// </summary>
+    /// <param name="value">The low 16 bits of the id to look up.</param>
+    /// <returns><see langword="true"/> when the container holds <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(ushort value)
     {
@@ -100,12 +116,43 @@ internal sealed class ArrayContainer : IContainer
         return Array.BinarySearch(_Values, 0, Cardinality, value) >= 0;
     }
 
+    /// <summary>Counts the values that are at most <paramref name="threshold"/>. Binary search, O(log n).</summary>
+    /// <param name="threshold">The largest value to count.</param>
+    /// <returns>The number of contained values in <c>0..threshold</c>.</returns>
+    internal int Rank(ushort threshold)
+    {
+        int index = Array.BinarySearch(_Values, 0, Cardinality, threshold);
+        return index >= 0
+            ? index + 1
+            : ~index;
+    }
+
+    /// <summary>
+    /// Deep copy sized exactly to <see cref="Cardinality"/> (no spare capacity), so the first <see cref="Add"/> on the copy
+    /// regrows the array. An empty container clones to a zero-length backing array, which <see cref="Add"/> handles.
+    /// </summary>
+    /// <returns>A new array container that holds the same values and shares no storage with this one.</returns>
+    public IContainer Clone()
+    {
+        ushort[] valueCopy = new ushort[Cardinality];
+        Array.Copy(_Values, valueCopy, Cardinality);
+        return new ArrayContainer(valueCopy, Cardinality);
+    }
+
+    #endregion
+
+    #region Adding values
+
     /// <summary>
     /// Inserts <paramref name="value"/> keeping the array sorted. Returns <see langword="this"/>, or a new
     /// <see cref="BitmapContainer"/> when the array already holds <see cref="MaxCapacity"/> values and the value is new
     /// (the caller must continue with the returned container). Adding a present value is a no-op.
     /// </summary>
     /// <param name="value">The low 16 bits of the id to add.</param>
+    /// <returns>
+    /// <see langword="this"/> when the value was added or already present; a new <see cref="BitmapContainer"/> that holds the
+    /// old values and <paramref name="value"/> when the array was full.
+    /// </returns>
     public IContainer Add(ushort value)
     {
         // Append shortcut: ids arrive in ascending order, so the value is usually above the current maximum. That needs
@@ -120,10 +167,11 @@ internal sealed class ArrayContainer : IContainer
         else
         {
             int idx = Array.BinarySearch(_Values, 0, count, value);
+            // Already present: nothing to change.
             if (idx >= 0)
             {
                 return this;
-            } // already present
+            }
 
             insertAt = ~idx;
         }
@@ -137,6 +185,7 @@ internal sealed class ArrayContainer : IContainer
             {
                 bitmap.Add(_Values[i]);
             }
+
             bitmap.Add(value);
             return bitmap;
         }
@@ -150,40 +199,40 @@ internal sealed class ArrayContainer : IContainer
             Array.Resize(ref _Values, newCap);
         }
 
-        // Shift elements right
+        // Open a gap by shifting the larger elements right; an append (insertAt == Cardinality) shifts nothing.
         if (insertAt < Cardinality)
         {
             Array.Copy(_Values, insertAt, _Values, insertAt + 1, Cardinality - insertAt);
         }
+
         _Values[insertAt] = value;
         Cardinality++;
 
         return this;
     }
 
-    /// <summary>
-    /// Deep copy sized exactly to <see cref="Cardinality"/> (no spare capacity), so the first <see cref="Add"/> on the copy
-    /// regrows the array. An empty container clones to a zero-length backing array, which <see cref="Add"/> handles.
-    /// </summary>
-    public IContainer Clone()
-    {
-        ushort[] valueCopy = new ushort[Cardinality];
-        Array.Copy(_Values, valueCopy, Cardinality);
-        return new ArrayContainer(valueCopy, Cardinality);
-    }
+    #endregion
+
+    #region Set operations
 
     /// <summary>
     /// Intersection. Array with array uses the SIMD intersection; against any other kind it probes <paramref name="other"/> for
     /// each of this container's values (this side is the smaller one, at most <see cref="MaxCapacity"/> values).
     /// The result is always a new array container (an intersection cannot exceed this container's size). Neither operand is mutated.
     /// </summary>
+    /// <param name="other">The container to intersect with; not <see langword="null"/>; not modified.</param>
+    /// <returns>A new array container that holds the values present in both operands.</returns>
     public IContainer And(IContainer other)
     {
         if (other is ArrayContainer arr)
         {
-            // The result cannot be larger than the smaller operand, so the buffer is allocated once at that size.
-            ushort[] result = new ushort[Math.Min(Cardinality, arr.Cardinality)];
-            int k = _SimdIntersect(_Values, Cardinality, arr._Values, arr.Cardinality, result);
+            // One read of each array and count: the result buffer is sized from the same numbers the intersection gets. The result
+            // cannot be larger than the smaller operand, so the buffer is allocated once at that size.
+            int thisCount = Cardinality;
+            ushort[] otherValues = arr._Values;
+            int otherCount = arr.Cardinality;
+            ushort[] result = new ushort[Math.Min(thisCount, otherCount)];
+            int k = _SimdIntersect(_Values, thisCount, otherValues, otherCount, result);
             return new ArrayContainer(result, k);
         }
 
@@ -206,13 +255,22 @@ internal sealed class ArrayContainer : IContainer
     /// <see cref="BitmapContainer"/> if the merged count exceeds <see cref="MaxCapacity"/>. Against any other kind it clones
     /// <paramref name="other"/> and adds this container's values to the clone. Neither operand is mutated.
     /// </summary>
+    /// <param name="other">The container to unite with; not <see langword="null"/>; not modified.</param>
+    /// <returns>
+    /// A new container that holds the values present in either operand: an array container, a <see cref="BitmapContainer"/> for a
+    /// dense array-with-array result, or the kind of <paramref name="other"/> for any other operand.
+    /// </returns>
     public IContainer Or(IContainer other)
     {
         if (other is ArrayContainer arr)
         {
-            // Worst-case size buffer (disjoint inputs); the merge reports how many entries it really wrote.
-            ushort[] result = new ushort[Cardinality + arr.Cardinality];
-            int k = _SimdMerge(_Values, Cardinality, arr._Values, arr.Cardinality, result);
+            // One read of each array and count (see And). Worst-case size buffer (disjoint inputs); the merge reports how many
+            // entries it really wrote.
+            int thisCount = Cardinality;
+            ushort[] otherValues = arr._Values;
+            int otherCount = arr.Cardinality;
+            ushort[] result = new ushort[thisCount + otherCount];
+            int k = _SimdMerge(_Values, thisCount, otherValues, otherCount, result);
 
             // Same density rule as Add: more than MaxCapacity distinct values is cheaper as a bitmap.
             if (k > MaxCapacity)
@@ -243,12 +301,18 @@ internal sealed class ArrayContainer : IContainer
     /// Difference (this AND NOT <paramref name="other"/>). The result is a new array container (it cannot be larger than this
     /// container). Neither operand is mutated.
     /// </summary>
+    /// <param name="other">The container whose values are removed; not <see langword="null"/>; not modified.</param>
+    /// <returns>A new array container that holds the values of this container that are absent from <paramref name="other"/>.</returns>
     public IContainer AndNot(IContainer other)
     {
         if (other is ArrayContainer arr)
         {
-            ushort[] result = new ushort[Cardinality];
-            int k = _SimdDifference(_Values, Cardinality, arr._Values, arr.Cardinality, result);
+            // One read of each array and count (see And).
+            int thisCount = Cardinality;
+            ushort[] otherValues = arr._Values;
+            int otherCount = arr.Cardinality;
+            ushort[] result = new ushort[thisCount];
+            int k = _SimdDifference(_Values, thisCount, otherValues, otherCount, result);
             return new ArrayContainer(result, k);
         }
 
@@ -271,12 +335,18 @@ internal sealed class ArrayContainer : IContainer
     /// <see cref="MaxCapacity"/>. Against any other kind this container is converted to a bitmap and the bitmap's XOR does the
     /// work (it picks the right result kind). Neither operand is mutated.
     /// </summary>
+    /// <param name="other">The container to combine with; not <see langword="null"/>; not modified.</param>
+    /// <returns>A new container that holds the values present in exactly one operand.</returns>
     public IContainer Xor(IContainer other)
     {
         if (other is ArrayContainer arr)
         {
-            ushort[] result = new ushort[Cardinality + arr.Cardinality];
-            int k = _SimdSymmetricDifference(_Values, Cardinality, arr._Values, arr.Cardinality, result);
+            // One read of each array and count (see And).
+            int thisCount = Cardinality;
+            ushort[] otherValues = arr._Values;
+            int otherCount = arr.Cardinality;
+            ushort[] result = new ushort[thisCount + otherCount];
+            int k = _SimdSymmetricDifference(_Values, thisCount, otherValues, otherCount, result);
 
             if (k > MaxCapacity)
             {
@@ -302,12 +372,12 @@ internal sealed class ArrayContainer : IContainer
         return bmp.Xor(other);
     }
 
-    #region ===================================================================
-    // SIMD helper methods — Vector128<ushort> (8 elements / 128 bits)
-    // All methods include scalar fallbacks for non-SIMD platforms (WASM, older x86).
     #endregion
 
-    #region ===================================================================
+    #region SIMD membership scan
+
+    // SIMD helpers use Vector128<ushort> (8 elements / 128 bits). Every kernel has a scalar fallback for platforms without
+    // hardware SIMD (WASM, older x86).
 
     /// <summary>
     /// SIMD linear scan for contains on a small sorted ushort array.
@@ -315,6 +385,10 @@ internal sealed class ArrayContainer : IContainer
     /// early once a chunk's first element exceeds <paramref name="value"/>.
     /// Falls back to scalar loop on platforms without Vector128 support.
     /// </summary>
+    /// <param name="values">The sorted values.</param>
+    /// <param name="count">The number of valid leading entries; bounded to <c>values.Length</c> inside, see the comment in the body.</param>
+    /// <param name="value">The value to look for.</param>
+    /// <returns><see langword="true"/> when <paramref name="value"/> is among the first <paramref name="count"/> entries.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _SimdLinearContains(ushort[] values, int count, ushort value)
     {
@@ -366,6 +440,10 @@ internal sealed class ArrayContainer : IContainer
         return false;
     }
 
+    #endregion
+
+    #region SIMD sorted-array kernels
+
     /// <summary>
     /// SIMD vectorized intersection of two sorted ushort arrays (AND / set intersection).
     ///
@@ -384,8 +462,22 @@ internal sealed class ArrayContainer : IContainer
     /// Falls back to scalar two-pointer walk for the tail and on non-SIMD platforms.
     /// <paramref name="result"/> must have capacity ≥ Min(aCount, bCount).
     /// </summary>
+    /// <param name="a">The first sorted operand.</param>
+    /// <param name="aCount">The number of valid leading entries of <paramref name="a"/>; bounded to <c>a.Length</c> inside.</param>
+    /// <param name="b">The second sorted operand.</param>
+    /// <param name="bCount">The number of valid leading entries of <paramref name="b"/>; bounded to <c>b.Length</c> inside.</param>
+    /// <param name="result">The output buffer; receives the common values in ascending order.</param>
+    /// <returns>The number of values written to <paramref name="result"/>.</returns>
     private static int _SimdIntersect(ushort[] a, int aCount, ushort[] b, int bCount, ushort[] result)
     {
+        // The operand of a set operation is read without the sequence lock, so its array and its count can come from different
+        // moments (the writer grows the array before it raises the count). The result of such a torn read is wrong by contract,
+        // but the unchecked 8-lane loads and stores below must still stay inside the arrays held here: bound both counts. The
+        // clamped counts are never larger than the counts the result was sized from, so the store bound
+        // (k + 8 <= aCount + bCount <= result.Length) holds.
+        aCount = Math.Min(aCount, a.Length);
+        bCount = Math.Min(bCount, b.Length);
+
         int i = 0, j = 0, k = 0;
 
         if (Vector128.IsHardwareAccelerated)
@@ -453,8 +545,22 @@ internal sealed class ArrayContainer : IContainer
     /// the scalar two-pointer walk (one element per step).
     /// <paramref name="result"/> must have capacity ≥ aCount + bCount.
     /// </summary>
+    /// <param name="a">The first sorted operand.</param>
+    /// <param name="aCount">The number of valid leading entries of <paramref name="a"/>; bounded to <c>a.Length</c> inside.</param>
+    /// <param name="b">The second sorted operand.</param>
+    /// <param name="bCount">The number of valid leading entries of <paramref name="b"/>; bounded to <c>b.Length</c> inside.</param>
+    /// <param name="result">The output buffer; receives the union in ascending order, each value once.</param>
+    /// <returns>The number of values written to <paramref name="result"/>.</returns>
     private static int _SimdMerge(ushort[] a, int aCount, ushort[] b, int bCount, ushort[] result)
     {
+        // The operand of a set operation is read without the sequence lock, so its array and its count can come from different
+        // moments (the writer grows the array before it raises the count). The result of such a torn read is wrong by contract,
+        // but the unchecked 8-lane loads and stores below must still stay inside the arrays held here: bound both counts. The
+        // clamped counts are never larger than the counts the result was sized from, so the store bound
+        // (k + 8 <= aCount + bCount <= result.Length) holds.
+        aCount = Math.Min(aCount, a.Length);
+        bCount = Math.Min(bCount, b.Length);
+
         int i = 0, j = 0, k = 0;
 
         if (Vector128.IsHardwareAccelerated)
@@ -470,7 +576,7 @@ internal sealed class ArrayContainer : IContainer
                 if (lastA < firstB)
                 {
                     // A chunk is entirely below B: no overlap → SIMD bulk-copy A chunk. The unchecked 8-lane store stays
-                    // inside result because these 8 values are all part of the output (capacity is aCount + bCount).
+                    // inside result because these 8 values are all part of the output (capacity is aCount + bCount, both clamped at the top).
                     Vector128.LoadUnsafe(ref a[i]).StoreUnsafe(ref result[k]);
                     i += vecSize;
                     k += vecSize;
@@ -479,7 +585,8 @@ internal sealed class ArrayContainer : IContainer
 
                 if (lastB < firstA)
                 {
-                    // B chunk is entirely below A: no overlap → SIMD bulk-copy B chunk
+                    // B chunk is entirely below A: no overlap → SIMD bulk-copy B chunk. Store bound: k + 8 <= aCount + bCount <= result.Length (counts are
+                    // clamped to the arrays at the top, and the result was sized from the same counts).
                     Vector128.LoadUnsafe(ref b[j]).StoreUnsafe(ref result[k]);
                     j += vecSize;
                     k += vecSize;
@@ -542,8 +649,22 @@ internal sealed class ArrayContainer : IContainer
     /// Overlapping regions are handled by the scalar two-pointer walk.
     /// <paramref name="result"/> must have capacity ≥ aCount.
     /// </summary>
+    /// <param name="a">The minuend: the sorted values to keep unless they appear in <paramref name="b"/>.</param>
+    /// <param name="aCount">The number of valid leading entries of <paramref name="a"/>; bounded to <c>a.Length</c> inside.</param>
+    /// <param name="b">The sorted values to remove.</param>
+    /// <param name="bCount">The number of valid leading entries of <paramref name="b"/>; bounded to <c>b.Length</c> inside.</param>
+    /// <param name="result">The output buffer; receives the values of <paramref name="a"/> that are not in <paramref name="b"/>.</param>
+    /// <returns>The number of values written to <paramref name="result"/>.</returns>
     private static int _SimdDifference(ushort[] a, int aCount, ushort[] b, int bCount, ushort[] result)
     {
+        // The operand of a set operation is read without the sequence lock, so its array and its count can come from different
+        // moments (the writer grows the array before it raises the count). The result of such a torn read is wrong by contract,
+        // but the unchecked 8-lane loads and stores below must still stay inside the arrays held here: bound both counts. The
+        // clamped counts are never larger than the counts the result was sized from, so the store bound
+        // (k + 8 <= aCount + bCount <= result.Length) holds.
+        aCount = Math.Min(aCount, a.Length);
+        bCount = Math.Min(bCount, b.Length);
+
         int i = 0, j = 0, k = 0;
 
         if (Vector128.IsHardwareAccelerated)
@@ -558,7 +679,8 @@ internal sealed class ArrayContainer : IContainer
 
                 if (lastA < firstB)
                 {
-                    // Entire A chunk < min(remaining B): all A elements absent from B → include all
+                    // Entire A chunk < min(remaining B): all A elements absent from B → include all. Store bound: k + 8 <= i + 8 <= aCount <=
+                    // result.Length (the result was sized from the same, clamped count).
                     Vector128.LoadUnsafe(ref a[i]).StoreUnsafe(ref result[k]);
                     i += vecSize;
                     k += vecSize;
@@ -621,8 +743,22 @@ internal sealed class ArrayContainer : IContainer
     /// Overlapping regions are handled by the scalar two-pointer walk.
     /// <paramref name="result"/> must have capacity ≥ aCount + bCount.
     /// </summary>
+    /// <param name="a">The first sorted operand.</param>
+    /// <param name="aCount">The number of valid leading entries of <paramref name="a"/>; bounded to <c>a.Length</c> inside.</param>
+    /// <param name="b">The second sorted operand.</param>
+    /// <param name="bCount">The number of valid leading entries of <paramref name="b"/>; bounded to <c>b.Length</c> inside.</param>
+    /// <param name="result">The output buffer; receives the values present in exactly one operand, in ascending order.</param>
+    /// <returns>The number of values written to <paramref name="result"/>.</returns>
     private static int _SimdSymmetricDifference(ushort[] a, int aCount, ushort[] b, int bCount, ushort[] result)
     {
+        // The operand of a set operation is read without the sequence lock, so its array and its count can come from different
+        // moments (the writer grows the array before it raises the count). The result of such a torn read is wrong by contract,
+        // but the unchecked 8-lane loads and stores below must still stay inside the arrays held here: bound both counts. The
+        // clamped counts are never larger than the counts the result was sized from, so the store bound
+        // (k + 8 <= aCount + bCount <= result.Length) holds.
+        aCount = Math.Min(aCount, a.Length);
+        bCount = Math.Min(bCount, b.Length);
+
         int i = 0, j = 0, k = 0;
 
         if (Vector128.IsHardwareAccelerated)
@@ -637,7 +773,8 @@ internal sealed class ArrayContainer : IContainer
 
                 if (lastA < firstB)
                 {
-                    // A chunk entirely before B: all A elements only in A → include all
+                    // A chunk entirely before B: all A elements only in A → include all. Store bound: k + 8 <= aCount + bCount <= result.Length
+                    // (the clamped counts never exceed the counts the result was sized from).
                     Vector128.LoadUnsafe(ref a[i]).StoreUnsafe(ref result[k]);
                     i += vecSize;
                     k += vecSize;
@@ -646,7 +783,7 @@ internal sealed class ArrayContainer : IContainer
 
                 if (lastB < firstA)
                 {
-                    // B chunk entirely before A: all B elements only in B → include all
+                    // B chunk entirely before A: all B elements only in B → include all. Same store bound as the A chunk above.
                     Vector128.LoadUnsafe(ref b[j]).StoreUnsafe(ref result[k]);
                     j += vecSize;
                     k += vecSize;
@@ -701,6 +838,10 @@ internal sealed class ArrayContainer : IContainer
         return k;
     }
 
+    #endregion
+
+    #region All-pairs match mask
+
     /// <summary>
     /// Computes an all-pairs equality mask for two 8-element ushort vectors.
     /// <c>result[i] = 0xFFFF</c> iff <c>vA[i]</c> equals any element in <c>vB</c>.
@@ -711,6 +852,9 @@ internal sealed class ArrayContainer : IContainer
     /// Rotations are implemented via byte-level shuffles using the precomputed table
     /// <see cref="_RotByteShuffles"/>.
     /// </summary>
+    /// <param name="vA">The window of the first operand.</param>
+    /// <param name="vB">The window of the second operand.</param>
+    /// <returns>A vector whose lane is all ones where the lane of <paramref name="vA"/> occurs in <paramref name="vB"/>, else zero.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector128<ushort> _ComputeMatchMask(Vector128<ushort> vA, Vector128<ushort> vB)
     {
@@ -761,5 +905,6 @@ internal sealed class ArrayContainer : IContainer
         // Rotation 7: [u7,u0,u1,u2,u3,u4,u5,u6]
         14, 15, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
     ];
+
     #endregion
 }

@@ -46,7 +46,7 @@ internal sealed class RandomAccessFrameSourceTests
             expectedFound += expected is null ? 0 : 1;
             if (_IdOf(buffer[3 + i]) != _IdOf(expected))
             {
-                mismatches.Add(FormattableString.Invariant($"entry {i}"));
+                mismatches.Add(Invariant($"entry {i}"));
             }
         }
 

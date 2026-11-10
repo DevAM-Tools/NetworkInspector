@@ -70,7 +70,7 @@ internal static class NegativeCompileHarness
         string fullName = asm.GetManifestResourceNames()
             .FirstOrDefault(n => n.EndsWith(snippetResourceName, StringComparison.Ordinal))
             ?? throw new InvalidOperationException(
-                $"Embedded snippet '{snippetResourceName}' not found in {asm.FullName}.");
+                Invariant($"Embedded snippet '{snippetResourceName}' not found in {asm.FullName}."));
         using Stream s = asm.GetManifestResourceStream(fullName)!;
         using StreamReader reader = new(s);
         return reader.ReadToEnd();

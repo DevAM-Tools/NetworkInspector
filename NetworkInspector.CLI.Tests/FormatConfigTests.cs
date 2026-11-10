@@ -100,12 +100,14 @@ internal sealed class FormatConfigTests
     {
         using BuiltInRegistry registry = new();
         using FrameBuilderStack stack = new();
-        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N") + ".json");
+        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".json");
         PacketFormatConfig weird = PacketFormatConfig.Parse("json:style=weird", registry.Registry);
         PacketFormatConfig unknown = PacketFormatConfig.Parse("json:colour=red", registry.Registry);
 
-        bool weirdCreated = weird.TryCreate(path, stack.Stack, CancellationToken.None, out _, out PluginError? weirdError);
-        bool unknownCreated = unknown.TryCreate(path, stack.Stack, CancellationToken.None, out _, out PluginError? unknownError);
+        bool weirdCreated = weird.TryCreate(path, stack.Stack, stack.Stack.Settings.GetLimit, static _ => { },
+            out _, out PluginError? weirdError, CancellationToken.None);
+        bool unknownCreated = unknown.TryCreate(path, stack.Stack, stack.Stack.Settings.GetLimit, static _ => { },
+            out _, out PluginError? unknownError, CancellationToken.None);
 
         await Assert.That(weirdCreated).IsFalse();
         await Assert.That(weirdError?.Message).StartsWith("style: allowed: compact, pretty, array");
@@ -124,12 +126,14 @@ internal sealed class FormatConfigTests
     {
         using BuiltInRegistry registry = new();
         using FrameBuilderStack stack = new();
-        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N") + ".duckdb");
+        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".duckdb");
         PacketFormatConfig bad = PacketFormatConfig.Parse("duckdb:storageVersion=v9", registry.Registry);
         PacketFormatConfig good = PacketFormatConfig.Parse("duckdb:storageVersion=v1.2.0", registry.Registry);
 
-        bool badCreated = bad.TryCreate(path, stack.Stack, CancellationToken.None, out _, out PluginError? badError);
-        bool goodCreated = good.TryCreate(path, stack.Stack, CancellationToken.None, out IPacketListener? listener, out PluginError? goodError);
+        bool badCreated = bad.TryCreate(path, stack.Stack, stack.Stack.Settings.GetLimit, static _ => { },
+            out _, out PluginError? badError, CancellationToken.None);
+        bool goodCreated = good.TryCreate(path, stack.Stack, stack.Stack.Settings.GetLimit, static _ => { },
+            out IPacketListener? listener, out PluginError? goodError, CancellationToken.None);
         (listener as IDisposable)?.Dispose();
 
         await Assert.That(badCreated).IsFalse();
@@ -150,12 +154,14 @@ internal sealed class FormatConfigTests
     {
         using BuiltInRegistry registry = new();
         using FrameBuilderStack stack = new();
-        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         PacketFormatConfig bad = PacketFormatConfig.Parse(spec, registry.Registry);
         PacketFormatConfig good = PacketFormatConfig.Parse("parquet:compression=snappy,compressionLevel=fastest", registry.Registry);
 
-        bool badCreated = bad.TryCreate(path, stack.Stack, CancellationToken.None, out _, out PluginError? badError);
-        bool goodCreated = good.TryCreate(path, stack.Stack, CancellationToken.None, out IPacketListener? listener, out PluginError? goodError);
+        bool badCreated = bad.TryCreate(path, stack.Stack, stack.Stack.Settings.GetLimit, static _ => { },
+            out _, out PluginError? badError, CancellationToken.None);
+        bool goodCreated = good.TryCreate(path, stack.Stack, stack.Stack.Settings.GetLimit, static _ => { },
+            out IPacketListener? listener, out PluginError? goodError, CancellationToken.None);
         (listener as IDisposable)?.Dispose();
 
         await Assert.That(badCreated).IsFalse();
@@ -206,9 +212,10 @@ internal sealed class FormatConfigTests
         using BuiltInRegistry registry = new();
         using FrameBuilderStack stack = new();
         FrameFormatConfig config = FrameFormatConfig.Parse("blf:compression=ultra", registry.Registry);
-        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N") + ".blf");
+        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".blf");
 
-        bool created = config.TryCreate(path, stack.Stack, CancellationToken.None, out _, out PluginError? error);
+        bool created = config.TryCreate(path, stack.Stack, stack.Stack.Settings.GetLimit, static _ => { },
+            out _, out PluginError? error, CancellationToken.None);
 
         await Assert.That(created).IsFalse();
         await Assert.That(error?.Message).IsEqualTo("compression: allowed: none, fast, default, best");
@@ -228,9 +235,10 @@ internal sealed class FormatConfigTests
         using BuiltInRegistry registry = new();
         using FrameBuilderStack stack = new();
         FrameFormatConfig config = FrameFormatConfig.Parse(spec, registry.Registry);
-        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N") + extension);
+        string path = Path.Combine(Path.GetTempPath(), "ni-format-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + extension);
 
-        bool created = config.TryCreate(path, stack.Stack, CancellationToken.None, out _, out PluginError? error);
+        bool created = config.TryCreate(path, stack.Stack, stack.Stack.Settings.GetLimit, static _ => { },
+            out _, out PluginError? error, CancellationToken.None);
 
         await Assert.That(created).IsFalse();
         await Assert.That(error?.Message).StartsWith("Unknown option 'buffers'; options: ");

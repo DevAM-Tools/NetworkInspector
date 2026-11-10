@@ -15,71 +15,132 @@ namespace NetworkInspector.Core;
 /// </summary>
 public sealed class StackBuilder : IStackBuilder
 {
-    #region Fields
+    #region Configuration and state
 
-    // Registration storage
+    /// <summary>Registered protocol infos; the list index is the <see cref="ProtocolId"/>.</summary>
     private readonly List<ProtocolInfo> _Protocols = [];
+
+    /// <summary>Registered protocol instances; same index as <see cref="_Protocols"/>.</summary>
     private readonly List<IProtocol> _ProtocolInstances = [];
+
+    /// <summary>Protocol name to id. Ordinal; frozen into the built stack.</summary>
     private readonly Dictionary<string, ProtocolId> _ProtocolNameMap = new(StringComparer.Ordinal);
 
+    /// <summary>Registered field infos; the list index is the <see cref="FieldId"/>.</summary>
     private readonly List<FieldInfo> _Fields = [];
+
+    /// <summary>Field name to id. Ordinal; frozen into the built stack.</summary>
     private readonly Dictionary<string, FieldId> _FieldNameMap = new(StringComparer.Ordinal);
 
-    // Field alias groups (own lookup map; the name still shares the conflict namespace of protocols and fields, see RegisterProtocol)
+    /// <summary>Registered field alias groups; the list index is the <see cref="FieldAliasGroupId"/>.</summary>
     private readonly List<FieldAliasGroupInfo> _FieldAliasGroups = [];
+
+    /// <summary>
+    /// Field alias group name to id. The map is the group's own, but the name still shares the conflict namespace of protocols
+    /// and fields (see <see cref="RegisterProtocol(IProtocol)"/>).
+    /// </summary>
     private readonly Dictionary<string, FieldAliasGroupId> _FieldAliasGroupNameMap = new(StringComparer.Ordinal);
 
-    // Snapshot caches for the build-phase property getters (Protocols, Fields, FieldAliasGroups, PostParsers, ...). IStack
-    // exposes these collections as ReadOnlyMemory<T>, which cannot wrap a List<T>, so a getter copies the list into an array.
-    // The copy is cached and dropped (set to null) by every registration that changes the list, so protocols that read a
-    // collection repeatedly while registering do not pay an O(n) copy per read, and a returned memory stays a stable view
-    // of the registrations made up to that moment (later registrations create a new array instead of altering it).
-    // Single-threaded like the rest of the builder; no synchronization.
+    /// <summary>
+    /// Snapshot cache of <see cref="FieldAliasGroups"/>. All <c>_*Snapshot</c> fields serve the build-phase property getters
+    /// (<see cref="Protocols"/>, <see cref="Fields"/>, <see cref="FieldAliasGroups"/>, <see cref="PostParsers"/>, ...).
+    /// <see cref="IStack"/> exposes these collections as <see cref="ReadOnlyMemory{T}"/>, which cannot wrap a
+    /// <see cref="List{T}"/>, so a getter copies the list into an array. The copy is cached and dropped (set to null) by
+    /// every registration that changes the list, so protocols that read a collection repeatedly while registering do not pay
+    /// an O(n) copy per read, and a returned memory stays a stable view of the registrations made up to that moment (later
+    /// registrations create a new array instead of altering it). Single-threaded like the rest of the builder; no
+    /// synchronization.
+    /// </summary>
     private FieldAliasGroupInfo[]? _FieldAliasGroupsSnapshot;
+
+    /// <summary>Snapshot cache of <see cref="Protocols"/>; see <see cref="_FieldAliasGroupsSnapshot"/>.</summary>
     private ProtocolInfo[]? _ProtocolsSnapshot;
+
+    /// <summary>Snapshot cache of <see cref="Fields"/>; see <see cref="_FieldAliasGroupsSnapshot"/>.</summary>
     private FieldInfo[]? _FieldsSnapshot;
+
+    /// <summary>Snapshot cache of <see cref="PostParsers"/>; see <see cref="_FieldAliasGroupsSnapshot"/>.</summary>
     private PostParserInfo[]? _PostParsersSnapshot;
+
+    /// <summary>Snapshot cache of <see cref="ProtocolTableInfos"/>; see <see cref="_FieldAliasGroupsSnapshot"/>.</summary>
     private ProtocolTableInfo[]? _ProtocolTableInfosSnapshot;
+
+    /// <summary>Snapshot cache of <see cref="HeuristicProtocolTableInfos"/>; see <see cref="_FieldAliasGroupsSnapshot"/>.</summary>
     private HeuristicProtocolTableInfo[]? _HeuristicTableInfosSnapshot;
+
+    /// <summary>Snapshot cache of <see cref="IndexGroups"/>; see <see cref="_FieldAliasGroupsSnapshot"/>.</summary>
     private IndexGroupInfo[]? _IndexGroupsSnapshot;
 
+    /// <summary>Registered dispatch tables; same index as <see cref="_ProtocolTableInfos"/>. The built stack shares these objects.</summary>
     private readonly List<ProtocolTable> _ProtocolTables = [];
+
+    /// <summary>Registered protocol table infos; the list index is the <see cref="ProtocolTableId"/>.</summary>
     private readonly List<ProtocolTableInfo> _ProtocolTableInfos = [];
+
+    /// <summary>Protocol table name to id. Ordinal; frozen into the built stack.</summary>
     private readonly Dictionary<string, ProtocolTableId> _ProtocolTableNameMap = new(StringComparer.Ordinal);
 
+    /// <summary>Registered heuristic tables; same index as <see cref="_HeuristicTableInfos"/>. The built stack shares these objects.</summary>
     private readonly List<HeuristicProtocolTable> _HeuristicTables = [];
+
+    /// <summary>Registered heuristic table infos; the list index is the <see cref="HeuristicProtocolTableId"/>.</summary>
     private readonly List<HeuristicProtocolTableInfo> _HeuristicTableInfos = [];
+
+    /// <summary>Heuristic table name to id. Ordinal; frozen into the built stack.</summary>
     private readonly Dictionary<string, HeuristicProtocolTableId> _HeuristicTableNameMap = new(StringComparer.Ordinal);
 
+    /// <summary>Registered post-parsers, kept sorted by priority and then by id.</summary>
     private readonly List<PostParserInfo> _PostParsers = [];
+
+    /// <summary>The settings manager protocols register their settings with; handed on to the built stack.</summary>
     private readonly SettingsManager _SettingsManager;
 
-    // Set by Build; a second Build is refused. Single-threaded like the rest of the builder.
+    /// <summary>
+    /// Set by <see cref="Build"/>; a second Build and every registration after it are refused (<see cref="_ThrowIfBuilt"/>).
+    /// Single-threaded like the rest of the builder.
+    /// </summary>
     private bool _Built;
 
-    // Stream reassembly configs (keyed by protocol ID)
+    /// <summary>The live holders of the limits of Core, created from the settings the builder registered them in.</summary>
+    private readonly CoreLimitSet _Limits;
+
+    /// <summary>Stream reassembly configs keyed by protocol id.</summary>
     private readonly Dictionary<ProtocolId, StreamReassemblyConfig> _ReassemblyConfigs = [];
 
-    // Index groups. Unlike the other entities there is no list: an index group is just a name with a dense ID, so the next ID
-    // is a counter and the ID-to-name direction is a linear scan of the map (build phase only).
+    /// <summary>
+    /// Index group name to id. Unlike the other entities there is no list: an index group is just a name with a dense id, so
+    /// the next id is a counter (<see cref="_NextIndexGroupId"/>) and the id-to-name direction is a linear scan of the map
+    /// (build phase only).
+    /// </summary>
     private readonly Dictionary<string, IndexGroupId> _IndexGroupMap = new(StringComparer.Ordinal);
+
+    /// <summary>The id the next new index group receives; equals the number of groups.</summary>
     private int _NextIndexGroupId;
 
-    // Frame interface registry (shared with Stack after Build)
-    /// <inheritdoc/>
-    public FrameInterfaceRegistry FrameInterfaceRegistry { get; }
-
-    // Deferred callbacks (WhenXRegistered): callbacks waiting for a name that is not registered yet, in subscription order.
-    // An entry is removed when its name is registered and its callbacks have run, so what is left at Build time is exactly
-    // the set of callbacks that never fired (reported as warnings).
+    /// <summary>
+    /// Callbacks waiting for a protocol name that is not registered yet, in subscription order. An entry is removed when its
+    /// name is registered and its callbacks have run, so what is left at <see cref="Build"/> time is exactly the set of
+    /// callbacks that never fired (reported as warnings). <see cref="_DeferredField"/> and <see cref="_DeferredTable"/> do the
+    /// same for fields and protocol tables.
+    /// </summary>
     private readonly Dictionary<string, List<Action<ProtocolId>>> _DeferredProtocol = new(StringComparer.Ordinal);
+
+    /// <summary>Callbacks waiting for a field name; see <see cref="_DeferredProtocol"/>.</summary>
     private readonly Dictionary<string, List<Action<FieldId>>> _DeferredField = new(StringComparer.Ordinal);
+
+    /// <summary>Callbacks waiting for a protocol table name; see <see cref="_DeferredProtocol"/>.</summary>
     private readonly Dictionary<string, List<Action<ProtocolTableId>>> _DeferredTable = new(StringComparer.Ordinal);
 
-    // Built-in field IDs
+    /// <summary>The id of the root field, owned by the built-in root protocol; set by the constructor.</summary>
     private readonly FieldId _RootFieldId = FieldId.Invalid;
+
+    /// <summary>The id of the <c>packet.error</c> field, owned by the packet protocol; set by the constructor.</summary>
     private readonly FieldId _PacketErrorFieldId = FieldId.Invalid;
+
+    /// <summary>The id of the <c>packet.choice</c> field, owned by the packet protocol; set by the constructor.</summary>
     private readonly FieldId _PacketChoiceFieldId = FieldId.Invalid;
+
+    /// <summary>The id of the built-in packet protocol, the top-level parse entry point; set by the constructor.</summary>
     private readonly ProtocolId _PacketProtocolId = ProtocolId.Invalid;
 
     /// <summary>
@@ -90,10 +151,6 @@ public sealed class StackBuilder : IStackBuilder
     /// </summary>
     private const string _FrameProtocolName = "frame";
 
-    #endregion
-
-    #region Constructors
-
     /// <inheritdoc/>
     /// <remarks>
     /// Use object initializer syntax (<c>new StackBuilder(sm, reg) { IncludeExceptionStackTrace = true }</c>)
@@ -103,13 +160,19 @@ public sealed class StackBuilder : IStackBuilder
     /// </remarks>
     public bool IncludeExceptionStackTrace { get; init; }
 
+    /// <inheritdoc/>
+    /// <remarks>The registry is shared with the built <see cref="Stack"/>.</remarks>
+    public FrameInterfaceRegistry FrameInterfaceRegistry { get; }
+
     /// <summary>Creates a new stack builder with externally provided dependencies and registers built-in root and error fields.</summary>
     /// <param name="settingsManager">
     /// The settings manager instance for managing protocol settings. It is handed on to the built
     /// <see cref="Stack"/>, whose <see cref="Stack.Dispose"/> releases it.
     /// </param>
     /// <param name="frameInterfaceRegistry">The frame interface registry for managing capture interfaces (shared with the built stack).</param>
-    /// <exception cref="ArgumentNullException"><paramref name="settingsManager"/> or <paramref name="frameInterfaceRegistry"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="settingsManager"/> or <paramref name="frameInterfaceRegistry"/> is <see langword="null"/>.
+    /// </exception>
     public StackBuilder(SettingsManager settingsManager, FrameInterfaceRegistry frameInterfaceRegistry)
     {
         // Both are dereferenced later (the registration of the built-in protocols, the settings of every protocol, Build); a
@@ -142,6 +205,26 @@ public sealed class StackBuilder : IStackBuilder
         _PacketChoiceFieldId = RegisterField(
             _PacketProtocolId, "packet.choice", "Choice", FieldType.String,
             "Groups alternative parse results from ambiguous protocol dispatch");
+
+        // The limits of Core are settings, registered before any protocol registers its own: a user changes them with the
+        // settings file, `ni settings set`, or `--set`, and the live holders below follow the values. Limits that are read when
+        // an owner is built (the reassembly limits: the stack starts the reassemblers and a connection resolves its
+        // configuration) are SessionReset; the others are read at every decision and are Immediate. A stored value that is not
+        // valid is reported by the settings manager as a load problem; the limit then keeps its default.
+        SettingsRegistrar registrar = SettingsRegistrar;
+        foreach (LimitDefinition definition in CoreLimits.All)
+        {
+            SettingActivation activation = definition.Group == "reassembly"
+                ? SettingActivation.SessionReset
+                : SettingActivation.Immediate;
+            _ = registrar.RegisterLimit(definition, activation);
+        }
+
+        _Limits = CoreLimitSet.FromSettings(_SettingsManager.ReadOnly);
+
+        // The registry may be shared by several stacks (one registry per host): the stack that is built last decides the limit
+        // of the registry, which is the limit its own settings hold.
+        FrameInterfaceRegistry.BindInterfaceLimit(_Limits.MaxInterfaces);
     }
 
     #endregion
@@ -420,7 +503,7 @@ public sealed class StackBuilder : IStackBuilder
 
     #endregion
 
-    #region Settings Access
+    #region Settings and Diagnostics Access
 
     /// <inheritdoc/>
     public ReadOnlySettingsManagerView Settings => _SettingsManager.ReadOnly;
@@ -431,13 +514,16 @@ public sealed class StackBuilder : IStackBuilder
 
     #endregion
 
-    #region Validation Helpers
+    #region Guards and Validation
 
     /// <summary>
     /// Whether <paramref name="idValue"/> is a valid index into a collection of <paramref name="count"/> entries. The
     /// unsigned comparison covers both bounds in one branch: a negative value (such as the <c>Invalid</c> sentinel, -1)
     /// becomes a huge unsigned number and fails the same test as a value past the end.
     /// </summary>
+    /// <param name="idValue">The id number to test.</param>
+    /// <param name="count">The number of entries of the indexed collection.</param>
+    /// <returns><see langword="true"/> when <c>0 &lt;= idValue &lt; count</c>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _IsValidIndex(int idValue, int count) => (uint)idValue < (uint)count;
 
@@ -446,11 +532,42 @@ public sealed class StackBuilder : IStackBuilder
     /// of an entity list, so the number of entries is bounded by the largest array the runtime can allocate; the guard turns
     /// that overflow into a clear error before an ID is issued. Constant by nature (a runtime fact, not a host setting).
     /// </summary>
+    /// <param name="nextIndex">The index the next entry would receive; the current number of entries.</param>
+    /// <param name="entityName">The kind of entity, named in the error message (for example "protocol").</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void _GuardIndexAllocation(int nextIndex, string entityName) =>
         ArrayIndexIdRange.ThrowIfInvalidNextIndex(nextIndex, entityName);
 
+    /// <summary>
+    /// Refuses a registration after <see cref="Build"/>. The built stack shares the dispatch tables with this builder and copied
+    /// every other list, so a late registration would either mutate a table that parse threads read (a data race) or be ignored.
+    /// The guard catches sequential misuse; the builder stays single-threaded by contract (see the type doc).
+    /// </summary>
+    /// <exception cref="InvalidOperationException"><see cref="Build"/> was already called.</exception>
+    private void _ThrowIfBuilt()
+    {
+        if (_Built)
+        {
+            throw new InvalidOperationException(
+                "The StackBuilder was already built; a registration now would change or miss the live Stack. Register before Build, or create a new builder.");
+        }
+    }
+
+    /// <summary>Refuses a protocol id that this builder did not issue.</summary>
+    /// <param name="protocolId">The id a registration refers to.</param>
+    /// <param name="what">The registration, as the start of the message (for example "Post-parser").</param>
+    /// <exception cref="NotFoundRegistrationException">The id is invalid or not registered with this builder.</exception>
+    private void _ThrowIfUnknownProtocol(ProtocolId protocolId, string what)
+    {
+        if (!_IsValidIndex(protocolId.Value, _Protocols.Count))
+        {
+            throw NotFoundRegistrationException.For(Invariant($"{what} references unknown protocol ID {protocolId.Value}"));
+        }
+    }
+
     /// <summary>Throws <see cref="InvalidNameRegistrationException"/> when the name is not a valid dot-separated C-style identifier.</summary>
+    /// <param name="name">The protocol, field, group, or table name to check.</param>
+    /// <exception cref="InvalidNameRegistrationException"><paramref name="name"/> is not a valid name.</exception>
     private static void _ValidateName(string name)
     {
         if (!NameValidation.IsValidName(name))
@@ -460,55 +577,13 @@ public sealed class StackBuilder : IStackBuilder
     }
 
     /// <summary>Throws <see cref="InvalidUiNameRegistrationException"/> when the UI name is empty or contains control characters.</summary>
+    /// <param name="uiName">The display name to check.</param>
+    /// <exception cref="InvalidUiNameRegistrationException"><paramref name="uiName"/> is empty or has control characters.</exception>
     private static void _ValidateUiName(string uiName)
     {
         if (!NameValidation.IsValidUiName(uiName))
         {
             throw InvalidUiNameRegistrationException.For(uiName);
-        }
-    }
-
-    /// <summary>
-    /// Invokes deferred registration callbacks for <paramref name="name"/>, collecting every
-    /// exception so all subscribers run before surfacing an <see cref="AggregateException"/>.
-    /// The entity is already registered when this runs; an exception reports failing subscribers but does not undo the
-    /// registration.
-    /// </summary>
-    private static void _InvokeDeferredCallbacks<T>(
-        Dictionary<string, List<Action<T>>> deferred,
-        string name,
-        T id,
-        string callbackKind)
-    {
-        // Removing the entry first means each callback list fires at most once, and that a callback which subscribes to the
-        // same name again (the name is now registered) is answered immediately by WhenXRegistered instead of being
-        // appended to the list that is being iterated.
-        if (!deferred.Remove(name, out List<Action<T>>? callbacks))
-        {
-            return;
-        }
-
-        // One failing subscriber (typically a plugin) must not stop the others from learning the ID, so exceptions are
-        // collected and thrown together after all callbacks ran. The list is allocated only when something failed.
-        List<Exception>? errors = null;
-        foreach (Action<T> cb in callbacks)
-        {
-            try
-            {
-                cb(id);
-            }
-            catch (Exception ex)
-            {
-                errors ??= [];
-                errors.Add(ex);
-            }
-        }
-
-        if (errors is not null)
-        {
-            throw new AggregateException(
-                $"One or more When{callbackKind}Registered callbacks failed for '{name}'.",
-                errors);
         }
     }
 
@@ -519,6 +594,9 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public ProtocolId RegisterProtocol(IProtocol protocol)
     {
+        _ThrowIfBuilt();
+        ArgumentNullException.ThrowIfNull(protocol);
+
         // Validate everything before touching any list, so a rejected registration leaves the builder unchanged. The ID is
         // the dense list index, which is what lets the built Stack resolve it by array indexing.
         string name = protocol.Name;
@@ -567,8 +645,12 @@ public sealed class StackBuilder : IStackBuilder
         Action<IStackBuilder, ProtocolId, TProtocol> callback)
         where TProtocol : IProtocol
     {
-        // The typed overload hands the concrete protocol instance back to the callback, so the caller needs no cast and
-        // (with a static lambda) no closure to register the protocol's fields and tables right after its ID exists.
+        // Both arguments are checked before the registration: a null callback found afterwards would leave the protocol
+        // registered although the call failed. The typed overload hands the concrete protocol instance back to the callback,
+        // so the caller needs no cast and (with a static lambda) no closure to register the protocol's fields and tables
+        // right after its ID exists.
+        ArgumentNullException.ThrowIfNull(protocol);
+        ArgumentNullException.ThrowIfNull(callback);
         ProtocolId id = RegisterProtocol(protocol);
         callback(this, id, protocol);
         return id;
@@ -580,13 +662,38 @@ public sealed class StackBuilder : IStackBuilder
 
     /// <inheritdoc/>
     public FieldId RegisterField(
-        ProtocolId protocolId, string name, string uiName, FieldType fieldType, string? description = null)
+        ProtocolId protocolId, string name, string uiName, FieldType fieldType, string? description = null) =>
+        _RegisterFieldCore(protocolId, name, uiName, fieldType, description, indexGroup: null);
+
+    /// <summary>
+    /// Registers a field, with its index group when <paramref name="indexGroup"/> is given. Validates everything first, commits
+    /// the field together with its group, and only then runs the subscribers, so no subscriber sees a field without its group.
+    /// </summary>
+    /// <param name="protocolId">The owning protocol, or <see cref="ProtocolId.Invalid"/> for "no owner".</param>
+    /// <param name="name">The unique dotted field name.</param>
+    /// <param name="uiName">The display name.</param>
+    /// <param name="fieldType">The value type of the field.</param>
+    /// <param name="description">Optional description text.</param>
+    /// <param name="indexGroup">The index group name, or <see langword="null"/> for a field without a group.</param>
+    /// <returns>The id of the new field.</returns>
+    /// <exception cref="InvalidOperationException"><see cref="Build"/> was already called.</exception>
+    /// <exception cref="NotFoundRegistrationException">The owning protocol is not registered.</exception>
+    /// <exception cref="DuplicateNameRegistrationException">The name is already taken in the shared namespace.</exception>
+    private FieldId _RegisterFieldCore(
+        ProtocolId protocolId, string name, string uiName, FieldType fieldType, string? description, string? indexGroup)
     {
+        _ThrowIfBuilt();
+
         // Field names share one namespace across all protocols (by convention prefixed with the protocol name, for example
         // "packet.error"), and the field ID is the dense list index. Validation comes first so a rejected registration
-        // changes nothing.
+        // changes nothing. The group name is validated here too, so a bad group name cannot leave behind a registered field
+        // that has no group.
         _ValidateName(name);
         _ValidateUiName(uiName);
+        if (indexGroup is not null)
+        {
+            _ValidateName(indexGroup);
+        }
 
         // The owning protocol must exist, or be the documented "no owner" sentinel ProtocolId.Invalid (IStackBuilder). Any other
         // unknown ID (for example one that came from another builder) would be stored as it is and later break everything
@@ -594,7 +701,7 @@ public sealed class StackBuilder : IStackBuilder
         if (protocolId != ProtocolId.Invalid && !_IsValidIndex(protocolId.Value, _Protocols.Count))
         {
             throw NotFoundRegistrationException.For(
-                $"Field '{name}' references unknown protocol ID {protocolId.Value}");
+                Invariant($"Field '{name}' references unknown protocol ID {protocolId.Value}"));
         }
 
         if (_FieldNameMap.ContainsKey(name))
@@ -615,14 +722,22 @@ public sealed class StackBuilder : IStackBuilder
             throw DuplicateNameRegistrationException.For(name, RegistrationHolderKind.Protocol);
         }
 
-        // The index group is still null here; RegisterFieldInGroup assigns it afterwards on the stored FieldInfo.
+        // Commit. The group is resolved (or created) before the FieldInfo exists, so the stored info is complete from the start
+        // and no subscriber below can observe a field without its group.
         _GuardIndexAllocation(_Fields.Count, "field");
+        IndexGroupId? groupId = null;
+        if (indexGroup is not null)
+        {
+            groupId = GetOrCreateIndexGroup(indexGroup);
+        }
+
         FieldId id = new(_Fields.Count);
-        FieldInfo info = new(id, protocolId, name, uiName, fieldType, description, null);
+        FieldInfo info = new(id, protocolId, name, uiName, fieldType, description, groupId);
         _Fields.Add(info);
         _FieldNameMap[name] = id;
         _FieldsSnapshot = null;
 
+        // Subscribers run after the state is committed; an AggregateException from a subscriber leaves the field registered.
         _InvokeDeferredCallbacks(_DeferredField, name, id, "Field");
 
         return id;
@@ -636,6 +751,7 @@ public sealed class StackBuilder : IStackBuilder
     public FieldAliasGroupId RegisterFieldAliasGroup(
         ProtocolId protocolId, string name, string? description, FieldId[] fieldIds)
     {
+        _ThrowIfBuilt();
         // An alias shares the conflict namespace of protocols and fields (see RegisterProtocol); protocol tables keep their own.
         _ValidateName(name);
         if (_FieldAliasGroupNameMap.ContainsKey(name))
@@ -657,7 +773,7 @@ public sealed class StackBuilder : IStackBuilder
         if (fieldIds.Length == 0)
         {
             throw new ArgumentException(
-                $"Field alias group '{name}' requires at least one member field ID.",
+                Invariant($"Field alias group '{name}' requires at least one member field ID."),
                 nameof(fieldIds));
         }
 
@@ -673,14 +789,17 @@ public sealed class StackBuilder : IStackBuilder
             if (!_IsValidIndex(memberId.Value, _Fields.Count))
             {
                 throw NotFoundRegistrationException.For(
-                    $"Field alias group '{name}' references unknown field ID {memberId.Value}");
+                    Invariant($"Field alias group '{name}' references unknown field ID {memberId.Value}"));
             }
 
             // Member field must belong to the protocol that owns this alias group.
             if (_Fields[memberId.Value].ProtocolId != protocolId)
             {
+                FieldInfo member = _Fields[memberId.Value];
                 throw new ArgumentException(
-                    $"Field alias group '{name}' references field '{_Fields[memberId.Value].Name}' (ID {memberId.Value}) which belongs to protocol '{_Fields[memberId.Value].ProtocolId.Value}', not the owning protocol '{protocolId.Value}'.",
+                    string.Concat(
+                        Invariant($"Field alias group '{name}' references field '{member.Name}' (ID {memberId.Value}) "),
+                        Invariant($"which belongs to protocol '{member.ProtocolId.Value}', not the owning protocol '{protocolId.Value}'.")),
                     nameof(fieldIds));
             }
 
@@ -691,7 +810,7 @@ public sealed class StackBuilder : IStackBuilder
                 if (members[j] == memberId)
                 {
                     throw new ArgumentException(
-                        $"Field alias group '{name}' contains duplicate member field ID {memberId.Value}.",
+                        Invariant($"Field alias group '{name}' contains duplicate member field ID {memberId.Value}."),
                         nameof(fieldIds));
                 }
             }
@@ -710,7 +829,7 @@ public sealed class StackBuilder : IStackBuilder
 
     #endregion
 
-    #region RegisterFieldInGroup Implementation
+    #region Field Registration in Index Group
 
     /// <inheritdoc/>
     public FieldId RegisterFieldInGroup(
@@ -721,23 +840,11 @@ public sealed class StackBuilder : IStackBuilder
         string indexGroup,
         string? description = null)
     {
-        // name and uiName are validated inside RegisterField. The group name is validated first, so that a bad group name
-        // cannot leave behind a registered field that has no group.
-        _ValidateName(indexGroup);
-        FieldId id = RegisterField(protocolId, name, uiName, fieldType, description);
-
-        // Resolve or create index group. Groups are created on first use and shared by name. Fields that always appear
-        // together are registered into one group so that they share a single presence bitmap in the cross-packet index.
-        if (!_IndexGroupMap.TryGetValue(indexGroup, out IndexGroupId groupId))
-        {
-            _GuardIndexAllocation(_NextIndexGroupId, "index group");
-            groupId = new IndexGroupId(_NextIndexGroupId++);
-            _IndexGroupMap[indexGroup] = groupId;
-            _IndexGroupsSnapshot = null;
-        }
-        _Fields[id.Value].IndexGroup = groupId;
-
-        return id;
+        // Groups are created on first use and shared by name. Fields that always appear together are registered into one group
+        // so that they share a single presence bitmap in the cross-packet index. The group is resolved inside the core
+        // registration, before the subscribers of the field run.
+        ArgumentNullException.ThrowIfNull(indexGroup);
+        return _RegisterFieldCore(protocolId, name, uiName, fieldType, description, indexGroup);
     }
 
     #endregion
@@ -747,6 +854,7 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public IndexGroupId GetOrCreateIndexGroup(string name)
     {
+        _ThrowIfBuilt();
         _ValidateName(name);
         if (!_IndexGroupMap.TryGetValue(name, out IndexGroupId groupId))
         {
@@ -766,6 +874,7 @@ public sealed class StackBuilder : IStackBuilder
     public ProtocolTableId RegisterProtocolTable(
         string name, string uiName, ProtocolTableKeyType keyType, string? description = null)
     {
+        _ThrowIfBuilt();
         _ValidateName(name);
         _ValidateUiName(uiName);
         if (_ProtocolTableNameMap.ContainsKey(name))
@@ -796,9 +905,11 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInU64Table(ProtocolTableId tableId, ulong key, ProtocolId protocolId)
     {
+        _ThrowIfBuilt();
+        _ThrowIfUnknownProtocol(protocolId, "Parser registration");
         if (!_IsValidIndex(tableId.Value, _ProtocolTables.Count))
         {
-            throw NotFoundRegistrationException.For($"Protocol table ID {tableId.Value} not found");
+            throw NotFoundRegistrationException.For(Invariant($"Protocol table ID {tableId.Value} not found"));
         }
         _ProtocolTables[tableId.Value].RegisterU64(key, protocolId);
     }
@@ -806,9 +917,10 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInU64TableByName(string tableName, ulong key, ProtocolId protocolId)
     {
+        _ThrowIfBuilt();
         if (!_ProtocolTableNameMap.TryGetValue(tableName, out ProtocolTableId id))
         {
-            throw NotFoundRegistrationException.For($"Protocol table '{tableName}' not found");
+            throw NotFoundRegistrationException.For(Invariant($"Protocol table '{tableName}' not found"));
         }
         RegisterParserInU64Table(id, key, protocolId);
     }
@@ -816,9 +928,11 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInStringTable(ProtocolTableId tableId, string key, ProtocolId protocolId)
     {
+        _ThrowIfBuilt();
+        _ThrowIfUnknownProtocol(protocolId, "Parser registration");
         if (!_IsValidIndex(tableId.Value, _ProtocolTables.Count))
         {
-            throw NotFoundRegistrationException.For($"Protocol table ID {tableId.Value} not found");
+            throw NotFoundRegistrationException.For(Invariant($"Protocol table ID {tableId.Value} not found"));
         }
         _ProtocolTables[tableId.Value].RegisterString(key, protocolId);
     }
@@ -826,9 +940,10 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInStringTableByName(string tableName, string key, ProtocolId protocolId)
     {
+        _ThrowIfBuilt();
         if (!_ProtocolTableNameMap.TryGetValue(tableName, out ProtocolTableId id))
         {
-            throw NotFoundRegistrationException.For($"Protocol table '{tableName}' not found");
+            throw NotFoundRegistrationException.For(Invariant($"Protocol table '{tableName}' not found"));
         }
         RegisterParserInStringTable(id, key, protocolId);
     }
@@ -836,9 +951,11 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInBytesTable(ProtocolTableId tableId, BytesKey key, ProtocolId protocolId)
     {
+        _ThrowIfBuilt();
+        _ThrowIfUnknownProtocol(protocolId, "Parser registration");
         if (!_IsValidIndex(tableId.Value, _ProtocolTables.Count))
         {
-            throw NotFoundRegistrationException.For($"Protocol table ID {tableId.Value} not found");
+            throw NotFoundRegistrationException.For(Invariant($"Protocol table ID {tableId.Value} not found"));
         }
         _ProtocolTables[tableId.Value].RegisterBytes(key, protocolId);
     }
@@ -846,9 +963,10 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInBytesTableByName(string tableName, BytesKey key, ProtocolId protocolId)
     {
+        _ThrowIfBuilt();
         if (!_ProtocolTableNameMap.TryGetValue(tableName, out ProtocolTableId id))
         {
-            throw NotFoundRegistrationException.For($"Protocol table '{tableName}' not found");
+            throw NotFoundRegistrationException.For(Invariant($"Protocol table '{tableName}' not found"));
         }
         RegisterParserInBytesTable(id, key, protocolId);
     }
@@ -856,9 +974,11 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInBoolTable(ProtocolTableId tableId, bool key, ProtocolId protocolId)
     {
+        _ThrowIfBuilt();
+        _ThrowIfUnknownProtocol(protocolId, "Parser registration");
         if (!_IsValidIndex(tableId.Value, _ProtocolTables.Count))
         {
-            throw NotFoundRegistrationException.For($"Protocol table ID {tableId.Value} not found");
+            throw NotFoundRegistrationException.For(Invariant($"Protocol table ID {tableId.Value} not found"));
         }
         _ProtocolTables[tableId.Value].RegisterBool(key, protocolId);
     }
@@ -866,9 +986,10 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInBoolTableByName(string tableName, bool key, ProtocolId protocolId)
     {
+        _ThrowIfBuilt();
         if (!_ProtocolTableNameMap.TryGetValue(tableName, out ProtocolTableId id))
         {
-            throw NotFoundRegistrationException.For($"Protocol table '{tableName}' not found");
+            throw NotFoundRegistrationException.For(Invariant($"Protocol table '{tableName}' not found"));
         }
         RegisterParserInBoolTable(id, key, protocolId);
     }
@@ -876,9 +997,11 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInAnyTable(ProtocolTableId tableId, ProtocolId protocolId)
     {
+        _ThrowIfBuilt();
+        _ThrowIfUnknownProtocol(protocolId, "Parser registration");
         if (!_IsValidIndex(tableId.Value, _ProtocolTables.Count))
         {
-            throw NotFoundRegistrationException.For($"Protocol table ID {tableId.Value} not found");
+            throw NotFoundRegistrationException.For(Invariant($"Protocol table ID {tableId.Value} not found"));
         }
         _ProtocolTables[tableId.Value].RegisterAny(protocolId);
     }
@@ -886,9 +1009,10 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterParserInAnyTableByName(string tableName, ProtocolId protocolId)
     {
+        _ThrowIfBuilt();
         if (!_ProtocolTableNameMap.TryGetValue(tableName, out ProtocolTableId id))
         {
-            throw NotFoundRegistrationException.For($"Protocol table '{tableName}' not found");
+            throw NotFoundRegistrationException.For(Invariant($"Protocol table '{tableName}' not found"));
         }
         RegisterParserInAnyTable(id, protocolId);
     }
@@ -901,6 +1025,8 @@ public sealed class StackBuilder : IStackBuilder
     public PostParserId RegisterPostParser(
         ProtocolId protocolId, int priority = 0, string? description = null)
     {
+        _ThrowIfBuilt();
+        _ThrowIfUnknownProtocol(protocolId, "Post-parser");
         _GuardIndexAllocation(_PostParsers.Count, "post-parser");
         PostParserId id = new(_PostParsers.Count);
         PostParserInfo info = new(id, priority, protocolId, description);
@@ -913,7 +1039,9 @@ public sealed class StackBuilder : IStackBuilder
         _PostParsers.Sort(static (a, b) =>
         {
             int cmp = a.Priority.CompareTo(b.Priority);
-            return cmp != 0 ? cmp : a.Id.Value.CompareTo(b.Id.Value);
+            return cmp != 0
+                ? cmp
+                : a.Id.Value.CompareTo(b.Id.Value);
         });
         _PostParsersSnapshot = null;
         return id;
@@ -927,8 +1055,16 @@ public sealed class StackBuilder : IStackBuilder
     public HeuristicProtocolTableId RegisterHeuristicProtocolTable(
         ProtocolId owningProtocolId, string name, string uiName, string? description = null)
     {
+        _ThrowIfBuilt();
         _ValidateName(name);
         _ValidateUiName(uiName);
+
+        // Same rule as RegisterField: ProtocolId.Invalid is the documented "no owner"; any other unknown id is refused.
+        if (owningProtocolId != ProtocolId.Invalid)
+        {
+            _ThrowIfUnknownProtocol(owningProtocolId, Invariant($"Heuristic table '{name}'"));
+        }
+
         if (_HeuristicTableNameMap.ContainsKey(name))
         {
             throw DuplicateNameRegistrationException.For(name);
@@ -949,9 +1085,10 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void RegisterHeuristicParser(HeuristicProtocolTableId tableId, IHeuristicParser parser)
     {
+        _ThrowIfBuilt();
         if (!_IsValidIndex(tableId.Value, _HeuristicTables.Count))
         {
-            throw NotFoundRegistrationException.For($"Heuristic table ID {tableId.Value} not found");
+            throw NotFoundRegistrationException.For(Invariant($"Heuristic table ID {tableId.Value} not found"));
         }
         _HeuristicTables[tableId.Value].AddEntry(new HeuristicParserEntry(parser));
     }
@@ -981,7 +1118,9 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void WhenProtocolRegistered(string name, Action<ProtocolId> callback)
     {
+        _ThrowIfBuilt();
         _ValidateName(name);
+        ArgumentNullException.ThrowIfNull(callback);
         if (_ProtocolNameMap.TryGetValue(name, out ProtocolId id))
         {
             callback(id);
@@ -998,7 +1137,9 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void WhenFieldRegistered(string name, Action<FieldId> callback)
     {
+        _ThrowIfBuilt();
         _ValidateName(name);
+        ArgumentNullException.ThrowIfNull(callback);
         if (_FieldNameMap.TryGetValue(name, out FieldId id))
         {
             callback(id);
@@ -1015,7 +1156,9 @@ public sealed class StackBuilder : IStackBuilder
     /// <inheritdoc/>
     public void WhenProtocolTableRegistered(string name, Action<ProtocolTableId> callback)
     {
+        _ThrowIfBuilt();
         _ValidateName(name);
+        ArgumentNullException.ThrowIfNull(callback);
         if (_ProtocolTableNameMap.TryGetValue(name, out ProtocolTableId id))
         {
             callback(id);
@@ -1029,25 +1172,88 @@ public sealed class StackBuilder : IStackBuilder
         list.Add(callback);
     }
 
+    /// <summary>
+    /// Invokes deferred registration callbacks for <paramref name="name"/>, collecting every
+    /// exception so all subscribers run before surfacing an <see cref="AggregateException"/>.
+    /// The entity is already registered when this runs; an exception reports failing subscribers but does not undo the
+    /// registration.
+    /// </summary>
+    /// <typeparam name="T">The id type the callbacks receive.</typeparam>
+    /// <param name="deferred">The waiting callbacks by name; the entry of <paramref name="name"/> is removed.</param>
+    /// <param name="name">The name that was just registered.</param>
+    /// <param name="id">The id issued for <paramref name="name"/>, passed to every callback.</param>
+    /// <param name="callbackKind">The entity kind for the error message (for example "Protocol").</param>
+    /// <exception cref="AggregateException">One or more callbacks threw; every callback ran first.</exception>
+    private static void _InvokeDeferredCallbacks<T>(
+        Dictionary<string, List<Action<T>>> deferred,
+        string name,
+        T id,
+        string callbackKind)
+    {
+        // Removing the entry first means each callback list fires at most once, and that a callback which subscribes to the
+        // same name again (the name is now registered) is answered immediately by WhenXRegistered instead of being
+        // appended to the list that is being iterated.
+        if (!deferred.Remove(name, out List<Action<T>>? callbacks))
+        {
+            return;
+        }
+
+        // One failing subscriber (typically a plugin) must not stop the others from learning the ID, so exceptions are
+        // collected and thrown together after all callbacks ran. The list is allocated only when something failed.
+        List<Exception>? errors = null;
+        foreach (Action<T> cb in callbacks)
+        {
+            try
+            {
+                cb(id);
+            }
+            catch (Exception ex)
+            {
+                errors ??= [];
+                errors.Add(ex);
+            }
+        }
+
+        if (errors is not null)
+        {
+            throw new AggregateException(
+                Invariant($"One or more When{callbackKind}Registered callbacks failed for '{name}'."),
+                errors);
+        }
+    }
+
     #endregion
 
-    #region Stream Reassembly
+    #region Stream Reassembly Config
 
     /// <inheritdoc/>
     public void RegisterStreamReassemblyConfig(ProtocolId protocolId, StreamReassemblyConfig config)
     {
+        _ThrowIfBuilt();
         ArgumentNullException.ThrowIfNull(config);
+        _ThrowIfUnknownProtocol(protocolId, "Stream reassembly config");
+
+        // A PDU larger than the buffer can never complete: the buffer refuses its bytes first. Refuse the pair here, once.
+        if (config.MaxBufferSize < config.MaxPduSize)
+        {
+            throw new ArgumentException(
+                Invariant($"MaxBufferSize ({config.MaxBufferSize}) must be at least MaxPduSize ({config.MaxPduSize})."), nameof(config));
+        }
 
         if (!_ReassemblyConfigs.TryAdd(protocolId, config))
         {
-            throw DuplicateNameRegistrationException.For(
-                $"Stream reassembly config already registered for protocol ID {protocolId.Value}");
+            // The holder of the duplicate is the protocol; its name is what the exception type reports.
+            throw DuplicateNameRegistrationException.For(_Protocols[protocolId.Value].Name);
         }
     }
 
     /// <inheritdoc/>
     public StreamReassemblyConfig? GetStreamReassemblyConfig(ProtocolId protocolId) =>
         _ReassemblyConfigs.GetValueOrDefault(protocolId);
+
+    #endregion
+
+    #region Dispatch Table Queries
 
     /// <inheritdoc/>
     public ReadOnlySpan<ProtocolId> GetProtocolsFromU64ProtocolTable(ProtocolTableId tableId, ulong key)
@@ -1150,13 +1356,15 @@ public sealed class StackBuilder : IStackBuilder
     }
 
     /// <inheritdoc/>
-    public ProtocolId? TryMatchHeuristic(HeuristicProtocolTableId tableId, ReadOnlyMemory<byte> data)
+    public bool TryMatchHeuristic(HeuristicProtocolTableId tableId, ReadOnlyMemory<byte> data, out ProtocolId protocolId)
     {
         if (_IsValidIndex(tableId.Value, _HeuristicTables.Count))
         {
-            return _HeuristicTables[tableId.Value].TryMatch(data);
+            return _HeuristicTables[tableId.Value].TryMatch(data, out protocolId);
         }
-        return null;
+
+        protocolId = ProtocolId.Invalid;
+        return false;
     }
 
     /// <inheritdoc/>
@@ -1167,6 +1375,10 @@ public sealed class StackBuilder : IStackBuilder
     /// </remarks>
     public ParseDelegate? ResolveParseDelegate(ProtocolId id) => null;
 
+    #endregion
+
+    #region Build
+
     /// <summary>
     /// Freezes the builder into an immutable <see cref="Stack"/>.
     /// Protocol startup exceptions from <see cref="IProtocol.OnStart(Stack)"/> are collected on
@@ -1175,10 +1387,14 @@ public sealed class StackBuilder : IStackBuilder
     /// <para>
     /// Call it once per builder. The returned stack shares the protocol instances, the (mutable) dispatch tables, the
     /// settings manager, and the frame interface registry with this builder, and a second call would run
-    /// <see cref="IProtocol.OnStart(Stack)"/> again on the same protocol instances. The builder must not be used for
-    /// registration after Build. A second call throws <see cref="InvalidOperationException"/> and starts nothing.
+    /// <see cref="IProtocol.OnStart(Stack)"/> again on the same protocol instances. Every registration member throws
+    /// <see cref="InvalidOperationException"/> after Build, because a late registration would mutate a dispatch table that
+    /// parse threads read. A second call throws <see cref="InvalidOperationException"/> and starts nothing.
     /// </para>
     /// </summary>
+    /// <returns>
+    /// The started stack. Startup failures and unresolved deferred callbacks are on <see cref="Stack.BuildDiagnostics"/>.
+    /// </returns>
     /// <exception cref="InvalidOperationException">Build was already called on this builder.</exception>
     public Stack Build()
     {
@@ -1212,8 +1428,8 @@ public sealed class StackBuilder : IStackBuilder
             parseDelegates[i] = protocolInstances[i].Parse;
         }
 
-        // The arrays are fresh copies, but the table objects inside them are the builder's own (mutable) instances: the
-        // builder must not register into them after Build.
+        // The arrays are fresh copies, but the table objects inside them are the builder's own (mutable) instances: every
+        // registration member refuses to run after Build (_ThrowIfBuilt), so nothing writes into them while the stack reads.
         ProtocolTable[] tables = [.. _ProtocolTables];
         ProtocolTableInfo[] tableInfos = [.. _ProtocolTableInfos];
         HeuristicProtocolTable[] heuristicTables = [.. _HeuristicTables];
@@ -1227,7 +1443,9 @@ public sealed class StackBuilder : IStackBuilder
         Array.Sort(postParsers, static (a, b) =>
         {
             int cmp = a.Priority.CompareTo(b.Priority);
-            return cmp != 0 ? cmp : a.Id.Value.CompareTo(b.Id.Value);
+            return cmp != 0
+                ? cmp
+                : a.Id.Value.CompareTo(b.Id.Value);
         });
 
         // Freeze name maps using FrozenDictionary: one-time build cost for faster lookups, and read-only data that any
@@ -1282,7 +1500,8 @@ public sealed class StackBuilder : IStackBuilder
             FrameInterfaceRegistry,
             IncludeExceptionStackTrace,
             reassemblyConfigs,
-            fieldAliasGroups, fieldAliasGroupNameMap);
+            fieldAliasGroups, fieldAliasGroupNameMap,
+            _Limits);
 
         // Start protocols in registration order. A failing OnStart (protocols may come from plugins) is recorded as a
         // diagnostic and the build continues: one broken protocol must not take down the whole stack, and the host decides
@@ -1313,6 +1532,10 @@ public sealed class StackBuilder : IStackBuilder
     }
 
     /// <summary>Collects unresolved deferred callbacks as structured <see cref="BuildCallbackWarning"/> entries.</summary>
+    /// <typeparam name="T">The id type the callbacks would have received.</typeparam>
+    /// <param name="deferred">The callbacks that are still waiting, by name.</param>
+    /// <param name="entityKind">The kind of entity named in each warning.</param>
+    /// <param name="diagnostics">The list that receives one warning per waiting name.</param>
     private static void _CollectUnresolvedCallbacks<T>(
         Dictionary<string, List<Action<T>>> deferred,
         BuildCallbackWarningKind entityKind,
@@ -1326,5 +1549,6 @@ public sealed class StackBuilder : IStackBuilder
                 kvp.Value.Count));
         }
     }
+
     #endregion
 }

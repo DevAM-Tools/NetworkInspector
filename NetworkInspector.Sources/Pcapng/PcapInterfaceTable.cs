@@ -84,7 +84,7 @@ internal sealed class PcapInterfaceTable
         if (interfaceIndex != interfaces.Count)
         {
             throw new InvalidOperationException(
-                $"Interface {interfaceIndex} of section {sectionIndex} added out of order (next is {interfaces.Count}).");
+                Invariant($"Interface {interfaceIndex} of section {sectionIndex} added out of order (next is {interfaces.Count})."));
         }
 
         // A null entry is an empty slot (a gap): readers treat a null slot as unresolved, as they do an unpublished one.

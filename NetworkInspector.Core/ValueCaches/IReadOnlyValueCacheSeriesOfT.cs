@@ -18,8 +18,6 @@ namespace NetworkInspector.Core.ValueCaches;
 /// <typeparam name="T">Payload type selected from the stack <see cref="FieldType"/>.</typeparam>
 public interface IReadOnlyValueCacheSeries<T> : IReadOnlyValueCacheSeries
 {
-    #region Properties
-
     /// <summary>
     /// Frozen prefix including the value column.
     /// Keep the compile-time type as <see cref="ValueCacheSeriesHandle{T}"/>.
@@ -30,23 +28,29 @@ public interface IReadOnlyValueCacheSeries<T> : IReadOnlyValueCacheSeries
     }
 
     /// <summary>Gathered row at <paramref name="index"/>.</summary>
+    /// <param name="index">Row index in <c>[0, Count)</c>.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not in <c>[0, Count)</c>.</exception>
     ValueCacheRow<T> this[int index]
     {
         get;
     }
 
-    #endregion
-
-    #region Methods
-
     /// <summary>Payload at <paramref name="index"/> against the live published <see cref="IReadOnlyValueCacheSeries.Count"/>.</summary>
+    /// <param name="index">Row index in <c>[0, Count)</c>.</param>
+    /// <returns>The stored payload of that row.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not in <c>[0, Count)</c>.</exception>
     T GetValue(int index);
 
     /// <summary>
     /// Returns the published value chunk at <paramref name="chunkIndex"/> clipped to
     /// <paramref name="observedCount"/>. Prefer <see cref="Handle"/> for scans.
     /// </summary>
+    /// <param name="chunkIndex">Zero-based inner-chunk index (row index shifted right by <see cref="IReadOnlyValueCacheSeries.ChunkShift"/>).</param>
+    /// <param name="observedCount">
+    /// Exclusive upper bound of the rows to expose, normally a count the caller loaded earlier. A negative value is treated as 0;
+    /// a value above the published count is lowered to it, so unpublished rows are never exposed.
+    /// </param>
+    /// <param name="span">The values of the chunk below the bound; empty when the method returns <see langword="false"/>.</param>
+    /// <returns><see langword="true"/> when the chunk exists and holds at least one row below the bound.</returns>
     bool TryGetValueChunk(int chunkIndex, int observedCount, out ReadOnlySpan<T> span);
-
-    #endregion
 }

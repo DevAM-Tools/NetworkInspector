@@ -13,14 +13,14 @@ internal sealed class FilterParserTests
         FilterResult<List<Token>> tokens = lexer.Tokenize();
         if (!tokens.TryGetValue(out List<Token>? tokenList))
         {
-            throw new InvalidOperationException($"Lexing '{source}' failed: {tokens.Error}");
+            throw new InvalidOperationException(Invariant($"Lexing '{source}' failed: {tokens.Error}"));
         }
 
         FilterParser parser = new(tokenList, source, callback, FilterBinder.DefaultRegexTimeout);
         FilterResult<FilterProgram> program = parser.Parse();
         if (!program.TryGetValue(out FilterProgram? parsed))
         {
-            throw new InvalidOperationException($"Parsing '{source}' failed: {program.Error}");
+            throw new InvalidOperationException(Invariant($"Parsing '{source}' failed: {program.Error}"));
         }
         return parsed;
     }
@@ -38,7 +38,7 @@ internal sealed class FilterParserTests
         FilterResult<FilterProgram> program = parser.Parse();
         if (program.IsSuccess)
         {
-            throw new InvalidOperationException($"Expected '{source}' to fail parsing.");
+            throw new InvalidOperationException(Invariant($"Expected '{source}' to fail parsing."));
         }
         return program.Error;
     }
@@ -156,7 +156,7 @@ internal sealed class FilterParserTests
     [Arguments("matches", StringOp.Matches)]
     public async Task Parse_StringPredicate_ProducesPredicateNode(string keyword, StringOp expected)
     {
-        FilterProgram program = _Parse($"udp.checksum.status {keyword} \"good\"");
+        FilterProgram program = _Parse(Invariant($"udp.checksum.status {keyword} \"good\""));
 
         StringPredicateNode predicate = (StringPredicateNode)program.Root;
         await Assert.That(predicate.Op).IsEqualTo(expected);

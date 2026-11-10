@@ -209,8 +209,10 @@ internal sealed class MutFieldTests
             bool hasParent = rootMut.TryGetParent(out _);
             bool hasPrev = rootMut.TryGetPrev(out _);
 
-            bool mutHasFirst = rootMut.TryGetFirstChild(out MutField mutChild, materialize: true); // materialize: true — navigate/populate children including lazy
-            bool fieldHasFirst = rootField.TryGetFirstChild(out Field fieldChild, materialize: true); // materialize: true — navigate/populate children including lazy
+            bool mutHasFirst = rootMut.TryGetFirstChild(out MutField mutChild,
+                materialize: true); // materialize: true — navigate/populate children including lazy
+            bool fieldHasFirst = rootField.TryGetFirstChild(out Field fieldChild,
+                materialize: true); // materialize: true — navigate/populate children including lazy
             FieldId mutChildId = mutChild.FieldId;
             ushort mutChildIndex = mutChild.StorageIndex;
             FieldId fieldChildId = fieldChild.FieldId;
@@ -221,8 +223,10 @@ internal sealed class MutFieldTests
             ushort mutChildCount = rootMut.ChildCount(materialize: true); // materialize: true — navigate/populate children including lazy
             ushort fieldChildCount = rootField.ChildCount(materialize: true); // materialize: true — navigate/populate children including lazy
 
-            bool mutHasLast = rootMut.TryGetLastChild(out MutField mutLast, materialize: true); // materialize: true — navigate/populate children including lazy
-            bool fieldHasLast = rootField.TryGetLastChild(out Field fieldLast, materialize: true); // materialize: true — navigate/populate children including lazy
+            bool mutHasLast = rootMut.TryGetLastChild(out MutField mutLast,
+                materialize: true); // materialize: true — navigate/populate children including lazy
+            bool fieldHasLast = rootField.TryGetLastChild(out Field fieldLast,
+                materialize: true); // materialize: true — navigate/populate children including lazy
             FieldId mutLastId = mutLast.FieldId;
             FieldId fieldLastId = fieldLast.FieldId;
             ushort mutLastIndex = mutLast.StorageIndex;
@@ -729,7 +733,7 @@ internal sealed class MutFieldTests
 
         public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
         {
-            builder.RegisterField(protocolId, $"{name}.field", "Field", FieldType.U64);
+            builder.RegisterField(protocolId, Invariant($"{name}.field"), "Field", FieldType.U64);
         }
 
         public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
@@ -755,7 +759,7 @@ internal sealed class MutFieldTests
 
         public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
         {
-            builder.RegisterField(protocolId, $"{Name}.root", "Root", FieldType.None);
+            builder.RegisterField(protocolId, Invariant($"{Name}.root"), "Root", FieldType.None);
         }
 
         public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
@@ -860,7 +864,7 @@ internal sealed class MutFieldTests
 
         public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
         {
-            builder.RegisterField(protocolId, $"{Name}.root", "Root", FieldType.None);
+            builder.RegisterField(protocolId, Invariant($"{Name}.root"), "Root", FieldType.None);
         }
 
         public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
@@ -887,7 +891,7 @@ internal sealed class MutFieldTests
 
         public void RegisterFields(StackBuilder builder, ProtocolId protocolId)
         {
-            builder.RegisterField(protocolId, $"{Name}.root", "Root", FieldType.None);
+            builder.RegisterField(protocolId, Invariant($"{Name}.root"), "Root", FieldType.None);
         }
 
         public ParseResult Parse(in MutField parentField, ReadOnlyMemory<byte> data, in ParseContext context)
@@ -1309,6 +1313,101 @@ internal sealed class MutFieldTests
             await Assert.That(tombstones).IsGreaterThanOrEqualTo(1);
             await Assert.That(values).IsEqualTo(viaLazyPopulator ? 3 : 2);
             await Assert.That(hasError).IsTrue();
+        }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task ThrowingValueCacheKeepsEarlierSiblingsReachable(bool insertAfter)
+    {
+        (Stack stack, InsertScriptProtocol protocol, ProtocolId id) = _BuildInsertStack();
+        using (stack)
+        {
+            FieldId item = protocol.Item;
+            ValueCache cache = new(stack, [], options: new ValueCacheBuildOptions { RecordAllFields = true });
+
+            // Two children, then the cache is evicted: the third insert throws between reserve and publish.
+            protocol.Script = (in MutField container) =>
+            {
+                MutField first = container.Append(item, FieldValue.NewU64(1));
+                _ = container.Append(item, FieldValue.NewU64(2));
+                cache.Abandon();
+                _ = insertAfter
+                    ? first.InsertAfter(item, FieldValue.NewU64(3))
+                    : container.Prepend(item, FieldValue.NewU64(3));
+            };
+            ParseOptions options = new(FieldTreeMode.Build, cache, firstProtocol: id);
+            Packet packet = _ParseScript(stack, id, 0, in options);
+
+            // The tree walk follows the links; both earlier values must still be reachable.
+            int reachable = 0;
+            foreach (Field field in packet.IterFieldsDfs(materialize: false))
+            {
+                if (field.FieldId == item)
+                {
+                    reachable++;
+                }
+            }
+
+            await Assert.That(reachable).IsEqualTo(2);
+        }
+    }
+
+    [Test]
+    public async Task AppendLazyWithANullPopulatorIsRecordedAsAPacketErrorUnderTheContainer()
+    {
+        (Stack stack, InsertScriptProtocol protocol, ProtocolId id) = _BuildInsertStack();
+        using (stack)
+        {
+            FieldId item = protocol.Item;
+            protocol.Script = (in MutField container) => _ = container.AppendLazy(item, FieldValue.NewU64(1), null!); // Invariant: null on purpose.
+            ParseOptions options = new(FieldTreeMode.Build, firstProtocol: id);
+
+            Packet packet = _ParseScript(stack, id, 0, in options);
+            packet.MaterializeAll();
+
+            // Nothing was thrown, the failure is counted once, and the only child of the lazy container is the error field.
+            Field container = _Container(packet, protocol.Container);
+            Field lazy = container.TryGetFirstChild(out Field first, materialize: true)
+                ? first
+                : default;
+            await Assert.That(packet.ErrorCount).IsEqualTo(1);
+            await Assert.That(lazy.IsValid).IsTrue();
+            await Assert.That(lazy.ChildCount(materialize: true)).IsEqualTo((ushort)1);
+            await Assert.That(lazy.TryGetFirstChild(out Field error, materialize: true) && error.FieldId == stack.PacketErrorFieldId).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task ADefaultFieldHasNoRelativesAndNoChildren()
+    {
+        Field none = default;
+
+        await Assert.That(none.HasFieldTree).IsFalse();
+        await Assert.That(none.TryGetParent(out _)).IsFalse();
+        await Assert.That(none.TryGetNext(out _)).IsFalse();
+        await Assert.That(none.TryGetPrev(out _)).IsFalse();
+        await Assert.That(none.TryGetFirstChild(out _, materialize: true)).IsFalse();
+        await Assert.That(none.TryGetLastChild(out _, materialize: true)).IsFalse();
+        await Assert.That(none.HasChildren(materialize: true)).IsFalse();
+        await Assert.That(none.ChildCount(materialize: true)).IsEqualTo((ushort)0);
+    }
+
+    [Test]
+    public async Task AsFieldOnASkipPacketKeepsTheFieldId()
+    {
+        (Stack stack, InsertScriptProtocol protocol, ProtocolId id) = _BuildInsertStack();
+        using (stack)
+        {
+            FieldId item = protocol.Item;
+            FieldId seen = default;
+            protocol.Script = (in MutField container) => seen = container.Append(item, FieldValue.NewU64(1)).AsField().FieldId;
+            ParseOptions options = new(FieldTreeMode.Skip, firstProtocol: id);
+
+            _ = _ParseScript(stack, id, 0, in options);
+
+            await Assert.That(seen).IsEqualTo(item);
         }
     }
 

@@ -19,8 +19,6 @@ namespace NetworkInspector.Core.Interfaces;
 /// </summary>
 public interface IRandomAccessFrameSource : IFrameSource
 {
-    #region Methods
-
     /// <summary>
     /// Gets a frame by its unique identifier.
     /// <para>
@@ -106,6 +104,4 @@ public interface IRandomAccessFrameSource : IFrameSource
 
         return found;
     }
-
-    #endregion
 }

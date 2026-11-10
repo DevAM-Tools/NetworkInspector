@@ -1,0 +1,13 @@
+<!-- Copyright © 2026 DevAM. All rights reserved. Licensed under MIT license. See license in the repository root for license information. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Trust-boundary limits for any .NET application: one declaration per limit with its explanation, a value that can be off or read-only, a lock-free live holder for hot loops, composable unit parts, a standard hit sentence, and a catalog check. It depends on nothing application-specific.</Description>
+    <PackageTags>limits;settings;security;configuration;trust-boundary</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The tests reach the internal value encoding (LimitValue.Bits) and the refused spellings of a word set through this grant only. -->
+    <InternalsVisibleTo Include="NetworkInspector.Limits.Tests" />
+  </ItemGroup>
+</Project>

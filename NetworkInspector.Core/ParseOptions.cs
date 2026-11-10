@@ -15,8 +15,6 @@ namespace NetworkInspector.Core;
 /// </remarks>
 public readonly struct ParseObserver
 {
-    #region Properties
-
     /// <summary>The observer called for this parse. Null makes <c>Packet.TryParse</c> throw before the parse starts.</summary>
     public IFieldObserver? Observer { get; init; }
 
@@ -33,8 +31,6 @@ public readonly struct ParseObserver
     /// </para>
     /// </summary>
     public FieldWatch DisplayText { get; init; }
-
-    #endregion
 }
 
 /// <summary>
@@ -53,9 +49,17 @@ public readonly struct ParseObserver
 /// A null <see cref="Index"/> does not record presence. A null <see cref="Cache"/> does not record
 /// values. An empty <see cref="Observers"/> memory does not call a watch.
 /// </para>
+/// <para>
+/// The primary constructor creates parse choices; omitted arguments match a build parse with no cache, index, or watch.
+/// </para>
 /// <para><b>Thread-safety:</b> a readonly struct. The cache, index, and observers it references have their own contracts.</para>
 /// </remarks>
-/// <remarks>Creates parse choices. Omitted arguments match a build parse with no cache, index, or watch.</remarks>
+/// <param name="fieldTree">Whether the parse writes the field-tree slab. Default builds it.</param>
+/// <param name="cache">Value cache the parse fills, or null to record nothing.</param>
+/// <param name="recordOnReplay">Whether a replay of an already first-parsed id also writes <paramref name="cache"/>.</param>
+/// <param name="index">Packet index the parse fills, or null to record no presence.</param>
+/// <param name="firstProtocol">Protocol dispatched after the packet protocol, or null for the stack default.</param>
+/// <param name="observers">Observers called during the parse; empty means no watch calls. The caller keeps the memory alive.</param>
 public readonly struct ParseOptions(
     FieldTreeMode fieldTree = FieldTreeMode.Build,
     ValueCache? cache = null,
@@ -64,8 +68,6 @@ public readonly struct ParseOptions(
     ProtocolId? firstProtocol = null,
     ReadOnlyMemory<ParseObserver> observers = default)
 {
-    #region Properties
-
     /// <summary>Whether this parse writes the field-tree slab. Default is <see cref="FieldTreeMode.Build"/>.</summary>
     public FieldTreeMode FieldTree { get; init; } = fieldTree;
 
@@ -89,6 +91,4 @@ public readonly struct ParseOptions(
     /// Empty means no watch calls.
     /// </summary>
     public ReadOnlyMemory<ParseObserver> Observers { get; init; } = observers;
-
-    #endregion
 }

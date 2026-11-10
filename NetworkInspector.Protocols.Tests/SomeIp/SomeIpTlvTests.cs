@@ -32,10 +32,10 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     }
 
     private static string _Union(string name, string members, string extra = "") =>
-        $$"""{"category":"union","name":"{{name}}","members":{{members}}{{extra}}}""";
+        Invariant($$"""{"category":"union","name":"{{name}}","members":{{members}}{{extra}}}""");
 
     private static string _Bitfield(string name, int bits, string members, string extra = "") =>
-        $$"""{"category":"bitfield","name":"{{name}}","bits":{{bits}},"members":{{members}}{{extra}}}""";
+        Invariant($$"""{"category":"bitfield","name":"{{name}}","bits":{{bits}},"members":{{members}}{{extra}}}""");
 
     #endregion
 
@@ -539,24 +539,24 @@ internal sealed class SomeIpTlvTests : SomeIpPayloadKit
     [Test]
     public async Task TheDeepestAllowedTypeChainDecodesOnAWorkerThreadWithoutExhaustingTheStack()
     {
-        // The depth limit may be raised to 1,024. A chain of 1,000 nested structures is the deepest the compiler expands; the decode
-        // runs on a pool thread, whose stack is smaller than the main thread's.
+        // someip.max_type_depth reaches at most 128. The chain holds 127 nested structures and a leaf inside the last one: that is the
+        // deepest a decode reaches at the upper end of the range. The decode runs on a thread-pool thread with its default stack.
         List<string> types = [];
-        for (int i = 1; i < 1000; i++)
+        for (int i = 1; i < 127; i++)
         {
             types.Add(StructType("level" + i, Site("next", "level" + (i + 1))));
         }
 
-        types.Add(StructType("level1000", Site("leaf", "uint8")));
+        types.Add(StructType("level127", Site("leaf", "uint8")));
         string methods = Method(1, "deep", Sites(Site("top", "level1")), "[]", Transform(structLength: 0));
-        using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, string.Join(",", types)), ("someip.max_type_depth", SettingValue.U64(1024)));
+        using SomeIpTestStack s = SomeIpTestStack.Create(Json(methods, string.Join(",", types)), ("someip.max_type_depth", SettingValue.U64(128)));
         byte[] frame = UdpFrame([42]);
 
         int nodes = await Task.Run(() =>
         {
             Packet packet = s.Parse(frame);
             packet.MaterializeAll();
-            return s.U64s(packet, Prefix + "deep.req.top.next.next.next".Replace(".next.next.next", string.Concat(Enumerable.Repeat(".next", 999)) + ".leaf")).Count;
+            return s.U64s(packet, Prefix + "deep.req.top" + string.Concat(Enumerable.Repeat(".next", 126)) + ".leaf").Count;
         }).ConfigureAwait(false);
 
         await Assert.That(nodes).IsEqualTo(1);

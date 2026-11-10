@@ -215,7 +215,7 @@ internal static class DisplayTables
         // Fill unnamed entries with hex representation
         for (int i = 0; i < 65536; i++)
         {
-            table[i] ??= $"0x{i:x4}";
+            table[i] ??= Invariant($"0x{i:x4}");
         }
         return table;
     }
@@ -235,7 +235,7 @@ internal static class DisplayTables
         string[] table = new string[65536];
         for (int i = 0; i < 65536; i++)
         {
-            table[i] = $"0x{i:x4}";
+            table[i] = Invariant($"0x{i:x4}");
         }
         return table;
     }
@@ -290,7 +290,7 @@ internal static class DisplayTables
         string[] table = new string[256];
         for (int i = 0; i < 256; i++)
         {
-            table[i] = $"0x{i:x2}";
+            table[i] = Invariant($"0x{i:x2}");
         }
         return table;
     }
@@ -767,7 +767,9 @@ internal static class DisplayTables
     // Same idea as the ICMPv4 title table: the title depends on the type byte only, so it is built once.
     private static readonly string[] _Icmpv6ContainerTitleTable = _BuildPrefixedTable("Internet Control Message Protocol v6, ", _Icmpv6TypeTable);
 
-    /// <summary>Returns the shared container title of an ICMPv6 message, for example "Internet Control Message Protocol v6, Echo (ping) request (128)".</summary>
+    /// <summary>
+    /// Returns the shared container title of an ICMPv6 message, for example "Internet Control Message Protocol v6, Echo (ping) request (128)".
+    /// </summary>
     /// <param name="type">The 8-bit ICMPv6 type.</param>
     internal static string GetIcmpv6ContainerTitle(byte type) => _Icmpv6ContainerTitleTable[type];
 
@@ -957,7 +959,7 @@ internal static class DisplayTables
         2 => "Multicast (2)",
         3 => "Sent to someone else (3)",
         4 => "Sent by us (4)",
-        _ => $"Unknown ({pktType})",
+        _ => Invariant($"Unknown ({pktType})"),
     };
 
     #endregion
@@ -1004,7 +1006,7 @@ internal static class DisplayTables
 
         for (int i = 0; i < 256; i++)
         {
-            table[i] ??= $"0x{i:x2}";
+            table[i] ??= Invariant($"0x{i:x2}");
         }
         return table;
     }
@@ -1074,7 +1076,7 @@ internal static class DisplayTables
         {
             string name = _IpOptionNameTable[i];
             // Known options: "Name (num)", unknown options: "num"
-            table[i] = name.Length > 0 ? $"{name} ({i})" : i.ToString(CultureInfo.InvariantCulture);
+            table[i] = name.Length > 0 ? Invariant($"{name} ({i})") : i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -1115,7 +1117,7 @@ internal static class DisplayTables
         table[3] = "Time stamps for prespecified addresses (3)";
         for (int i = 0; i < 16; i++)
         {
-            table[i] ??= $"Unknown ({i})";
+            table[i] ??= Invariant($"Unknown ({i})");
         }
         return table;
     }
@@ -1139,7 +1141,7 @@ internal static class DisplayTables
         return value switch
         {
             0 => "Router shall examine packet (0)",
-            >= 1 and <= 18 => $"Aggregated Reservation Nesting Level {value - 1} ({value})",
+            >= 1 and <= 18 => Invariant($"Aggregated Reservation Nesting Level {value - 1} ({value})"),
             32 => "QoS NSLP Aggregation Level 0 (32)",
             65535 => "Reserved (65535)",
             _ => null,
@@ -1205,7 +1207,7 @@ internal static class DisplayTables
         for (int i = 0; i < 256; i++)
         {
             string name = _Ipv6OptionNameTable[i];
-            table[i] = name.Length > 0 ? $"{name} ({i})" : i.ToString(CultureInfo.InvariantCulture);
+            table[i] = name.Length > 0 ? Invariant($"{name} ({i})") : i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -1275,7 +1277,7 @@ internal static class DisplayTables
         for (int i = 0; i < 256; i++)
         {
             string name = _Ipv6RoutingTypeNameTable[i];
-            table[i] = name.Length > 0 ? $"{name} ({i})" : i.ToString(CultureInfo.InvariantCulture);
+            table[i] = name.Length > 0 ? Invariant($"{name} ({i})") : i.ToString(CultureInfo.InvariantCulture);
         }
         return table;
     }
@@ -1374,7 +1376,7 @@ internal static class DisplayTables
             // An unnamed kind is its number already; print it once, as the IPv4 and IPv6 option tables do.
             string name = _TcpOptionNameTable[i];
             string number = i.ToString(CultureInfo.InvariantCulture);
-            table[i] = name == number ? number : $"{name} ({i})";
+            table[i] = name == number ? number : Invariant($"{name} ({i})");
         }
         return table;
     }

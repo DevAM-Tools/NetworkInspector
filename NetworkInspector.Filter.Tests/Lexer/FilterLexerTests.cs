@@ -13,7 +13,7 @@ internal sealed class FilterLexerTests
         FilterResult<List<Token>> result = lexer.Tokenize();
         if (!result.TryGetValue(out List<Token>? tokens))
         {
-            throw new InvalidOperationException($"Expected '{source}' to tokenize but got {result.Error}");
+            throw new InvalidOperationException(Invariant($"Expected '{source}' to tokenize but got {result.Error}"));
         }
         return tokens;
     }
@@ -24,7 +24,7 @@ internal sealed class FilterLexerTests
         FilterResult<List<Token>> result = lexer.Tokenize();
         if (result.IsSuccess)
         {
-            throw new InvalidOperationException($"Expected '{source}' to fail tokenizing.");
+            throw new InvalidOperationException(Invariant($"Expected '{source}' to fail tokenizing."));
         }
         return result.Error;
     }

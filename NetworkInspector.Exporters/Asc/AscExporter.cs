@@ -362,7 +362,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         // ordinary I/O failure).
         if (!_Output.TryGetOrCreateUnderlyingStream(out Stream? stream, out string openFailure))
         {
-            _ReportStartFailure($"ASC output could not be opened: {openFailure}");
+            _ReportStartFailure(Invariant($"ASC output could not be opened: {openFailure}"));
             return false;
         }
 
@@ -375,7 +375,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _ReportStartFailure($"ASC header write failed: {ex.Message}");
+            _ReportStartFailure(Invariant($"ASC header write failed: {ex.Message}"));
             return false;
         }
 
@@ -442,7 +442,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
                     {
                         return _HandleSkip(
                             ExportErrorKind.MalformedData,
-                            $"CAN XL frame is shorter than 12 bytes ({data.Length})",
+                            Invariant($"CAN XL frame is shorter than 12 bytes ({data.Length})"),
                             currentIndex);
                     }
 
@@ -463,7 +463,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
             default:
                 return _HandleSkip(
                     ExportErrorKind.UnsupportedType,
-                    $"Unsupported link type: {frame.LinkType}",
+                    Invariant($"Unsupported link type: {frame.LinkType}"),
                     currentIndex);
         }
     }
@@ -494,7 +494,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         {
             return _HandleSkip(
                 ExportErrorKind.MalformedData,
-                $"CAN frame too short ({data.Length} bytes; minimum {_SocketCanHeaderSize})",
+                Invariant($"CAN frame too short ({data.Length} bytes; minimum {_SocketCanHeaderSize})"),
                 currentIndex);
         }
 
@@ -585,7 +585,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         {
             return _HandleSkip(
                 ExportErrorKind.MalformedData,
-                $"CAN XL frame is shorter than 12 bytes ({data.Length})",
+                Invariant($"CAN XL frame is shorter than 12 bytes ({data.Length})"),
                 currentIndex);
         }
 
@@ -598,7 +598,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         {
             return _HandleSkip(
                 ExportErrorKind.MalformedData,
-                $"CAN XL payload length {length} does not fit in {data.Length} bytes",
+                Invariant($"CAN XL payload length {length} does not fit in {data.Length} bytes"),
                 currentIndex);
         }
 
@@ -638,7 +638,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         {
             return _HandleSkip(
                 ExportErrorKind.MalformedData,
-                $"Ethernet frame length {data.Length} is outside 0..1518",
+                Invariant($"Ethernet frame length {data.Length} is outside 0..1518"),
                 currentIndex);
         }
 
@@ -681,7 +681,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         {
             return _HandleSkip(
                 ExportErrorKind.MalformedData,
-                $"LIN frame too short ({data.Length} bytes; minimum {_LinMinSize})",
+                Invariant($"LIN frame too short ({data.Length} bytes; minimum {_LinMinSize})"),
                 currentIndex);
         }
 
@@ -768,7 +768,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         {
             return _HandleSkip(
                 ExportErrorKind.MalformedData,
-                $"FlexRay frame too short ({data.Length} bytes; minimum {_DltFlexRayHeaderSize})",
+                Invariant($"FlexRay frame too short ({data.Length} bytes; minimum {_DltFlexRayHeaderSize})"),
                 currentIndex);
         }
 
@@ -799,7 +799,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
         ExportErrorKind kind = ex is IOException
             ? ExportErrorKind.IoError
             : ExportErrorKind.SerializationError;
-        return _HandleSkip(kind, $"Write failed: {ex.Message}", currentIndex);
+        return _HandleSkip(kind, Invariant($"Write failed: {ex.Message}"), currentIndex);
     }
 
     /// <summary>
@@ -1181,7 +1181,7 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
     private bool _HandleInvalidChannel(int channel, int currentIndex) =>
         _HandleSkip(
             ExportErrorKind.SerializationError,
-            $"ASC channel value '{channel.ToString(CultureInfo.InvariantCulture)}' is negative and cannot be written.",
+            Invariant($"ASC channel value '{channel.ToString(CultureInfo.InvariantCulture)}' is negative and cannot be written."),
             currentIndex);
 
     #endregion
@@ -1314,8 +1314,8 @@ public sealed class AscExporter : IFrameListener, IErrorTolerantExporter, IDispo
                 throw new ArgumentOutOfRangeException(
                     nameof(count),
                     count,
-                    $"Target frame count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
-                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+                    Invariant($"Target frame count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} ") +
+                    Invariant($"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)})."));
             }
 
             _TargetFrameCount = count;

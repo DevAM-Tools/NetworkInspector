@@ -21,7 +21,7 @@ internal sealed class PcapngFramesByIdTests
         using (PcapngSource fromData = PcapngSource.FromData(data, name))
         {
             List<Frame> frames = RandomAccessEquivalence.StartAndReadAll(fromData);
-            _CollectMismatches(fromData, frames.Count, $"{name}/data", mismatches);
+            _CollectMismatches(fromData, frames.Count, Invariant($"{name}/data"), mismatches);
         }
 
         // File backends: preloaded and memory-mapped, lazy (after the scan) and full.
@@ -33,7 +33,7 @@ internal sealed class PcapngFramesByIdTests
                 PcapngSourceOptions options = new() { PreloadBudget = budget, ScanMode = mode };
                 using PcapngSource source = PcapngSource.Open(file.Path, options);
                 List<Frame> frames = RandomAccessEquivalence.StartAndReadAll(source);
-                _CollectMismatches(source, frames.Count, $"{name}/{(budget is null ? "mapped" : "preload")}/{mode}", mismatches);
+                _CollectMismatches(source, frames.Count, Invariant($"{name}/{(budget is null ? "mapped" : "preload")}/{mode}"), mismatches);
             }
         }
 
@@ -160,7 +160,7 @@ internal sealed class PcapngFramesByIdTests
     {
         foreach ((string name, FrameId first, int length) in RandomAccessEquivalence.BatchRanges(frameCount))
         {
-            string? mismatch = RandomAccessEquivalence.FindBatchMismatch(source, first, length, $"{label}/{name}");
+            string? mismatch = RandomAccessEquivalence.FindBatchMismatch(source, first, length, Invariant($"{label}/{name}"));
             if (mismatch is not null)
             {
                 mismatches.Add(mismatch);

@@ -21,26 +21,17 @@ namespace NetworkInspector.Core.ValueCaches;
 /// </summary>
 public readonly struct ReadOnlyValueCacheSeries : IReadOnlyValueCacheSeries
 {
-    #region Fields
-
     /// <summary>The series this view reads. Non-null for any view made with the public constructor; a <c>default</c> view has none.</summary>
     private readonly ValueCacheSeries _Owner;
 
-    #endregion
-
-    #region Lifecycle
-
     /// <summary>Creates a view over <paramref name="owner"/>.</summary>
+    /// <param name="owner">The series to read; the view keeps a reference to it and never changes it.</param>
     /// <exception cref="ArgumentNullException"><paramref name="owner"/> is <see langword="null"/>.</exception>
     public ReadOnlyValueCacheSeries(ValueCacheSeries owner)
     {
         ArgumentNullException.ThrowIfNull(owner);
         _Owner = owner;
     }
-
-    #endregion
-
-    #region Properties
 
     /// <inheritdoc/>
     public FieldId FieldId => _Owner.FieldId;
@@ -57,7 +48,7 @@ public readonly struct ReadOnlyValueCacheSeries : IReadOnlyValueCacheSeries
     /// <inheritdoc/>
     public int Count => _Owner.Count;
 
-    /// <inheritdoc/>
+    /// <summary>Frozen prefix of the series: <see cref="Count"/> and the monotonic flags are loaded once; later rows are not visible on it.</summary>
     public ValueCacheSeriesHandle Handle => _Owner.Handle;
 
     /// <inheritdoc/>
@@ -65,10 +56,6 @@ public readonly struct ReadOnlyValueCacheSeries : IReadOnlyValueCacheSeries
 
     /// <inheritdoc/>
     public bool TimestampsMonotonic => _Owner.TimestampsMonotonic;
-
-    #endregion
-
-    #region Public API
 
     /// <inheritdoc/>
     public int GetPacketId(int index) => _Owner.GetPacketId(index);
@@ -86,6 +73,4 @@ public readonly struct ReadOnlyValueCacheSeries : IReadOnlyValueCacheSeries
 
     /// <inheritdoc/>
     public ValueCacheSeriesHandle GetHandle() => Handle;
-
-    #endregion
 }

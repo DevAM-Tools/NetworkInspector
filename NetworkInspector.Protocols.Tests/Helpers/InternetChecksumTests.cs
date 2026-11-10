@@ -58,7 +58,7 @@ internal sealed class InternetChecksumTests
             ushort actual = InternetChecksum.Compute(slice);
             if (actual != expected)
             {
-                await Assert.That(actual).IsEqualTo(expected).Because($"length {length}");
+                await Assert.That(actual).IsEqualTo(expected).Because(Invariant($"length {length}"));
             }
         }
     }

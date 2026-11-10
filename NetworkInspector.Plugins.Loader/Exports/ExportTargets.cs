@@ -74,7 +74,7 @@ public static class ExportTargets
             // leftover of a crashed run) from colliding.
             string parent = Path.GetDirectoryName(fullPath)
                 ?? throw new InvalidOperationException("_TryCheck guarantees a parent folder.");
-            string backup = Path.Combine(parent, "." + Path.GetFileName(fullPath) + ".ni-replaced-" + Guid.NewGuid().ToString("N"));
+            string backup = Path.Combine(parent, "." + Path.GetFileName(fullPath) + ".ni-replaced-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
             try
             {
                 MoveOrThrow(fullPath, backup, isDirectory);

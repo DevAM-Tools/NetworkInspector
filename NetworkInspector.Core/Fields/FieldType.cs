@@ -5,8 +5,6 @@ namespace NetworkInspector.Core.Fields;
 /// <summary>Discriminant for the data type stored in a field value.</summary>
 public enum FieldType : byte
 {
-    #region Enum Values
-
     /// <summary>No value (container/grouping field).</summary>
     None = 0,
     /// <summary>Signed 64-bit integer.</summary>
@@ -33,6 +31,4 @@ public enum FieldType : byte
     Timestamp = 11,
     /// <summary>Boolean value.</summary>
     Bool = 12,
-
-    #endregion
 }

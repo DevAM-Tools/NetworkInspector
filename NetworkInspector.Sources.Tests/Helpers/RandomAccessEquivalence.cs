@@ -105,19 +105,19 @@ internal static class RandomAccessEquivalence
             Frame? actual = source.FrameById(expected.Id);
             if (actual is null)
             {
-                return $"{label}: FrameById({expected.Id.Value}) returned null.";
+                return Invariant($"{label}: FrameById({expected.Id.Value}) returned null.");
             }
 
             if (!SameFrame(expected, actual.Value))
             {
-                return $"{label}: FrameById({expected.Id.Value}) differs from the sequential frame.";
+                return Invariant($"{label}: FrameById({expected.Id.Value}) differs from the sequential frame.");
             }
         }
 
         // After a complete sequential read every file source knows its frame count; null means the read ended early.
         if (source.EstimatedFrameCount is not int estimated)
         {
-            return $"{label}: EstimatedFrameCount is null after the sequential read ended (stream ended before the file).";
+            return Invariant($"{label}: EstimatedFrameCount is null after the sequential read ended (stream ended before the file).");
         }
 
         // An id the sequential read skipped (its frame could not be built) must not appear by id either.
@@ -125,7 +125,7 @@ internal static class RandomAccessEquivalence
         {
             if (!returned.Contains(id) && source.FrameById(id) is not null)
             {
-                return $"{label}: FrameById({id}) returned a frame the sequential read skipped.";
+                return Invariant($"{label}: FrameById({id}) returned a frame the sequential read skipped.");
             }
         }
 

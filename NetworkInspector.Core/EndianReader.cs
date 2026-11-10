@@ -56,6 +56,7 @@ public readonly struct EndianReader(bool byteSwapped)
 
     /// <summary>Reads a 16-bit unsigned integer from the start of the span.</summary>
     /// <param name="data">Source bytes; at least 2 bytes (otherwise <see cref="ArgumentOutOfRangeException"/>).</param>
+    /// <returns>The value in the byte order of the source.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ushort ReadU16(ReadOnlySpan<byte> data) =>
         _BigEndian
@@ -64,6 +65,7 @@ public readonly struct EndianReader(bool byteSwapped)
 
     /// <summary>Reads a 32-bit unsigned integer from the start of the span.</summary>
     /// <param name="data">Source bytes; at least 4 bytes (otherwise <see cref="ArgumentOutOfRangeException"/>).</param>
+    /// <returns>The value in the byte order of the source.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public uint ReadU32(ReadOnlySpan<byte> data) =>
         _BigEndian
@@ -72,6 +74,7 @@ public readonly struct EndianReader(bool byteSwapped)
 
     /// <summary>Reads a 64-bit unsigned integer from the start of the span.</summary>
     /// <param name="data">Source bytes; at least 8 bytes (otherwise <see cref="ArgumentOutOfRangeException"/>).</param>
+    /// <returns>The value in the byte order of the source.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ulong ReadU64(ReadOnlySpan<byte> data) =>
         _BigEndian
@@ -80,6 +83,7 @@ public readonly struct EndianReader(bool byteSwapped)
 
     /// <summary>Reads a 16-bit signed integer from the start of the span.</summary>
     /// <param name="data">Source bytes; at least 2 bytes (otherwise <see cref="ArgumentOutOfRangeException"/>).</param>
+    /// <returns>The value in the byte order of the source.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public short ReadI16(ReadOnlySpan<byte> data) =>
         _BigEndian
@@ -88,6 +92,7 @@ public readonly struct EndianReader(bool byteSwapped)
 
     /// <summary>Reads a 32-bit signed integer from the start of the span.</summary>
     /// <param name="data">Source bytes; at least 4 bytes (otherwise <see cref="ArgumentOutOfRangeException"/>).</param>
+    /// <returns>The value in the byte order of the source.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int ReadI32(ReadOnlySpan<byte> data) =>
         _BigEndian
@@ -96,6 +101,7 @@ public readonly struct EndianReader(bool byteSwapped)
 
     /// <summary>Reads a 64-bit signed integer from the start of the span.</summary>
     /// <param name="data">Source bytes; at least 8 bytes (otherwise <see cref="ArgumentOutOfRangeException"/>).</param>
+    /// <returns>The value in the byte order of the source.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public long ReadI64(ReadOnlySpan<byte> data) =>
         _BigEndian
@@ -112,6 +118,7 @@ public readonly struct EndianReader(bool byteSwapped)
 
     /// <summary>Conditionally reverses the byte order of an already-loaded 16-bit value.</summary>
     /// <param name="value">Value in native machine order.</param>
+    /// <returns>The value with reversed bytes when the source order differs from the machine order, otherwise unchanged.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ushort Swap(ushort value)
     {
@@ -124,6 +131,7 @@ public readonly struct EndianReader(bool byteSwapped)
 
     /// <summary>Conditionally reverses the byte order of an already-loaded 32-bit value.</summary>
     /// <param name="value">Value in native machine order.</param>
+    /// <returns>The value with reversed bytes when the source order differs from the machine order, otherwise unchanged.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public uint Swap(uint value)
     {
@@ -136,6 +144,7 @@ public readonly struct EndianReader(bool byteSwapped)
 
     /// <summary>Conditionally reverses the byte order of an already-loaded 64-bit unsigned value.</summary>
     /// <param name="value">Value in native machine order.</param>
+    /// <returns>The value with reversed bytes when the source order differs from the machine order, otherwise unchanged.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ulong Swap(ulong value)
     {
@@ -148,6 +157,7 @@ public readonly struct EndianReader(bool byteSwapped)
 
     /// <summary>Conditionally reverses the byte order of an already-loaded 64-bit signed value.</summary>
     /// <param name="value">Value in native machine order.</param>
+    /// <returns>The value with reversed bytes when the source order differs from the machine order, otherwise unchanged.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public long Swap(long value)
     {
@@ -157,5 +167,6 @@ public readonly struct EndianReader(bool byteSwapped)
         }
         return value;
     }
+
     #endregion
 }

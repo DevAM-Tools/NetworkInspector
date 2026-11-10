@@ -161,6 +161,25 @@ internal sealed class ParsePlanTests
     }
 
     [Test]
+    public async Task AnIndexOfAnotherStackIsRefusedWithTheIndexCode()
+    {
+        (Stack stack, ProbeProtocol _) = _Probe();
+        (Stack other, ProbeProtocol _) = _Probe();
+        using (stack)
+        using (other)
+        {
+            PacketIndex foreign = new(other);
+
+            bool created = ParsePlan.TryCreate(stack, [new() { Index = foreign }], out ParsePlan? plan, out ParsePlanError error);
+
+            await Assert.That(created).IsFalse();
+            await Assert.That(plan).IsNull();
+            await Assert.That(error.Code).IsEqualTo(ParsePlanErrorCode.IndexStackMismatch);
+            await Assert.That(error.Message).Contains("Demand 0");
+        }
+    }
+
+    [Test]
     public async Task AnUndefinedDepthAndOneObserverInTwoDemandsAreRefusedAndAFieldsDemandNeedsAnObserver()
     {
         (Stack stack, ProbeProtocol probe) = _Probe();

@@ -74,7 +74,7 @@ internal static class TsharkProcess
 
             // -C must come BEFORE -r/-T/-e so tshark applies the profile while parsing
             // the rest of the args.
-            finalArguments = $"{hideRawPref} -C \"{escapedProfileName}\" {arguments}";
+            finalArguments = Invariant($"{hideRawPref} -C \"{escapedProfileName}\" {arguments}");
             configDir = personalDir;
         }
 
@@ -136,14 +136,18 @@ internal static class TsharkProcess
             {
                 // Kill failed due to OS-level denial; log and continue so the caller still
                 // receives a timeout result rather than an unhandled exception.
-                Debug.WriteLine($"[TsharkProcess] Failed to kill tshark process: {ex.Message}");
+                Debug.WriteLine(Invariant($"[TsharkProcess] Failed to kill tshark process: {ex.Message}"));
             }
             // Drain whatever was written before the kill so the tasks complete.
+#pragma warning disable CSC004 // Id: CSC004. Why: sync API; drain tasks end once the process exited or was killed. Scope: 2 lines. User approved.
             string partialStdout = stdoutTask.GetAwaiter().GetResult();
             string partialStderr = stderrTask.GetAwaiter().GetResult();
+#pragma warning restore CSC004
             return (-1, partialStdout, partialStderr, true);
         }
+#pragma warning disable CSC004 // Id: CSC004. Why: sync API by design; the drain tasks end once the process exited. Scope: this line. User approved.
         return (process.ExitCode, stdoutTask.GetAwaiter().GetResult(), stderrTask.GetAwaiter().GetResult(), false);
+#pragma warning restore CSC004
     }
 
     /// <summary>

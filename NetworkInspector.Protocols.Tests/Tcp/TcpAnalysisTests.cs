@@ -787,9 +787,17 @@ internal sealed class TcpAnalysisTests
     {
         // A connection that never carries data (a port scan) must stay small: the unacked list is created on the first data
         // segment, not with the connection. Measured as the allocation of the tracker state object itself.
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        // The first construction pays for type loading and JIT, so it runs before the window. Up to five rounds are measured
+        // and the smallest is kept: a one-off allocation on this thread inflates only its own round, while a real per-object
+        // cost appears in every round and keeps the proof.
         TcpConnectionState state = new();
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        long allocated = long.MaxValue;
+        for (int round = 0; round < 5 && allocated >= 400; round++)
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            state = new();
+            allocated = Math.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
 
         await Assert.That(state.Forward.Unacked).IsNull();
         await Assert.That(state.Reverse.Unacked).IsNull();

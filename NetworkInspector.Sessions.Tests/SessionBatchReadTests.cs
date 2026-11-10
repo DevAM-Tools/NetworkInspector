@@ -32,7 +32,7 @@ internal sealed class SessionBatchReadTests
         {
             foreach (int length in new[] { 1, 63, 64, 65, 200 })
             {
-                _CompareOverloads(session, start, length, total, FormattableString.Invariant($"{kind} start {start} length {length}"), problems);
+                _CompareOverloads(session, start, length, total, Invariant($"{kind} start {start} length {length}"), problems);
             }
         }
 
@@ -340,14 +340,14 @@ internal sealed class SessionBatchReadTests
 
         if (plain != expectedCount || withRefs != expectedCount || layout != PacketIdLayout.Contiguous)
         {
-            problems.Add(FormattableString.Invariant($"{label}: counts {plain}/{withRefs}, expected {expectedCount}"));
+            problems.Add(Invariant($"{label}: counts {plain}/{withRefs}, expected {expectedCount}"));
         }
 
         for (int i = 0; i < expectedCount; i++)
         {
             if (!_Same(expected[i], buffer[i]) || !_Same(expected[i], refs[i].Packet) || refs[i].Id.Value != start + i)
             {
-                problems.Add(FormattableString.Invariant($"{label}: slot {i} differs"));
+                problems.Add(Invariant($"{label}: slot {i} differs"));
             }
         }
     }

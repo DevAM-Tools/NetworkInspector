@@ -42,13 +42,72 @@ public static class RegistrationOptions
     }
 
     /// <summary>
+    /// Creates the option manager of a request and seeds every limit option with the stored value of its limit key, so a limit
+    /// that the user stored once (for example <c>blf.maxContainerSize</c>) is the default of every later source or format of that
+    /// kind, and an inline option text still overrides it for one source or output
+    /// (<see cref="TryApplyTexts"/> runs afterwards). A stored value outside the range of the option's definition (written by
+    /// another version) is ignored and reported in <paramref name="ignoredStoredValues"/>; the option keeps the definition
+    /// default, so a stale stored value never stops a run and is never silent.
+    /// </summary>
+    /// <param name="registerOptions">The option action of a source or exporter registration.</param>
+    /// <param name="storedLimit">Returns the stored value of a limit key, or <see langword="null"/> when nothing is stored.</param>
+    /// <param name="ignoredStoredValues">The refused stored values, one error per value; empty when every stored value was used.</param>
+    /// <returns>A new settings manager; the caller disposes it.</returns>
+    /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
+    /// <exception cref="Exception">Whatever <paramref name="registerOptions"/> throws, unchanged.</exception>
+    /// <seealso cref="CreateDefaults(Action{SettingsRegistrar})"/>
+    public static SettingsManager CreateDefaults(Action<SettingsRegistrar> registerOptions,
+        Func<string, LimitValue?> storedLimit, out IReadOnlyList<PluginError> ignoredStoredValues)
+    {
+        ArgumentNullException.ThrowIfNull(registerOptions);
+        ArgumentNullException.ThrowIfNull(storedLimit);
+
+        SettingsManager options = CreateDefaults(registerOptions);
+        try
+        {
+            // The key of an option is its local name, but the stored value lives under the full key of the limit: the
+            // definition of each limit option names it. Seeding applies the value as the option's current value, so
+            // TryApplyTexts (an inline text) overrides it afterwards, which is the order the user expects.
+            List<PluginError>? ignored = null;
+            foreach (Setting setting in options.AllSettings)
+            {
+                if (setting.LimitDefinition is not { } definition || storedLimit(definition.Key) is not { } stored)
+                {
+                    continue;
+                }
+
+                if (!setting.TrySetPendingValue(SettingValue.Limit(stored), out SettingProblem? problem))
+                {
+                    ignored ??= [];
+                    ignored.Add(new PluginError(PluginErrorCode.InvalidOption,
+                        Invariant($"Stored limit {definition.Key} is ignored: {problem.Message}"), setting.Name));
+                    continue;
+                }
+
+                setting.Apply();
+            }
+
+            ignoredStoredValues = ignored is null
+                ? []
+                : ignored;
+            return options;
+        }
+        catch
+        {
+            // The manager must not leak when seeding fails; the original exception continues unchanged.
+            options.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Applies option texts with <see cref="SettingValueText"/>, the one text form of every application: all
     /// texts are parsed and validated first, then set and applied, so a refusal leaves <paramref name="options"/> unchanged.
     /// Refusals are <see cref="PluginErrorCode.InvalidOption"/> with <see cref="PluginError.Option"/> set to the key:
     /// an unknown key (<c>Unknown option 'cout'; did you mean: count?</c> or <c>Unknown option 'x'; options: a, b.</c>), a key
     /// given twice (<c>Option 'count' is given twice.</c>), and every <see cref="SettingProblem"/> (<c>port: allowed 1 – 65535</c>).
     /// </summary>
-    /// <param name="options">The manager of a registration's options (see <see cref="CreateDefaults"/>).</param>
+    /// <param name="options">The manager of a registration's options (see <see cref="CreateDefaults(Action{SettingsRegistrar})"/>).</param>
     /// <param name="texts">Option name and text pairs, in the order given.</param>
     /// <param name="error">Why the texts were refused; <see langword="null"/> on success.</param>
     /// <returns><see langword="true"/> when every text was applied.</returns>
@@ -59,7 +118,9 @@ public static class RegistrationOptions
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(texts);
 
-        // Phase one: resolve and parse everything. Nothing is stored until every text is acceptable.
+        // Phase one: resolve and parse everything. Nothing is stored until every text is acceptable. The limit of the text length
+        // is read once, from the manager of the options: the texts come from remote clients and command lines.
+        LimitValue maxTextLength = options.Limits.MaxTextLength;
         List<(Setting Setting, SettingValue Value)> parsed = new(texts.Count);
         HashSet<string> seen = new(StringComparer.Ordinal);
         foreach (KeyValuePair<string, string> pair in texts)
@@ -76,7 +137,7 @@ public static class RegistrationOptions
                 return false;
             }
 
-            if (!SettingValueText.TryParse(setting, pair.Value, out SettingValue value, out SettingProblem? problem))
+            if (!SettingValueText.TryParse(setting, pair.Value, maxTextLength, out SettingValue value, out SettingProblem? problem))
             {
                 error = new PluginError(PluginErrorCode.InvalidOption, problem.ToString(), pair.Key);
                 return false;

@@ -24,10 +24,10 @@ internal sealed class JsonBasicTests
     private static byte[] _BuildJsonHttpFrame(string jsonBody)
     {
         string httpMessage =
-            $"POST /api HTTP/1.1\r\n" +
-            $"Host: example.com\r\n" +
-            $"Content-Type: application/json\r\n" +
-            $"Content-Length: {jsonBody.Length}\r\n" +
+            Invariant($"POST /api HTTP/1.1\r\n") +
+            Invariant($"Host: example.com\r\n") +
+            Invariant($"Content-Type: application/json\r\n") +
+            Invariant($"Content-Length: {jsonBody.Length}\r\n") +
             "\r\n" +
             jsonBody;
 

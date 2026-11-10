@@ -537,7 +537,7 @@ internal sealed class SignalMessageProtocol : IProtocol
                 muxOk = _TryRegisterField(
                     builder,
                     protocolId,
-                    $"{muxName}.value",
+                    Invariant($"{muxName}.value"),
                     "Mux Value",
                     FieldType.U64,
                     "Multiplexer selector value",
@@ -652,7 +652,7 @@ internal sealed class SignalMessageProtocol : IProtocol
                 if (!_TryRegisterField(
                         builder,
                         protocolId,
-                        $"{fieldName}.raw",
+                        Invariant($"{fieldName}.raw"),
                         "Raw Value",
                         FieldType.U64,
                         "Raw signal bits",
@@ -668,7 +668,7 @@ internal sealed class SignalMessageProtocol : IProtocol
                 if (!_TryRegisterField(
                         builder,
                         protocolId,
-                        $"{fieldName}.enum",
+                        Invariant($"{fieldName}.enum"),
                         "Enum Value",
                         FieldType.String,
                         "Named enum value",
@@ -752,7 +752,7 @@ internal sealed class SignalMessageProtocol : IProtocol
             SettingsLoadWarningKind.ExternalConfigUnavailable,
             "signal_message",
             SignalMessageRegistration.ConfigFileSetting,
-            $"Skipping field '{fieldName}' in message '{Name}': {detail}"));
+            Invariant($"Skipping field '{fieldName}' in message '{Name}': {detail}")));
     }
 
     #endregion

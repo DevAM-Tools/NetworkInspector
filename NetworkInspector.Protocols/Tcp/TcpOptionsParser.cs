@@ -635,7 +635,7 @@ internal static class TcpOptionsParser
             6 => "MP_FAIL",
             7 => "MP_FASTCLOSE",
             8 => "MP_TCPRST",
-            _ => $"Unknown ({subtype})",
+            _ => Invariant($"Unknown ({subtype})"),
         };
     }
     #endregion

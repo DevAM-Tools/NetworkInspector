@@ -39,10 +39,10 @@ dotnet add package NetworkInspector.Protocols
 ```csharp
 using NetworkInspector.Core;
 using NetworkInspector.Core.Ids;
-using NetworkInspector.Core.Settings;
 using NetworkInspector.Filter;
 using NetworkInspector.Filter.Errors;
 using NetworkInspector.Protocols;
+using NetworkInspector.Settings;
 using NetworkInspector.Values;
 
 StackBuilder builder = new(new SettingsManager(), new FrameInterfaceRegistry());

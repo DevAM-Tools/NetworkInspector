@@ -609,7 +609,7 @@ internal sealed class StandardBlockBuilder
         if ((uint)fieldIdValue >= (uint)_MaxFieldId)
         {
             throw new ArgumentOutOfRangeException(nameof(entry),
-                $"Field ID {fieldIdValue} is outside the PBF field ID range [0, {_MaxFieldId}).");
+                Invariant($"Field ID {fieldIdValue} is outside the PBF field ID range [0, {_MaxFieldId})."));
         }
 
         ProtobufEncoder.WriteVarintField(ref buffer, PbfFieldNumbers.FieldFieldId, (ulong)fieldIdValue);
@@ -704,7 +704,7 @@ internal sealed class StandardBlockBuilder
         if ((uint)fieldIdValue >= (uint)_MaxFieldId)
         {
             throw new ArgumentOutOfRangeException(nameof(field),
-                $"Field ID {fieldIdValue} is outside the PBF field ID range [0, {_MaxFieldId}).");
+                Invariant($"Field ID {fieldIdValue} is outside the PBF field ID range [0, {_MaxFieldId})."));
         }
 
         // Field ID — always present

@@ -32,7 +32,7 @@ internal static class CliArgumentParsing
         }
         catch (ArgumentException ex)
         {
-            error.WriteLine($"Error: {ex.Message}");
+            error.WriteLine(Invariant($"Error: {ex.Message}"));
             return (int)ExitCode.ArgumentError;
         }
     }
@@ -56,7 +56,7 @@ internal static class CliArgumentParsing
         }
         catch (Exception ex) when (ex is ArgumentException or CliUsageException)
         {
-            error.WriteLine($"Error: {ex.Message}");
+            error.WriteLine(Invariant($"Error: {ex.Message}"));
             return (int)ExitCode.ArgumentError;
         }
     }
@@ -97,7 +97,7 @@ internal static class CliArgumentParsing
         index++;
         if (index >= args.Length)
         {
-            throw new ArgumentException($"Option '{name}' requires a value.");
+            throw new ArgumentException(Invariant($"Option '{name}' requires a value."));
         }
 
         // The operating system never hands over a null argument; only a caller that built the array by hand can, which is a bug
@@ -105,7 +105,7 @@ internal static class CliArgumentParsing
         string? value = args[index];
         if (value is null)
         {
-            throw new ArgumentException($"Option '{name}' received a null argument (internal error).");
+            throw new ArgumentException(Invariant($"Option '{name}' received a null argument (internal error)."));
         }
 
         return value;
@@ -122,7 +122,7 @@ internal static class CliArgumentParsing
     {
         if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long result))
         {
-            throw new ArgumentException($"Invalid numeric value: '{value}'.");
+            throw new ArgumentException(Invariant($"Invalid numeric value: '{value}'."));
         }
 
         return result;
@@ -139,7 +139,7 @@ internal static class CliArgumentParsing
     {
         if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result))
         {
-            throw new ArgumentException($"Invalid numeric value: '{value}'.");
+            throw new ArgumentException(Invariant($"Invalid numeric value: '{value}'."));
         }
 
         return result;
@@ -156,7 +156,7 @@ internal static class CliArgumentParsing
     {
         if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long result) || result < 0)
         {
-            throw new ArgumentException($"Invalid numeric value: '{value}'.");
+            throw new ArgumentException(Invariant($"Invalid numeric value: '{value}'."));
         }
 
         return result;
@@ -186,19 +186,19 @@ internal static class CliArgumentParsing
 
         if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result))
         {
-            throw new ArgumentException($"Invalid numeric value: '{value}'.");
+            throw new ArgumentException(Invariant($"Invalid numeric value: '{value}'."));
         }
 
         if (result < 0)
         {
-            throw new ArgumentException($"Invalid numeric value: '{value}'.");
+            throw new ArgumentException(Invariant($"Invalid numeric value: '{value}'."));
         }
 
         if (result > max)
         {
-            string prefix = optionName is not null ? $"{optionName} too large" : "Value too large";
+            string prefix = optionName is not null ? Invariant($"{optionName} too large") : "Value too large";
             throw new ArgumentException(
-                $"{prefix}: '{value}'. Max is {max.ToString(CultureInfo.InvariantCulture)}.");
+                Invariant($"{prefix}: '{value}'. Max is {max.ToString(CultureInfo.InvariantCulture)}."));
         }
 
         return result;
@@ -224,8 +224,8 @@ internal static class CliArgumentParsing
         if (miB > maxMiB)
         {
             throw new ArgumentException(
-                $"{optionName} too large: '{miB.ToString(CultureInfo.InvariantCulture)}'. " +
-                $"Max is {maxMiB.ToString(CultureInfo.InvariantCulture)} MiB.");
+                Invariant($"{optionName} too large: '{miB.ToString(CultureInfo.InvariantCulture)}'. ") +
+                Invariant($"Max is {maxMiB.ToString(CultureInfo.InvariantCulture)} MiB."));
         }
 
         return (int)(miB * bytesPerMiB);
@@ -253,8 +253,8 @@ internal static class CliArgumentParsing
         if (miB > maxMiB)
         {
             throw new ArgumentException(
-                $"{optionName} too large: '{miB.ToString(CultureInfo.InvariantCulture)}'. " +
-                $"Max is {maxMiB.ToString(CultureInfo.InvariantCulture)} MiB.");
+                Invariant($"{optionName} too large: '{miB.ToString(CultureInfo.InvariantCulture)}'. ") +
+                Invariant($"Max is {maxMiB.ToString(CultureInfo.InvariantCulture)} MiB."));
         }
 
         return miB * bytesPerMiB;

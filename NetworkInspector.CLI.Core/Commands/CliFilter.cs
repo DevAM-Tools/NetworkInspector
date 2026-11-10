@@ -42,7 +42,7 @@ internal static class CliFilter
         FilterResult<PacketFilter> compiled = PacketFilter.Compile(expression, stack);
         if (!compiled.TryGetValue(out PacketFilter? compiledFilter))
         {
-            error.WriteLine($"Error: invalid --filter expression: {compiled.Error.Message}");
+            error.WriteLine(Invariant($"Error: invalid --filter expression: {compiled.Error.Message}"));
             filter = null;
             return false;
         }
@@ -85,7 +85,7 @@ internal static class CliFilter
             return true;
         }
 
-        error.WriteLine($"Error: filter evaluation failed: {failure.Message}");
+        error.WriteLine(Invariant($"Error: filter evaluation failed: {failure.Message}"));
         matched = false;
         return false;
     }

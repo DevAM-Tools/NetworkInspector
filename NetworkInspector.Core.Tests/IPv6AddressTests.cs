@@ -281,14 +281,14 @@ internal sealed class IPv6AddressTests
     public async Task ToString_MatchesFormat()
     {
         IPv6Address ip = new(0, 1);
-        await Assert.That(ip.ToString()).IsEqualTo(ip.Format());
+        await Assert.That(ip.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(ip.Format());
     }
 
     [Test]
     public async Task ToString_FormatProvider()
     {
         IPv6Address ip = new(0, 1);
-        await Assert.That(ip.ToString(null, null)).IsEqualTo(ip.Format());
+        await Assert.That(ip.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(ip.Format());
     }
 
     // === TryFormat (char) ===

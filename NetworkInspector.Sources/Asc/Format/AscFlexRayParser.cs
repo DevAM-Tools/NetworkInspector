@@ -8,7 +8,8 @@ namespace NetworkInspector.Sources.Asc.Format;
 /// Old ASC FlexRay line (CANoe 5.1 and earlier):
 ///   &lt;time&gt; Fr &lt;channel&gt; V9 &lt;id&gt; &lt;cycle&gt; &lt;nm&gt; &lt;sync&gt; &lt;header_crc&gt; &lt;name&gt; &lt;byte_count&gt; &lt;data...&gt;
 /// New ASC FlexRay line (since CANoe 5.2):
-///   &lt;time&gt; Fr RMSG|PDU &lt;cluster&gt; &lt;client&gt; &lt;channel&gt; &lt;mask&gt; &lt;slot&gt; &lt;cycle&gt; &lt;dir&gt; ... &lt;crc&gt; &lt;name&gt; &lt;payloadLen&gt; &lt;bufferLen&gt; &lt;data...&gt;
+///   &lt;time&gt; Fr RMSG|PDU &lt;cluster&gt; &lt;client&gt; &lt;channel&gt; &lt;mask&gt; &lt;slot&gt; &lt;cycle&gt; &lt;dir&gt; ... &lt;crc&gt;
+///   &lt;name&gt; &lt;payloadLen&gt; &lt;bufferLen&gt; &lt;data...&gt;
 /// Numeric fields follow the file base. NM and Sync are skipped. Mask 3 (both channels) is stored as bus channel B
 /// because LINKTYPE_FLEXRAY has one channel bit.
 ///

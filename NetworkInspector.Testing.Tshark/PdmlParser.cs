@@ -66,7 +66,7 @@ internal static class PdmlParser
         {
             string snippet = pdmlXml.Length > 200 ? pdmlXml[..200] : pdmlXml;
             throw new InvalidOperationException(
-                $"tshark returned malformed PDML XML: {ex.Message}\nXML snippet: {snippet}", ex);
+                Invariant($"tshark returned malformed PDML XML: {ex.Message}\nXML snippet: {snippet}"), ex);
         }
 
         return result;
@@ -114,7 +114,7 @@ internal static class PdmlParser
         {
             string snippet = pdmlXml.Length > 200 ? pdmlXml[..200] : pdmlXml;
             throw new InvalidOperationException(
-                $"tshark returned malformed PDML XML: {ex.Message}\nXML snippet: {snippet}", ex);
+                Invariant($"tshark returned malformed PDML XML: {ex.Message}\nXML snippet: {snippet}"), ex);
         }
 
         return result;

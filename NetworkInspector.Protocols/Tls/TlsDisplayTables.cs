@@ -71,7 +71,7 @@ internal static class TlsDisplayTables
             return text;
         }
 
-        return $"0x{version:X4}";
+        return Invariant($"0x{version:X4}");
     }
 
     #endregion
@@ -154,7 +154,7 @@ internal static class TlsDisplayTables
         {
             // GREASE pattern: high nibble in both bytes, 0x0A in low nibble of both bytes
             ushort code = (ushort)((hi << 12) | (0x0A << 8) | (hi << 4) | 0x0A);
-            result[code] = $"GREASE (0x{code:X4})";
+            result[code] = Invariant($"GREASE (0x{code:X4})");
         }
         return result;
     }
@@ -173,7 +173,7 @@ internal static class TlsDisplayTables
                 return grease;
             }
 
-            return $"GREASE (0x{code:X4})";
+            return Invariant($"GREASE (0x{code:X4})");
         }
 
         // Known suite: binary search over the sorted table (O(log n), no allocation); unknown suites format their code.
@@ -182,7 +182,7 @@ internal static class TlsDisplayTables
         {
             return _CipherSuites[idx].Name;
         }
-        return $"Unknown (0x{code:X4})";
+        return Invariant($"Unknown (0x{code:X4})");
     }
 
     /// <summary>Binary search over <see cref="_CipherSuites"/>, which must be sorted ascending by code. Returns the index, or -1.</summary>
@@ -297,7 +297,7 @@ internal static class TlsDisplayTables
         Dictionary<ushort, string> result = new(_ExtensionTypeNames.Count);
         foreach ((ushort type, string name) in _ExtensionTypeNames)
         {
-            result[type] = $"{name} ({type})";
+            result[type] = Invariant($"{name} ({type})");
         }
         return result;
     }
@@ -314,14 +314,14 @@ internal static class TlsDisplayTables
                 return grease;
             }
 
-            return $"GREASE (0x{type:X4})";
+            return Invariant($"GREASE (0x{type:X4})");
         }
 
         if (_ExtensionTypeDisplayTexts.TryGetValue(type, out string? text))
         {
             return text;
         }
-        return $"Unknown ({type})";
+        return Invariant($"Unknown ({type})");
     }
 
     /// <summary>Returns the short name for a TLS extension type.</summary>
@@ -445,15 +445,15 @@ internal static class TlsDisplayTables
                 return grease;
             }
 
-            return $"GREASE (0x{group:X4})";
+            return Invariant($"GREASE (0x{group:X4})");
         }
 
         if (_SupportedGroupNames.TryGetValue(group, out string? name))
         {
-            return $"{name} ({group})";
+            return Invariant($"{name} ({group})");
         }
 
-        return $"Unknown ({group})";
+        return Invariant($"Unknown ({group})");
     }
 
     #endregion
@@ -495,15 +495,15 @@ internal static class TlsDisplayTables
                 return grease;
             }
 
-            return $"GREASE (0x{algo:X4})";
+            return Invariant($"GREASE (0x{algo:X4})");
         }
 
         if (_SignatureAlgorithmNames.TryGetValue(algo, out string? name))
         {
-            return $"{name} (0x{algo:X4})";
+            return Invariant($"{name} (0x{algo:X4})");
         }
 
-        return $"Unknown (0x{algo:X4})";
+        return Invariant($"Unknown (0x{algo:X4})");
     }
     #endregion
 }

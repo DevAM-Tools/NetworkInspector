@@ -9,11 +9,8 @@ namespace NetworkInspector.Core.Errors;
 /// <param name="message">Message naming the missing id or name.</param>
 public sealed class NotFoundRegistrationException(string message) : RegistrationException(message)
 {
-    #region Factory Methods
-
     /// <summary>Creates a not-found exception with the specified message.</summary>
     /// <param name="message">Message naming the missing id or name.</param>
+    /// <returns>The exception, ready to be thrown by the core.</returns>
     internal static NotFoundRegistrationException For(string message) => new(message);
-
-    #endregion
 }

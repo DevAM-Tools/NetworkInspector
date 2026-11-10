@@ -36,7 +36,7 @@ internal sealed class FieldValueFormattingTests
             7 => FieldValueData.NewUuid(new Uuid(0x550E8400E29B41D4UL, 0xA716446655440000UL)),
             _ => FieldValueData.NewBytes(_Bytes(16)),
         };
-        return value.ToString().Length;
+        return value.ToString(null, CultureInfo.InvariantCulture).Length;
     }
 
     #endregion
@@ -46,7 +46,7 @@ internal sealed class FieldValueFormattingTests
     {
         FieldValueData value = FieldValueData.NewBytes(_Bytes(10_000));
 
-        string text = value.ToString();
+        string text = value.ToString(null, CultureInfo.InvariantCulture);
 
         // 3 characters per byte minus the missing trailing separator.
         await Assert.That(text.Length).IsEqualTo((3 * 10_000) - 1);
@@ -61,7 +61,7 @@ internal sealed class FieldValueFormattingTests
         char[] large = new char[400];
 
         bool ok = value.TryFormat(large, out int written, default, CultureInfo.InvariantCulture);
-        string text = value.ToString();
+        string text = value.ToString(null, CultureInfo.InvariantCulture);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(text.Length).IsEqualTo(299);
@@ -73,8 +73,8 @@ internal sealed class FieldValueFormattingTests
     {
         IPv6Address address = new(0x20010DB800010002UL, 0x0003000400050006UL);
         SettingValue setting = SettingValue.String("setting-label");
-        LazyString warmUp = LazyString.Lazy(() => FieldValue.NewIPv6(address).ToString() + "|" + setting.Format());
-        LazyString measured = LazyString.Lazy(() => FieldValue.NewIPv6(address).ToString() + "|" + setting.Format());
+        LazyString warmUp = LazyString.Lazy(() => FieldValue.NewIPv6(address).ToString(null, CultureInfo.InvariantCulture) + "|" + setting.Format());
+        LazyString measured = LazyString.Lazy(() => FieldValue.NewIPv6(address).ToString(null, CultureInfo.InvariantCulture) + "|" + setting.Format());
         _ = warmUp.AsString; // JIT and static initialisation outside the measured window
 
         long before = GC.GetAllocatedBytesForCurrentThread();

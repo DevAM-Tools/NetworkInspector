@@ -17,17 +17,11 @@ namespace NetworkInspector.Core.Interfaces;
 /// </summary>
 public interface IErrorTolerantExporter : IExporterStatistics, IExportByteProgress
 {
-    #region Properties
-
     /// <summary>Gets or sets the error tolerance mode. Default: Tolerant.</summary>
     ErrorToleranceMode ErrorTolerance
     {
         get; set;
     }
-
-    #endregion
-
-    #region Events
 
     /// <summary>
     /// Event raised when a frame/packet is skipped due to a recoverable error.
@@ -39,6 +33,4 @@ public interface IErrorTolerantExporter : IExporterStatistics, IExportByteProgre
     /// </para>
     /// </summary>
     event EventHandler<ExportErrorEventArgs>? ItemSkipped;
-
-    #endregion
 }

@@ -1066,10 +1066,10 @@ public sealed partial class TcpProtocol : IProtocol
         // TCP can be entered again while the same packet is still being parsed (nested layers, for example tunnels).
         // The watermark is raised only by the outermost scope, so an inner layer of the same packet still sees its own
         // packet id as "not yet parsed" and takes the first-parse path too. A replay holds the inert default scope.
-        bool isReplay = _Gate.IsReplay(packet.Id);
+        bool isReplay = _Gate.IsReplay(in context, packet.Id);
         IngestScope scope = isReplay
             ? default
-            : _Gate.Enter(packet.Id);
+            : _Gate.Enter(in context, packet.Id);
 
         // The scope must end in finally, also after errors and exceptions: otherwise a later parse of this id would
         // re-enter the first-parse path and mutate the tracker a second time.

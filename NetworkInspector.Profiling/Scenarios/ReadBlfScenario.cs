@@ -29,7 +29,7 @@ internal sealed class ReadBlfScenario : ReadScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant($"Read {_Count:N0} frames from a BLF file per iteration.");
+        Invariant($"Read {_Count:N0} frames from a BLF file per iteration.");
 
     /// <inheritdoc/>
     protected override void RunIteration(string filePath)

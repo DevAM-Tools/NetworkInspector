@@ -590,7 +590,7 @@ internal sealed class JsonExporterTests
 
         if (!_TryFindFieldTypeByName(fields, fieldName, typeKey, out JsonElement typeElement))
         {
-            throw new InvalidOperationException($"Field '{fieldName}' with key '{typeKey}' not found.");
+            throw new InvalidOperationException(Invariant($"Field '{fieldName}' with key '{typeKey}' not found."));
         }
 
         return typeElement;

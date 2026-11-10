@@ -129,7 +129,7 @@ internal abstract class FilterScenarioBase : IProfilingScenario
         if (!compiled.TryGetValue(out PacketFilter? filter))
         {
             throw new InvalidOperationException(
-                FormattableString.Invariant($"Failed to compile filter '{Expression}': {compiled.Error.Message}"));
+                Invariant($"Failed to compile filter '{Expression}': {compiled.Error.Message}"));
         }
 
         _Filter = filter;
@@ -169,10 +169,10 @@ internal abstract class FilterScenarioBase : IProfilingScenario
         if (_TimedPhase && _TimedEvalCount > 0)
         {
             Console.WriteLine(
-                FormattableString.Invariant(
+                Invariant(
                     $"  Filter matches: {_TimedMatchCount:N0} / {_TimedEvalCount:N0} evaluations ({100.0 * _TimedMatchCount / _TimedEvalCount:F2}%)."));
             Console.WriteLine(
-                FormattableString.Invariant(
+                Invariant(
                     $"  Packets with pending lazy fields: {_PendingLazyCount:N0} / {TimedPoolSize:N0}."));
         }
 
@@ -249,7 +249,7 @@ internal abstract class FilterScenarioBase : IProfilingScenario
             if (!filter.TryIsMatch(packet, index, out _, out FilterError? failure))
             {
                 throw new InvalidOperationException(
-                    FormattableString.Invariant($"Filter '{Expression}' failed on warmup packet {i}: {failure.Message}"));
+                    Invariant($"Filter '{Expression}' failed on warmup packet {i}: {failure.Message}"));
             }
         }
     }
@@ -321,7 +321,7 @@ internal abstract class FilterScenarioBase : IProfilingScenario
             if (!filter.TryIsMatch(packet, index, out bool matched, out FilterError? failure))
             {
                 throw new InvalidOperationException(
-                    FormattableString.Invariant(
+                    Invariant(
                         $"Filter '{Expression}' failed on timed packet {packet.Id.Value}: {failure.Message}"));
             }
 

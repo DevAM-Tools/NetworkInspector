@@ -13,12 +13,10 @@ namespace NetworkInspector.Core.Errors;
 /// <seealso cref="RegistrationHolderKind"/>
 public sealed class DuplicateNameRegistrationException : RegistrationException
 {
-    #region Constructors
-
     /// <summary>Creates the exception for a name that is registered twice within one kind of registration.</summary>
     /// <param name="name">The name that was registered twice; also reported in the message.</param>
     public DuplicateNameRegistrationException(string name)
-        : base($"Duplicate name: '{name}'")
+        : base(Invariant($"Duplicate name: '{name}'"))
     {
         Name = name;
         HolderKind = RegistrationHolderKind.Unknown;
@@ -28,15 +26,11 @@ public sealed class DuplicateNameRegistrationException : RegistrationException
     /// <param name="name">The name that was refused; also reported in the message.</param>
     /// <param name="holderKind">The kind of the registration that holds the name; also reported in the message.</param>
     public DuplicateNameRegistrationException(string name, RegistrationHolderKind holderKind)
-        : base($"Duplicate name: '{name}' is already registered as a {_Describe(holderKind)}.")
+        : base(Invariant($"Duplicate name: '{name}' is already registered as a {_Describe(holderKind)}."))
     {
         Name = name;
         HolderKind = holderKind;
     }
-
-    #endregion
-
-    #region Properties
 
     /// <summary>The name that was already registered.</summary>
     public string Name { get; }
@@ -44,22 +38,16 @@ public sealed class DuplicateNameRegistrationException : RegistrationException
     /// <summary>The kind of registration that holds the name; <see cref="RegistrationHolderKind.Unknown"/> when not reported.</summary>
     public RegistrationHolderKind HolderKind { get; }
 
-    #endregion
-
-    #region Factory Methods
-
     /// <summary>Creates a duplicate-name exception for the given name.</summary>
     /// <param name="name">The name that was registered twice.</param>
+    /// <returns>The exception, ready to be thrown by the core.</returns>
     internal static DuplicateNameRegistrationException For(string name) => new(name);
 
     /// <summary>Creates a duplicate-name exception that names the kind of the holder.</summary>
     /// <param name="name">The name that was refused.</param>
     /// <param name="holderKind">The kind of the registration that holds the name.</param>
+    /// <returns>The exception, ready to be thrown by the core.</returns>
     internal static DuplicateNameRegistrationException For(string name, RegistrationHolderKind holderKind) => new(name, holderKind);
-
-    #endregion
-
-    #region Message
 
     /// <summary>The noun the message uses for <paramref name="kind"/>; "registration" for an unknown or undefined kind.</summary>
     /// <param name="kind">The holder kind.</param>
@@ -71,6 +59,4 @@ public sealed class DuplicateNameRegistrationException : RegistrationException
         RegistrationHolderKind.FieldAliasGroup => "field alias group",
         _ => "registration",
     };
-
-    #endregion
 }

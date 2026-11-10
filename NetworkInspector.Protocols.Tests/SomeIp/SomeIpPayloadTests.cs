@@ -49,7 +49,7 @@ internal sealed class SomeIpPayloadTests : SomeIpPayloadKit
         List<Field> uuid = FieldsOf(s, packet, InName("base", "id"));
         await Assert.That(uuid.Count).IsEqualTo(1);
         await Assert.That(uuid[0].Value.Data.TryGetAsUuid(out Values.Uuid value)).IsTrue();
-        await Assert.That(value.ToString()).IsEqualTo("00112233-4455-6677-8899-AABBCCDDEEFF");
+        await Assert.That(value.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("00112233-4455-6677-8899-AABBCCDDEEFF");
         await Assert.That(Errors(s, packet)).IsEmpty();
     }
 

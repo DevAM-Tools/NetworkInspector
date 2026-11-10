@@ -58,7 +58,7 @@ internal sealed class NegativeCompileTests
         bool hasError = diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
         await Assert.That(hasError)
             .IsTrue()
-            .Because($"snippet '{snippetName}' must NOT compile, but produced no error diagnostic. " +
-                $"Diagnostics: {string.Join("; ", diagnostics.Select(d => d.ToString()))}");
+            .Because(Invariant($"snippet '{snippetName}' must NOT compile, but produced no error diagnostic. ") +
+                Invariant($"Diagnostics: {string.Join("; ", diagnostics.Select(d => string.Create(CultureInfo.InvariantCulture, $"{d}")))}"));
     }
 }

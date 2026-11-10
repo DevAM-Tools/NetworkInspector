@@ -79,7 +79,7 @@ internal sealed class PostParserTests
         for (int i = 0; i < priorities.Length; i++)
         {
             int capturedIndex = i;
-            protos[i] = new PostParserProto($"pp{i}", $"PP{i}", () => executionOrder.Add(capturedIndex));
+            protos[i] = new PostParserProto(Invariant($"pp{i}"), Invariant($"PP{i}"), () => executionOrder.Add(capturedIndex));
             ProtocolId ppId = builder.RegisterProtocol(protos[i]);
             builder.RegisterPostParser(ppId, priorities[i]);
         }
@@ -308,7 +308,8 @@ internal sealed class PostParserTests
         }
 
         // Assert: custom field appears in the packet tree
-        bool found = packet.TryGetFieldValue(customFieldId, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+        bool found = packet.TryGetFieldValue(customFieldId, out FieldValue value,
+            materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(found).IsTrue();
         bool asU64 = value.Data.TryGetAsU64(out ulong u64Value);
         await Assert.That(asU64).IsTrue();
@@ -401,7 +402,8 @@ internal sealed class PostParserTests
         await Assert.That(postParserRan).IsTrue();
 
         // Assert: main parse error was recorded
-        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true); // materialize: true — need complete field tree for assertion
+        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _,
+            materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(hasError).IsTrue();
 
         stack.Dispose();
@@ -447,7 +449,8 @@ internal sealed class PostParserTests
         await Assert.That(postParserRan).IsTrue();
 
         // Assert: main exception was recorded as packet error
-        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true); // materialize: true — need complete field tree for assertion
+        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _,
+            materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(hasError).IsTrue();
 
         stack.Dispose();
@@ -504,7 +507,8 @@ internal sealed class PostParserTests
         await Assert.That(ran[1]).IsEqualTo("pp3");
 
         // Assert: pp1's error was recorded
-        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true); // materialize: true — need complete field tree for assertion
+        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _,
+            materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(hasError).IsTrue();
 
         stack.Dispose();
@@ -561,7 +565,8 @@ internal sealed class PostParserTests
         await Assert.That(ran[1]).IsEqualTo("pp3");
 
         // Assert: pp1's exception was recorded as packet error
-        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true); // materialize: true — need complete field tree for assertion
+        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _,
+            materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(hasError).IsTrue();
 
         stack.Dispose();
@@ -600,7 +605,8 @@ internal sealed class PostParserTests
 
         // Assert: parse completed normally, no errors
         await Assert.That(packet.IsFinalized).IsTrue();
-        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _, materialize: true); // materialize: true — need complete field tree for assertion
+        bool hasError = packet.TryGetFieldValue(stack.PacketErrorFieldId, out _,
+            materialize: true); // materialize: true — need complete field tree for assertion
         await Assert.That(hasError).IsFalse();
 
         stack.Dispose();

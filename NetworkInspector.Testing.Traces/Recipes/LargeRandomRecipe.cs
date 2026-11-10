@@ -119,7 +119,7 @@ public sealed class LargeRandomRecipe : TraceRecipe
         // caller's expectation wrong, so it is an error here and not a short file.
         if (written != Frames)
         {
-            throw new InvalidOperationException($"The random source with mode {Mode} delivered {written} of {Frames} frames.");
+            throw new InvalidOperationException(Invariant($"The random source with mode {Mode} delivered {written} of {Frames} frames."));
         }
 
         exporter.OnFinish();

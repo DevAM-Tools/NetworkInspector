@@ -21,7 +21,7 @@ internal sealed class PduTransportBasicTests
             pduWireId: AutomotivePduBench.PduTransportWireId,
             signalMessage: inner);
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_basic_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_basic_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         string sigJson = Path.Combine(work, "signal_message.json");
@@ -72,7 +72,7 @@ internal sealed class PduTransportBasicTests
             pduWireId: AutomotivePduBench.PduTransportWireId,
             signalMessage: inner);
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_tree_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_tree_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         string sigJson = Path.Combine(work, "signal_message.json");
@@ -184,7 +184,7 @@ internal sealed class PduTransportBasicTests
             new PduTransportSlot(AutomotivePduBench.PduTransportWireId, new byte[] { 0x11 }),
             new PduTransportSlot(0x21, new byte[] { 0x22, 0x33 }));
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_multi_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_multi_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         try
@@ -261,7 +261,7 @@ internal sealed class PduTransportBasicTests
             pduWireId: AutomotivePduBench.PduTransportWireId,
             signalMessage: inner);
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_noport_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_noport_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         string sigJson = Path.Combine(work, "signal_message.json");
@@ -326,7 +326,7 @@ internal sealed class PduTransportBasicTests
             pduWireId: AutomotivePduBench.PduTransportWireId,
             signalMessage: inner);
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_badkey_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_badkey_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         string sigJson = Path.Combine(work, "signal_message.json");
@@ -412,7 +412,7 @@ internal sealed class PduTransportBasicTests
             pduWireId: AutomotivePduBench.PduTransportWireId,
             signalMessage: inner);
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_twoport_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_twoport_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         string sigJson = Path.Combine(work, "signal_message.json");
@@ -471,7 +471,7 @@ internal sealed class PduTransportBasicTests
             pduWireId: AutomotivePduBench.PduTransportWireId,
             signalMessage: inner);
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_mixedport_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_mixedport_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         string sigJson = Path.Combine(work, "signal_message.json");
@@ -524,7 +524,7 @@ internal sealed class PduTransportBasicTests
             pduWireId: AutomotivePduBench.PduTransportWireId,
             signalMessage: inner);
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_scalarport_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_scalarport_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         string sigJson = Path.Combine(work, "signal_message.json");
@@ -573,7 +573,7 @@ internal sealed class PduTransportBasicTests
             pduWireId: AutomotivePduBench.PduTransportWireId,
             signalMessage: inner);
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_srcport_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_srcport_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         string sigJson = Path.Combine(work, "signal_message.json");
@@ -621,7 +621,7 @@ internal sealed class PduTransportBasicTests
             pduWireId: AutomotivePduBench.PduTransportWireId,
             signalMessage: inner);
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_oldkey_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_oldkey_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         string sigJson = Path.Combine(work, "signal_message.json");
@@ -668,7 +668,7 @@ internal sealed class PduTransportBasicTests
             pduWireId: AutomotivePduBench.PduTransportWireId,
             signalMessage: inner);
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_zerodst_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pdu_tr_zerodst_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         string sigJson = Path.Combine(work, "signal_message.json");

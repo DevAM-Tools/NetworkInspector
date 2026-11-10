@@ -138,7 +138,7 @@ public sealed class CachedFrameSource : IRandomAccessFrameSource, IErrorTolerant
         if (inner is IRandomAccessFrameSource && !allowRandomAccessInner)
         {
             throw new ArgumentException(
-                $"The source '{inner.UiName}' already supports random access. " +
+                Invariant($"The source '{inner.UiName}' already supports random access. ") +
                 "Wrapping it in CachedFrameSource is unnecessary — use the source directly.",
                 nameof(inner));
         }

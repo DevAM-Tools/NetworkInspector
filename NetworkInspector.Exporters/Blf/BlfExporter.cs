@@ -460,7 +460,8 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IBatch
                         ItemIndex = currentIndex,
                         Kind = ExportErrorKind.UnsupportedType,
                         Message =
-                            $"BLF LIN frame is not a data, error, sleep, or wakeup object (byte4=0x{data[4]:X2}, byte7=0x{linErrors:X2}, length={data.Length}).",
+                            Invariant($"BLF LIN frame is not a data, error, sleep, or wakeup object ")
+                            + Invariant($"(byte4=0x{data[4]:X2}, byte7=0x{linErrors:X2}, length={data.Length})."),
                     });
                 }
 
@@ -472,7 +473,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IBatch
                 {
                     ItemIndex = currentIndex,
                     Kind = ExportErrorKind.UnsupportedType,
-                    Message = $"Unsupported link type: {frame.LinkType}",
+                    Message = Invariant($"Unsupported link type: {frame.LinkType}"),
                 });
         }
 
@@ -532,7 +533,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IBatch
                 Kind = ex is IOException
                     ? ExportErrorKind.IoError
                     : ExportErrorKind.SerializationError,
-                Message = $"BLF write failed: {ex.Message}",
+                Message = Invariant($"BLF write failed: {ex.Message}"),
             });
         }
 
@@ -651,9 +652,9 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IBatch
             target = lookup switch
             {
                 InterfaceChannelLookup.Invalid => new(1, null, null,
-                    $"BLF channel value '{invalid}' cannot be converted to a UInt16 channel id."),
+                    Invariant($"BLF channel value '{invalid}' cannot be converted to a UInt16 channel id.")),
                 InterfaceChannelLookup.Found when channel is < 0 or > ushort.MaxValue => new(1, null, null,
-                    $"BLF channel value '{channel}' cannot be converted to a UInt16 channel id."),
+                    Invariant($"BLF channel value '{channel}' cannot be converted to a UInt16 channel id.")),
                 InterfaceChannelLookup.Found => new((ushort)channel, hardwareChannel, info.UiName, null),
                 _ => new(1, hardwareChannel, info.UiName, null),
             };
@@ -812,7 +813,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IBatch
         // ordinary I/O failure).
         if (!_Output.TryGetOrCreateUnderlyingStream(out Stream? underlyingStream, out string openFailure))
         {
-            _ReportStartFailure($"BLF output could not be opened: {openFailure}");
+            _ReportStartFailure(Invariant($"BLF output could not be opened: {openFailure}"));
             return false;
         }
 
@@ -824,7 +825,7 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IBatch
         }
         catch (Exception ex)
         {
-            _ReportStartFailure($"BLF header write failed: {ex.Message}");
+            _ReportStartFailure(Invariant($"BLF header write failed: {ex.Message}"));
             return false;
         }
 
@@ -1158,8 +1159,8 @@ public sealed class BlfExporter : IFrameListener, IErrorTolerantExporter, IBatch
                 throw new ArgumentOutOfRangeException(
                     nameof(count),
                     count,
-                    $"Target frame count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
-                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+                    Invariant($"Target frame count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} ") +
+                    Invariant($"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)})."));
             }
 
             _TargetFrameCount = count;

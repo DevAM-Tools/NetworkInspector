@@ -28,9 +28,9 @@ using NetworkInspector.BuiltInPlugins;
 using NetworkInspector.Core;
 using NetworkInspector.Core.Ids;
 using NetworkInspector.Core.Interfaces;
-using NetworkInspector.Core.Settings;
 using NetworkInspector.Plugins;
 using NetworkInspector.Plugins.Loader;
+using NetworkInspector.Settings;
 
 string appFolder = Path.Combine(Path.GetTempPath(), "my-analyzer");
 string pluginFolder = args[0];
@@ -121,10 +121,10 @@ sealed class ConsoleLog(string plugin) : IPluginLog
 With the [sample plugin](../samples/Sample.Protocol/README.md) in the folder the program prints:
 
 ```text
-NetworkInspector.StandardProtocols 0.20.0: Loaded
-NetworkInspector.FileSources 0.20.0: Loaded
-NetworkInspector.RandomSource 0.20.0: Loaded
-NetworkInspector.Exporters 0.20.0: Loaded
+NetworkInspector.StandardProtocols 0.21.0: Loaded
+NetworkInspector.FileSources 0.21.0: Loaded
+NetworkInspector.RandomSource 0.21.0: Loaded
+NetworkInspector.Exporters 0.21.0: Loaded
 Sample.Protocol 0.1.0: Loaded
 Info Sample.Protocol: started; greeting=Hello from Sample.Protocol
 Sample counter=0 gear=0 speed=254
@@ -143,7 +143,7 @@ Info Sample.Protocol: stopped
 | `PluginLifecycle` | `StartAsync` in load order and `StopAsync` in reverse order, each call bounded by a timeout and isolated |
 | `PluginContext` | The `IPluginContext` implementation a started plugin receives |
 | `PluginPathsSetting`, `PluginTimeoutSettings` | The application settings `plugins.paths`, `plugins.startTimeoutSeconds`, and `plugins.stopTimeoutSeconds` |
-| `RegistrationOptions` | Option managers of a source or format from defaults and `key=value` texts, with Core validation |
+| `RegistrationOptions` | Option managers of a source or format from defaults and `key=value` texts, with Core validation; the overload with a stored-limit lookup seeds every limit option from the stored limit of the same key, and an option text still overrides it |
 | `ExportTargets`, `TargetReplacement` | Target rules every export runner applies: full path, parent folder, refused overwrite, an existing output moved aside until the new one is complete, cleanup of a partial output |
 | `PluginTier`, `PluginTierStep`, `IPluginBuilderFactory`, `ContributionKind`, `ContributionRecorder` | Tier handling and contribution bookkeeping |
 
@@ -157,7 +157,7 @@ Info Sample.Protocol: stopped
 - **Clear version refusals.** A plugin built against a newer version of an application assembly (the contract, Core, or the
   framework) cannot bind its references; the loader detects that from metadata before any plugin code runs and fails the
   plugin with a reason that names the assembly and both versions. The same or an older version runs with the application's
-  copy, as long as that assembly kept its binary contract. Before 1.0 a minor release may change it (0.20.0 changed public
+  copy, as long as that assembly kept its binary contract. Before 1.0 a minor release may change it (0.20.0 and 0.21.0 changed public
   Core signatures), and the loader does not detect that: rebuild a plugin against the minor version it runs on, or it fails
   when the changed code runs.
 - **One plugin never breaks another.** A plugin that fails to load, configure, register, or start becomes a `Failed`

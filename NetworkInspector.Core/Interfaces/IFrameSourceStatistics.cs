@@ -9,8 +9,6 @@ namespace NetworkInspector.Core.Interfaces;
 /// </summary>
 public interface IFrameSourceStatistics
 {
-    #region Properties
-
     /// <summary>
     /// Number of frames successfully read and returned via <see cref="IFrameSource.NextFrame"/>.
     /// </summary>
@@ -47,6 +45,4 @@ public interface IFrameSourceStatistics
     {
         get;
     }
-
-    #endregion
 }

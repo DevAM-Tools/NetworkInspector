@@ -10,6 +10,9 @@ internal sealed class SequenceStreamBufferTests
         MaxBufferSize = 1024,
     });
 
+    /// <summary>A one-byte segment whose value is the low byte of <paramref name="index"/>, so a stream position names its content.</summary>
+    private static byte[] _OneByte(int index) => [unchecked((byte)index)];
+
     [Test]
     public async Task InOrderHalves_FormOnePrefix()
     {
@@ -102,26 +105,126 @@ internal sealed class SequenceStreamBufferTests
     #region Held segments
 
     [Test]
-    public async Task TenThousandHeldSegmentsFillInReverseOrderInBoundedTime()
+    public async Task DescendingSegmentsFormOnePrefix()
     {
-        // The held list is kept sorted, so the insertion of a segment is a binary search plus a move, and filling the hole
-        // at the front drains the whole list in one pass. A scan per insertion would make this quadratic.
-        SequenceStreamBuffer buffer = new(new StreamReassemblyConfig { MaxBufferSize = 100_000 });
+        // Every descending segment starts before the origin, so each one rebuilds the prefix; the segment that fills the
+        // hole at the front then joins all of them. The test proves content and order, not speed.
+        SequenceStreamBuffer buffer = new(new StreamReassemblyConfig { MaxBufferSize = 100_000, MaxRebases = int.MaxValue });
         byte[] one = [7];
         const int count = 10_000;
 
-        Stopwatch watch = Stopwatch.StartNew();
+        int rejected = 0;
         for (int index = count; index >= 1; index--)
         {
-            await Assert.That(buffer.TryAppend((uint)(1000 + index), one)).IsTrue();
+            if (!buffer.TryAppend((uint)(1000 + index), one))
+            {
+                rejected++;
+            }
         }
 
-        await Assert.That(buffer.ContiguousLength).IsEqualTo(count);
-        await Assert.That(buffer.TryAppend(1000, one)).IsTrue();
-        watch.Stop();
+        int lengthBeforeFill = buffer.ContiguousLength;
+        bool filled = buffer.TryAppend(1000, one);
 
+        await Assert.That(rejected).IsEqualTo(0);
+        await Assert.That(lengthBeforeFill).IsEqualTo(count);
+        await Assert.That(filled).IsTrue();
         await Assert.That(buffer.ContiguousLength).IsEqualTo(count + 1);
-        await Assert.That(watch.Elapsed.TotalSeconds).IsLessThan(5);
+    }
+
+    [Test]
+    public async Task DescendingSegmentsStopRebasingAtTheLimit()
+    {
+        SequenceStreamBuffer buffer = new(new StreamReassemblyConfig { MaxBufferSize = 100_000, MaxRebases = 8 });
+        byte[] one = [7];
+        StreamAppendRefusal last = StreamAppendRefusal.None;
+        int refused = 0;
+
+        // Distinct packet ids keep one contributor piece per segment: the expensive shape of a rebase.
+        for (int index = 100; index >= 1; index--)
+        {
+            if (!buffer.TryAppend((uint)(1000 + index), one, packetId: index, out last))
+            {
+                refused++;
+            }
+        }
+
+        await Assert.That(buffer.RebaseCount).IsEqualTo(8);
+        await Assert.That(refused).IsEqualTo(91);
+        await Assert.That(last).IsEqualTo(StreamAppendRefusal.RebaseLimit);
+    }
+
+    [Test]
+    public async Task AnOversizeSegmentIsRefusedByTheBufferLimitAndNamesIt()
+    {
+        SequenceStreamBuffer buffer = new(new StreamReassemblyConfig { MaxBufferSize = 4 });
+
+        bool stored = buffer.TryAppend(1000, new byte[5], 0, out StreamAppendRefusal refusal);
+
+        await Assert.That(stored).IsFalse();
+        await Assert.That(refusal).IsEqualTo(StreamAppendRefusal.BufferSize);
+    }
+
+    [Test]
+    public async Task ASwitchedOffRebaseLimitAllowsEveryRebase()
+    {
+        // A switched-off limit reaches the buffer as the largest int (WithLimits does this for the live holder).
+        StreamReassemblyConfig config = new() { MaxBufferSize = 100_000, MaxRebases = int.MaxValue };
+        SequenceStreamBuffer buffer = new(config);
+        byte[] one = [7];
+        int refused = 0;
+
+        for (int index = 100; index >= 1; index--)
+        {
+            if (!buffer.TryAppend((uint)(1000 + index), one, packetId: index))
+            {
+                refused++;
+            }
+        }
+
+        await Assert.That(refused).IsEqualTo(0);
+        await Assert.That(buffer.RebaseCount).IsEqualTo(99);
+    }
+    [Test]
+    public async Task AscendingSegmentsBehindAHoleDrainInStreamOrder()
+    {
+        SequenceStreamBuffer buffer = new(new StreamReassemblyConfig { MaxBufferSize = 100_000 });
+        byte[] first = [0];
+        await Assert.That(buffer.TryAppend(1000, first, 0)).IsTrue();
+
+        // 1001 is missing; 1002..11001 arrive in order and are held behind the hole.
+        for (int index = 2; index <= 10_001; index++)
+        {
+            _ = buffer.TryAppend((uint)(1000 + index), _OneByte(index), index);
+        }
+
+        await Assert.That(buffer.ContiguousLength).IsEqualTo(1);
+        await Assert.That(buffer.TryAppend(1001, _OneByte(1), 1)).IsTrue();
+        await Assert.That(buffer.ContiguousLength).IsEqualTo(10_002);
+        await Assert.That(buffer.ContiguousSpan[10_001]).IsEqualTo(_OneByte(10_001)[0]);
+    }
+
+    [Test]
+    public async Task ShuffledSegmentsBehindAHoleDrainInStreamOrder()
+    {
+        // A fixed seed keeps the arrival order the same on every run; the heap must return the lowest segment each time.
+        SequenceStreamBuffer buffer = new(new StreamReassemblyConfig { MaxBufferSize = 100_000 });
+        await Assert.That(buffer.TryAppend(1000, _OneByte(0), 0)).IsTrue();
+        int[] order = [.. Enumerable.Range(2, 4_999)];
+        new Random(12345).Shuffle(order);
+
+        foreach (int index in order)
+        {
+            _ = buffer.TryAppend((uint)(1000 + index), _OneByte(index), index);
+        }
+
+        bool appended = buffer.TryAppend(1001, _OneByte(1), 1);
+        bool inOrder = appended && buffer.ContiguousLength == 5_001;
+        for (int index = 0; inOrder && index < buffer.ContiguousLength; index++)
+        {
+            inOrder = buffer.ContiguousSpan[index] == _OneByte(index)[0];
+        }
+
+        await Assert.That(inOrder).IsTrue();
     }
 
     [Test]

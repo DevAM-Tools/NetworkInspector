@@ -1,15 +1,70 @@
 <!-- Copyright © 2026 DevAM. Licensed under the MIT License. See LICENSE in the repository root. -->
 <Project>
   <!--
-    Auto-pack every packable project on Release/CI builds, so `dotnet build -c Release`
-    (solution-wide) produces .nupkg for all packable projects under artifacts/<Version>,
-    not just projects explicitly targeted by `dotnet pack`.
-    Evaluated here (Directory.Build.targets) rather than Directory.Build.props because
-    IsPackable/IsTestProject overrides from the project file are only known by this point.
+    Clean packages: `dotnet pack` is the only command that produces packages, and it always packs a fresh build.
+    A build never packs (no GeneratePackageOnBuild). With it, `dotnet pack` would skip its own build and package
+    whatever DLLs an earlier build left in bin\<Configuration>, and every build would rewrite artifacts\<Version>.
+    The three targets below run in this order through BeforePack, the SDK's hook for steps that precede a pack.
+    Invariant: BeforePack runs only in the project instance that executes the Pack target, ahead of that instance's
+    build and of the package creation. Rejected: a BeforeTargets hook on Pack (runs after the package was written and
+    deletes the new file) and a hook on Build (the NuGet pack targets start a second instance of the project to collect
+    package content, and its Build would delete files the first instance wrote moments before, such as
+    obj\<Configuration>\<Framework>\DotnetToolSettings.xml, so the tool pack fails with NU5019).
+    Sync: Directory.Solution.targets (clears the package folder once per solution pack), README.md § Build From Source.
   -->
-  <PropertyGroup Condition="('$(Configuration)' == 'Release' or '$(CI)' == 'true') and '$(IsPackable)' != 'false' and '$(IsTestProject)' != 'true'">
-    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+  <PropertyGroup>
+    <BeforePack>$(BeforePack);_RejectNoBuildPack;_CleanOutputsBeforePack;_RemoveOwnPackageBeforePack</BeforePack>
   </PropertyGroup>
+
+  <!--
+    Rejects the no-build option of `dotnet pack`: it packs the binaries of whatever build ran last, which is the
+    stale-package defect this section exists to prevent. Residual risk: `dotnet msbuild -t:Pack -p:NoBuild=true` is
+    rejected the same way, but a pack through a custom target that bypasses Pack bypasses every check here.
+  -->
+  <Target Name="_RejectNoBuildPack"
+          Condition="'$(NoBuild)' == 'true' and '$(IsPackable)' != 'false'">
+    <Error Code="NIPACK001"
+           Text="'dotnet pack --no-build' is not supported for $(MSBuildProjectName): it packs the binaries of the last build, which may be stale. Run 'dotnet pack' without --no-build." />
+  </Target>
+
+  <!--
+    Removes the bin and obj folders of the active configuration before the project builds, so no output of an earlier
+    build (a deleted source file, a renamed assembly, an older compiler result, a file left in the publish folder of
+    the tool) can reach a package. The Restore results (obj\project.assets.json) are outside obj\<Configuration> and stay.
+    Scope: the project that is packed. In a solution pack that is every project except the test projects, so the
+    generator bundled into Core is cleaned too. A pack of one project does not clean its project references; they
+    build incrementally and contribute their DLL through the reference, never through a folder scan.
+    Security: a bin or obj path that the project overrides must not make this delete outside the project folder.
+    Mitigation: each folder is removed only when it lies below the project directory. Rejected: deleting without the
+    check. Residual risk: none for folders inside the project directory; they only hold build output.
+  -->
+  <Target Name="_CleanOutputsBeforePack"
+          Condition="'$(NoBuild)' != 'true' and '$(IsTestProject)' != 'true'">
+    <PropertyGroup>
+      <_PackProjectDir>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)'))</_PackProjectDir>
+      <_PackBinDir>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(BaseOutputPath)', '$(Configuration)'))</_PackBinDir>
+      <_PackObjDir>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', '$(Configuration)'))</_PackObjDir>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_PackBinDir)"
+               Condition="'$(Configuration)' != '' and $(_PackBinDir.StartsWith('$(_PackProjectDir)', System.StringComparison.OrdinalIgnoreCase))" />
+    <RemoveDir Directories="$(_PackObjDir)"
+               Condition="'$(Configuration)' != '' and $(_PackObjDir.StartsWith('$(_PackProjectDir)', System.StringComparison.OrdinalIgnoreCase))" />
+  </Target>
+
+  <!--
+    Deletes this project's package of the current version before it is rebuilt, so a failed pack leaves no package
+    behind instead of an older one that looks valid. The folder-wide clean for a solution pack is in
+    Directory.Solution.targets. Only the exact file names of this package are removed, never a wildcard: a wildcard
+    on the id would also match packages whose id starts with this one (Exporters and Exporters.DuckDb).
+  -->
+  <Target Name="_RemoveOwnPackageBeforePack"
+          Condition="'$(NoBuild)' != 'true' and '$(IsPackable)' != 'false'">
+    <ItemGroup>
+      <_OwnOldPackage Include="$(PackageOutputPath)$(PackageId).$(PackageVersion).nupkg" />
+      <_OwnOldPackage Include="$(PackageOutputPath)$(PackageId).$(PackageVersion).snupkg" />
+    </ItemGroup>
+    <Delete Files="@(_OwnOldPackage)" />
+  </Target>
 
   <!-- CSharpStyleChecker (ExitPoints bundled) on all SDK-style C# consumers -->
   <PropertyGroup>
@@ -17,6 +72,14 @@
   </PropertyGroup>
   <ItemGroup Condition="'$(ApplyCSharpStyleChecker)' == 'true'">
     <PackageReference Include="CSharpStyleChecker" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!--
+    InvariantStringHelper: Invariant($"…") for every .NET 6+ consumer (the package has no netstandard2.0 build).
+    NetworkInspector.Limits is left out: it uses string.Create directly, so its package lists no dependency.
+  -->
+  <ItemGroup Condition="'$(TargetFrameworkIdentifier)' == '.NETCoreApp' and '$(MSBuildProjectName)' != 'NetworkInspector.Limits'">
+    <PackageReference Include="InvariantStringHelper" />
   </ItemGroup>
 
   <!-- TUnit on all test projects -->

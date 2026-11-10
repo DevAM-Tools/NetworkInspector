@@ -180,7 +180,8 @@ internal sealed class AssemblyPrescanner
             AssemblyDefinition assembly = reader.GetAssemblyDefinition();
             List<PrescanEntry> entries = _ReadEntries(reader);
             afterContentRead?.Invoke();
-            return new PrescanResult(info.FullName, length, ticks, reader.GetString(assembly.Name), assembly.Version.ToString(), entries);
+            return new PrescanResult(info.FullName, length, ticks, reader.GetString(assembly.Name),
+                string.Create(CultureInfo.InvariantCulture, $"{assembly.Version}"), entries);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

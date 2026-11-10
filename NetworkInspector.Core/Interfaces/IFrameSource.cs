@@ -22,8 +22,6 @@ namespace NetworkInspector.Core.Interfaces;
 /// </summary>
 public interface IFrameSource : IDisposable
 {
-    #region Properties
-
     /// <summary>Gets the user-friendly display name of the source.</summary>
     string UiName
     {
@@ -53,10 +51,6 @@ public interface IFrameSource : IDisposable
     {
         get;
     }
-
-    #endregion
-
-    #region Methods
 
     /// <summary>
     /// Initializes the source and prepares it for frame reading.
@@ -95,6 +89,4 @@ public interface IFrameSource : IDisposable
     /// </exception>
     /// <param name="cancellationToken">Token that can be used to cancel the read operation.</param>
     Frame? NextFrame(CancellationToken cancellationToken = default);
-
-    #endregion
 }

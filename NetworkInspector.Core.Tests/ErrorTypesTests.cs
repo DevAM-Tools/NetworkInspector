@@ -16,15 +16,6 @@ internal sealed class ErrorTypesTests
     }
 
     [Test]
-    public async Task InvalidNameSettingsException_ForUiName_ContainsName()
-    {
-        InvalidNameSettingsException ex = InvalidNameSettingsException.ForUiName("bad name");
-
-        await Assert.That(ex.Name).IsEqualTo("bad name");
-        await Assert.That(ex.Message).Contains("Invalid UI name");
-    }
-
-    [Test]
     public async Task ParseError_FactoryMethods_ProduceExpectedKinds()
     {
         ParseError internalError = ParseError.InternalError("boom");
@@ -102,26 +93,6 @@ internal sealed class ErrorTypesTests
     }
 
     [Test]
-    public async Task PersistenceSettingsException_ForIo_WrapsInnerException()
-    {
-        IOException io = new("disk full");
-        PersistenceSettingsException ex = PersistenceSettingsException.ForIo(io);
-
-        await Assert.That(ex.InnerException).IsSameReferenceAs(io);
-        await Assert.That(ex.Message).Contains("I/O error");
-    }
-
-    [Test]
-    public async Task PersistenceSettingsException_ForJson_WrapsInnerException()
-    {
-        JsonException json = new("bad json");
-        PersistenceSettingsException ex = PersistenceSettingsException.ForJson(json);
-
-        await Assert.That(ex.InnerException).IsSameReferenceAs(json);
-        await Assert.That(ex.Message).Contains("JSON error");
-    }
-
-    [Test]
     public async Task RegistrationException_InnerConstructor_IsReachable()
     {
         InvalidOperationException inner = new("root");
@@ -132,13 +103,11 @@ internal sealed class ErrorTypesTests
     }
 
     [Test]
-    public async Task SettingsException_InnerConstructor_IsReachable()
+    public async Task TheRegistrationErrorsOfTheStackBuilderAreNotSettingsErrors()
     {
-        InvalidOperationException inner = new("root");
-        SettingsException ex = new TestSettingsException("wrapped", inner);
-
-        await Assert.That(ex.InnerException).IsSameReferenceAs(inner);
-        await Assert.That(ex.Message).IsEqualTo("wrapped");
+        // The stack builder keeps its own errors; the settings library does not borrow them.
+        await Assert.That(typeof(InvalidNameRegistrationException).IsAssignableTo(typeof(SettingsException))).IsFalse();
+        await Assert.That(typeof(InvalidUiNameRegistrationException).IsAssignableTo(typeof(SettingsException))).IsFalse();
     }
 
     [Test]
@@ -191,46 +160,6 @@ internal sealed class ErrorTypesTests
         await Assert.That(ex.ParseError.Message).Contains("Maximum field count exceeded");
     }
 
-    [Test]
-    public async Task ThrowHelpers_ThrowNonFiniteF64_SettingsJson_ThrowsInvalidOperationException()
-    {
-        MethodInfo? method = typeof(SettingValueJson).GetMethod(
-            "_SettingF64ToJson",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
-        SettingValue nonFinite = SettingValue.F64(double.NaN);
-        TargetInvocationException ex = Assert.Throws<TargetInvocationException>(
-            () => method!.Invoke(null, [nonFinite]));
-        await Assert.That(ex.InnerException).IsTypeOf<InvalidOperationException>();
-        await Assert.That(ex.InnerException!.Message).Contains("F64 setting value must be finite");
-    }
-
-    [Test]
-    public async Task ThrowHelpers_ThrowNonFiniteF64_UsesInvariantCulture()
-    {
-        MethodInfo? method = typeof(SettingValueJson).GetMethod(
-            "_SettingF64ToJson",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
-        CultureInfo previous = CultureInfo.CurrentCulture;
-        try
-        {
-            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
-            SettingValue nonFinite = SettingValue.F64(double.PositiveInfinity);
-            TargetInvocationException ex = Assert.Throws<TargetInvocationException>(
-                () => method!.Invoke(null, [nonFinite]));
-
-            await Assert.That(ex.InnerException!.Message).IsEqualTo(
-                "F64 setting value must be finite, got Infinity.");
-        }
-        finally
-        {
-            CultureInfo.CurrentCulture = previous;
-        }
-    }
-
     private sealed class ThrowFieldAppendProtocol : IProtocol
     {
         public string Name => "throw.append";
@@ -249,14 +178,6 @@ internal sealed class ErrorTypesTests
     private sealed class TestRegistrationException : RegistrationException
     {
         internal TestRegistrationException(string message, Exception inner)
-            : base(message, inner)
-        {
-        }
-    }
-
-    private sealed class TestSettingsException : SettingsException
-    {
-        internal TestSettingsException(string message, Exception inner)
             : base(message, inner)
         {
         }

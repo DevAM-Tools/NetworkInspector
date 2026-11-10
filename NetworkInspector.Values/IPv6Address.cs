@@ -184,7 +184,7 @@ public readonly record struct IPv6Address
     {
         if (!TryParse(s, out IPv6Address result))
         {
-            throw new FormatException($"Input '{s}' is not a valid IPv6 address.");
+            throw new FormatException(Invariant($"Input '{s}' is not a valid IPv6 address."));
         }
         return result;
     }
@@ -204,7 +204,7 @@ public readonly record struct IPv6Address
         ArgumentNullException.ThrowIfNull(s);
         if (!TryParse(s.AsSpan(), out IPv6Address result))
         {
-            throw new FormatException($"Input '{s}' is not a valid IPv6 address.");
+            throw new FormatException(Invariant($"Input '{s}' is not a valid IPv6 address."));
         }
         return result;
     }
@@ -415,7 +415,10 @@ public readonly record struct IPv6Address
     /// <remarks>
     /// Allocates exactly the result string (the text is built on the stack first). Use <see cref="FormatInto"/> or
     /// <see cref="TryFormat(Span{char}, out int, ReadOnlySpan{char}, IFormatProvider?)"/> when the caller owns a buffer.
-    /// <param name="hexCase">Letter case of the hex digits; <see cref="HexCase.Upper"/> by default. The format specifier <c>x</c> of <c>ToString</c> and of interpolation selects <see cref="HexCase.Lower"/>.</param>
+    /// <param name="hexCase">
+    /// Letter case of the hex digits; <see cref="HexCase.Upper"/> by default. The format specifier <c>x</c> of <c>ToString</c> and of
+    /// interpolation selects <see cref="HexCase.Lower"/>.
+    /// </param>
     /// </remarks>
     public string Format(HexCase hexCase = HexCase.Upper)
     {
@@ -457,7 +460,7 @@ public readonly record struct IPv6Address
     {
         if (obj is null) { return 1; }
         if (obj is IPv6Address other) { return CompareTo(other); }
-        throw new ArgumentException($"Object must be of type {nameof(IPv6Address)}.", nameof(obj));
+        throw new ArgumentException(Invariant($"Object must be of type {nameof(IPv6Address)}."), nameof(obj));
     }
 
     #endregion

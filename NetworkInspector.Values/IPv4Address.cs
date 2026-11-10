@@ -172,7 +172,7 @@ public readonly record struct IPv4Address
     {
         if (!TryParse(s, out IPv4Address result))
         {
-            throw new FormatException($"Input '{s}' is not a valid IPv4 address.");
+            throw new FormatException(Invariant($"Input '{s}' is not a valid IPv4 address."));
         }
         return result;
     }
@@ -192,7 +192,7 @@ public readonly record struct IPv4Address
         ArgumentNullException.ThrowIfNull(s);
         if (!TryParse(s.AsSpan(), out IPv4Address result))
         {
-            throw new FormatException($"Input '{s}' is not a valid IPv4 address.");
+            throw new FormatException(Invariant($"Input '{s}' is not a valid IPv4 address."));
         }
         return result;
     }
@@ -361,7 +361,7 @@ public readonly record struct IPv4Address
     {
         if (obj is null) { return 1; }
         if (obj is IPv4Address other) { return CompareTo(other); }
-        throw new ArgumentException($"Object must be of type {nameof(IPv4Address)}.", nameof(obj));
+        throw new ArgumentException(Invariant($"Object must be of type {nameof(IPv4Address)}."), nameof(obj));
     }
 
     #endregion

@@ -31,7 +31,7 @@ internal static class FilterRuntime
         }
         catch (RegexMatchTimeoutException ex)
         {
-            context.SetError(FilterError.Runtime($"Regular expression timed out: {ex.Message}"));
+            context.SetError(FilterError.Runtime(Invariant($"Regular expression timed out: {ex.Message}")));
             return false;
         }
     }

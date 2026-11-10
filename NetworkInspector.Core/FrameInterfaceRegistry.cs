@@ -16,47 +16,138 @@ namespace NetworkInspector.Core;
 /// writes (registrations) are rare and use CAS retry.
 /// </para>
 /// <para>
-/// <b>Why copy-on-write:</b> every parsed packet reads the registry (the frame's interface is looked up and the registry
-/// reference is compared on the parse path), while registrations happen a handful of times when a source opens. A lock or
-/// reader-writer lock would put a synchronization cost on every read; here a read is one volatile load of an immutable
-/// array. A registration pays instead: it copies the array (O(n) in the registered count, which stays tiny) and publishes
-/// the new array with a compare-exchange, retrying if another registration won the race. Ids are the array indexes, so
-/// they are dense, assigned in registration order, and never reused or removed.
+/// <b>Why snapshots:</b> every parsed packet reads the registry (the frame's interface is looked up and the registry
+/// reference is compared on the parse path), while registrations happen when a source opens. A lock or reader-writer lock
+/// would put a synchronization cost on every read; here a read is one volatile load of an immutable snapshot plus one bounds
+/// test. A registration allocates one small snapshot object and, when the backing array is full, one doubled array (so n
+/// registrations copy O(n) references in total, not O(n²)). The count of registered interfaces comes from capture files
+/// (untrusted), which is why the copy work must not grow with every registration. Ids are the array indexes, so they are
+/// dense, assigned in registration order, and never reused or removed.
 /// </para>
 /// <para>
-/// <b>Thread-safety:</b> all members are safe to call from any thread. Published arrays are never mutated, so a snapshot
-/// (including the spans returned by <see cref="All"/> and <see cref="AllSources"/>) stays valid and consistent while other
-/// threads register. Entries are only ever appended: an id that resolved once resolves forever.
+/// <b>Thread-safety:</b> all members are safe to call from any thread. Entries below the count of a published snapshot are
+/// never mutated, so a snapshot (including the spans returned by <see cref="All"/> and <see cref="AllSources"/>) stays valid
+/// and consistent while other threads register. Entries are only ever appended: an id that resolved once resolves forever.
+/// </para>
+/// <para>
+/// <b>Retention:</b> entries are never removed, so a registry keeps every registered source reachable for its own lifetime;
+/// a host that opens many captures uses one registry per session.
+/// </para>
+/// <para>
+/// <b>Limit:</b> the number of interfaces is bounded by <see cref="CoreLimits.MaxInterfaces"/> (setting <c>frames.maxInterfaces</c>,
+/// default 1,048,576): a capture file that is nothing but interface descriptions is refused with an exception that names the limit.
+/// A registry without a stack applies the default; a stack built on it binds its own live holder.
 /// </para>
 /// </summary>
 public sealed class FrameInterfaceRegistry
 {
-    /// <summary>
-    /// The current snapshot of registered interfaces.
-    /// Replaced atomically on every registration via copy-on-write
-    /// (<see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/>).
-    /// The field is <see langword="volatile"/>, so a plain read is an acquire read: it observes a fully constructed array.
-    /// Readers load it once into a local and use only that local, so they see one consistent immutable snapshot.
-    /// </summary>
-    private volatile FrameInterfaceInfo[] _Interfaces = [];
+    #region Configuration and state
 
     /// <summary>
-    /// The current snapshot of registered frame sources.
-    /// Replaced atomically on every registration via copy-on-write
-    /// (<see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/>).
-    /// Same volatile-snapshot read rule as <see cref="_Interfaces"/>.
+    /// One published state of a table: the first <see cref="Count"/> slots of <see cref="Items"/> are registered entries and
+    /// never change; slots at and above <see cref="Count"/> are spare capacity (null) that no reader of this snapshot looks at.
+    /// Immutable; safe to share between threads.
     /// </summary>
-    private volatile FrameSourceInfo[] _Sources = [];
+    /// <typeparam name="T">The registered entry type.</typeparam>
+    private sealed class Snapshot<T>(T[] items, int count)
+        where T : class
+    {
+        /// <summary>The backing array; shared with later snapshots until it is full.</summary>
+        public readonly T[] Items = items;
+
+        /// <summary>Number of registered entries; the exclusive upper bound of every read.</summary>
+        public readonly int Count = count;
+    }
+
+    /// <summary>
+    /// The current snapshot of registered interfaces. Read only through <see cref="Volatile.Read{T}(ref readonly T)"/> (an
+    /// acquire read), so a reader that loads it once and uses only that object sees one consistent count and array. Replaced by
+    /// compare-exchange on every registration. Not declared <see langword="volatile"/> because the shared append helper takes
+    /// the field by reference, which C# does not allow for a volatile field without a warning.
+    /// </summary>
+    private Snapshot<FrameInterfaceInfo> _Interfaces = new([], 0);
+
+    /// <summary>
+    /// The current snapshot of registered frame sources. Same volatile-snapshot read rule as <see cref="_Interfaces"/>.
+    /// </summary>
+    private Snapshot<FrameSourceInfo> _Sources = new([], 0);
+
+    /// <summary>
+    /// The live limit of <see cref="CoreLimits.MaxInterfaces"/> this registry applies. The fixed default until a stack binds its
+    /// own holder (<see cref="BindInterfaceLimit"/>). Read with <see cref="Volatile.Read{T}(ref readonly T)"/> on every
+    /// registration; replaced at most once per stack build.
+    /// </summary>
+    private Limit _InterfaceLimit = CoreLimitSet.Defaults.MaxInterfaces;
+
+    /// <summary>
+    /// Makes this registry follow the interface limit of a stack. The registry may be shared by several stacks; the stack that
+    /// is built last decides.
+    /// </summary>
+    /// <param name="limit">The live holder of <see cref="CoreLimits.MaxInterfaces"/> of the stack.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="limit"/> is <see langword="null"/>.</exception>
+    internal void BindInterfaceLimit(Limit limit)
+    {
+        ArgumentNullException.ThrowIfNull(limit);
+        Volatile.Write(ref _InterfaceLimit, limit);
+    }
 
     /// <summary>Creates an empty registry.</summary>
     public FrameInterfaceRegistry()
     {
     }
 
-    #region Interface Registration
+    #endregion
+
+    #region Snapshot append
+
+    /// <summary>
+    /// Appends one entry to a snapshot table at index <c>current.Count</c>: into spare capacity when there is some, otherwise
+    /// into a doubled array. Lock-free; a lost race costs at most one allocation.
+    /// </summary>
+    /// <typeparam name="T">The registered entry type.</typeparam>
+    /// <param name="table">The published snapshot field to update.</param>
+    /// <param name="current">The snapshot the caller read; its <see cref="Snapshot{T}.Count"/> is the entry's index.</param>
+    /// <param name="entry">The entry to store at index <c>current.Count</c>.</param>
+    /// <returns>
+    /// <see langword="true"/> when <paramref name="entry"/> now sits at that index; <see langword="false"/> when another thread
+    /// took the index, in which case the caller re-reads the table and tries again.
+    /// </returns>
+    private static bool _TryAppend<T>(ref Snapshot<T> table, Snapshot<T> current, T entry)
+        where T : class
+    {
+        int count = current.Count;
+        T[] items = current.Items;
+        if (count == items.Length)
+        {
+            // Full: grow into a private array (doubling keeps the total copy work linear). Nobody sees it before the publish,
+            // so a lost race costs only this allocation.
+            T[] grown = new T[Math.Max(4, items.Length * 2)];
+            items.AsSpan(0, count).CopyTo(grown);
+            grown[count] = entry;
+            return ReferenceEquals(
+                Interlocked.CompareExchange(ref table, new Snapshot<T>(grown, count + 1), current),
+                current);
+        }
+
+        // Spare capacity: claim slot [count] of the shared array. Only threads that hold this (array, count) pair compete for
+        // it, and readers of any published snapshot stop below their count, so the write is invisible until the publish.
+        // Null! is the comparand "empty slot": spare slots are default (null) by construction. Invariant: slots below a
+        // published count are never null, so a non-null result means another thread owns this index.
+        T? winner = Interlocked.CompareExchange(ref items[count], entry, null!); // Invariant: spare capacity holds null.
+
+        // Publish count + 1 for whoever owns the slot now (this thread or the one that won it): the slot content is final, so
+        // helping is safe, and it guarantees progress when the winner is descheduled between its two steps. When this
+        // compare-exchange loses, a newer snapshot is already published and nothing is left to do.
+        _ = Interlocked.CompareExchange(ref table, new Snapshot<T>(items, count + 1), current);
+        return winner is null;
+    }
+
+    #endregion
+
+    #region Interfaces
 
     /// <summary>Number of registered interfaces.</summary>
-    public int Count => _Interfaces.Length;
+    public int Count => Volatile.Read(ref _Interfaces).Count;
 
     /// <summary>
     /// Registers a new frame interface belonging to a registered frame source.
@@ -100,40 +191,46 @@ public sealed class FrameInterfaceRegistry
         // The source table only grows and entries are never removed, so one check against the current snapshot is enough:
         // a source that is registered now stays registered while the loop below runs. The unsigned compare also rejects
         // negative values.
-        if ((uint)sourceId.Value >= (uint)_Sources.Length)
+        if ((uint)sourceId.Value >= (uint)Volatile.Read(ref _Sources).Count)
         {
             throw new ArgumentException(
-                $"Frame source ID {sourceId.Value} is not registered.", nameof(sourceId));
+                Invariant($"Frame source ID {sourceId.Value} is not registered."), nameof(sourceId));
         }
 
-        // CAS retry loop: copy-on-write for lock-free registration. The id and the info are rebuilt on each attempt from the
-        // freshest snapshot, because the id is the array length and a concurrent registration may have taken it.
+        // CAS retry loop for lock-free registration. The id and the info are rebuilt on each attempt from the freshest
+        // snapshot, because the id is the count and a concurrent registration may have taken it.
         while (true)
         {
-            FrameInterfaceInfo[] current = _Interfaces;
+            Snapshot<FrameInterfaceInfo> current = Volatile.Read(ref _Interfaces);
+            int count = current.Count;
 
             // Capacity guard: ids are array indexes, so the count is capped by what an id can hold. Exceeding it is a
             // broken-invariant condition at registration time (not an expected per-packet failure), hence an exception.
-            if (current.Length > ArrayIndexIdRange.MaxValue)
+            if (count > ArrayIndexIdRange.MaxValue)
             {
                 throw new InvalidOperationException(
-                    $"Maximum frame interface count exceeded (valid range 0..{ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)}).");
+                    Invariant($"Maximum frame interface count exceeded (valid range 0..{ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)})."));
             }
 
-            FrameInterfaceId id = new(current.Length);
+            // The configured limit (frames.maxInterfaces): a capture file that is nothing but interface descriptions registers
+            // as many interfaces as it can hold, so the registration is refused with the name of the limit. An exception, as
+            // for the id range above: the registration of an interface is a setup call of a source, not a per-packet result.
+            Limit interfaceLimit = Volatile.Read(ref _InterfaceLimit);
+            if (count >= interfaceLimit.Ceiling)
+            {
+                throw new InvalidOperationException(CoreLimits.MaxInterfaces.HitMessage(
+                    Invariant($"Maximum frame interface count exceeded: the registry already holds {count} interfaces"),
+                    interfaceLimit.Value));
+            }
+
+            FrameInterfaceId id = new(count);
             FrameInterfaceInfo newInfo = new(id, sourceId, uiName, description, linkType, properties);
-
-            // Create a new array with the additional entry appended
-            FrameInterfaceInfo[] updated = new FrameInterfaceInfo[current.Length + 1];
-            current.CopyTo(updated, 0);
-            updated[current.Length] = newInfo;
-
-            // Atomically swap if no other thread modified the array in the meantime
-            if (Interlocked.CompareExchange(ref _Interfaces, updated, current) == current)
+            if (_TryAppend(ref _Interfaces, current, newInfo))
             {
                 return id;
             }
-            // Another thread registered concurrently — retry with the new snapshot
+
+            // Another thread registered concurrently, or owned the slot this one wanted: retry with the new snapshot.
         }
     }
 
@@ -147,11 +244,12 @@ public sealed class FrameInterfaceRegistry
     {
         // Read the snapshot once — consistent even if another thread is registering. The unsigned compare handles
         // the negative Invalid id and any id past the end in one branch. An id issued by this registry always resolves.
-        FrameInterfaceInfo[] snapshot = _Interfaces;
-        if ((uint)id.Value < (uint)snapshot.Length)
+        Snapshot<FrameInterfaceInfo> snapshot = Volatile.Read(ref _Interfaces);
+        if ((uint)id.Value < (uint)snapshot.Count)
         {
-            return snapshot[id.Value];
+            return snapshot.Items[id.Value];
         }
+
         return null;
     }
 
@@ -164,12 +262,13 @@ public sealed class FrameInterfaceRegistry
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGet(FrameInterfaceId id, [NotNullWhen(true)] out FrameInterfaceInfo? info)
     {
-        FrameInterfaceInfo[] snapshot = _Interfaces;
-        if ((uint)id.Value < (uint)snapshot.Length)
+        Snapshot<FrameInterfaceInfo> snapshot = Volatile.Read(ref _Interfaces);
+        if ((uint)id.Value < (uint)snapshot.Count)
         {
-            info = snapshot[id.Value];
+            info = snapshot.Items[id.Value];
             return true;
         }
+
         info = null;
         return false;
     }
@@ -179,14 +278,23 @@ public sealed class FrameInterfaceRegistry
     /// and will not change as new interfaces are registered; interfaces registered later are not part of an already
     /// returned span. Allocation-free (a span over the published array).
     /// </summary>
-    public ReadOnlySpan<FrameInterfaceInfo> All => _Interfaces;
+    public ReadOnlySpan<FrameInterfaceInfo> All
+    {
+        get
+        {
+            // One snapshot load: the span covers exactly the entries that were registered at that moment. Slots below the
+            // count are never mutated, so the span stays valid while other threads register.
+            Snapshot<FrameInterfaceInfo> snapshot = Volatile.Read(ref _Interfaces);
+            return new ReadOnlySpan<FrameInterfaceInfo>(snapshot.Items, 0, snapshot.Count);
+        }
+    }
 
     #endregion
 
-    #region Frame Source Registration
+    #region Frame sources
 
     /// <summary>Number of registered frame sources.</summary>
-    public int SourceCount => _Sources.Length;
+    public int SourceCount => Volatile.Read(ref _Sources).Count;
 
     /// <summary>
     /// Registers a new frame source. Thread-safe (lock-free, CAS retry).
@@ -203,25 +311,21 @@ public sealed class FrameInterfaceRegistry
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        // CAS retry loop: copy-on-write for lock-free registration. Same scheme as Register: the id is the array length of
-        // the snapshot, so it is recomputed after a lost race.
+        // CAS retry loop for lock-free registration. Same scheme as Register: the id is the count of the snapshot, so it is
+        // recomputed after a lost race.
         while (true)
         {
-            FrameSourceInfo[] current = _Sources;
-            if (current.Length > ArrayIndexIdRange.MaxValue)
+            Snapshot<FrameSourceInfo> current = Volatile.Read(ref _Sources);
+            int count = current.Count;
+            if (count > ArrayIndexIdRange.MaxValue)
             {
                 throw new InvalidOperationException(
-                    $"Maximum frame source count exceeded (valid range 0..{ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)}).");
+                    Invariant($"Maximum frame source count exceeded (valid range 0..{ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)})."));
             }
 
-            FrameSourceId id = new(current.Length);
+            FrameSourceId id = new(count);
             FrameSourceInfo newInfo = new(id, source);
-
-            FrameSourceInfo[] updated = new FrameSourceInfo[current.Length + 1];
-            current.CopyTo(updated, 0);
-            updated[current.Length] = newInfo;
-
-            if (Interlocked.CompareExchange(ref _Sources, updated, current) == current)
+            if (_TryAppend(ref _Sources, current, newInfo))
             {
                 return id;
             }
@@ -236,11 +340,12 @@ public sealed class FrameInterfaceRegistry
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public FrameSourceInfo? GetSource(FrameSourceId id)
     {
-        FrameSourceInfo[] snapshot = _Sources;
-        if ((uint)id.Value < (uint)snapshot.Length)
+        Snapshot<FrameSourceInfo> snapshot = Volatile.Read(ref _Sources);
+        if ((uint)id.Value < (uint)snapshot.Count)
         {
-            return snapshot[id.Value];
+            return snapshot.Items[id.Value];
         }
+
         return null;
     }
 
@@ -253,12 +358,13 @@ public sealed class FrameInterfaceRegistry
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetSource(FrameSourceId id, [NotNullWhen(true)] out FrameSourceInfo? info)
     {
-        FrameSourceInfo[] snapshot = _Sources;
-        if ((uint)id.Value < (uint)snapshot.Length)
+        Snapshot<FrameSourceInfo> snapshot = Volatile.Read(ref _Sources);
+        if ((uint)id.Value < (uint)snapshot.Count)
         {
-            info = snapshot[id.Value];
+            info = snapshot.Items[id.Value];
             return true;
         }
+
         info = null;
         return false;
     }
@@ -266,6 +372,14 @@ public sealed class FrameInterfaceRegistry
     /// <summary>
     /// Returns a snapshot of all registered frame sources. Same snapshot rules as <see cref="All"/>.
     /// </summary>
-    public ReadOnlySpan<FrameSourceInfo> AllSources => _Sources;
+    public ReadOnlySpan<FrameSourceInfo> AllSources
+    {
+        get
+        {
+            Snapshot<FrameSourceInfo> snapshot = Volatile.Read(ref _Sources);
+            return new ReadOnlySpan<FrameSourceInfo>(snapshot.Items, 0, snapshot.Count);
+        }
+    }
+
     #endregion
 }

@@ -38,18 +38,27 @@ internal interface ILazyTextFormat
 /// </para>
 /// </remarks>
 /// <typeparam name="TState">The captured state (usually a ValueTuple).</typeparam>
+/// <param name="state">The state handed to <paramref name="formatter"/> on evaluation; boxed with this object.</param>
+/// <param name="formatter">
+/// Builds the text from <paramref name="state"/>; static by convention. Not validated here: <see cref="LazyString.FormatLazy{TState}"/> rejects null.
+/// </param>
 internal sealed class LazyTextFormat<TState>(TState state, Func<TState, string> formatter) : ILazyTextFormat
 {
+    /// <summary>The captured state; immutable after construction.</summary>
     private readonly TState _State = state;
 
+    /// <summary>The formatter that builds the text from <see cref="_State"/>; immutable after construction.</summary>
     private readonly Func<TState, string> _Formatter = formatter;
 
-    // The built string; null until the first successful evaluation. The first publisher wins (see Evaluate).
-    // Perf: 8 bytes more per deferred text, allocated at parse time for every text; it saves a second formatter run for every
-    // copy of the LazyString that is read (staging buffers, observers, the cache). Removing it brings back one build per copy.
+    /// <summary>The built string; null until the first successful evaluation. The first publisher wins (see <see cref="Evaluate"/>).</summary>
+    /// <remarks>
+    /// Perf: 8 bytes more per deferred text, allocated at parse time for every text; it saves a second formatter run for every
+    /// copy of the LazyString that is read (staging buffers, observers, the cache). Removing it brings back one build per copy.
+    /// </remarks>
     private string? _Result;
 
     /// <inheritdoc/>
+    /// <remarks>An exception from the formatter propagates to the caller and nothing is remembered.</remarks>
     public string Evaluate()
     {
         // Acquire load: a non-null memo is a complete string published by a compare-exchange.
@@ -61,7 +70,8 @@ internal sealed class LazyTextFormat<TState>(TState state, Func<TState, string> 
 
         // Winner takes all: a loser of the race discards its own string and returns the winner's, so every copy of the
         // LazyString that points to this box hands out one string instance.
-        string built = _Formatter(_State);
+        string built = _Formatter(_State)
+            ?? string.Empty; // A formatter must not return null; a null result is stored as an empty text.
         return Interlocked.CompareExchange(ref _Result, built, null)
             ?? built;
     }
@@ -75,16 +85,21 @@ internal sealed class LazyTextFormat<TState>(TState state, Func<TState, string> 
 /// Same memo and thread-safety contract as <see cref="LazyTextFormat{TState}"/>. Production code builds deferred texts with
 /// <see cref="LazyString.FormatLazy{TState}"/> and a static lambda; this box exists for callers that already hold a delegate.
 /// </remarks>
+/// <param name="factory">Builds the text. Not validated here: <see cref="LazyString.Lazy"/> rejects null.</param>
 internal sealed class LazyTextFunc(Func<string> factory) : ILazyTextFormat
 {
+    /// <summary>The delegate that builds the text; immutable after construction.</summary>
     private readonly Func<string> _Factory = factory;
 
-    // The built string; null until the first successful evaluation.
-    // Perf: 8 bytes more per deferred text, allocated at parse time for every text; it saves a second formatter run for every
-    // copy of the LazyString that is read (staging buffers, observers, the cache). Removing it brings back one build per copy.
+    /// <summary>The built string; null until the first successful evaluation. The first publisher wins (see <see cref="Evaluate"/>).</summary>
+    /// <remarks>
+    /// Perf: 8 bytes more per deferred text, allocated at parse time for every text; it saves a second formatter run for every
+    /// copy of the LazyString that is read (staging buffers, observers, the cache). Removing it brings back one build per copy.
+    /// </remarks>
     private string? _Result;
 
     /// <inheritdoc/>
+    /// <remarks>An exception from the factory propagates to the caller and nothing is remembered.</remarks>
     public string Evaluate()
     {
         string? remembered = Volatile.Read(ref _Result);
@@ -93,7 +108,8 @@ internal sealed class LazyTextFunc(Func<string> factory) : ILazyTextFormat
             return remembered;
         }
 
-        string built = _Factory();
+        string built = _Factory()
+            ?? string.Empty; // A factory must not return null; a null result is stored as an empty text.
         return Interlocked.CompareExchange(ref _Result, built, null)
             ?? built;
     }

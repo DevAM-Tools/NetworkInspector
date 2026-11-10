@@ -67,9 +67,9 @@ internal sealed class RandomSourceParseScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description => _Materialize
-        ? FormattableString.Invariant(
+        ? Invariant(
             $"Direct parse: RandomFrameSource(UdpIPv6) -> TryParse -> MaterializeAll, {_FrameCount:N0} frames.")
-        : FormattableString.Invariant(
+        : Invariant(
             $"Direct parse: RandomFrameSource(UdpIPv6) -> TryParse (lazy), {_FrameCount:N0} frames.");
 
     /// <inheritdoc/>

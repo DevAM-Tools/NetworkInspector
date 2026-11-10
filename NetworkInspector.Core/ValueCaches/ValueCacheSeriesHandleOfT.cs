@@ -13,14 +13,10 @@ namespace NetworkInspector.Core.ValueCaches;
 /// <typeparam name="T">Payload type of the series.</typeparam>
 public readonly struct ValueCacheSeriesHandle<T>
 {
-    #region Fields
+    #region Snapshot state
 
     /// <summary>Live series. Reads are clipped to <see cref="Count"/>; the value column is not copied.</summary>
     private readonly ValueCacheSeries<T> _Series;
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>
     /// Wraps the keys-only snapshot with the typed series, so that count, flags, and the key columns come from one frozen
@@ -34,10 +30,6 @@ public readonly struct ValueCacheSeriesHandle<T>
         Keys = keys;
     }
 
-    #endregion
-
-    #region Properties
-
     /// <inheritdoc cref="ValueCacheSeriesHandle.Count"/>
     public int Count => Keys.Count;
 
@@ -50,12 +42,12 @@ public readonly struct ValueCacheSeriesHandle<T>
     /// <inheritdoc cref="ValueCacheSeriesHandle.ChunkShift"/>
     public int ChunkShift => Keys.ChunkShift;
 
-    /// <summary>Packet-id / timestamp snapshot (no values).</summary>
+    /// <summary>Packet-id / timestamp snapshot (no values), taken at the same moment as this handle.</summary>
     public ValueCacheSeriesHandle Keys { get; }
 
     #endregion
 
-    #region Public API
+    #region Snapshot reads and walks
 
     /// <inheritdoc cref="ValueCacheSeriesHandle.GetPacketId"/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -68,6 +60,8 @@ public readonly struct ValueCacheSeriesHandle<T>
         Keys.GetTimestamp(index);
 
     /// <summary>Payload at <paramref name="index"/> in this snapshot.</summary>
+    /// <param name="index">Row index in <c>[0, Count)</c>.</param>
+    /// <returns>The stored payload of that row.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not in <c>[0, Count)</c>.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T GetValue(int index)
@@ -83,6 +77,8 @@ public readonly struct ValueCacheSeriesHandle<T>
     }
 
     /// <summary>Gathered row at <paramref name="index"/>. Each of the three reads checks the frozen count again; use an enumerator for scans.</summary>
+    /// <param name="index">Row index in <c>[0, Count)</c>.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not in <c>[0, Count)</c>.</exception>
     public ValueCacheRow<T> this[int index] =>
         new ValueCacheRow<T>(GetPacketId(index), GetTimestamp(index), GetValue(index));
 
@@ -107,6 +103,7 @@ public readonly struct ValueCacheSeriesHandle<T>
         Keys.TryFindTimestamps(minInclusive, maxInclusive, out range);
 
     /// <summary>Walks this snapshot in row order from index 0, including values. Stops at <see cref="Count"/>.</summary>
+    /// <returns>A ref enumerator over the rows <c>[0, Count)</c>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Enumerator GetEnumerator() =>
         new Enumerator(_Series, startIndex: 0, endExclusive: Count);
@@ -139,6 +136,9 @@ public readonly struct ValueCacheSeriesHandle<T>
     /// Value inner chunk at <paramref name="chunkIndex"/>, clipped to <see cref="Count"/>,
     /// starting at slot 0 of that chunk. Prefer <see cref="EnumerateChunksFrom"/> for a watermark slice.
     /// </summary>
+    /// <param name="chunkIndex">Zero-based inner-chunk index (row index shifted right by <see cref="ChunkShift"/>).</param>
+    /// <param name="span">The values of the chunk below <see cref="Count"/>; empty when the method returns <see langword="false"/>.</param>
+    /// <returns><see langword="true"/> when the chunk exists and holds at least one row of this snapshot.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetValueChunk(int chunkIndex, out ReadOnlySpan<T> span) =>
         _Series.TryGetValueChunk(chunkIndex, Count, out span);
@@ -154,6 +154,7 @@ public readonly struct ValueCacheSeriesHandle<T>
         Keys.TryGetTimestampChunk(chunkIndex, out span);
 
     /// <summary>Walks SoA chunks from index 0 to <see cref="Count"/>, including values.</summary>
+    /// <returns>A ref enumerator over the chunk slices covering <c>[0, Count)</c>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ChunkEnumerator EnumerateChunks() =>
         new ChunkEnumerator(_Series, startIndex: 0, endExclusive: Count);
@@ -184,7 +185,7 @@ public readonly struct ValueCacheSeriesHandle<T>
 
     #endregion
 
-    #region Nested types
+    #region Chunk and row enumerators
 
     /// <summary>
     /// One contiguous SoA slice of packet ids, timestamps, and values. Lengths match.
@@ -192,8 +193,11 @@ public readonly struct ValueCacheSeriesHandle<T>
     /// </summary>
     public readonly ref struct Chunk
     {
-        #region Constructors
-
+        /// <summary>Wraps the three column slices of one chunk.</summary>
+        /// <param name="startIndex">Series index of the first row of the slices.</param>
+        /// <param name="packetIds">Packet ids of the slice.</param>
+        /// <param name="timestamps">Timestamps of the slice; the same length as <paramref name="packetIds"/>.</param>
+        /// <param name="values">Payloads of the slice; the same length as <paramref name="packetIds"/>.</param>
         internal Chunk(
             int startIndex,
             ReadOnlySpan<int> packetIds,
@@ -205,10 +209,6 @@ public readonly struct ValueCacheSeriesHandle<T>
             Timestamps = timestamps;
             Values = values;
         }
-
-        #endregion
-
-        #region Properties
 
         /// <summary>Series index of <c>Values[0]</c>.</summary>
         public int StartIndex { get; }
@@ -224,8 +224,6 @@ public readonly struct ValueCacheSeriesHandle<T>
 
         /// <summary>Number of rows in this slice.</summary>
         public int Length => Values.Length;
-
-        #endregion
     }
 
     /// <summary>
@@ -235,23 +233,37 @@ public readonly struct ValueCacheSeriesHandle<T>
     /// </summary>
     public ref struct ChunkEnumerator
     {
-        #region Fields
-
+        /// <summary>The series whose chunks are walked.</summary>
         private readonly ValueCacheSeries<T> _Series;
+
+        /// <summary>Exclusive end of the walk: the frozen count of the snapshot, or the end of the requested range.</summary>
         private readonly int _EndExclusive;
+
+        /// <summary>Log₂ of rows per chunk, copied from the series.</summary>
         private readonly int _ChunkShift;
+
+        /// <summary>Mask that maps a row index to its slot inside a chunk (<c>(1 &lt;&lt; _ChunkShift) - 1</c>).</summary>
         private readonly int _ChunkMask;
+
+        /// <summary>Row index at which the next <see cref="MoveNext"/> starts.</summary>
         private int _NextIndex;
+
+        /// <summary>Series index of the first row of the current slice.</summary>
         private int _StartIndex;
+
+        /// <summary>Packet ids of the current slice.</summary>
         private ReadOnlySpan<int> _PacketIds;
+
+        /// <summary>Timestamps of the current slice.</summary>
         private ReadOnlySpan<long> _Timestamps;
+
+        /// <summary>Values of the current slice.</summary>
         private ReadOnlySpan<T> _Values;
 
-        #endregion
-
-        #region Constructors
-
         /// <summary>Starts at row <paramref name="startIndex"/>; callers have already validated the bounds against the frozen count.</summary>
+        /// <param name="series">The series to walk.</param>
+        /// <param name="startIndex">First row to visit.</param>
+        /// <param name="endExclusive">Exclusive end row; not above the frozen count of the snapshot.</param>
         internal ChunkEnumerator(ValueCacheSeries<T> series, int startIndex, int endExclusive)
         {
             // The chunk size is a power of two (1 << ChunkShift), so row -> (chunk, slot) is a shift and a mask.
@@ -266,24 +278,18 @@ public readonly struct ValueCacheSeriesHandle<T>
             _Values = [];
         }
 
-        #endregion
-
-        #region Properties
-
-        /// <summary>Current SoA slice.</summary>
+        /// <summary>Current SoA slice; valid after <see cref="MoveNext"/> returned <see langword="true"/>.</summary>
         public readonly Chunk Current =>
             new Chunk(_StartIndex, _PacketIds, _Timestamps, _Values);
 
-        #endregion
-
-        #region Public API
-
         /// <summary>Returns this enumerator so <c>foreach</c> works on chunk walks.</summary>
+        /// <returns>A copy of this enumerator.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ChunkEnumerator GetEnumerator() =>
             this;
 
         /// <summary>Advances to the next SoA slice. The first slice after a watermark starts at that slot, not slot 0.</summary>
+        /// <returns><see langword="false"/> at the end of the walk, or when a chunk cannot be fetched (the walk stops early).</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool MoveNext()
         {
@@ -313,8 +319,6 @@ public readonly struct ValueCacheSeriesHandle<T>
             _NextIndex = chunkStart + packetIds.Length;
             return true;
         }
-
-        #endregion
     }
 
     /// <summary>
@@ -324,26 +328,46 @@ public readonly struct ValueCacheSeriesHandle<T>
     /// </summary>
     public ref struct Enumerator
     {
-        #region Fields
-
+        /// <summary>The series whose rows are walked.</summary>
         private readonly ValueCacheSeries<T> _Series;
+
+        /// <summary>Exclusive end of the walk: the frozen count of the snapshot, or the end of the requested range.</summary>
         private readonly int _EndExclusive;
+
+        /// <summary>Log₂ of rows per chunk, copied from the series.</summary>
         private readonly int _ChunkShift;
+
+        /// <summary>Mask that maps a row index to its slot inside a chunk (<c>(1 &lt;&lt; _ChunkShift) - 1</c>).</summary>
         private readonly int _ChunkMask;
+
+        /// <summary>Index of the last row returned; one before the start row until the first <see cref="MoveNext"/>.</summary>
         private int _Index;
+
+        /// <summary>Index of the chunk whose spans are held in <see cref="_PacketIds"/>, or -1 when none is loaded.</summary>
         private int _LoadedChunk;
+
+        /// <summary>Packet ids of the loaded chunk, clipped to the end of the walk.</summary>
         private ReadOnlySpan<int> _PacketIds;
+
+        /// <summary>Timestamps of the loaded chunk, clipped to the end of the walk.</summary>
         private ReadOnlySpan<long> _Timestamps;
+
+        /// <summary>Values of the loaded chunk, clipped to the end of the walk.</summary>
         private ReadOnlySpan<T> _Values;
+
+        /// <summary>Packet id of the current row.</summary>
         private int _PacketId;
+
+        /// <summary>Timestamp (nanoseconds) of the current row.</summary>
         private long _TimestampNanos;
+
+        /// <summary>Payload of the current row.</summary>
         private T _Value;
 
-        #endregion
-
-        #region Constructors
-
         /// <summary>Starts before row <paramref name="startIndex"/>; callers have already validated the bounds against the frozen count.</summary>
+        /// <param name="series">The series to walk.</param>
+        /// <param name="startIndex">First row to visit.</param>
+        /// <param name="endExclusive">Exclusive end row; not above the frozen count of the snapshot.</param>
         internal Enumerator(ValueCacheSeries<T> series, int startIndex, int endExclusive)
         {
             _Series = series;
@@ -359,30 +383,24 @@ public readonly struct ValueCacheSeriesHandle<T>
             _Values = [];
             _PacketId = 0;
             _TimestampNanos = 0;
-            _Value = default!;
+            _Value = default!; // Invariant: Current reads _Value only after MoveNext stored a published value.
         }
 
-        #endregion
-
-        #region Properties
-
-        /// <summary>Current gathered row.</summary>
+        /// <summary>Current gathered row; valid after <see cref="MoveNext"/> returned <see langword="true"/>.</summary>
         public readonly ValueCacheRow<T> Current =>
             new ValueCacheRow<T>(_PacketId, _TimestampNanos, _Value);
 
         /// <summary>Index of the current row in the series snapshot.</summary>
         public readonly int Index => _Index;
 
-        #endregion
-
-        #region Public API
-
         /// <summary>Returns this enumerator so <c>foreach</c> works on <see cref="EnumerateFrom"/> / <see cref="Enumerate"/>.</summary>
+        /// <returns>A copy of this enumerator.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Enumerator GetEnumerator() =>
             this;
 
         /// <summary>Advances to the next published row in the span. Does not pick up later appends.</summary>
+        /// <returns><see langword="false"/> at the end of the span, or when a chunk cannot be fetched (the walk stops early).</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool MoveNext()
         {
@@ -413,15 +431,14 @@ public readonly struct ValueCacheSeriesHandle<T>
             _Index = next;
             return true;
         }
-
-        #endregion
     }
 
     #endregion
 
-    #region Private helpers
+    #region Out-of-range failure
 
     /// <summary>Kept out of line (NoInlining) so the inlined index getters and enumerator factories stay small.</summary>
+    /// <param name="index">The rejected index, reported in the exception.</param>
     /// <exception cref="ArgumentOutOfRangeException">Always.</exception>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void _ThrowIndexOutOfRange(int index) =>

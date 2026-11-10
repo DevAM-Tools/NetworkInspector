@@ -16,7 +16,9 @@ namespace NetworkInspector.Core.Reassembly;
 /// <b>Memory limit:</b> the sum of the contiguous prefix and all held segments never exceeds
 /// <see cref="StreamReassemblyConfig.MaxBufferSize"/> (threat: a peer that never completes a PDU or leaves holes).
 /// An append that would exceed it returns <see langword="false"/> and the owner moves the stream to its error state;
-/// nothing is truncated silently.
+/// nothing is truncated silently. A segment that starts before the first byte seen rebuilds the buffer; the number of rebuilds is
+/// bounded by <see cref="StreamReassemblyConfig.MaxRebases"/> (threat: quadratic work from descending segments), and
+/// <see cref="TryAppend(uint, ReadOnlyMemory{byte}, int, out StreamAppendRefusal)"/> names the limit that refused a segment.
 /// </para>
 /// <para>
 /// <b>Thread-safety:</b> one owner thread at a time, the same rule as
@@ -25,63 +27,101 @@ namespace NetworkInspector.Core.Reassembly;
 /// </summary>
 public sealed class SequenceStreamBuffer
 {
-    #region Fields
+    #region Configuration and state
 
+    /// <summary>
+    /// Cap on <see cref="BufferedLength"/> in bytes, taken from <see cref="StreamReassemblyConfig.MaxBufferSize"/> (positive
+    /// by that property's validation). Threat, posture, and range are documented there.
+    /// </summary>
     private readonly int _MaxBufferSize;
+
+    /// <summary>The most rebuilds of the buffer for a segment that starts before the origin, from <see cref="StreamReassemblyConfig.MaxRebases"/>.</summary>
+    private readonly int _MaxRebases;
+
+    /// <summary>Whether held segments are copied into pooled arrays (<see cref="StreamReassemblyConfig.CopySegments"/>).</summary>
     private readonly bool _CopySegments;
 
-    // Right edge: sequence number of the next byte that extends the contiguous prefix.
-    // _OriginSeq is the sequence number of the first byte of the prefix while nothing has been consumed; it lets an
-    // earlier-arriving segment move the left edge backward (see _Rebase). After the first Consume it is no longer used.
+    /// <summary>
+    /// Whether the first segment has defined the left edge of the stream (<see cref="_OriginSeq"/> and
+    /// <see cref="_NextExpected"/> are valid).
+    /// </summary>
     private bool _Initialized;
+
+    /// <summary>
+    /// Whether <see cref="Consume"/> was called since the last <see cref="Clear"/>; from then on the left edge is fixed and
+    /// no rebase happens.
+    /// </summary>
     private bool _EverConsumed;
+
+    /// <summary>Right edge: sequence number of the next byte that extends the contiguous prefix.</summary>
     private uint _NextExpected;
+
+    /// <summary>
+    /// Sequence number of the first byte of the prefix while nothing has been consumed; it lets an earlier-arriving segment
+    /// move the left edge backward (see <see cref="_Rebase"/>). After the first <see cref="Consume"/> it is no longer used.
+    /// </summary>
     private uint _OriginSeq;
 
-    // Contiguous prefix lives in one array, so a boundary detector sees one span and not a chain of segments.
-    // _Offset is the first unread byte; the dead bytes before it are reclaimed lazily by _AppendContiguous.
+    /// <summary>
+    /// Backing array of the contiguous prefix. One array, so a boundary detector sees one span and not a chain of segments.
+    /// The live bytes are <c>[_Offset, _Offset + _ContiguousLength)</c>.
+    /// </summary>
     private byte[] _Contiguous = [];
+
+    /// <summary>
+    /// Index of the first unread byte in <see cref="_Contiguous"/>; the dead bytes before it are reclaimed lazily by
+    /// <see cref="_AppendContiguous"/>.
+    /// </summary>
     private int _Offset;
+
+    /// <summary>Number of unread bytes of the contiguous prefix.</summary>
     private int _ContiguousLength;
 
-    // Segments behind a hole, sorted by sequence with the HIGHEST sequence first (serial-number order, so the order survives
-    // a 32-bit wrap). Motivation: the segment to drain next is always the lowest one, and with the lowest at the END of the
-    // list its removal is O(1) instead of a List.RemoveAt shift. An insert is a binary search (O(log k)) plus a shift of
-    // the entries below the insert position; a reorder burst inserts near the end, so that shift is short. The previous
-    // arrival-order list scanned all k held segments once per drained segment (O(k^2)); a hole at the start of a large
-    // download holds thousands of segments, and only the byte cap bounds k.
-    // _HeldBytes mirrors the sum of their lengths so the cap check is O(1).
-    private readonly List<HeldSegment> _Held = [];
+    /// <summary>
+    /// Segments behind a hole, as a binary min-heap keyed by sequence in serial-number order (so the order survives a 32-bit
+    /// wrap). Why a heap: only the lowest held segment is ever taken (it is the next one the cursor can reach), and a heap
+    /// inserts and removes in O(log k) for every arrival order. A sorted list is O(k) per insert at one of its ends, and the
+    /// sender of the bytes chooses the order (threat: algorithmic complexity). Only the byte cap bounds k. Array-backed, so a
+    /// held segment costs no allocation of its own.
+    /// </summary>
+    private readonly PriorityQueue<HeldSegment, uint> _Held = new(SerialNumberComparer.Instance);
+
+    /// <summary>Sum of the lengths of the held segments, so the cap check is O(1).</summary>
     private int _HeldBytes;
 
-    // Which packets delivered the bytes of the contiguous prefix, in stream order. Motivation: a reassembled PDU is shown
-    // together with the packets that carried its bytes, and only this buffer knows which packet contributed which byte
-    // (held segments reach the prefix later than they arrived). One entry per append to the prefix, merged when the same
-    // packet appends twice in a row; End is the running total of bytes appended when the entry was closed, so an entry
-    // covers [previous End, End). Entries that lie completely before the consumed offset are trimmed in Consume.
-    // Memory: one 16-byte entry per contributing segment of the unconsumed prefix, bounded by MaxBufferSize / 1 byte in
-    // the worst case of one-byte segments (the byte cap also bounds the number of entries).
+    /// <summary>
+    /// Which packets delivered the bytes of the contiguous prefix, in stream order. Motivation: a reassembled PDU is shown
+    /// together with the packets that carried its bytes, and only this buffer knows which packet contributed which byte
+    /// (held segments reach the prefix later than they arrived). One entry per append to the prefix, merged when the same
+    /// packet appends twice in a row; <c>End</c> is the running total of bytes appended when the entry was closed, so an
+    /// entry covers <c>[previous End, End)</c>. Entries that lie completely before the consumed offset are trimmed in
+    /// <see cref="Consume"/>. Memory: one 16-byte entry per contributing segment of the unconsumed prefix, bounded by
+    /// <see cref="_MaxBufferSize"/> entries in the worst case of one-byte segments (the byte cap also bounds the number of entries).
+    /// </summary>
     private readonly List<Contributor> _Contributors = [];
+
+    /// <summary>Index of the first live entry of <see cref="_Contributors"/>; the entries before it are dead and compacted in bulk.</summary>
     private int _ContributorHead;
+
+    /// <summary>Running total of bytes ever appended to the prefix since the last reset; the <c>End</c> of the newest entry.</summary>
     private long _AppendedTotal;
+
+    /// <summary>Running total of bytes consumed from the prefix since the last reset; the stream offset of the first unread byte.</summary>
     private long _ConsumedTotal;
-
-    #endregion
-
-    #region Construction
 
     /// <summary>Creates a buffer bounded by <see cref="StreamReassemblyConfig.MaxBufferSize"/>.</summary>
     /// <param name="config">Reassembly limits and the copy-on-append flag. The detector is not used here.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="config"/> is null.</exception>
     public SequenceStreamBuffer(StreamReassemblyConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
         _MaxBufferSize = config.MaxBufferSize;
+        _MaxRebases = config.MaxRebases;
         _CopySegments = config.CopySegments;
     }
 
-    #endregion
-
-    #region Public API
+    /// <summary>Packet id value that means "this append is not attributed to a packet".</summary>
+    public const int NoPacket = -1;
 
     /// <summary>Bytes currently readable as one contiguous prefix (no hole in front).</summary>
     public int ContiguousLength => _ContiguousLength;
@@ -105,57 +145,9 @@ public sealed class SequenceStreamBuffer
     /// </summary>
     public ReadOnlySpan<byte> ContiguousSpan => _Contiguous.AsSpan(_Offset, _ContiguousLength);
 
-    /// <summary>
-    /// Inserts payload that starts at <paramref name="sequence"/>.
-    /// Bytes at or before the contiguous cursor are dropped (retransmission overlap).
-    /// A hole holds the segment until the cursor reaches it.
-    /// Returns <see langword="false"/> only when the buffer cap would be exceeded; the cursor does not move in that case.
-    /// </summary>
-    /// <param name="sequence">Sequence number of <paramref name="payload"/>[0] in the stream's 32-bit serial-number space.</param>
-    /// <param name="payload">Segment payload. Empty is a no-op success.</param>
-    public bool TryAppend(uint sequence, ReadOnlyMemory<byte> payload) => TryAppend(sequence, payload, NoPacket);
+    #endregion
 
-    /// <summary>
-    /// Inserts payload like <see cref="TryAppend(uint, ReadOnlyMemory{byte})"/> and remembers which packet delivered it, so
-    /// <see cref="GetContributingPacketIds"/> can later name the packets behind a prefix.
-    /// </summary>
-    /// <param name="sequence">Sequence number of <paramref name="payload"/>[0] in the stream's 32-bit serial-number space.</param>
-    /// <param name="payload">Segment payload. Empty is a no-op success.</param>
-    /// <param name="packetId">Opaque id chosen by the caller for the packet (or other unit) that carried the payload; the buffer only stores and returns it. <see cref="NoPacket"/> when it is not tracked.</param>
-    /// <returns><see langword="false"/> only when the buffer cap would be exceeded.</returns>
-    public bool TryAppend(uint sequence, ReadOnlyMemory<byte> payload, int packetId)
-    {
-        if (payload.Length == 0)
-        {
-            return true;
-        }
-
-        // The first segment defines the left edge. Do not assume sequence 0 (the capture may start mid-connection, and
-        // the initial sequence number is random). Refuse an oversize first segment before any state changes.
-        if (!_Initialized)
-        {
-            if (payload.Length > _MaxBufferSize)
-            {
-                return false;
-            }
-
-            _Initialized = true;
-            _OriginSeq = sequence;
-            _NextExpected = sequence;
-        }
-
-        // An earlier segment may arrive before the left edge is known. Until bytes have been
-        // consumed, move the origin backward and rebuild so the hole is in front, not behind.
-        if (_ContiguousLength > 0 && !_EverConsumed && (int)(sequence - _OriginSeq) < 0)
-        {
-            return _Rebase(sequence, payload, packetId);
-        }
-
-        return _Insert(sequence, payload, packetId);
-    }
-
-    /// <summary>Packet id value that means "this append is not attributed to a packet".</summary>
-    public const int NoPacket = -1;
+    #region Reading and consuming the prefix
 
     /// <summary>
     /// Ids of the packets that delivered the first <paramref name="length"/> bytes of the contiguous prefix, in stream order.
@@ -178,7 +170,9 @@ public sealed class SequenceStreamBuffer
         int count = 0;
         for (int i = _ContributorHead; i < _Contributors.Count; i++)
         {
-            long start = i == _ContributorHead ? from : _Contributors[i - 1].End;
+            long start = i == _ContributorHead
+                ? from
+                : _Contributors[i - 1].End;
             if (start >= to)
             {
                 break;
@@ -200,7 +194,9 @@ public sealed class SequenceStreamBuffer
         int written = 0;
         for (int i = _ContributorHead; i < _Contributors.Count && written < count; i++)
         {
-            long start = i == _ContributorHead ? from : _Contributors[i - 1].End;
+            long start = i == _ContributorHead
+                ? from
+                : _Contributors[i - 1].End;
             if (start >= to)
             {
                 break;
@@ -274,7 +270,96 @@ public sealed class SequenceStreamBuffer
 
     #endregion
 
-    #region Insert
+    #region Segment placement
+
+    /// <summary>
+    /// Inserts payload that starts at <paramref name="sequence"/>.
+    /// Bytes at or before the contiguous cursor are dropped (retransmission overlap).
+    /// A hole holds the segment until the cursor reaches it.
+    /// Returns <see langword="false"/> only when the buffer cap would be exceeded; the cursor does not move in that case.
+    /// </summary>
+    /// <param name="sequence">Sequence number of <paramref name="payload"/>[0] in the stream's 32-bit serial-number space.</param>
+    /// <param name="payload">Segment payload. Empty is a no-op success.</param>
+    /// <returns><see langword="false"/> only when the buffer cap would be exceeded.</returns>
+    public bool TryAppend(uint sequence, ReadOnlyMemory<byte> payload) => TryAppend(sequence, payload, NoPacket);
+
+    /// <summary>
+    /// Inserts payload like <see cref="TryAppend(uint, ReadOnlyMemory{byte})"/> and remembers which packet delivered it, so
+    /// <see cref="GetContributingPacketIds"/> can later name the packets behind a prefix.
+    /// </summary>
+    /// <param name="sequence">Sequence number of <paramref name="payload"/>[0] in the stream's 32-bit serial-number space.</param>
+    /// <param name="payload">Segment payload. Empty is a no-op success.</param>
+    /// <param name="packetId">
+    /// Opaque id chosen by the caller for the packet (or other unit) that carried the payload; the buffer only stores and returns it.
+    /// <see cref="NoPacket"/> when it is not tracked.
+    /// </param>
+    /// <returns><see langword="false"/> only when the buffer cap would be exceeded.</returns>
+    public bool TryAppend(uint sequence, ReadOnlyMemory<byte> payload, int packetId) =>
+        TryAppend(sequence, payload, packetId, out _);
+
+    /// <summary>
+    /// Inserts payload like <see cref="TryAppend(uint, ReadOnlyMemory{byte}, int)"/> and says which limit refused it when it
+    /// stored nothing.
+    /// </summary>
+    /// <param name="sequence">Sequence number of <paramref name="payload"/>[0] in the stream's 32-bit serial-number space.</param>
+    /// <param name="payload">Segment payload. Empty is a no-op success.</param>
+    /// <param name="packetId">The packet that carried the payload, or <see cref="NoPacket"/>.</param>
+    /// <param name="refusal">The limit that refused the segment; <see cref="StreamAppendRefusal.None"/> on success.</param>
+    /// <returns><see langword="false"/> when the buffer cap or the rebase limit refused the segment.</returns>
+    public bool TryAppend(uint sequence, ReadOnlyMemory<byte> payload, int packetId, out StreamAppendRefusal refusal)
+    {
+        refusal = StreamAppendRefusal.None;
+        if (payload.Length == 0)
+        {
+            return true;
+        }
+
+        // The first segment defines the left edge. Do not assume sequence 0 (the capture may start mid-connection, and
+        // the initial sequence number is random). Refuse an oversize first segment before any state changes.
+        if (!_Initialized)
+        {
+            if (payload.Length > _MaxBufferSize)
+            {
+                refusal = StreamAppendRefusal.BufferSize;
+                return false;
+            }
+
+            _Initialized = true;
+            _OriginSeq = sequence;
+            _NextExpected = sequence;
+        }
+
+        // An earlier segment may arrive before the left edge is known. Until bytes have been
+        // consumed, move the origin backward and rebuild so the hole is in front, not behind.
+        if (_ContiguousLength > 0 && !_EverConsumed && (int)(sequence - _OriginSeq) < 0)
+        {
+            // Security: each rebase copies the whole buffer and the sender chooses how often a segment arrives before the
+            // origin, so the number of rebases is a limit (reassembly.maxStreamRebases). Threat: quadratic work from descending
+            // segments. Mitigation: refuse the segment and name the limit. Rejected: skipping the rebase silently (the bytes
+            // would be lost without a trace). Residual: up to the limit many full copies of the buffer per stream direction.
+            if (RebaseCount >= _MaxRebases)
+            {
+                refusal = StreamAppendRefusal.RebaseLimit;
+                return false;
+            }
+
+            if (!_Rebase(sequence, payload, packetId))
+            {
+                refusal = StreamAppendRefusal.BufferSize;
+                return false;
+            }
+
+            return true;
+        }
+
+        if (!_Insert(sequence, payload, packetId))
+        {
+            refusal = StreamAppendRefusal.BufferSize;
+            return false;
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Rebuilds the buffer around an earlier left edge: a segment arrived whose sequence lies before the origin while
@@ -283,6 +368,10 @@ public sealed class SequenceStreamBuffer
     /// inserted again, so the old prefix becomes a held segment behind a hole, or joins the prefix when contiguous.
     /// Cold path (copies the whole buffer), so allocation is acceptable here. Returns <see langword="false"/> on the cap.
     /// </summary>
+    /// <param name="sequence">Sequence number of the first byte of <paramref name="payload"/>; lies before the current origin.</param>
+    /// <param name="payload">The earlier segment that moves the left edge.</param>
+    /// <param name="packetId">The packet that carried <paramref name="payload"/>, or <see cref="NoPacket"/>.</param>
+    /// <returns><see langword="false"/> when the buffer cap would be exceeded.</returns>
     private bool _Rebase(uint sequence, ReadOnlyMemory<byte> payload, int packetId)
     {
         // Refuse before discarding the current prefix. Overlap can only shrink the total.
@@ -316,7 +405,8 @@ public sealed class SequenceStreamBuffer
             }
         }
 
-        foreach (HeldSegment held in _Held)
+        // The pieces are inserted again below, so the heap order of this enumeration is irrelevant.
+        foreach ((HeldSegment held, uint _) in _Held.UnorderedItems)
         {
             previous.Add((held.Sequence, held.Data.ToArray(), held.PacketId));
         }
@@ -353,6 +443,10 @@ public sealed class SequenceStreamBuffer
     /// appends an in-order segment to the contiguous prefix (and drains held segments it unblocks), or holds a segment
     /// that lies behind a hole. Returns <see langword="false"/> only when the buffer cap would be exceeded.
     /// </summary>
+    /// <param name="sequence">Sequence number of the first byte of <paramref name="payload"/>.</param>
+    /// <param name="payload">The segment; bytes at or before the cursor are dropped.</param>
+    /// <param name="packetId">The packet that carried <paramref name="payload"/>, or <see cref="NoPacket"/>.</param>
+    /// <returns><see langword="false"/> only when the buffer cap would be exceeded.</returns>
     private bool _Insert(uint sequence, ReadOnlyMemory<byte> payload, int packetId)
     {
         uint end = sequence + (uint)payload.Length;
@@ -398,25 +492,26 @@ public sealed class SequenceStreamBuffer
     /// Whether adding <paramref name="payloadLength"/> bytes would exceed the buffer cap. Summed in <see cref="long"/>:
     /// with a cap near <see cref="int.MaxValue"/> the <see cref="int"/> sum would wrap and let the payload in.
     /// </summary>
+    /// <param name="payloadLength">Length in bytes of the segment that would be added.</param>
+    /// <returns><see langword="true"/> when the prefix, the held segments, and the payload together exceed the cap.</returns>
     private bool _WouldExceedMax(int payloadLength) =>
         (long)_ContiguousLength + _HeldBytes + payloadLength > _MaxBufferSize;
 
     /// <summary>
     /// After the cursor advanced, moves every held segment that now starts at (or overlaps) the cursor into the
     /// contiguous prefix, lowest sequence first, and discards held segments that are fully behind the cursor.
-    /// Cost: O(1) per moved segment, because the lowest held segment is the last list entry (see the field comment).
+    /// Cost: O(log k) per moved segment, because the lowest held segment is the root of the heap (see the field doc).
     /// </summary>
     private void _DrainHeld()
     {
-        while (_Held.Count > 0)
+        while (_Held.TryPeek(out HeldSegment held, out _))
         {
-            // The lowest sequence is at the end of the sorted list. Everything above it is further away from the cursor.
-            HeldSegment held = _Held[^1];
+            // The lowest sequence is the heap root. Everything else is further away from the cursor.
             uint end = held.Sequence + (uint)held.Data.Length;
             if ((int)(end - _NextExpected) <= 0)
             {
                 // Fully behind the cursor (a retransmission filled the same bytes): its bytes are already in the prefix.
-                _RemoveLastHeld();
+                _RemoveLowestHeld();
                 continue;
             }
 
@@ -432,17 +527,20 @@ public sealed class SequenceStreamBuffer
             ReadOnlySpan<byte> tail = held.Data.Span[skip..];
             _AppendContiguous(tail, held.PacketId);
             _NextExpected += (uint)tail.Length;
-            _RemoveLastHeld();
+            _RemoveLowestHeld();
         }
     }
 
     /// <summary>
-    /// Stores a segment that lies behind a hole, keeping the list sorted highest sequence first. With <c>CopySegments</c>
+    /// Stores a segment that lies behind a hole in the heap of held segments. With <c>CopySegments</c>
     /// the bytes are copied into a pooled array, because the caller's memory (a live-capture packet buffer) may be
     /// recycled before the hole is filled; without it the segment keeps a reference to the caller's memory (zero copy,
-    /// valid for file-based sources). The pooled array is returned in <see cref="_RemoveLastHeld"/> or
+    /// valid for file-based sources). The pooled array is returned in <see cref="_RemoveLowestHeld"/> or
     /// <see cref="_ReleaseHeld"/>.
     /// </summary>
+    /// <param name="sequence">Sequence number of the first byte of <paramref name="payload"/>; behind the cursor.</param>
+    /// <param name="payload">The segment; the caller already checked the buffer cap.</param>
+    /// <param name="packetId">The packet that carried <paramref name="payload"/>, or <see cref="NoPacket"/>.</param>
     private void _Hold(uint sequence, ReadOnlyMemory<byte> payload, int packetId)
     {
         ReadOnlyMemory<byte> stored = payload;
@@ -454,57 +552,29 @@ public sealed class SequenceStreamBuffer
             stored = owned.AsMemory(0, payload.Length);
         }
 
-        _Held.Insert(_FindInsertIndex(sequence), new HeldSegment(sequence, stored, owned, packetId));
+        _Held.Enqueue(new HeldSegment(sequence, stored, owned, packetId), sequence);
         _HeldBytes += payload.Length;
     }
 
-    /// <summary>
-    /// Index at which a segment with <paramref name="sequence"/> keeps <see cref="_Held"/> sorted highest first.
-    /// Binary search with the signed 32-bit difference, so the order is correct across a sequence wrap (all held
-    /// sequences lie less than 2^31 after the cursor, the same precondition as the rest of this class).
-    /// </summary>
-    private int _FindInsertIndex(uint sequence)
+    /// <summary>Removes the lowest held segment (the heap root) and returns its pooled array.</summary>
+    private void _RemoveLowestHeld()
     {
-        int low = 0;
-        int high = _Held.Count;
-        while (low < high)
-        {
-            int middle = (low + high) >> 1;
-            if ((int)(_Held[middle].Sequence - sequence) > 0)
-            {
-                // The entry at "middle" is higher than the new segment, so the new one goes behind it.
-                low = middle + 1;
-            }
-            else
-            {
-                high = middle;
-            }
-        }
-
-        return low;
-    }
-
-    /// <summary>Removes the lowest held segment (the last entry) and returns its pooled array.</summary>
-    private void _RemoveLastHeld()
-    {
-        int index = _Held.Count - 1;
-        HeldSegment held = _Held[index];
+        HeldSegment held = _Held.Dequeue();
         _HeldBytes -= held.Data.Length;
         if (held.Owned is not null)
         {
             ArrayPool<byte>.Shared.Return(held.Owned);
         }
-
-        _Held.RemoveAt(index);
     }
 
+    /// <summary>
+    /// Returns every pooled array of the held segments and empties the heap. Order does not matter here, so the unordered
+    /// enumeration is used. Each pooled array is returned exactly once because the heap is cleared right after.
+    /// </summary>
     private void _ReleaseHeld()
     {
-        for (int i = 0; i < _Held.Count; i++)
+        foreach ((HeldSegment held, uint _) in _Held.UnorderedItems)
         {
-            // HeldSegment is a struct stored in the list: copy it once into a local, so the null check and the Return
-            // below use the same Owned reference.
-            HeldSegment held = _Held[i];
             if (held.Owned is not null)
             {
                 ArrayPool<byte>.Shared.Return(held.Owned);
@@ -520,6 +590,8 @@ public sealed class SequenceStreamBuffer
     /// tail, (2) slide the live bytes to the array start when that frees enough room (no allocation), (3) allocate a
     /// larger array. The caller has already checked the buffer cap, so growth never exceeds it.
     /// </summary>
+    /// <param name="data">The bytes that continue the prefix; empty is a no-op.</param>
+    /// <param name="packetId">The packet that carried <paramref name="data"/>, or <see cref="NoPacket"/>; recorded for attribution.</param>
     private void _AppendContiguous(ReadOnlySpan<byte> data, int packetId)
     {
         if (data.IsEmpty)
@@ -559,7 +631,9 @@ public sealed class SequenceStreamBuffer
         // refused an append past that cap. The new array is a plain allocation, not a pooled rental: it stays alive as
         // the stream's prefix and ContiguousSpan hands out views of it, so it has no point at which it could be returned.
         // The halving test avoids overflow of cap * 2 for caps near int.MaxValue.
-        int cap = _Contiguous.Length == 0 ? newLength : _Contiguous.Length;
+        int cap = _Contiguous.Length == 0
+            ? newLength
+            : _Contiguous.Length;
         while (cap < newLength)
         {
             if (cap > _MaxBufferSize / 2)
@@ -590,12 +664,14 @@ public sealed class SequenceStreamBuffer
 
     #endregion
 
-    #region Contributors
+    #region Packet attribution
 
     /// <summary>
     /// Notes that <paramref name="length"/> bytes were appended to the prefix on behalf of <paramref name="packetId"/>. Two
     /// appends by the same packet in a row share one entry, so a packet is listed once per contiguous run.
     /// </summary>
+    /// <param name="length">Number of bytes appended; positive.</param>
+    /// <param name="packetId">The packet that carried the bytes, or <see cref="NoPacket"/>.</param>
     private void _RecordContributor(int length, int packetId)
     {
         _AppendedTotal += length;
@@ -639,23 +715,53 @@ public sealed class SequenceStreamBuffer
     }
 
     /// <summary>One attributed run of the prefix: it ends at stream offset <paramref name="end"/> (running total).</summary>
+    /// <param name="end">Running total of bytes appended to the prefix when the run was closed.</param>
+    /// <param name="packetId">The packet that delivered the run, or <see cref="NoPacket"/> when it is not tracked.</param>
     private readonly struct Contributor(long end, int packetId)
     {
+        /// <summary>Running total of appended bytes at the end of the run; the run covers <c>[previous End, End)</c>.</summary>
         internal long End { get; } = end;
 
+        /// <summary>The packet that delivered the run, or <see cref="NoPacket"/>.</summary>
         internal int PacketId { get; } = packetId;
     }
 
     #endregion
 
-    #region Held segment
+    #region Held segment ordering and storage
 
+    /// <summary>
+    /// Orders 32-bit sequence numbers in serial-number order. Valid while all compared values lie within 2^31 of each other,
+    /// which is the precondition of this class (all held sequences lie less than 2^31 after the cursor). Stateless; thread-safe.
+    /// </summary>
+    private sealed class SerialNumberComparer : IComparer<uint>
+    {
+        /// <summary>The one instance; the comparer has no state.</summary>
+        public static readonly SerialNumberComparer Instance = new();
+
+        /// <summary>Negative when <paramref name="x"/> comes before <paramref name="y"/> in the stream, also across a wrap.</summary>
+        /// <param name="x">The first sequence number.</param>
+        /// <param name="y">The second sequence number.</param>
+        /// <returns>The signed 32-bit difference <c>x - y</c>.</returns>
+        public int Compare(uint x, uint y) => (int)(x - y);
+    }
+
+    /// <summary>One segment held behind a hole: its bytes, the pooled array to return (null when the caller's memory is used), and the packet.</summary>
+    /// <param name="sequence">Sequence number of the first byte of the segment.</param>
+    /// <param name="data">The segment bytes: a view of <paramref name="owned"/> or of the caller's memory.</param>
+    /// <param name="owned">
+    /// The pooled array to return to <see cref="ArrayPool{T}.Shared"/>, or <see langword="null"/> when the caller's memory is used.
+    /// </param>
+    /// <param name="packetId">The packet that carried the segment, or <see cref="NoPacket"/>.</param>
     private readonly struct HeldSegment(uint sequence, ReadOnlyMemory<byte> data, byte[]? owned, int packetId)
     {
+        /// <summary>Sequence number of the first byte of the segment, in the stream's serial-number space.</summary>
         internal uint Sequence { get; } = sequence;
 
+        /// <summary>The segment bytes; valid until the segment is removed from the heap.</summary>
         internal ReadOnlyMemory<byte> Data { get; } = data;
 
+        /// <summary>The pooled array behind <see cref="Data"/> that must be returned on removal, or <see langword="null"/>.</summary>
         internal byte[]? Owned { get; } = owned;
 
         /// <summary>Packet that delivered the bytes, kept so the attribution survives the wait behind the hole.</summary>

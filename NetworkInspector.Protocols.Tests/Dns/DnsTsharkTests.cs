@@ -51,7 +51,7 @@ internal sealed class DnsTsharkTests
         await Assert.That(value).IsNotNull().Because("tshark must report this field");
         // tshark may produce "0x4242" or "16962" — accept either.
         bool ok = string.Equals(value, "0x4242", StringComparison.OrdinalIgnoreCase) || value == "16962";
-        await Assert.That(ok).IsTrue().Because($"got '{value}'");
+        await Assert.That(ok).IsTrue().Because(Invariant($"got '{value}'"));
     }
 
     [Test]

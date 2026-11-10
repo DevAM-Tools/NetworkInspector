@@ -169,7 +169,7 @@ internal sealed class SomeIpRegistrationTests
             ];
             foreach (string text in texts)
             {
-                await Assert.That(string.IsNullOrWhiteSpace(text)).IsFalse().Because($"{limit.Key} has an empty text");
+                await Assert.That(string.IsNullOrWhiteSpace(text)).IsFalse().Because(Invariant($"{limit.Key} has an empty text"));
             }
 
             await Assert.That(limit.Texts.Title.EndsWith('.')).IsFalse();
@@ -177,7 +177,7 @@ internal sealed class SomeIpRegistrationTests
             await Assert.That(limit.Default).IsLessThanOrEqualTo(limit.Maximum);
 
             ReadOnlySettingView? setting = s.Stack.Settings.GetSetting(limit.Key);
-            await Assert.That(setting).IsNotNull().Because($"{limit.Key} must be registered");
+            await Assert.That(setting).IsNotNull().Because(Invariant($"{limit.Key} must be registered"));
             ReadOnlySettingView view = setting!.Value;
             await Assert.That(view.MinValue!.Value.TryGetAsU64(out ulong min)).IsTrue();
             await Assert.That(view.MaxValue!.Value.TryGetAsU64(out ulong max)).IsTrue();

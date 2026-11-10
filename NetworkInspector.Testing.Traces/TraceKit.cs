@@ -31,7 +31,7 @@ public sealed class TraceKit
         ArgumentException.ThrowIfNullOrWhiteSpace(cacheDirectory);
         if (!Path.IsPathFullyQualified(cacheDirectory))
         {
-            throw new ArgumentException($"The cache folder '{cacheDirectory}' is not fully qualified.", nameof(cacheDirectory));
+            throw new ArgumentException(Invariant($"The cache folder '{cacheDirectory}' is not fully qualified."), nameof(cacheDirectory));
         }
 
         CacheDirectory = cacheDirectory;

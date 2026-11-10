@@ -144,7 +144,7 @@ public static class TsharkEquivalence
     /// <c>.Because(...)</c> clauses across the test projects.
     /// </summary>
     public static string Describe(string fieldName, string? niValue, string? tsharkValue)
-        => $"Field '{fieldName}' — NI='{niValue ?? "<absent>"}' vs tshark='{tsharkValue ?? "<absent>"}'";
+        => Invariant($"Field '{fieldName}' — NI='{niValue ?? "<absent>"}' vs tshark='{tsharkValue ?? "<absent>"}'");
 
     #region Normalisation helpers
 

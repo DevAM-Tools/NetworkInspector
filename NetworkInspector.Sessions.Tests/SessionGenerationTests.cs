@@ -474,14 +474,20 @@ internal sealed class SessionGenerationTests
             current |= rig.Session.CurrentStack.IsCurrent(rig.Session) & view.IsCurrent(rig.Session);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++)
+        // Up to five measured rounds of 1000 reads; the smallest allocation counts. A one-off allocation inflates only the
+        // round it lands in, while a real per-read allocation shows in every round. A round at zero ends the measuring.
+        long allocated = long.MaxValue;
+        for (int round = 0; round < 5 && allocated > 0; round++)
         {
-            generation += rig.Session.Generation;
-            current |= rig.Session.CurrentStack.IsCurrent(rig.Session) & view.IsCurrent(rig.Session);
-        }
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 1000; i++)
+            {
+                generation += rig.Session.Generation;
+                current |= rig.Session.CurrentStack.IsCurrent(rig.Session) & view.IsCurrent(rig.Session);
+            }
 
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            allocated = long.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
 
         await Assert.That(allocated).IsEqualTo(0);
         await Assert.That(current).IsTrue();

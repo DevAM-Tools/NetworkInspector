@@ -17,7 +17,7 @@ global using System.Runtime.Loader;
 global using System.Text.Json;
 global using System.Threading;
 global using System.Threading.Tasks;
-global using static System.FormattableString;
+global using static InvariantStringHelper.InvariantText;
 #endregion
 
 #region Roslyn (test assembly compiler)
@@ -42,8 +42,11 @@ global using NetworkInspector.Core.Errors;
 global using NetworkInspector.Core.Fields;
 global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Interfaces;
+global using NetworkInspector.Limits;
+global using NetworkInspector.Limits.Utility;
 global using NetworkInspector.Core.Protocols;
 global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Settings;
 global using NetworkInspector.Plugins;
 global using NetworkInspector.Plugins.Loader;
 global using NetworkInspector.Protocols;

@@ -66,7 +66,7 @@ internal static class TsharkAssert
             await Assert.That(TsharkVerifier.MissingTsharkAllowed)
                 .IsTrue()
                 .Because(
-                    $"tshark did not emit field '{tsharkFieldName}'. " +
+                    Invariant($"tshark did not emit field '{tsharkFieldName}'. ") +
                     "Either the dissector configuration is wrong, the frame is malformed, " +
                     "or the field name is incorrect.");
             return;
@@ -75,13 +75,13 @@ internal static class TsharkAssert
         string? niValue = _TryGetNiValueAsString(stack, packet, niFieldPath);
         await Assert.That(niValue)
             .IsNotNull()
-            .Because($"NI field '{niFieldPath}' must be present (tshark reported '{tsharkValue}').");
+            .Because(Invariant($"NI field '{niFieldPath}' must be present (tshark reported '{tsharkValue}')."));
 
         bool equivalent = TsharkEquivalence.AreEquivalent(niValue, tsharkValue);
         await Assert.That(equivalent)
             .IsTrue()
             .Because(TsharkEquivalence.Describe(niFieldPath, niValue, tsharkValue) +
-                     $" (tshark field '{tsharkFieldName}')");
+                     Invariant($" (tshark field '{tsharkFieldName}')"));
     }
 
     /// <summary>
@@ -173,8 +173,8 @@ internal static class TsharkAssert
             await Assert.That(TsharkVerifier.MissingTsharkAllowed)
                 .IsTrue()
                 .Because(
-                    $"tshark did not emit any expert info matching severity='{severity}', " +
-                    $"substring='{messageOrGroupSubstring}'.");
+                    Invariant($"tshark did not emit any expert info matching severity='{severity}', ") +
+                    Invariant($"substring='{messageOrGroupSubstring}'."));
             return;
         }
 
@@ -194,8 +194,8 @@ internal static class TsharkAssert
         await Assert.That(match)
             .IsTrue()
             .Because(
-                $"Expected tshark expert info with severity='{severity}' and substring='{messageOrGroupSubstring}'. " +
-                $"Got {fields.Count} expert entries, none matched.");
+                Invariant($"Expected tshark expert info with severity='{severity}' and substring='{messageOrGroupSubstring}'. ") +
+                Invariant($"Got {fields.Count} expert entries, none matched."));
     }
 
     /// <summary>
@@ -223,6 +223,6 @@ internal static class TsharkAssert
         {
             return null;
         }
-        return value.ToString();
+        return value.ToString(null, CultureInfo.InvariantCulture);
     }
 }

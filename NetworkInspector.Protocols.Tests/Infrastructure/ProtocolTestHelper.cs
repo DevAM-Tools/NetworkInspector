@@ -68,7 +68,7 @@ internal static class ProtocolTestHelper
     {
 #pragma warning disable CA2000 // SettingsManager ownership transfers to Stack via StackBuilder.
         // Temp-file JSON configs (signal_message / pdu_transport) resolve under this base.
-        SettingsManager settings = new(Path.GetTempPath());
+        SettingsManager settings = new(Path.GetTempPath(), CoreSettingsLayout.Instance);
 #pragma warning restore CA2000
         configureSettings(settings);
         StackBuilder builder = new(settings, new FrameInterfaceRegistry());
@@ -125,14 +125,14 @@ internal static class ProtocolTestHelper
     internal static async Task AssertU64Field(Stack stack, Packet packet, string fieldName, ulong expected)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true);
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
 
         bool ok = value.Data.TryGetAsU64(out ulong actual);
-        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be U64");
-        await Assert.That(actual).IsEqualTo(expected).Because($"Field '{fieldName}'");
+        await Assert.That(ok).IsTrue().Because(Invariant($"Field '{fieldName}' must be U64"));
+        await Assert.That(actual).IsEqualTo(expected).Because(Invariant($"Field '{fieldName}'"));
     }
 
     /// <summary>
@@ -142,14 +142,14 @@ internal static class ProtocolTestHelper
     internal static async Task AssertI64Field(Stack stack, Packet packet, string fieldName, long expected)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true);
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
 
         bool ok = value.Data.TryGetAsI64(out long actual);
-        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be I64");
-        await Assert.That(actual).IsEqualTo(expected).Because($"Field '{fieldName}'");
+        await Assert.That(ok).IsTrue().Because(Invariant($"Field '{fieldName}' must be I64"));
+        await Assert.That(actual).IsEqualTo(expected).Because(Invariant($"Field '{fieldName}'"));
     }
 
     /// <summary>
@@ -159,14 +159,14 @@ internal static class ProtocolTestHelper
     internal static async Task AssertF64Field(Stack stack, Packet packet, string fieldName, double expected)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true);
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
 
         bool ok = value.Data.TryGetAsF64(out double actual);
-        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be F64");
-        await Assert.That(actual).IsEqualTo(expected).Because($"Field '{fieldName}'");
+        await Assert.That(ok).IsTrue().Because(Invariant($"Field '{fieldName}' must be F64"));
+        await Assert.That(actual).IsEqualTo(expected).Because(Invariant($"Field '{fieldName}'"));
     }
 
     /// <summary>
@@ -176,16 +176,16 @@ internal static class ProtocolTestHelper
     internal static async Task AssertF64FieldApprox(Stack stack, Packet packet, string fieldName, double expected, double tolerance)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true); // materialize: true — include lazy fields in assertion
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
 
         bool ok = value.Data.TryGetAsF64(out double actual);
-        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be F64");
+        await Assert.That(ok).IsTrue().Because(Invariant($"Field '{fieldName}' must be F64"));
         double diff = Math.Abs(actual - expected);
         await Assert.That(diff).IsLessThanOrEqualTo(tolerance)
-            .Because($"Field '{fieldName}': expected ~{expected}, got {actual} (tolerance {tolerance})");
+            .Because(Invariant($"Field '{fieldName}': expected ~{expected}, got {actual} (tolerance {tolerance})"));
     }
 
     /// <summary>
@@ -209,7 +209,7 @@ internal static class ProtocolTestHelper
     internal static Stack BuildStack(Action<SettingsManager> configureSettings)
     {
 #pragma warning disable CA2000 // SettingsManager ownership transfers to Stack via StackBuilder.
-        SettingsManager settings = new(Path.GetTempPath());
+        SettingsManager settings = new(Path.GetTempPath(), CoreSettingsLayout.Instance);
 #pragma warning restore CA2000
         configureSettings(settings);
         StackBuilder builder = new(settings, new FrameInterfaceRegistry());
@@ -300,14 +300,14 @@ internal static class ProtocolTestHelper
     internal static async Task AssertBoolField(Stack stack, Packet packet, string fieldName, bool expected)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true); // materialize: true — include lazy fields in assertion
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
 
         bool ok = value.Data.TryGetAsBool(out bool actual);
-        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be Bool");
-        await Assert.That(actual).IsEqualTo(expected).Because($"Field '{fieldName}'");
+        await Assert.That(ok).IsTrue().Because(Invariant($"Field '{fieldName}' must be Bool"));
+        await Assert.That(actual).IsEqualTo(expected).Because(Invariant($"Field '{fieldName}'"));
     }
 
     /// <summary>
@@ -316,14 +316,14 @@ internal static class ProtocolTestHelper
     internal static async Task AssertStringField(Stack stack, Packet packet, string fieldName, string expected)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true); // materialize: true — include lazy fields in assertion
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
 
         bool ok = value.Data.TryGetAsString(out string? actual);
-        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be String");
-        await Assert.That(actual).IsEqualTo(expected).Because($"Field '{fieldName}'");
+        await Assert.That(ok).IsTrue().Because(Invariant($"Field '{fieldName}' must be String"));
+        await Assert.That(actual).IsEqualTo(expected).Because(Invariant($"Field '{fieldName}'"));
     }
 
     /// <summary>
@@ -332,14 +332,14 @@ internal static class ProtocolTestHelper
     internal static async Task AssertStringFieldContains(Stack stack, Packet packet, string fieldName, string expectedSubstring)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true);
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
 
         bool ok = value.Data.TryGetAsString(out string? actual);
-        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be String");
-        await Assert.That(actual).Contains(expectedSubstring).Because($"Field '{fieldName}'");
+        await Assert.That(ok).IsTrue().Because(Invariant($"Field '{fieldName}' must be String"));
+        await Assert.That(actual).Contains(expectedSubstring).Because(Invariant($"Field '{fieldName}'"));
     }
 
     /// <summary>
@@ -348,14 +348,14 @@ internal static class ProtocolTestHelper
     internal static async Task AssertMacField(Stack stack, Packet packet, string fieldName, string expected)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true); // materialize: true — include lazy fields in assertion
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
 
         bool ok = value.Data.TryGetAsMacAddress(out MacAddress actual);
-        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be MacAddress");
-        await Assert.That(actual.ToString()).IsEqualTo(expected).Because($"Field '{fieldName}'");
+        await Assert.That(ok).IsTrue().Because(Invariant($"Field '{fieldName}' must be MacAddress"));
+        await Assert.That(actual.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(expected).Because(Invariant($"Field '{fieldName}'"));
     }
 
     /// <summary>
@@ -364,14 +364,14 @@ internal static class ProtocolTestHelper
     internal static async Task AssertIPv4Field(Stack stack, Packet packet, string fieldName, string expected)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true); // materialize: true — include lazy fields in assertion
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
 
         bool ok = value.Data.TryGetAsIPv4(out IPv4Address actual);
-        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be IPv4Address");
-        await Assert.That(actual.ToString()).IsEqualTo(expected).Because($"Field '{fieldName}'");
+        await Assert.That(ok).IsTrue().Because(Invariant($"Field '{fieldName}' must be IPv4Address"));
+        await Assert.That(actual.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(expected).Because(Invariant($"Field '{fieldName}'"));
     }
 
     /// <summary>
@@ -380,16 +380,16 @@ internal static class ProtocolTestHelper
     internal static async Task AssertIPv6Field(Stack stack, Packet packet, string fieldName, string expected)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true); // materialize: true — include lazy fields in assertion
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
 
         bool ok = value.Data.TryGetAsIPv6(out IPv6Address actual);
-        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be IPv6Address");
+        await Assert.That(ok).IsTrue().Because(Invariant($"Field '{fieldName}' must be IPv6Address"));
         // Use case-insensitive comparison — IPv6 hex digits may be upper- or lower-case
-        await Assert.That(actual.ToString().ToUpperInvariant())
-            .IsEqualTo(expected.ToUpperInvariant()).Because($"Field '{fieldName}'");
+        await Assert.That(actual.ToString(null, CultureInfo.InvariantCulture).ToUpperInvariant())
+            .IsEqualTo(expected.ToUpperInvariant()).Because(Invariant($"Field '{fieldName}'"));
     }
 
     /// <summary>
@@ -398,14 +398,14 @@ internal static class ProtocolTestHelper
     internal static async Task AssertBytesField(Stack stack, Packet packet, string fieldName, byte[] expected)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         bool found = packet.TryGetFieldValue(fieldId!.Value, out FieldValue value, materialize: true); // materialize: true — include lazy fields in assertion
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
 
         bool ok = value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> actual);
-        await Assert.That(ok).IsTrue().Because($"Field '{fieldName}' must be Bytes");
-        await Assert.That(actual.Span.SequenceEqual(expected)).IsTrue().Because($"Field '{fieldName}' bytes mismatch");
+        await Assert.That(ok).IsTrue().Because(Invariant($"Field '{fieldName}' must be Bytes"));
+        await Assert.That(actual.Span.SequenceEqual(expected)).IsTrue().Because(Invariant($"Field '{fieldName}' bytes mismatch"));
     }
 
     /// <summary>
@@ -414,10 +414,10 @@ internal static class ProtocolTestHelper
     internal static async Task AssertFieldExists(Stack stack, Packet packet, string fieldName)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         bool found = packet.TryGetFieldValue(fieldId!.Value, out _, materialize: true); // materialize: true — include lazy fields in assertion
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
     }
 
     /// <summary>
@@ -433,7 +433,7 @@ internal static class ProtocolTestHelper
         }
 
         bool found = packet.TryGetFieldValue(fieldId.Value, out _, materialize: true); // materialize: true — include lazy fields in assertion
-        await Assert.That(found).IsFalse().Because($"Packet must NOT contain field '{fieldName}'");
+        await Assert.That(found).IsFalse().Because(Invariant($"Packet must NOT contain field '{fieldName}'"));
     }
 
     /// <summary>
@@ -456,13 +456,13 @@ internal static class ProtocolTestHelper
     internal static async Task AssertDisplayText(Stack stack, Packet packet, string fieldName, string expectedDisplayText)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         // Search the field tree for the matching node to access its CustomText
         LazyString customText = _FindFieldCustomText(packet, fieldId!.Value, out bool found);
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
-        await Assert.That(customText.IsNull).IsFalse().Because($"Field '{fieldName}' must have custom display text");
-        await Assert.That((string)customText).IsEqualTo(expectedDisplayText).Because($"Field '{fieldName}' display text");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
+        await Assert.That(customText.IsNull).IsFalse().Because(Invariant($"Field '{fieldName}' must have custom display text"));
+        await Assert.That((string)customText).IsEqualTo(expectedDisplayText).Because(Invariant($"Field '{fieldName}' display text"));
     }
 
     /// <summary>
@@ -472,13 +472,14 @@ internal static class ProtocolTestHelper
     internal static async Task AssertDisplayTextContains(Stack stack, Packet packet, string fieldName, string expectedSubstring)
     {
         FieldId? fieldId = stack.GetFieldId(fieldName);
-        await Assert.That(fieldId).IsNotNull().Because($"Field '{fieldName}' must be registered");
+        await Assert.That(fieldId).IsNotNull().Because(Invariant($"Field '{fieldName}' must be registered"));
 
         // Search the field tree for the matching node to access its CustomText
         LazyString customText = _FindFieldCustomText(packet, fieldId!.Value, out bool found);
-        await Assert.That(found).IsTrue().Because($"Packet must contain field '{fieldName}'");
-        await Assert.That(customText.IsNull).IsFalse().Because($"Field '{fieldName}' must have custom display text");
-        await Assert.That((string)customText).Contains(expectedSubstring).Because($"Field '{fieldName}' display text should contain '{expectedSubstring}'");
+        await Assert.That(found).IsTrue().Because(Invariant($"Packet must contain field '{fieldName}'"));
+        await Assert.That(customText.IsNull).IsFalse().Because(Invariant($"Field '{fieldName}' must have custom display text"));
+        await Assert.That((string)customText).Contains(expectedSubstring)
+            .Because(Invariant($"Field '{fieldName}' display text should contain '{expectedSubstring}'"));
     }
 
     /// <summary>

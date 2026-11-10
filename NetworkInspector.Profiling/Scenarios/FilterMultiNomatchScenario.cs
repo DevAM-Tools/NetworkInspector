@@ -15,7 +15,7 @@ internal sealed class FilterMultiNomatchScenario : FilterScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant($"Four-field no-match \"{Expression}\" without index (full eval of every term).");
+        Invariant($"Four-field no-match \"{Expression}\" without index (full eval of every term).");
 
     /// <inheritdoc/>
     protected override string Expression =>

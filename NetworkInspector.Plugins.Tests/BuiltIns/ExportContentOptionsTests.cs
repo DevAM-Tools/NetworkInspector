@@ -327,7 +327,7 @@ internal sealed class ExportContentOptionsTests
     /// <returns>The single value of the query.</returns>
     private static long _Count(string dataSource, string sql)
     {
-        using DuckDB.NET.Data.DuckDBConnection connection = new($"Data Source={dataSource}");
+        using DuckDB.NET.Data.DuckDBConnection connection = new(Invariant($"Data Source={dataSource}"));
         connection.Open();
         using DuckDB.NET.Data.DuckDBCommand command = connection.CreateCommand();
         command.CommandText = sql;
@@ -818,7 +818,7 @@ internal sealed class ExportContentOptionsTests
     /// <remarks>Sync: <c>CliExportFormatTests._ReportedStorageVersion</c> in NetworkInspector.CLI.Tests (the same query).</remarks>
     private static string _ReportedStorageVersion(string path)
     {
-        using DuckDB.NET.Data.DuckDBConnection connection = new($"Data Source={path};access_mode=READ_ONLY");
+        using DuckDB.NET.Data.DuckDBConnection connection = new(Invariant($"Data Source={path};access_mode=READ_ONLY"));
         connection.Open();
         using DuckDB.NET.Data.DuckDBCommand command = connection.CreateCommand();
         command.CommandText = "SELECT tags['storage_version'] FROM duckdb_databases() WHERE NOT internal";
@@ -927,7 +927,7 @@ internal sealed class ExportContentOptionsTests
         using DuckDB.NET.Data.DuckDBConnection connection = new("Data Source=:memory:");
         connection.Open();
         using DuckDB.NET.Data.DuckDBCommand command = connection.CreateCommand();
-        command.CommandText = $"SELECT DISTINCT compression FROM parquet_metadata([{list}]) ORDER BY 1";
+        command.CommandText = Invariant($"SELECT DISTINCT compression FROM parquet_metadata([{list}]) ORDER BY 1");
         using DuckDB.NET.Data.DuckDBDataReader reader = command.ExecuteReader();
         List<string> codecs = [];
         while (reader.Read())

@@ -37,7 +37,7 @@ internal sealed class SessionExportTests
     private sealed class Rig : IDisposable
     {
         private readonly TestFrameSource _Source;
-        private readonly string _Directory = Path.Combine(Path.GetTempPath(), "ni-session-export-" + Guid.NewGuid().ToString("N"));
+        private readonly string _Directory = Path.Combine(Path.GetTempPath(), "ni-session-export-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
 
         internal Rig(Func<TestFrameSource, IFrameSource>? wrapSource = null, byte[][]? frames = null)
         {
@@ -299,10 +299,10 @@ internal sealed class SessionExportTests
     private static string _LengthRows(string path, Stack stack)
     {
         int fieldId = stack.GetFieldId("udp.length")!.Value.Value; // Non-null: the standard stack defines it.
-        using DuckDBConnection connection = new($"Data Source={path}");
+        using DuckDBConnection connection = new(Invariant($"Data Source={path}"));
         connection.Open();
         using DuckDBCommand command = connection.CreateCommand();
-        command.CommandText = $"SELECT packet_id, value FROM field_{fieldId.ToString(CultureInfo.InvariantCulture)} ORDER BY packet_id";
+        command.CommandText = Invariant($"SELECT packet_id, value FROM field_{fieldId.ToString(CultureInfo.InvariantCulture)} ORDER BY packet_id");
         using DuckDBDataReader reader = command.ExecuteReader();
         List<string> rows = [];
         while (reader.Read())

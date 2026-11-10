@@ -37,7 +37,7 @@ namespace NetworkInspector.Core.Index;
 /// </summary>
 public readonly struct ReadOnlyRoaringBitmap
 {
-    #region Fields
+    #region Wrapped bitmap
 
     /// <summary>
     /// Shared empty mutable bitmap used only when <see cref="Inner"/> must return a non-null
@@ -48,25 +48,21 @@ public readonly struct ReadOnlyRoaringBitmap
     /// </summary>
     private static readonly RoaringBitmap _SharedEmpty = new();
 
-    // Null only for default / Empty. Every other instance wraps a live RoaringBitmap, so reads see later appends.
+    /// <summary>
+    /// The wrapped bitmap. Null only for <c>default</c> / <see cref="Empty"/>. Every other instance wraps a live
+    /// <see cref="RoaringBitmap"/>, so reads see later appends.
+    /// </summary>
     private readonly RoaringBitmap? _Inner;
-
-    #endregion
-
-    #region Lifecycle
 
     /// <summary>Empty read-only bitmap. Equivalent to <c>default</c>; zero allocation.</summary>
     public static ReadOnlyRoaringBitmap Empty => default;
 
     /// <summary>Creates a read-only view over <paramref name="inner"/>.</summary>
+    /// <param name="inner">The live bitmap to view; not <see langword="null"/>; not copied.</param>
     internal ReadOnlyRoaringBitmap(RoaringBitmap inner)
     {
         _Inner = inner;
     }
-
-    #endregion
-
-    #region Internal
 
     /// <summary>
     /// Internal accessor for the wrapped <see cref="RoaringBitmap"/>. Used by
@@ -82,9 +78,9 @@ public readonly struct ReadOnlyRoaringBitmap
 
     #endregion
 
-    #region Properties
+    #region Size and bounds
 
-    /// <summary>Total number of values stored.</summary>
+    /// <summary>Total number of values stored; 0 for <see cref="Empty"/>.</summary>
     public long Cardinality => _Inner?.Cardinality
         ?? 0L;
 
@@ -107,6 +103,8 @@ public readonly struct ReadOnlyRoaringBitmap
     /// Tries to get the minimum value in the bitmap. Returns <see langword="false"/> when the
     /// bitmap is empty (<paramref name="value"/> is set to 0).
     /// </summary>
+    /// <param name="value">The smallest value on success; 0 when the bitmap is empty.</param>
+    /// <returns><see langword="true"/> when the bitmap holds at least one value.</returns>
     public bool TryGetMin(out uint value)
     {
         if (_Inner is null)
@@ -122,6 +120,8 @@ public readonly struct ReadOnlyRoaringBitmap
     /// Tries to get the maximum value in the bitmap. Returns <see langword="false"/> when the
     /// bitmap is empty (<paramref name="value"/> is set to 0).
     /// </summary>
+    /// <param name="value">The largest value on success; 0 when the bitmap is empty.</param>
+    /// <returns><see langword="true"/> when the bitmap holds at least one value.</returns>
     public bool TryGetMax(out uint value)
     {
         if (_Inner is null)
@@ -135,14 +135,18 @@ public readonly struct ReadOnlyRoaringBitmap
 
     #endregion
 
-    #region Query methods
+    #region Queries
 
     /// <summary>Returns whether <paramref name="value"/> is present in the bitmap. Safe while a single writer appends to the viewed bitmap.</summary>
+    /// <param name="value">The value to look up.</param>
+    /// <returns><see langword="true"/> when the bitmap holds <paramref name="value"/>; always <see langword="false"/> for <see cref="Empty"/>.</returns>
     public bool Contains(uint value) => _Inner is not null && _Inner.Contains(value);
 
     /// <summary>
     /// Returns the number of values ≤ <paramref name="value"/> in the bitmap.
     /// </summary>
+    /// <param name="value">The upper bound, inclusive; it need not be present in the bitmap.</param>
+    /// <returns>The count of stored values that are less than or equal to <paramref name="value"/>; 0 for <see cref="Empty"/>.</returns>
     public long Rank(uint value) => _Inner?.Rank(value)
         ?? 0L;
 
@@ -150,16 +154,19 @@ public readonly struct ReadOnlyRoaringBitmap
     /// Returns the 0-based <paramref name="position"/>-th smallest value in the bitmap,
     /// or <see langword="null"/> if fewer than (<paramref name="position"/> + 1) values exist.
     /// </summary>
+    /// <param name="position">The 0-based position in ascending order; a negative position selects nothing.</param>
+    /// <returns>The value at <paramref name="position"/>, or <see langword="null"/> when no such value exists.</returns>
     public uint? Select(long position) => _Inner?.Select(position);
 
     #endregion
 
-    #region Copy
+    #region Detached copy
 
     /// <summary>
     /// Returns a new mutable <see cref="RoaringBitmap"/> that is a detached copy of the underlying
     /// bitmap. Mutations to the returned copy do not affect this view or the original bitmap.
     /// </summary>
+    /// <returns>A new bitmap that holds the values this view holds now; empty for <see cref="Empty"/>.</returns>
     public RoaringBitmap ToBitmap() => _Inner is null
         ? new RoaringBitmap()
         : _Inner.Clone();
@@ -172,6 +179,8 @@ public readonly struct ReadOnlyRoaringBitmap
     /// Returns the intersection of this bitmap and <paramref name="other"/> as a new
     /// <see cref="ReadOnlyRoaringBitmap"/>. Neither operand is modified.
     /// </summary>
+    /// <param name="other">The bitmap to intersect with.</param>
+    /// <returns>A view of a new bitmap that holds the values present in both operands; <see cref="Empty"/> when either is empty.</returns>
     public ReadOnlyRoaringBitmap And(ReadOnlyRoaringBitmap other)
     {
         // x AND empty is empty: skip the merge and allocate nothing.
@@ -187,6 +196,11 @@ public readonly struct ReadOnlyRoaringBitmap
     /// Returns the union of this bitmap and <paramref name="other"/> as a new
     /// <see cref="ReadOnlyRoaringBitmap"/>. Neither operand is modified.
     /// </summary>
+    /// <param name="other">The bitmap to unite with.</param>
+    /// <returns>
+    /// A view of a new bitmap that holds the values present in either operand; when one operand is empty, the other operand's
+    /// live view without a copy.
+    /// </returns>
     public ReadOnlyRoaringBitmap Or(ReadOnlyRoaringBitmap other)
     {
         // Empty identity: the union equals the other view, so it is returned without a copy (still a live view).
@@ -207,6 +221,11 @@ public readonly struct ReadOnlyRoaringBitmap
     /// Returns the difference (this AND NOT other) as a new <see cref="ReadOnlyRoaringBitmap"/>.
     /// Neither operand is modified.
     /// </summary>
+    /// <param name="other">The bitmap whose values are removed from this one.</param>
+    /// <returns>
+    /// A view of a new bitmap that holds the values of this bitmap that are absent from <paramref name="other"/>;
+    /// <see cref="Empty"/> when this bitmap is empty, this live view without a copy when <paramref name="other"/> is empty.
+    /// </returns>
     public ReadOnlyRoaringBitmap AndNot(ReadOnlyRoaringBitmap other)
     {
         // empty AND NOT x is empty; x AND NOT empty is x, returned as the same live view without a copy.
@@ -227,6 +246,11 @@ public readonly struct ReadOnlyRoaringBitmap
     /// Returns the symmetric difference (XOR) as a new <see cref="ReadOnlyRoaringBitmap"/>.
     /// Neither operand is modified.
     /// </summary>
+    /// <param name="other">The bitmap to combine with.</param>
+    /// <returns>
+    /// A view of a new bitmap that holds the values present in exactly one operand; when one operand is empty, the other
+    /// operand's live view without a copy.
+    /// </returns>
     public ReadOnlyRoaringBitmap Xor(ReadOnlyRoaringBitmap other)
     {
         // Empty identity, as in Or: the other view is returned without a copy.

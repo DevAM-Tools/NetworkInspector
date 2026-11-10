@@ -308,7 +308,7 @@ internal sealed class FilterOptionTests
 
     /// <summary>A unique path in the temp directory with the given extension.</summary>
     private static string _TempPath(string extension) =>
-        Path.Combine(Path.GetTempPath(), $"ni-filter-{Guid.NewGuid():N}.{extension}");
+        Path.Combine(Path.GetTempPath(), Invariant($"ni-filter-{Guid.NewGuid():N}.{extension}"));
 
     /// <summary>Removes a temporary output file if the command created one.</summary>
     private static void _Delete(string path)

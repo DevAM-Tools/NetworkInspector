@@ -384,7 +384,7 @@ internal sealed class FieldValueTests
         await Assert.That(val.Type).IsEqualTo(FieldType.Uuid);
         await Assert.That(val.CustomRepresentation.AsString).IsEqualTo("uuid-custom");
         val.Data.TryGetAsUuid(out Uuid uuidVal);
-        await Assert.That(uuidVal.ToString()).IsEqualTo(uuid.Format());
+        await Assert.That(uuidVal.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(uuid.Format());
     }
 
     /// <summary>NewTimestamp creates a value of type Timestamp that reads back as the given instant.</summary>
@@ -405,7 +405,7 @@ internal sealed class FieldValueTests
         FieldValue val = FieldValue.NewU64(80, "HTTP (80)");
         await Assert.That(val.CustomRepresentation.IsNull).IsFalse();
         await Assert.That(val.CustomRepresentation.AsString).IsEqualTo("HTTP (80)");
-        await Assert.That(val.ToString()).IsEqualTo("HTTP (80)");
+        await Assert.That(val.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("HTTP (80)");
     }
 
     /// <summary>A value created without a custom representation has a null one.</summary>
@@ -439,48 +439,53 @@ internal sealed class FieldValueTests
 
     /// <summary>The none value formats as the empty string.</summary>
     [Test]
-    public async Task FieldValueDataToStringNone() => await Assert.That(FieldValueData.None.ToString()).IsEqualTo(string.Empty);
+    public async Task FieldValueDataToStringNone() => await Assert.That(FieldValueData.None.ToString(null, CultureInfo.InvariantCulture))
+        .IsEqualTo(string.Empty);
 
     /// <summary>A true bool formats as True.</summary>
     [Test]
-    public async Task FieldValueDataToStringBoolTrue() => await Assert.That(FieldValueData.NewBool(true).ToString()).IsEqualTo("True");
+    public async Task FieldValueDataToStringBoolTrue() => await Assert.That(FieldValueData.NewBool(true).ToString(null, CultureInfo.InvariantCulture))
+        .IsEqualTo("True");
 
     /// <summary>A false bool formats as False.</summary>
     [Test]
-    public async Task FieldValueDataToStringBoolFalse() => await Assert.That(FieldValueData.NewBool(false).ToString()).IsEqualTo("False");
+    public async Task FieldValueDataToStringBoolFalse() => await Assert.That(FieldValueData.NewBool(false).ToString(null, CultureInfo.InvariantCulture))
+        .IsEqualTo("False");
 
     /// <summary>A negative I64 formats with its minus sign.</summary>
     [Test]
-    public async Task FieldValueDataToStringI64() => await Assert.That(FieldValueData.NewI64(-42).ToString()).IsEqualTo("-42");
+    public async Task FieldValueDataToStringI64() => await Assert.That(FieldValueData.NewI64(-42).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("-42");
 
     /// <summary>A U64 formats as its decimal digits.</summary>
     [Test]
-    public async Task FieldValueDataToStringU64() => await Assert.That(FieldValueData.NewU64(12345).ToString()).IsEqualTo("12345");
+    public async Task FieldValueDataToStringU64() => await Assert.That(FieldValueData.NewU64(12345).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("12345");
 
     /// <summary>An F64 formats with the invariant culture.</summary>
     [Test]
     public async Task FieldValueDataToStringF64() =>
         // InvariantCulture uses '.' as decimal separator
-        await Assert.That(FieldValueData.NewF64(3.14).ToString()).IsEqualTo("3.14");
+        await Assert.That(FieldValueData.NewF64(3.14).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("3.14");
 
     /// <summary>A string formats as itself.</summary>
     [Test]
-    public async Task FieldValueDataToStringString() => await Assert.That(FieldValueData.NewString("hello").ToString()).IsEqualTo("hello");
+    public async Task FieldValueDataToStringString() => await Assert.That(FieldValueData.NewString("hello").ToString(null, CultureInfo.InvariantCulture))
+        .IsEqualTo("hello");
 
     /// <summary>Empty bytes format as the empty string.</summary>
     [Test]
     public async Task FieldValueDataToStringBytesEmpty()
-        => await Assert.That(FieldValueData.NewBytes(ReadOnlyMemory<byte>.Empty).ToString()).IsEqualTo(string.Empty);
+        => await Assert.That(FieldValueData.NewBytes(ReadOnlyMemory<byte>.Empty).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(string.Empty);
 
     /// <summary>One byte formats as two upper-case hex digits.</summary>
     [Test]
-    public async Task FieldValueDataToStringBytesSingleByte() => await Assert.That(FieldValueData.NewBytes([0xAB]).ToString()).IsEqualTo("AB");
+    public async Task FieldValueDataToStringBytesSingleByte() => await Assert.That(FieldValueData.NewBytes([0xAB]).ToString(null, CultureInfo.InvariantCulture))
+        .IsEqualTo("AB");
 
     /// <summary>Several bytes format as upper-case hex pairs separated by blanks.</summary>
     [Test]
     public async Task FieldValueDataToStringBytesMultipleBytes()
     {
-        await Assert.That(FieldValueData.NewBytes([0xDE, 0xAD, 0xBE, 0xEF]).ToString())
+        await Assert.That(FieldValueData.NewBytes([0xDE, 0xAD, 0xBE, 0xEF]).ToString(null, CultureInfo.InvariantCulture))
             .IsEqualTo("DE AD BE EF");
     }
 
@@ -489,7 +494,7 @@ internal sealed class FieldValueTests
     public async Task FieldValueDataToStringMacAddress()
     {
         MacAddress mac = MacAddress.FromBytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
-        await Assert.That(FieldValueData.NewMacAddress(mac).ToString()).IsEqualTo("AA:BB:CC:DD:EE:FF");
+        await Assert.That(FieldValueData.NewMacAddress(mac).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("AA:BB:CC:DD:EE:FF");
     }
 
     /// <summary>An IPv4 address formats in dotted decimal.</summary>
@@ -497,7 +502,7 @@ internal sealed class FieldValueTests
     public async Task FieldValueDataToStringIPv4()
     {
         IPv4Address ip = IPv4Address.FromBytes([192, 168, 1, 1]);
-        await Assert.That(FieldValueData.NewIPv4(ip).ToString()).IsEqualTo("192.168.1.1");
+        await Assert.That(FieldValueData.NewIPv4(ip).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("192.168.1.1");
     }
 
     // === FieldValueData.TryFormat(Span<char>) ===
@@ -629,7 +634,7 @@ internal sealed class FieldValueTests
     public async Task FieldValueToStringWithCustomRepresentation()
     {
         FieldValue val = FieldValue.NewU64(80, "HTTP (80)");
-        await Assert.That(val.ToString()).IsEqualTo("HTTP (80)");
+        await Assert.That(val.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("HTTP (80)");
     }
 
     /// <summary>ToString of a value without a custom representation returns the default text of the data.</summary>
@@ -637,12 +642,12 @@ internal sealed class FieldValueTests
     public async Task FieldValueToStringWithoutCustomRepresentationFallsBackToData()
     {
         FieldValue val = FieldValue.NewU64(80);
-        await Assert.That(val.ToString()).IsEqualTo("80");
+        await Assert.That(val.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("80");
     }
 
     /// <summary>ToString of the none value is the empty string.</summary>
     [Test]
-    public async Task FieldValueToStringNone() => await Assert.That(FieldValue.None.ToString()).IsEqualTo(string.Empty);
+    public async Task FieldValueToStringNone() => await Assert.That(FieldValue.None.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(string.Empty);
 
     // === FieldValue.TryFormat ===
 
@@ -942,7 +947,7 @@ internal sealed class FieldValueTests
         FieldValueData val = FieldValueData.NewI64(long.MinValue);
         bool result = val.TryGetStringSize(default, null, out int size);
         await Assert.That(result).IsTrue();
-        await Assert.That(size).IsGreaterThanOrEqualTo(val.ToString().Length);
+        await Assert.That(size).IsGreaterThanOrEqualTo(val.ToString(null, CultureInfo.InvariantCulture).Length);
     }
 
     /// <summary>The size of a U64 is an upper bound: not less than the text length, also for the largest ulong.</summary>
@@ -952,7 +957,7 @@ internal sealed class FieldValueTests
         FieldValueData val = FieldValueData.NewU64(ulong.MaxValue);
         bool result = val.TryGetStringSize(default, null, out int size);
         await Assert.That(result).IsTrue();
-        await Assert.That(size).IsGreaterThanOrEqualTo(val.ToString().Length);
+        await Assert.That(size).IsGreaterThanOrEqualTo(val.ToString(null, CultureInfo.InvariantCulture).Length);
     }
 
     /// <summary>An F64 has no text size known in advance: the size query reports false with size 0.</summary>
@@ -1025,7 +1030,7 @@ internal sealed class FieldValueTests
         FieldValueData val = FieldValueData.NewMacAddress(mac);
         bool result = val.TryGetStringSize(default, null, out int size);
         await Assert.That(result).IsTrue();
-        await Assert.That(size).IsEqualTo(mac.ToString().Length);
+        await Assert.That(size).IsEqualTo(mac.ToString(null, CultureInfo.InvariantCulture).Length);
     }
 
     /// <summary>The size of an IPv4 address is not less than the length of its text.</summary>
@@ -1036,7 +1041,7 @@ internal sealed class FieldValueTests
         FieldValueData val = FieldValueData.NewIPv4(ip);
         bool result = val.TryGetStringSize(default, null, out int size);
         await Assert.That(result).IsTrue();
-        await Assert.That(size).IsGreaterThanOrEqualTo(ip.ToString().Length);
+        await Assert.That(size).IsGreaterThanOrEqualTo(ip.ToString(null, CultureInfo.InvariantCulture).Length);
     }
 
     /// <summary>A value with a custom representation has the size of that representation.</summary>
@@ -1099,7 +1104,7 @@ internal sealed class FieldValueTests
             string viaTryFormat = new(large, 0, written);
 
             await Assert.That(ok).IsTrue();
-            await Assert.That(val.ToString()).IsEqualTo(viaTryFormat);
+            await Assert.That(val.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(viaTryFormat);
         }
     }
 
@@ -1107,16 +1112,17 @@ internal sealed class FieldValueTests
     [Test]
     public async Task FieldValueDataToStringKnownTexts()
     {
-        await Assert.That(FieldValueData.None.ToString()).IsEqualTo(string.Empty);
-        await Assert.That(FieldValueData.NewBool(true).ToString()).IsEqualTo("True");
-        await Assert.That(FieldValueData.NewBool(false).ToString()).IsEqualTo("False");
-        await Assert.That(FieldValueData.NewI64(-1234567890L).ToString()).IsEqualTo("-1234567890");
-        await Assert.That(FieldValueData.NewU64(9876543210UL).ToString()).IsEqualTo("9876543210");
-        await Assert.That(FieldValueData.NewString("Hello").ToString()).IsEqualTo("Hello");
-        await Assert.That(FieldValueData.NewBytes(Array.Empty<byte>()).ToString()).IsEqualTo(string.Empty);
-        await Assert.That(FieldValueData.NewBytes([0xDE, 0xAD, 0xBE, 0xEF]).ToString()).IsEqualTo("DE AD BE EF");
-        await Assert.That(FieldValueData.NewMacAddress(new MacAddress(0x112233445566UL)).ToString()).IsEqualTo("11:22:33:44:55:66");
-        await Assert.That(FieldValueData.NewIPv4(new IPv4Address(0xC0A80101u)).ToString()).IsEqualTo("192.168.1.1");
+        await Assert.That(FieldValueData.None.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(string.Empty);
+        await Assert.That(FieldValueData.NewBool(true).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("True");
+        await Assert.That(FieldValueData.NewBool(false).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("False");
+        await Assert.That(FieldValueData.NewI64(-1234567890L).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("-1234567890");
+        await Assert.That(FieldValueData.NewU64(9876543210UL).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("9876543210");
+        await Assert.That(FieldValueData.NewString("Hello").ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("Hello");
+        await Assert.That(FieldValueData.NewBytes(Array.Empty<byte>()).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(string.Empty);
+        await Assert.That(FieldValueData.NewBytes([0xDE, 0xAD, 0xBE, 0xEF]).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("DE AD BE EF");
+        await Assert.That(FieldValueData.NewMacAddress(new MacAddress(0x112233445566UL)).ToString(null, CultureInfo.InvariantCulture))
+            .IsEqualTo("11:22:33:44:55:66");
+        await Assert.That(FieldValueData.NewIPv4(new IPv4Address(0xC0A80101u)).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("192.168.1.1");
     }
 
     /// <summary>ToString of a string value returns the stored string instance and does not copy it.</summary>
@@ -1126,7 +1132,7 @@ internal sealed class FieldValueTests
         string text = new('x', 5);
         FieldValueData val = FieldValueData.NewString(text);
 
-        string result = val.ToString();
+        string result = val.ToString(null, CultureInfo.InvariantCulture);
 
         await Assert.That(ReferenceEquals(result, text)).IsTrue();
     }
@@ -1138,8 +1144,8 @@ internal sealed class FieldValueTests
         FieldValue withCustom = FieldValue.NewU64(42, "Custom Display");
         FieldValue withoutCustom = FieldValue.NewI64(99L);
 
-        await Assert.That(withCustom.ToString()).IsEqualTo("Custom Display");
-        await Assert.That(withoutCustom.ToString()).IsEqualTo("99");
+        await Assert.That(withCustom.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("Custom Display");
+        await Assert.That(withoutCustom.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("99");
     }
 
     /// <summary>ToString of the Data of a value that has a custom representation returns the data text.</summary>
@@ -1148,7 +1154,7 @@ internal sealed class FieldValueTests
     {
         FieldValue val = FieldValue.NewI64(42L, "custom");
 
-        string result = val.Data.ToString();
+        string result = val.Data.ToString(null, CultureInfo.InvariantCulture);
 
         await Assert.That(result).IsEqualTo("42");
     }
@@ -1209,7 +1215,7 @@ internal sealed class FieldValueTests
     {
         FieldValue val = FieldValue.NewU64(80, "HTTP");
         await Assert.That(val.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("HTTP");
-        await Assert.That(FieldValue.NewI64(-5).ToString(null, null)).IsEqualTo("-5");
+        await Assert.That(FieldValue.NewI64(-5).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo("-5");
     }
 
     /// <summary>short and sbyte convert implicitly to I64, ushort and byte to U64, each with the same number.</summary>
@@ -1348,10 +1354,11 @@ internal sealed class FieldValueTests
         Eui64 eui = Eui64.FromBytes(new byte[] { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 });
         Uuid uuid = Uuid.FromBytes(new byte[16]);
         Timestamp ts = Timestamp.FromSecs(5);
-        await Assert.That(FieldValueData.NewIPv6(ipv6).ToString()).IsEqualTo(ipv6.Format());
-        await Assert.That(FieldValueData.NewEui64(eui).ToString()).IsEqualTo(eui.Format());
-        await Assert.That(FieldValueData.NewUuid(uuid).ToString()).IsEqualTo(uuid.Format());
-        await Assert.That(FieldValueData.NewTimestamp(ts).ToString()).IsEqualTo(ts.ToString());
+        await Assert.That(FieldValueData.NewIPv6(ipv6).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(ipv6.Format());
+        await Assert.That(FieldValueData.NewEui64(eui).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(eui.Format());
+        await Assert.That(FieldValueData.NewUuid(uuid).ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(uuid.Format());
+        await Assert.That(FieldValueData.NewTimestamp(ts).ToString(null, CultureInfo.InvariantCulture))
+            .IsEqualTo(ts.ToString(null, CultureInfo.InvariantCulture));
     }
 
     /// <summary>Every scalar type formats into a 128-character destination and writes at least one character.</summary>
@@ -1560,7 +1567,7 @@ internal sealed class FieldValueTests
         bool utf8Ok = lazy.TryFormat(utf8Buf, out int byteWritten, default, null);
         string utf8Text = Encoding.UTF8.GetString(utf8Buf, 0, byteWritten);
 
-        string toString = lazy.ToString();
+        string toString = lazy.ToString(null, CultureInfo.InvariantCulture);
         string overload = lazy.ToString(null, CultureInfo.InvariantCulture);
 
         bool smallChar = lazy.TryFormat(new char[3], out int smallCharWritten, default, null);
@@ -1704,7 +1711,7 @@ internal sealed class FieldValueTests
     [Test]
     public async Task FieldValueDataEqualsStringAndBytesSwitchArms()
     {
-        string unique = Guid.NewGuid().ToString("N");
+        string unique = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
         string left = unique;
         string right = new string(unique.ToCharArray());
         FieldValueData strLeft = FieldValueData.NewString(left);

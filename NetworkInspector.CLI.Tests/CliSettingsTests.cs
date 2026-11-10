@@ -99,7 +99,7 @@ internal sealed class CliSettingsTests
         CliResult tcp = await sandbox.RunAsync("settings", "list", "--group", "tcp");
 
         await Assert.That(list.Exit).IsEqualTo(0);
-        await Assert.That(list.OutLines).Contains($"application  plugins.paths  StringArray  {JsonSerializer.Serialize(new[] { sandbox.Combine("sample") })}");
+        await Assert.That(list.OutLines).Contains(Invariant($"application  plugins.paths  StringArray  {JsonSerializer.Serialize(new[] { sandbox.Combine("sample") })}"));
         await Assert.That(list.OutLines).Contains("application  plugins.startTimeoutSeconds  I64  120");
         await Assert.That(list.OutLines).Contains("application  sample.greeting  String  Hello from Sample.Protocol");
         await Assert.That(list.OutLines).Contains("profile  tcp.relative_sequence_numbers  Bool  true");
@@ -168,8 +168,11 @@ internal sealed class CliSettingsTests
         using CliSandbox sandbox = new();
         await sandbox.RunAsync("settings", "set", "tcp.max_tracked_streams", "5000");
 
+        // The smallest limit is 1 KiB, so the stored file is padded with trailing white space (still valid JSON) to exceed it.
+        File.AppendAllText(Path.Combine(sandbox.Base, "default", "tcp.json"), new string(' ', 2048));
+
         // A limit below the size of the file: Load skips it with a warning, and the stored flag must not read it either.
-        CliResult limited = await sandbox.RunAsync("settings", "list", "--json", "--scope", "profile", "--settings-max-config-file-bytes", "10");
+        CliResult limited = await sandbox.RunAsync("settings", "list", "--json", "--scope", "profile", "--set", "settings.maxFileSize=1KiB");
         CliResult unlimited = await sandbox.RunAsync("settings", "list", "--json", "--scope", "profile");
 
         using JsonDocument limitedDocument = JsonDocument.Parse(limited.Out);
@@ -179,7 +182,8 @@ internal sealed class CliSettingsTests
         JsonElement unlimitedStreams = unlimitedDocument.RootElement.EnumerateArray()
             .Single(static item => item.GetProperty("name").GetString() == "tcp.max_tracked_streams");
         await Assert.That(limited.Exit).IsEqualTo(0);
-        await Assert.That(limited.Error).Contains("exceeds 10 bytes");
+        await Assert.That(limited.Error).Contains("is larger than allowed");
+        await Assert.That(limited.Error).Contains("Limit: 1 KiB (setting settings.maxFileSize)");
         await Assert.That(limitedStreams.GetProperty("value").GetInt64()).IsEqualTo(10000L);
         await Assert.That(limitedStreams.GetProperty("stored").GetBoolean()).IsFalse();
         await Assert.That(unlimitedStreams.GetProperty("stored").GetBoolean()).IsTrue();

@@ -25,7 +25,7 @@ internal sealed class BuffersLayoutTests
     private static List<(string Name, string Type)> _Describe(DuckDBConnection connection, string relation)
     {
         using DuckDBCommand command = connection.CreateCommand();
-        command.CommandText = $"DESCRIBE SELECT * FROM {relation}";
+        command.CommandText = Invariant($"DESCRIBE SELECT * FROM {relation}");
         using DuckDBDataReader reader = command.ExecuteReader();
         List<(string, string)> columns = [];
         while (reader.Read())
@@ -49,7 +49,7 @@ internal sealed class BuffersLayoutTests
         using TestDir dir = new("buffers_layout_duckdb");
         BufferRun run = BufferExportScenarios.Run(BufferScenario.DuckDbHierarchy, BufferTrace.Create(), BufferMembers.Buffers, dir);
 
-        using DuckDBConnection connection = new($"Data Source={run.Path}");
+        using DuckDBConnection connection = new(Invariant($"Data Source={run.Path}"));
         connection.Open();
         List<(string Name, string Type)> columns = _Describe(connection, "packet_buffers");
 
@@ -86,7 +86,7 @@ internal sealed class BuffersLayoutTests
 
         using DuckDBConnection connection = new("Data Source=:memory:");
         connection.Open();
-        List<(string Name, string Type)> columns = _Describe(connection, $"read_parquet('{Path.Combine(run.Path, "packet_buffers.parquet")}')");
+        List<(string Name, string Type)> columns = _Describe(connection, Invariant($"read_parquet('{Path.Combine(run.Path, "packet_buffers.parquet")}')"));
 
         await Assert.That(columns.Count).IsEqualTo(3);
         await Assert.That(columns[0]).IsEqualTo(("packet_id", "INTEGER"));

@@ -149,7 +149,7 @@ internal sealed class FilterParser
         if (current.Kind != TokenKind.Eof)
         {
             return _Failure(FilterError.Syntax(
-                $"Unexpected '{current.Text}' after a complete expression",
+                Invariant($"Unexpected '{current.Text}' after a complete expression"),
                 current.Position,
                 Math.Max(current.Length, 1)));
         }
@@ -288,7 +288,7 @@ internal sealed class FilterParser
                 }
                 if (_Current.Kind != TokenKind.RightParen)
                 {
-                    return _Expected($"')' to close the '(' at offset {token.Position.ToString(CultureInfo.InvariantCulture)}");
+                    return _Expected(Invariant($"')' to close the '(' at offset {token.Position.ToString(CultureInfo.InvariantCulture)}"));
                 }
                 _Advance();
                 return FilterResult.Ok<FilterNode>(node);
@@ -315,7 +315,7 @@ internal sealed class FilterParser
                 return FilterError.Syntax(
                     token.Kind == TokenKind.Eof
                         ? "Unexpected end of expression"
-                        : $"Unexpected '{token.Text}'",
+                        : Invariant($"Unexpected '{token.Text}'"),
                     token.Position,
                     Math.Max(token.Length, 1));
         }
@@ -388,7 +388,7 @@ internal sealed class FilterParser
                 _Advance();
                 if (_Current.Kind != TokenKind.StringLiteral)
                 {
-                    return _Expected($"a quoted string after '{op.Text}'");
+                    return _Expected(Invariant($"a quoted string after '{op.Text}'"));
                 }
                 Token pattern = _Current;
                 _Advance();
@@ -401,7 +401,7 @@ internal sealed class FilterParser
                 if (stringOp == StringOp.Matches && !FilterBinder.TryBuildRegex(pattern.Text, _RegexTimeout, out regex))
                 {
                     return FilterError.InvalidValue(
-                        $"Invalid regular expression '{pattern.Text}'", pattern.Position, pattern.Length);
+                        Invariant($"Invalid regular expression '{pattern.Text}'"), pattern.Position, pattern.Length);
                 }
                 return FilterResult.Ok<FilterNode>(
                     new StringPredicateNode(
@@ -700,7 +700,7 @@ internal sealed class FilterParser
 
             if (_Current.Kind != TokenKind.Colon)
             {
-                return _Expected($"':' after '{argName}'");
+                return _Expected(Invariant($"':' after '{argName}'"));
             }
             _Advance();
 
@@ -771,7 +771,7 @@ internal sealed class FilterParser
 
                 default:
                     return FilterError.Syntax(
-                        $"Unknown flank argument '{argName}'", argToken.Position, argToken.Length);
+                        Invariant($"Unknown flank argument '{argName}'"), argToken.Position, argToken.Length);
             }
         }
 
@@ -890,7 +890,7 @@ internal sealed class FilterParser
             return FilterError.Syntax(
                 token.Kind == TokenKind.Eof
                     ? "Unexpected end of expression — a literal value is required here"
-                    : $"Expected a literal value but found '{token.Text}'",
+                    : Invariant($"Expected a literal value but found '{token.Text}'"),
                 token.Position,
                 Math.Max(token.Length, 1));
         }
@@ -914,7 +914,7 @@ internal sealed class FilterParser
         if (token.Kind != TokenKind.Integer)
         {
             return FilterError.Syntax(
-                $"Expected a non-negative integer but found '{token.Text}'",
+                Invariant($"Expected a non-negative integer but found '{token.Text}'"),
                 token.Position,
                 Math.Max(token.Length, 1));
         }
@@ -929,7 +929,7 @@ internal sealed class FilterParser
         if (!value.TryGetAsU64(out ulong raw) || raw > (ulong)ArrayIndexIdRange.MaxValue)
         {
             return FilterError.InvalidValue(
-                $"Index '{token.Text}' is out of range (maximum {ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)})",
+                Invariant($"Index '{token.Text}' is out of range (maximum {ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)})"),
                 token.Position,
                 token.Length);
         }
@@ -962,7 +962,7 @@ internal sealed class FilterParser
         if (_Depth >= MaxNestingDepth)
         {
             failure = FilterError.Syntax(
-                $"Expression nests deeper than {MaxNestingDepth.ToString(CultureInfo.InvariantCulture)} levels " +
+                Invariant($"Expression nests deeper than {MaxNestingDepth.ToString(CultureInfo.InvariantCulture)} levels ") +
                 "of '(', '!', scope bodies or 'when:' gates",
                 at.Position,
                 Math.Max(at.Length, 1));
@@ -980,7 +980,7 @@ internal sealed class FilterParser
         if (_TermCount >= MaxTermCount)
         {
             failure = FilterError.Syntax(
-                $"Expression has more than {MaxTermCount.ToString(CultureInfo.InvariantCulture)} terms; " +
+                Invariant($"Expression has more than {MaxTermCount.ToString(CultureInfo.InvariantCulture)} terms; ") +
                 "use 'in { … }' for long value lists",
                 at.Position,
                 Math.Max(at.Length, 1));
@@ -1026,8 +1026,8 @@ internal sealed class FilterParser
         Token token = _Current;
         return FilterError.Syntax(
             token.Kind == TokenKind.Eof
-                ? $"Unexpected end of expression — expected {what}"
-                : $"Expected {what} but found '{token.Text}'",
+                ? Invariant($"Unexpected end of expression — expected {what}")
+                : Invariant($"Expected {what} but found '{token.Text}'"),
             token.Position,
             Math.Max(token.Length, 1));
     }

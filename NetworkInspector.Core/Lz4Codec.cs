@@ -67,34 +67,39 @@ namespace NetworkInspector.Core;
 /// </summary>
 public static class Lz4Codec
 {
-    #region Constants
+    #region Configuration and state
 
-    private const int _MinMatch = 4;          // minimum match length required by the format
-    private const int _HashLog = 16;          // hash table: 2^16 = 65 536 entries
+    /// <summary>Minimum match length required by the block format.</summary>
+    private const int _MinMatch = 4;
+
+    /// <summary>Log2 of the hash table size: 2^16 = 65 536 entries.</summary>
+    private const int _HashLog = 16;
+
+    /// <summary>Number of hash table entries (<c>1 &lt;&lt; _HashLog</c>).</summary>
     private const int _HashSize = 1 << _HashLog;
-    private const int _MaxInputSizePerBlock = 0x7E000000; // 2 113 929 216 bytes: LZ4_MAX_INPUT_SIZE of the reference implementation
-    private const int _MFlimit = 12;          // block format: the last match must start at least 12 bytes before the end of the block
-    private const int _LastLiterals = 5;      // block format: the last 5 input bytes are always emitted as literals
 
-    #endregion
+    /// <summary>Largest input of one block: 2 113 929 216 bytes, the LZ4_MAX_INPUT_SIZE of the reference implementation.</summary>
+    private const int _MaxInputSizePerBlock = 0x7E000000;
 
-    #region Fields
+    /// <summary>Block format: the last match must start at least 12 bytes before the end of the block.</summary>
+    private const int _MFlimit = 12;
 
-    // A [ThreadStatic] int[] eliminates a 256 KB stackalloc that would exhaust
-    // the default 1 MB thread stack in deeply-nested async state machines.
-    //
-    // Trade-offs vs ArrayPool<int>:
-    //   + No Rent/Return ceremony; no try/finally required.
-    //   + Zero pool contention; each thread owns its array exclusively.
-    //   - Array stays alive until the thread exits — acceptable for thread-pool
-    //     threads: one 256 KB array per pool thread.
-    //   - Thread-affine; safe because Compress is fully synchronous.
+    /// <summary>Block format: the last 5 input bytes are always emitted as literals.</summary>
+    private const int _LastLiterals = 5;
+
+    /// <summary>
+    /// The per-thread hash table of <see cref="Compress"/>; null until the thread first compresses. A thread-static array
+    /// avoids a 256 KB stackalloc that would exhaust the default 1 MB thread stack in deeply nested async state machines.
+    /// Trade-offs against <c>ArrayPool&lt;int&gt;</c>: no rent/return ceremony and no pool contention, because each thread owns
+    /// its array exclusively; the cost is that the array stays alive until the thread exits (one 256 KB array per pool
+    /// thread). Thread-affine, which is safe because <see cref="Compress"/> is fully synchronous.
+    /// </summary>
     [ThreadStatic]
     private static int[]? _HashTable;
 
     #endregion
 
-    #region Public API
+    #region Compression
 
     /// <summary>
     /// Returns the maximum possible compressed size for <paramref name="inputSize"/> bytes.
@@ -153,8 +158,8 @@ public static class Lz4Codec
 
         // Too short for any match, so the only possible block is all literals, and that is always larger than the input
         // (token byte plus the payload). The answer is therefore -1 whether or not such a block would fit into the output.
-        // Encoding it first, as an earlier version did, wrote bytes into the caller's buffer that nobody can use and cleared
-        // the hash table for nothing. Nothing is written to the output for such an input.
+        // Rejected: encoding it first, which would write bytes into the caller's buffer that nobody can use and clear the
+        // hash table for nothing. Nothing is written to the output for such an input.
         if (inputLength < _MFlimit)
         {
             return -1;
@@ -254,6 +259,186 @@ public static class Lz4Codec
         }
         return -1;
     }
+
+    /// <summary>
+    /// Computes a 16-bit hash index from the 4 bytes starting at <paramref name="pos"/>.
+    /// Uses Knuth's multiplicative hash with prime 2 654 435 761: the product wraps modulo 2^32 on purpose and the
+    /// top 16 bits (the best mixed ones) form the index. Reads little-endian so the hash of a given byte sequence is
+    /// the same on every platform. Callers guarantee that four bytes are available at <paramref name="pos"/>.
+    /// </summary>
+    /// <param name="data">The input; at least four bytes must follow <paramref name="pos"/>.</param>
+    /// <param name="pos">Position of the first of the four bytes.</param>
+    /// <returns>The index into the hash table, 0 to <c>_HashSize - 1</c>.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int _Hash(ReadOnlySpan<byte> data, int pos)
+    {
+        uint val = BinaryPrimitives.ReadUInt32LittleEndian(data[pos..]);
+        return (int)((val * 2654435761u) >> (32 - _HashLog));
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when the 4 bytes at <paramref name="pos1"/>
+    /// and <paramref name="pos2"/> are identical.
+    /// </summary>
+    /// <param name="data">The input; four bytes must be available at both positions.</param>
+    /// <param name="pos1">Position of the first sequence.</param>
+    /// <param name="pos2">Position of the second sequence.</param>
+    /// <returns><see langword="true"/> when the four bytes are identical.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool _SequenceEqual4(ReadOnlySpan<byte> data, int pos1, int pos2) =>
+        BinaryPrimitives.ReadUInt32LittleEndian(data[pos1..])
+        == BinaryPrimitives.ReadUInt32LittleEndian(data[pos2..]);
+
+    /// <summary>
+    /// Writes one LZ4 literal+match sequence to <paramref name="output"/>.
+    /// Returns the updated output position, or <c>-1</c> on overflow.
+    /// </summary>
+    /// <param name="output">The destination block.</param>
+    /// <param name="outputPos">Position at which the sequence starts.</param>
+    /// <param name="input">The uncompressed input that holds the literals.</param>
+    /// <param name="literalStart">Position of the first literal in <paramref name="input"/>.</param>
+    /// <param name="literalLength">Number of literals; 0 or more.</param>
+    /// <param name="offset">Backward distance of the match, 1 to 65 535.</param>
+    /// <param name="matchLength">Match length, at least 4.</param>
+    /// <returns>The output position behind the sequence, or <c>-1</c> when the output is too small.</returns>
+    private static int _EmitSequence(
+        Span<byte> output, int outputPos,
+        ReadOnlySpan<byte> input, int literalStart,
+        int literalLength, int offset, int matchLength)
+    {
+        // Reserve space for the token byte.
+        int tokenPos = outputPos++;
+        if (outputPos > output.Length)
+        {
+            return -1;
+        }
+
+        int adjustedMatch = matchLength - _MinMatch;
+        int litToken = Math.Min(literalLength, 15);
+        int matchToken = Math.Min(adjustedMatch, 15);
+        output[tokenPos] = (byte)((litToken << 4) | matchToken);
+
+        // --- Extra literal-length bytes ---
+        if (literalLength >= 15)
+        {
+            int remaining = literalLength - 15;
+            while (remaining >= 255)
+            {
+                if (outputPos >= output.Length)
+                {
+                    return -1;
+                }
+                output[outputPos++] = 255;
+                remaining -= 255;
+            }
+            if (outputPos >= output.Length)
+            {
+                return -1;
+            }
+            output[outputPos++] = (byte)remaining;
+        }
+
+        // --- Literal bytes ---
+        if (!_HasOutputSpace(outputPos, literalLength, output.Length))
+        {
+            return -1;
+        }
+        input.Slice(literalStart, literalLength).CopyTo(output[outputPos..]);
+        outputPos += literalLength;
+
+        // --- 16-bit little-endian offset ---
+        if (!_HasOutputSpace(outputPos, 2, output.Length))
+        {
+            return -1;
+        }
+        output[outputPos++] = (byte)offset;
+        output[outputPos++] = (byte)(offset >> 8);
+
+        // --- Extra match-length bytes ---
+        if (adjustedMatch >= 15)
+        {
+            int remaining = adjustedMatch - 15;
+            while (remaining >= 255)
+            {
+                if (outputPos >= output.Length)
+                {
+                    return -1;
+                }
+                output[outputPos++] = 255;
+                remaining -= 255;
+            }
+            if (outputPos >= output.Length)
+            {
+                return -1;
+            }
+            output[outputPos++] = (byte)remaining;
+        }
+
+        return outputPos;
+    }
+
+    /// <summary>
+    /// Writes the terminal literal run (input bytes after the last match) to
+    /// <paramref name="output"/>.  Returns the updated output position, or
+    /// <c>-1</c> on overflow.
+    /// </summary>
+    /// <param name="input">The uncompressed input that holds the literals.</param>
+    /// <param name="output">The destination block.</param>
+    /// <param name="outputPos">Position at which the run starts.</param>
+    /// <param name="anchor">Position of the first literal in <paramref name="input"/>.</param>
+    /// <param name="inputEnd">End of the input; the literals are <c>[anchor, inputEnd)</c>.</param>
+    /// <returns>The output position behind the run, or <c>-1</c> when the output is too small.</returns>
+    private static int _EmitLastLiterals(
+        ReadOnlySpan<byte> input, Span<byte> output,
+        int outputPos, int anchor, int inputEnd)
+    {
+        int literalLength = inputEnd - anchor;
+        if (literalLength == 0)
+        {
+            return outputPos;
+        }
+
+        int tokenPos = outputPos++;
+        if (outputPos > output.Length)
+        {
+            return -1;
+        }
+
+        int litToken = Math.Min(literalLength, 15);
+        output[tokenPos] = (byte)(litToken << 4);
+
+        if (literalLength >= 15)
+        {
+            int remaining = literalLength - 15;
+            while (remaining >= 255)
+            {
+                if (outputPos >= output.Length)
+                {
+                    return -1;
+                }
+                output[outputPos++] = 255;
+                remaining -= 255;
+            }
+            if (outputPos >= output.Length)
+            {
+                return -1;
+            }
+            output[outputPos++] = (byte)remaining;
+        }
+
+        if (!_HasOutputSpace(outputPos, literalLength, output.Length))
+        {
+            return -1;
+        }
+        input.Slice(anchor, literalLength).CopyTo(output[outputPos..]);
+        outputPos += literalLength;
+
+        return outputPos;
+    }
+
+    #endregion
+
+    #region Decompression
 
     /// <summary>
     /// Decompresses a single LZ4 block from <paramref name="input"/> into
@@ -416,169 +601,6 @@ public static class Lz4Codec
         return outputPos;
     }
 
-    #endregion
-
-    #region Compression Helpers
-
-    /// <summary>
-    /// Computes a 16-bit hash index from the 4 bytes starting at <paramref name="pos"/>.
-    /// Uses Knuth's multiplicative hash with prime 2 654 435 761: the product wraps modulo 2^32 on purpose and the
-    /// top 16 bits (the best mixed ones) form the index. Reads little-endian so the hash of a given byte sequence is
-    /// the same on every platform. Callers guarantee that four bytes are available at <paramref name="pos"/>.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int _Hash(ReadOnlySpan<byte> data, int pos)
-    {
-        uint val = BinaryPrimitives.ReadUInt32LittleEndian(data[pos..]);
-        return (int)((val * 2654435761u) >> (32 - _HashLog));
-    }
-
-    /// <summary>
-    /// Returns <see langword="true"/> when the 4 bytes at <paramref name="pos1"/>
-    /// and <paramref name="pos2"/> are identical.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool _SequenceEqual4(ReadOnlySpan<byte> data, int pos1, int pos2) =>
-        BinaryPrimitives.ReadUInt32LittleEndian(data[pos1..])
-        == BinaryPrimitives.ReadUInt32LittleEndian(data[pos2..]);
-
-    /// <summary>
-    /// Writes one LZ4 literal+match sequence to <paramref name="output"/>.
-    /// Returns the updated output position, or <c>-1</c> on overflow.
-    /// </summary>
-    private static int _EmitSequence(
-        Span<byte> output, int outputPos,
-        ReadOnlySpan<byte> input, int literalStart,
-        int literalLength, int offset, int matchLength)
-    {
-        // Reserve space for the token byte.
-        int tokenPos = outputPos++;
-        if (outputPos > output.Length)
-        {
-            return -1;
-        }
-
-        int adjustedMatch = matchLength - _MinMatch;
-        int litToken = Math.Min(literalLength, 15);
-        int matchToken = Math.Min(adjustedMatch, 15);
-        output[tokenPos] = (byte)((litToken << 4) | matchToken);
-
-        // --- Extra literal-length bytes ---
-        if (literalLength >= 15)
-        {
-            int remaining = literalLength - 15;
-            while (remaining >= 255)
-            {
-                if (outputPos >= output.Length)
-                {
-                    return -1;
-                }
-                output[outputPos++] = 255;
-                remaining -= 255;
-            }
-            if (outputPos >= output.Length)
-            {
-                return -1;
-            }
-            output[outputPos++] = (byte)remaining;
-        }
-
-        // --- Literal bytes ---
-        if (!_HasOutputSpace(outputPos, literalLength, output.Length))
-        {
-            return -1;
-        }
-        input.Slice(literalStart, literalLength).CopyTo(output[outputPos..]);
-        outputPos += literalLength;
-
-        // --- 16-bit little-endian offset ---
-        if (!_HasOutputSpace(outputPos, 2, output.Length))
-        {
-            return -1;
-        }
-        output[outputPos++] = (byte)offset;
-        output[outputPos++] = (byte)(offset >> 8);
-
-        // --- Extra match-length bytes ---
-        if (adjustedMatch >= 15)
-        {
-            int remaining = adjustedMatch - 15;
-            while (remaining >= 255)
-            {
-                if (outputPos >= output.Length)
-                {
-                    return -1;
-                }
-                output[outputPos++] = 255;
-                remaining -= 255;
-            }
-            if (outputPos >= output.Length)
-            {
-                return -1;
-            }
-            output[outputPos++] = (byte)remaining;
-        }
-
-        return outputPos;
-    }
-
-    /// <summary>
-    /// Writes the terminal literal run (input bytes after the last match) to
-    /// <paramref name="output"/>.  Returns the updated output position, or
-    /// <c>-1</c> on overflow.
-    /// </summary>
-    private static int _EmitLastLiterals(
-        ReadOnlySpan<byte> input, Span<byte> output,
-        int outputPos, int anchor, int inputEnd)
-    {
-        int literalLength = inputEnd - anchor;
-        if (literalLength == 0)
-        {
-            return outputPos;
-        }
-
-        int tokenPos = outputPos++;
-        if (outputPos > output.Length)
-        {
-            return -1;
-        }
-
-        int litToken = Math.Min(literalLength, 15);
-        output[tokenPos] = (byte)(litToken << 4);
-
-        if (literalLength >= 15)
-        {
-            int remaining = literalLength - 15;
-            while (remaining >= 255)
-            {
-                if (outputPos >= output.Length)
-                {
-                    return -1;
-                }
-                output[outputPos++] = 255;
-                remaining -= 255;
-            }
-            if (outputPos >= output.Length)
-            {
-                return -1;
-            }
-            output[outputPos++] = (byte)remaining;
-        }
-
-        if (!_HasOutputSpace(outputPos, literalLength, output.Length))
-        {
-            return -1;
-        }
-        input.Slice(anchor, literalLength).CopyTo(output[outputPos..]);
-        outputPos += literalLength;
-
-        return outputPos;
-    }
-
-    #endregion
-
-    #region Decompression Helpers
-
     /// <summary>
     /// Reads the variable-length continuation of a length field.
     /// Each byte equal to 255 adds 255; the first byte less than 255 is added
@@ -587,6 +609,10 @@ public static class Lz4Codec
     /// <paramref name="accumulated"/>; on return it holds the final length.
     /// Returns <see langword="false"/> if the input is truncated.
     /// </summary>
+    /// <param name="input">The compressed block.</param>
+    /// <param name="inputPos">Position of the first continuation byte; advanced past the field.</param>
+    /// <param name="accumulated">The length so far; receives the final length.</param>
+    /// <returns><see langword="false"/> when the input ends inside the field or the length would overflow.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _ReadVarLen(ReadOnlySpan<byte> input, ref int inputPos, ref int accumulated)
     {
@@ -620,12 +646,20 @@ public static class Lz4Codec
     /// becomes a huge uint and is rejected). Identical to <c>_HasOutputSpace</c>; the two names document which buffer
     /// is being checked at each call site.
     /// </summary>
+    /// <param name="position">Start of the range in the input buffer.</param>
+    /// <param name="length">Number of bytes needed; may be negative or huge (rejected).</param>
+    /// <param name="bufferLength">Length of the input buffer.</param>
+    /// <returns><see langword="true"/> when the range lies inside the buffer.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _HasInputSpace(int position, int length, int bufferLength) =>
         (uint)position <= (uint)bufferLength
         && (uint)length <= (uint)bufferLength - (uint)position;
 
     /// <summary>Output-buffer twin of <c>_HasInputSpace</c>; see there for the overflow reasoning.</summary>
+    /// <param name="position">Start of the range in the output buffer.</param>
+    /// <param name="length">Number of bytes needed; may be negative or huge (rejected).</param>
+    /// <param name="bufferLength">Length of the output buffer.</param>
+    /// <returns><see langword="true"/> when the range lies inside the buffer.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool _HasOutputSpace(int position, int length, int bufferLength) =>
         (uint)position <= (uint)bufferLength

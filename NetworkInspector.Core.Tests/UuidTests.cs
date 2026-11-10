@@ -161,14 +161,14 @@ internal sealed class UuidTests
     public async Task ToString_MatchesFormat()
     {
         Uuid uuid = new(0x550E8400E29B41D4, 0xA716446655440000);
-        await Assert.That(uuid.ToString()).IsEqualTo(uuid.Format());
+        await Assert.That(uuid.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(uuid.Format());
     }
 
     [Test]
     public async Task ToString_FormatProvider()
     {
         Uuid uuid = new(1, 2);
-        await Assert.That(uuid.ToString(null, null)).IsEqualTo(uuid.Format());
+        await Assert.That(uuid.ToString(null, CultureInfo.InvariantCulture)).IsEqualTo(uuid.Format());
     }
 
     // === TryFormat ===

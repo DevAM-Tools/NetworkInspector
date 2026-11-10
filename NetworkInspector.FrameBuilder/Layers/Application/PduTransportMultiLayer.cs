@@ -84,8 +84,8 @@ public readonly struct PduTransportMultiLayer : IStatelessLayer, IPayloadLayer, 
                 throw new ArgumentOutOfRangeException(
                     nameof(slots),
                     payloadLen,
-                    $"Slot {i} (PDU ID 0x{slots[i].PduId:X}) payload of {payloadLen} bytes"
-                        + $" exceeds the {lengthSize}-byte Length field range (max {maxPayload}).");
+                    Invariant($"Slot {i} (PDU ID 0x{slots[i].PduId:X}) payload of {payloadLen} bytes")
+                        + Invariant($" exceeds the {lengthSize}-byte Length field range (max {maxPayload})."));
             }
             total += idSize + lengthSize + payloadLen;
         }

@@ -143,7 +143,7 @@ public readonly struct DnsLayer : IStatelessLayer, IPayloadLayer, IPseudoHeaderI
                 if (c > 127)
                 {
                     throw new ArgumentException(
-                        $"DNS name contains non-ASCII character U+{(int)c:X4} in label '{lbl}'. " +
+                        Invariant($"DNS name contains non-ASCII character U+{(int)c:X4} in label '{lbl}'. ") +
                         "Use Punycode (IDNA) encoding before calling EncodeName.", nameof(name));
                 }
             }
@@ -156,7 +156,7 @@ public readonly struct DnsLayer : IStatelessLayer, IPayloadLayer, IPseudoHeaderI
             int len = Encoding.ASCII.GetByteCount(lbl);
             if (len > 63)
             {
-                throw new ArgumentException($"DNS label too long: '{lbl}'", nameof(name));
+                throw new ArgumentException(Invariant($"DNS label too long: '{lbl}'"), nameof(name));
             }
             buf[idx++] = (byte)len;
             Encoding.ASCII.GetBytes(lbl, buf.AsSpan(idx, len));
@@ -248,7 +248,7 @@ public readonly struct DnsLayer : IStatelessLayer, IPayloadLayer, IPseudoHeaderI
         if (_Message.Length > 65535)
         {
             throw new InvalidOperationException(
-                $"DNS message length {_Message.Length} exceeds the maximum 65535 bytes for DNS-over-TCP.");
+                Invariant($"DNS message length {_Message.Length} exceeds the maximum 65535 bytes for DNS-over-TCP."));
         }
         byte[] result = new byte[2 + _Message.Length];
         BinaryPrimitives.WriteUInt16BigEndian(result, (ushort)_Message.Length);

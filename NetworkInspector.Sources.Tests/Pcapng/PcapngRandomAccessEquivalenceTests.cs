@@ -53,7 +53,7 @@ internal sealed class PcapngRandomAccessEquivalenceTests
         using (PcapngSource fromData = PcapngSource.FromData(data, name))
         {
             List<Frame> frames = RandomAccessEquivalence.StartAndReadAll(fromData);
-            await Assert.That(RandomAccessEquivalence.FindMismatch(fromData, frames, $"{name}/data")).IsNull();
+            await Assert.That(RandomAccessEquivalence.FindMismatch(fromData, frames, Invariant($"{name}/data"))).IsNull();
         }
 
         // File backends: preloaded and memory-mapped, lazy and full.
@@ -65,7 +65,7 @@ internal sealed class PcapngRandomAccessEquivalenceTests
                 PcapngSourceOptions options = new() { PreloadBudget = budget, ScanMode = mode };
                 using PcapngSource source = PcapngSource.Open(file.Path, options);
                 List<Frame> frames = RandomAccessEquivalence.StartAndReadAll(source);
-                string label = $"{name}/{(budget is null ? "mapped" : "preload")}/{mode}";
+                string label = Invariant($"{name}/{(budget is null ? "mapped" : "preload")}/{mode}");
                 await Assert.That(RandomAccessEquivalence.FindMismatch(source, frames, label)).IsNull();
             }
         }
@@ -224,7 +224,7 @@ internal sealed class PcapngRandomAccessEquivalenceTests
                     }
                 }
             })
-            { Name = $"PCAPNG FrameById reader {r}", IsBackground = true };
+            { Name = Invariant($"PCAPNG FrameById reader {r}"), IsBackground = true };
             readers[r].Start();
         }
 

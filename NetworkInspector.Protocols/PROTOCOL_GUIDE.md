@@ -159,20 +159,23 @@ decides for itself whether a call is a first parse or a re-parse.
 
 **Mechanism — ingest gate.** Every stateful protocol owns one `private readonly IngestGate _Gate = new();`
 (`NetworkInspector.Core.Protocols`). Its watermark is the highest packet id whose first parse completed;
-`_Gate.IsReplay(id)` is `id.Value <= watermark` (one volatile read, safe from any thread). The pattern at the top of
+`_Gate.IsReplay(in context, id)` is true when the stack classified the parse as a replay (`context.IsReplay`) or `id.Value <= watermark`
+(a field read and one volatile read, safe from any thread). The stack's verdict comes first, because a packet can complete its first
+parse without reaching this protocol (an observer failed, another first protocol was chosen, an earlier dissector threw): its replay
+finds no recorded effect here and must treat that as "no information". The pattern at the top of
 `Parse`:
 
 ```csharp
-bool isReplay = _Gate.IsReplay(packet.Id);
+bool isReplay = _Gate.IsReplay(in context, packet.Id);
 IngestScope scope = isReplay
     ? default                      // inert scope: a replay never raises the watermark
-    : _Gate.Enter(packet.Id);      // throws InvalidOperationException for an id that is already replayed
+    : _Gate.Enter(in context, packet.Id);   // throws InvalidOperationException for a replay
 try { return _ParseBody(/* ... */, isReplay); }
 finally { scope.Dispose(); }       // the outermost scope raises the watermark
 ```
 
-A protocol that has no cleanup in the `finally` can write `if (_Gate.IsReplay(id)) { return _Replay(...); }` followed by
-`using IngestScope scope = _Gate.Enter(id);`.
+A protocol that has no cleanup in the `finally` can write `if (_Gate.IsReplay(in context, id)) { return _Replay(...); }` followed by
+`using IngestScope scope = _Gate.Enter(in context, id);`.
 
 - `id > watermark` → **first parse**: mutate cross-packet state (trackers, reassembly and
   fragment buffers) and record a compact **effect** for the packet.
@@ -223,7 +226,7 @@ with ids from a monotonic allocator starting at 0, while `TryGetPacket` re-parse
 `_TryReparseFrame`. `Packet.TryParse` with `ParseOptions.Index` is safe on a re-parse:
 `TryBeginPacket` returns false and the index is not mutated.
 
-Stateful protocols still use their own ingest gate (`_Gate.IsReplay(id)`, `id <= protocol watermark` → replay) because
+Stateful protocols still use their own ingest gate (`_Gate.IsReplay(in context, id)`: the stack's verdict, or `id <= protocol watermark` → replay) because
 they are not invoked for every packet. The dense check lives on the `Stack`, which sees every
 `TryParse` call.
 
@@ -1278,7 +1281,7 @@ sm.PreloadValue(
 
 `RegisterStandardProtocols` registers these settings. Persist them in the profile directory as **group files** (`{group}.json`). Paths in `*_config_file` are resolved relative to the settings storage path (the profile directory).
 
-Group JSON and referenced `*_config_file` JSON are capped by `SettingsManager.MaxConfigFileBytes` (default 1 GiB = 1073741824 bytes) and `SettingsManager.MaxJsonDepth` (default 1024). Set both only in the `SettingsManager` / `SettingsManagerFactory.Create` constructor; they are not profile settings. Values `<= 0` disable that check (CLI `--settings-max-config-file-bytes` / `--settings-max-json-depth`). Additional stream config (`JsonConfigStream` / `Register(..., Stream)`) is not size- or depth-capped by SettingsManager.
+Group JSON and referenced `*_config_file` JSON are capped by `SettingsLimits.MaxFileSize` (`settings.maxFileSize`, 64 MiB by default) and `SettingsLimits.MaxJsonDepth` (`settings.maxJsonDepth`, depth 64). Pass the values as `SettingsLimitValues` to the `SettingsManager` / `SettingsManagerFactory.Create` constructor; they are not profile settings. `off` removes a cap and `0` is refused (CLI `--settings-max-config-file-bytes` / `--settings-max-json-depth`, for example `64MiB` or `off`). Additional stream config (`JsonConfigStream` / `Register(..., Stream)`) is not size- or depth-capped by SettingsManager.
 
 **`pdu_transport.json`** (settings group `pdu_transport`):
 

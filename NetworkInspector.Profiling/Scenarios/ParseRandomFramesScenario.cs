@@ -9,7 +9,8 @@ namespace NetworkInspector.Profiling.Scenarios;
 /// <para>
 /// Two variants exist:
 /// <list type="bullet">
-///   <item><b>parse-random-frames</b> — <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/> only (lazy field tree).</item>
+///   <item><b>parse-random-frames</b> — <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>
+///     (lazy field tree).</item>
 ///   <item><b>parse-random-frames-materialized</b> — <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/> +
 ///     <see cref="Packet.MaterializeAll"/> (fully walks and stores the field tree).</item>
 /// </list>
@@ -59,9 +60,9 @@ internal sealed class ParseRandomFramesScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description => _Materialize
-        ? FormattableString.Invariant(
+        ? Invariant(
             $"TryParse + MaterializeAll, {_BatchSize:N0} IPv6/UDP frames per iteration.")
-        : FormattableString.Invariant(
+        : Invariant(
             $"TryParse only (lazy field tree), {_BatchSize:N0} IPv6/UDP frames per iteration.");
 
     /// <inheritdoc/>

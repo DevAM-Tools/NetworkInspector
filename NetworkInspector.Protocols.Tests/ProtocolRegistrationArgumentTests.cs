@@ -16,6 +16,7 @@ internal sealed class ProtocolRegistrationArgumentTests
     [Test]
     public async Task RegisterFairProfilingProtocolsRejectsANullBuilder()
     {
-        await Assert.That(static () => ProtocolRegistration.RegisterFairProfilingProtocols(null!)).Throws<ArgumentNullException>(); // null! is the point of the test
+        await Assert.That(static () => ProtocolRegistration.RegisterFairProfilingProtocols(null!))
+            .Throws<ArgumentNullException>(); // null! is the point of the test
     }
 }

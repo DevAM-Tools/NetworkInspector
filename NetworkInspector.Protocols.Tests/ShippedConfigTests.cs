@@ -184,7 +184,7 @@ internal sealed class ShippedConfigTests
         string profile = ShippedConfigFixture.ProfileDirectory("pdu_transport.json", "signal_message.json");
         try
         {
-            using SettingsManager settings = new(profile);
+            using SettingsManager settings = new(profile, CoreSettingsLayout.Instance);
             IReadOnlyList<SettingsLoadWarning> loadWarnings = settings.Load();
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             IReadOnlyList<SettingsLoadWarning> warnings = builder.RegisterStandardProtocols();
@@ -213,7 +213,7 @@ internal sealed class ShippedConfigTests
         string profile = ShippedConfigFixture.ProfileDirectory("someip.json");
         try
         {
-            using SettingsManager settings = new(profile);
+            using SettingsManager settings = new(profile, CoreSettingsLayout.Instance);
             IReadOnlyList<SettingsLoadWarning> loadWarnings = settings.Load();
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
             IReadOnlyList<SettingsLoadWarning> warnings = builder.RegisterStandardProtocols();

@@ -13,7 +13,7 @@ internal sealed class FilterScopedNomatchScenario : FilterScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Scoped no-match \"{Expression}\" on UDP-only traffic (index prune).");
 
     /// <inheritdoc/>

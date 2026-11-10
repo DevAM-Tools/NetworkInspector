@@ -23,7 +23,7 @@ internal sealed class ParquetExporterFlushFailureTests
 
         foreach (int fieldId in probe.FieldBags.Keys)
         {
-            Directory.CreateDirectory(Path.Combine(fieldsDirectory, $"field_{fieldId}.parquet"));
+            Directory.CreateDirectory(Path.Combine(fieldsDirectory, Invariant($"field_{fieldId}.parquet")));
         }
     }
 
@@ -90,7 +90,7 @@ internal sealed class ParquetExporterFlushFailureTests
 
             // The writer visits the bags in dictionary order, so the last key is the field whose file fails after the others.
             int lastFieldId = probe.FieldBags.Keys.Last();
-            Directory.CreateDirectory(Path.Combine(fieldsDirectory, $"field_{lastFieldId}.parquet"));
+            Directory.CreateDirectory(Path.Combine(fieldsDirectory, Invariant($"field_{lastFieldId}.parquet")));
         }
 
         using (ParquetExporter exporter = ParquetExporter.CreateBuilder()

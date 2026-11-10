@@ -190,7 +190,7 @@ internal sealed class SomeIpTpSessionsTests
         await Assert.That(outcome.DiscardReason).IsEqualTo(FragmentDiscardReason.ExtentLimit);
         await Assert.That(sessions.PendingCount).IsEqualTo(0);
         await Assert.That(sessions.BufferedBytes).IsEqualTo(0);
-        await Assert.That(allocated).IsLessThan(1024).Because($"the refused segment allocated {allocated} bytes");
+        await Assert.That(allocated).IsLessThan(1024).Because(Invariant($"the refused segment allocated {allocated} bytes"));
     }
 
     [Test]

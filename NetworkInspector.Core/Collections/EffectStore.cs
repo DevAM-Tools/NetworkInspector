@@ -43,7 +43,7 @@ namespace NetworkInspector.Core.Collections;
 /// <typeparam name="TEffect">Effect payload recorded for one protocol layer.</typeparam>
 public sealed class EffectStore<TEffect> where TEffect : struct
 {
-    #region Nested types
+    #region Configuration and state
 
     /// <summary>
     /// One packed row: the first layer of a packet inline, further layers behind <see cref="More"/>. A mutable struct
@@ -87,16 +87,8 @@ public sealed class EffectStore<TEffect> where TEffect : struct
         public LayerNode? Next;
     }
 
-    #endregion
-
-    #region Constants
-
     /// <summary>Default chunk shift: 2^14 = 16 384 rows per inner array.</summary>
     private const int _DefaultChunkShift = 14;
-
-    #endregion
-
-    #region Fields
 
     /// <summary>Packed rows in ascending packet-id order; owns chunking, growth, and publication of the row count.</summary>
     private readonly ChunkedAppendOnlyStore<Entry> _Entries;
@@ -107,10 +99,6 @@ public sealed class EffectStore<TEffect> where TEffect : struct
     /// whole call must be single-writer. A second concurrent call throws instead of waiting.
     /// </summary>
     private volatile int _RecordGate;
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>Creates a store with the default chunk size (16 384 entries per inner array).</summary>
     public EffectStore()
@@ -128,7 +116,7 @@ public sealed class EffectStore<TEffect> where TEffect : struct
 
     #endregion
 
-    #region Public API
+    #region Recording and replay
 
     /// <summary>
     /// Number of packed tail rows. Nested layers of the same packet share one row.
@@ -202,7 +190,8 @@ public sealed class EffectStore<TEffect> where TEffect : struct
                 if (packetId < tail.PacketId)
                 {
                     throw new InvalidOperationException(
-                        $"Effect rows must be recorded in non-decreasing packet-id order. Tail is {tail.PacketId.ToString(CultureInfo.InvariantCulture)}, got {packetId.ToString(CultureInfo.InvariantCulture)}.");
+                        "Effect rows must be recorded in non-decreasing packet-id order. "
+                        + Invariant($"Tail is {tail.PacketId.ToString(CultureInfo.InvariantCulture)}, got {packetId.ToString(CultureInfo.InvariantCulture)}."));
                 }
 
                 // Same packet: add a nested layer to the existing row instead of a new row, so the row id stays unique
@@ -212,7 +201,8 @@ public sealed class EffectStore<TEffect> where TEffect : struct
                     if (_LayerKeyExists(ref tail, layerKey))
                     {
                         throw new InvalidOperationException(
-                            $"Duplicate layer key {layerKey.ToString(CultureInfo.InvariantCulture)} for packet {packetId.ToString(CultureInfo.InvariantCulture)}.");
+                            Invariant($"Duplicate layer key {layerKey.ToString(CultureInfo.InvariantCulture)} ")
+                            + Invariant($"for packet {packetId.ToString(CultureInfo.InvariantCulture)}."));
                     }
 
                     // Build the node completely first, then publish it as the new chain head with a release write:
@@ -295,16 +285,13 @@ public sealed class EffectStore<TEffect> where TEffect : struct
     public void Clear() =>
         _Entries.Clear();
 
-    #endregion
-
-    #region Private helpers
-
     /// <summary>
     /// Whether the row already holds <paramref name="layerKey"/>, inline or in its chain. Writer-side check for
     /// <see cref="Record"/>: only the writer changes the chain, so this walk sees every node linked so far.
     /// </summary>
     /// <param name="tail">The tail row, by reference into the live slot.</param>
     /// <param name="layerKey">Key to look for.</param>
+    /// <returns><see langword="true"/> when the inline layer or a chain node has the key.</returns>
     private static bool _LayerKeyExists(ref Entry tail, int layerKey)
     {
         if (tail.LayerKey == layerKey)

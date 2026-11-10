@@ -74,7 +74,7 @@ public readonly struct TcpLayerWithOptions :
         if (padded > _MaxHeaderSize - TcpHeader.Size)
         {
             throw new ArgumentException(
-                $"TCP options exceed the maximum length of {_MaxHeaderSize - TcpHeader.Size} bytes.",
+                Invariant($"TCP options exceed the maximum length of {_MaxHeaderSize - TcpHeader.Size} bytes."),
                 nameof(opts));
         }
 

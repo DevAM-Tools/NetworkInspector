@@ -139,7 +139,7 @@ public readonly struct SignalMessageLayer : IStatelessLayer, IPayloadLayer, IPse
             if (!matched)
             {
                 throw new InvalidOperationException(
-                    $"Multiplexer '{mux.Name}' value {muxRaw} does not match any configured MuxGroup.");
+                    Invariant($"Multiplexer '{mux.Name}' value {muxRaw} does not match any configured MuxGroup."));
             }
         }
     }
@@ -171,7 +171,7 @@ public readonly struct SignalMessageLayer : IStatelessLayer, IPayloadLayer, IPse
             return (ulong)Math.Round(physical, MidpointRounding.AwayFromZero);
         }
         throw new InvalidOperationException(
-            $"Multiplexer selector '{mux.Name}' has no value in the SignalMessageValueSet.");
+            Invariant($"Multiplexer selector '{mux.Name}' has no value in the SignalMessageValueSet."));
     }
 
     /// <summary>

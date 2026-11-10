@@ -20,8 +20,6 @@ namespace NetworkInspector.Core.Interfaces;
 /// </summary>
 public interface IExportByteProgress
 {
-    #region Properties
-
     /// <summary>
     /// Approximate number of output bytes already committed plus bytes pending in buffers
     /// for the current output segment. Monotonic non-decreasing while the segment is open.
@@ -30,6 +28,4 @@ public interface IExportByteProgress
     {
         get;
     }
-
-    #endregion
 }

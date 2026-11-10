@@ -3,6 +3,7 @@
 #region System
 global using System;
 global using System.Collections.Generic;
+global using System.Diagnostics.CodeAnalysis;
 global using System.Globalization;
 global using System.IO;
 global using System.Linq;
@@ -11,7 +12,7 @@ global using System.Text.Json;
 global using System.Text.Json.Nodes;
 global using System.Threading;
 global using System.Threading.Tasks;
-global using static System.FormattableString;
+global using static InvariantStringHelper.InvariantText;
 #endregion
 
 #region TUnit
@@ -28,7 +29,11 @@ global using NetworkInspector.Core.Errors;
 global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Index;
 global using NetworkInspector.Core.Interfaces;
+global using NetworkInspector.Core.Limits;
+global using NetworkInspector.Limits;
+global using NetworkInspector.Limits.Utility;
 global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Settings;
 global using NetworkInspector.Exporters.Blf;
 global using NetworkInspector.Filter;
 global using NetworkInspector.Filter.Errors;

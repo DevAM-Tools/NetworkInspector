@@ -60,7 +60,7 @@ internal static class FilterTestHelper
         ProtocolId? id = stack.GetProtocolId(name);
         if (id is not ProtocolId protocolId)
         {
-            throw new InvalidOperationException($"Stack does not know protocol '{name}'.");
+            throw new InvalidOperationException(Invariant($"Stack does not know protocol '{name}'."));
         }
         return protocolId;
     }
@@ -73,7 +73,7 @@ internal static class FilterTestHelper
         FieldId? id = stack.GetFieldId(name);
         if (id is not FieldId fieldId)
         {
-            throw new InvalidOperationException($"Stack does not know field '{name}'.");
+            throw new InvalidOperationException(Invariant($"Stack does not know field '{name}'."));
         }
         return fieldId;
     }
@@ -302,7 +302,7 @@ internal static class FilterTestHelper
         FilterResult<Filter> result = Filter.Compile(expression, stack);
         if (!result.TryGetValue(out Filter? filter))
         {
-            throw new InvalidOperationException($"Expected '{expression}' to compile but got {result.Error}");
+            throw new InvalidOperationException(Invariant($"Expected '{expression}' to compile but got {result.Error}"));
         }
         return filter;
     }
@@ -315,7 +315,7 @@ internal static class FilterTestHelper
 
         if (!filter.TryIsMatch(packet, index, out bool matched, out FilterError? failure))
         {
-            throw new InvalidOperationException($"Evaluation failed: {failure}");
+            throw new InvalidOperationException(Invariant($"Evaluation failed: {failure}"));
         }
         return matched;
     }

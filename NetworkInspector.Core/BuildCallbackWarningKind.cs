@@ -8,8 +8,6 @@ namespace NetworkInspector.Core;
 /// </summary>
 public enum BuildCallbackWarningKind
 {
-    #region Enum Values
-
     /// <summary>A protocol referenced via <c>WhenProtocolRegistered</c> was never registered.</summary>
     Protocol,
 
@@ -26,6 +24,4 @@ public enum BuildCallbackWarningKind
     /// whenever no protocol with that name exists, with a callback count of 0.
     /// </summary>
     MissingFrameProtocol,
-
-    #endregion
 }

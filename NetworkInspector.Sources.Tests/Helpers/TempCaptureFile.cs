@@ -12,7 +12,7 @@ internal sealed class TempCaptureFile : IDisposable
     /// <summary>Writes <paramref name="data"/> to a new temp file with the given extension (e.g. <c>".pcapng"</c>).</summary>
     internal TempCaptureFile(byte[] data, string extension)
     {
-        Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"ni-test-{Guid.NewGuid():N}{extension}");
+        Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Invariant($"ni-test-{Guid.NewGuid():N}{extension}"));
         File.WriteAllBytes(Path, data);
     }
 

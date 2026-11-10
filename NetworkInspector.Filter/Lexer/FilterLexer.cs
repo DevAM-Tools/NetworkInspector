@@ -276,7 +276,7 @@ internal sealed class FilterLexer
                 {
                     return _LexIdentifierOrAddress();
                 }
-                return FilterError.Lexer($"Unexpected character '{c}'", _Position, 1);
+                return FilterError.Lexer(Invariant($"Unexpected character '{c}'"), _Position, 1);
         }
     }
 
@@ -537,7 +537,7 @@ internal sealed class FilterLexer
         string text = _Slice(start);
         if (!IPv6Address.TryParse(text, out _))
         {
-            return FilterError.InvalidValue($"Invalid IPv6 address '{text}'", start, text.Length);
+            return FilterError.InvalidValue(Invariant($"Invalid IPv6 address '{text}'"), start, text.Length);
         }
         return new Token(TokenKind.Ipv6Address, new FilterSpan(start, text.Length), text);
     }
@@ -588,7 +588,7 @@ internal sealed class FilterLexer
                     string ipText = _Slice(start);
                     if (!IPv4Address.TryParse(ipText, out _))
                     {
-                        return FilterError.InvalidValue($"Invalid IPv4 address '{ipText}'", start, ipText.Length);
+                        return FilterError.InvalidValue(Invariant($"Invalid IPv4 address '{ipText}'"), start, ipText.Length);
                     }
                     return new Token(TokenKind.Ipv4Address, new FilterSpan(start, ipText.Length), ipText);
                 }

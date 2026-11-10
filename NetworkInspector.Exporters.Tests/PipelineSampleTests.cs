@@ -18,7 +18,8 @@ internal sealed class PipelineSampleTests
         string path = dir.FilePath("dns.duckdb");
         Stack stack = TestHarness.GetStack();
 
-        // The sample reads `frames`, `stack` and `nextId`; the test supplies them. Every third frame is a DNS query (a longer datagram, which the filter selects).
+        // The sample reads `frames`, `stack` and `nextId`; the test supplies them.
+        // Every third frame is a DNS query (a longer datagram, which the filter selects).
         List<Frame> frames = [];
         for (int i = 0; i < 100; i++)
         {
@@ -91,14 +92,14 @@ internal sealed class PipelineSampleTests
         // --- sample end ---
 
         exporter.Dispose();
-        using DuckDBConnection connection = new($"Data Source={path}");
+        using DuckDBConnection connection = new(Invariant($"Data Source={path}"));
         connection.Open();
 
         await Assert.That(treeSeen.Count).IsEqualTo(100);
         await Assert.That(treeSeen.Contains(true)).IsFalse();
         await Assert.That(_Scalar(connection, "SELECT COUNT(*) FROM packets")).IsEqualTo(34L);
-        await Assert.That(_Scalar(connection, $"SELECT COUNT(*) FROM field_{stack.GetFieldId("udp.dstport")!.Value.Value}")).IsEqualTo(34L);
-        await Assert.That(_Scalar(connection, $"SELECT COUNT(*) FROM field_{stack.GetFieldId("ip.src")!.Value.Value}")).IsEqualTo(34L);
+        await Assert.That(_Scalar(connection, Invariant($"SELECT COUNT(*) FROM field_{stack.GetFieldId("udp.dstport")!.Value.Value}"))).IsEqualTo(34L);
+        await Assert.That(_Scalar(connection, Invariant($"SELECT COUNT(*) FROM field_{stack.GetFieldId("ip.src")!.Value.Value}"))).IsEqualTo(34L);
         await Assert.That(plan.ToString()).Contains("no tree");
     }
 

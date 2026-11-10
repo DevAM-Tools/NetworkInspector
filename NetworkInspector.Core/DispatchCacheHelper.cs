@@ -27,6 +27,10 @@ namespace NetworkInspector.Core;
 /// concurrently by any number of threads.
 /// </para>
 /// <para>
+/// <b>Omitted validation:</b> the <c>stack</c> argument is not checked for null. The caller is the <c>OnStart</c> hook,
+/// which receives its own non-null stack.
+/// </para>
+/// <para>
 /// <b>ID caches</b> (<see cref="BuildU64IdCache"/>, <see cref="BuildU64SparseIdCache"/>)
 /// store <see cref="ProtocolId"/> values. Production dispatch uses these with
 /// <see cref="MutField.CallProtocol"/> so invalid ids return a <see cref="ParseError"/>.
@@ -40,20 +44,7 @@ namespace NetworkInspector.Core;
 /// </summary>
 public static class DispatchCacheHelper
 {
-    #region Constants
-
-    /// <summary>
-    /// Maximum dense-cache domain size (16-bit key). 8-bit callers pass 256 (~2 kB of delegates).
-    /// Limit (value 65 536 · threat: a caller-supplied domain size turning one startup call into an arbitrarily
-    /// large allocation or an array-constructor overflow · constant, because it is the key range of a 16-bit
-    /// protocol field, not a host-dependent value · posture: secure by default, a larger domain is not offered; use the
-    /// sparse caches for wider keys). At most 65 536 references (about 512 KB) are allocated per call.
-    /// </summary>
-    private const int _MaxDenseDomain = 65_536;
-
-    #endregion
-
-    #region Delegate Caches
+    #region Delegate caches
 
     /// <summary>
     /// Builds a dense <see cref="ParseDelegate"/>[] cache for a u64 dispatch table over the
@@ -121,7 +112,7 @@ public static class DispatchCacheHelper
     /// </para>
     /// </summary>
     /// <param name="stack">The stack that owns the protocol table.</param>
-    /// <param name="tableId">U64 protocol table to cache.</param>
+    /// <param name="tableId">U64 protocol table to cache. An unknown id yields an empty array.</param>
     /// <returns>
     /// Pairs of key and delegate for every single-protocol key whose protocol has a parse delegate; empty when the table
     /// does not exist. Not sorted by key; look up by linear scan.
@@ -157,7 +148,7 @@ public static class DispatchCacheHelper
 
     #endregion
 
-    #region ID Caches
+    #region Id caches
 
     /// <summary>
     /// Builds a pre-computed dense ID cache for a u64 dispatch table over the key domain
@@ -244,7 +235,16 @@ public static class DispatchCacheHelper
 
     #endregion
 
-    #region Validation
+    #region Dense domain limit
+
+    /// <summary>
+    /// Maximum dense-cache domain size (16-bit key). 8-bit callers pass 256 (~2 kB of delegates).
+    /// Limit (value 65 536 · threat: a caller-supplied domain size turning one startup call into an arbitrarily
+    /// large allocation or an array-constructor overflow · constant, because it is the key range of a 16-bit
+    /// protocol field, not a host-dependent value · posture: secure by default, a larger domain is not offered; use the
+    /// sparse caches for wider keys). At most 65 536 references (about 512 KB) are allocated per call.
+    /// </summary>
+    private const int _MaxDenseDomain = 65_536;
 
     /// <summary>
     /// Rejects non-positive and oversized dense domains so <c>OnStart</c> fails with a named

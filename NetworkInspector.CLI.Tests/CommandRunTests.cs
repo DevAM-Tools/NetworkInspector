@@ -22,10 +22,10 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Convert_WithProfile_Succeeds()
     {
-        string dir = Path.Combine(Path.GetTempPath(), $"ni-prof-{Guid.NewGuid():N}");
+        string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-prof-{Guid.NewGuid():N}"));
         Directory.CreateDirectory(dir);
         // An explicitly named profile must exist; the command line does not invent one.
-        SettingsProfiles.TryCreate(dir, "TestProfile", null, out _);
+        SettingsProfiles.TryCreate(dir, CoreSettingsLayout.Instance, "TestProfile", null, out _);
         string path = Path.Combine(dir, "out.pcapng");
         try
         {
@@ -50,9 +50,9 @@ internal sealed class CommandRunTests
     }
 
     [Test]
-    public async Task Convert_SettingsMaxConfigFileBytesZero_Succeeds()
+    public async Task Convert_SettingsMaxConfigFileBytesOff_Succeeds()
     {
-        string dir = Path.Combine(Path.GetTempPath(), $"ni-cap-{Guid.NewGuid():N}");
+        string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-cap-{Guid.NewGuid():N}"));
         Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "out.pcapng");
         try
@@ -62,7 +62,7 @@ internal sealed class CommandRunTests
                 "-o", path,
                 "-n", "2",
                 "--settings-path", dir,
-                "--settings-max-config-file-bytes", "0",
+                "--set", "settings.maxFileSize=off",
             ]);
 
             await Assert.That(code).IsEqualTo((int)ExitCode.Success);
@@ -78,9 +78,16 @@ internal sealed class CommandRunTests
     }
 
     [Test]
-    public async Task Convert_SettingsMaxConfigFileBytesNegative_Succeeds()
+    [Arguments("settings.maxFileSize", "0")]
+    [Arguments("settings.maxFileSize", "-1")]
+    [Arguments("settings.maxFileSize", "512")]
+    [Arguments("settings.maxFileSize", "2MB")]
+    [Arguments("settings.maxJsonDepth", "0")]
+    [Arguments("settings.maxJsonDepth", "3")]
+    [Arguments("settings.maxJsonDepth", "2000")]
+    public async Task Convert_AnInvalidSettingsLimit_ReturnsArgumentErrorAndCreatesNoFile(string key, string text)
     {
-        string dir = Path.Combine(Path.GetTempPath(), $"ni-cap-neg-{Guid.NewGuid():N}");
+        string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-cap-bad-{Guid.NewGuid():N}"));
         Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "out.pcapng");
         try
@@ -90,7 +97,38 @@ internal sealed class CommandRunTests
                 "-o", path,
                 "-n", "2",
                 "--settings-path", dir,
-                "--settings-max-config-file-bytes", "-1",
+                "--set", key + "=" + text,
+            ]);
+
+            await Assert.That(code).IsEqualTo((int)ExitCode.ArgumentError);
+            await Assert.That(File.Exists(path)).IsFalse();
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    [Arguments("64MiB")]
+    [Arguments("1_048_576")]
+    [Arguments("1 KiB")]
+    public async Task Convert_SettingsMaxConfigFileBytesWithAUnit_Succeeds(string text)
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-cap-unit-{Guid.NewGuid():N}"));
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "out.pcapng");
+        try
+        {
+            int code = await CliRun.ConvertAsync([
+                "random:count=2,mode=udp4",
+                "-o", path,
+                "-n", "2",
+                "--settings-path", dir,
+                "--set", "settings.maxFileSize=" + text,
             ]);
 
             await Assert.That(code).IsEqualTo((int)ExitCode.Success);
@@ -111,16 +149,16 @@ internal sealed class CommandRunTests
         int code = await CliRun.ConvertAsync([
             "random:count=1,mode=udp4",
             "-o", "out.pcapng",
-            "--settings-max-config-file-bytes",
+            "--set",
         ]);
 
         await Assert.That(code).IsEqualTo((int)ExitCode.ArgumentError);
     }
 
     [Test]
-    public async Task Convert_SettingsMaxJsonDepthZero_Succeeds()
+    public async Task Convert_SettingsMaxJsonDepthOff_Succeeds()
     {
-        string dir = Path.Combine(Path.GetTempPath(), $"ni-depth-{Guid.NewGuid():N}");
+        string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-depth-{Guid.NewGuid():N}"));
         Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "out.pcapng");
         try
@@ -130,7 +168,7 @@ internal sealed class CommandRunTests
                 "-o", path,
                 "-n", "2",
                 "--settings-path", dir,
-                "--settings-max-json-depth", "0",
+                "--set", "settings.maxJsonDepth=off",
             ]);
 
             await Assert.That(code).IsEqualTo((int)ExitCode.Success);
@@ -151,16 +189,16 @@ internal sealed class CommandRunTests
         int code = await CliRun.ConvertAsync([
             "random:count=1,mode=udp4",
             "-o", "out.pcapng",
-            "--settings-max-json-depth",
+            "--set",
         ]);
 
         await Assert.That(code).IsEqualTo((int)ExitCode.ArgumentError);
     }
 
     [Test]
-    public async Task Export_SettingsMaxConfigFileBytesZero_Succeeds()
+    public async Task Export_SettingsMaxConfigFileBytesOff_Succeeds()
     {
-        string path = Path.Combine(Path.GetTempPath(), $"ni-export-zero-{Guid.NewGuid():N}.json");
+        string path = Path.Combine(Path.GetTempPath(), Invariant($"ni-export-zero-{Guid.NewGuid():N}.json"));
         try
         {
             int code = await CliRun.ExportAsync([
@@ -168,7 +206,7 @@ internal sealed class CommandRunTests
                 "-f", "json:style=compact",
                 "-o", path,
                 "-n", "2",
-                "--settings-max-config-file-bytes", "0",
+                "--set", "settings.maxFileSize=off",
             ]);
 
             await Assert.That(code).IsEqualTo((int)ExitCode.Success);
@@ -186,7 +224,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Export_SettingsMaxConfigFileBytes4096_Succeeds()
     {
-        string path = Path.Combine(Path.GetTempPath(), $"ni-export-cap-{Guid.NewGuid():N}.json");
+        string path = Path.Combine(Path.GetTempPath(), Invariant($"ni-export-cap-{Guid.NewGuid():N}.json"));
         try
         {
             int code = await CliRun.ExportAsync([
@@ -194,8 +232,8 @@ internal sealed class CommandRunTests
                 "-f", "json:style=compact",
                 "-o", path,
                 "-n", "2",
-                "--settings-max-config-file-bytes", "4096",
-                "--settings-max-json-depth", "8",
+                "--set", "settings.maxFileSize=4096",
+                "--set", "settings.maxJsonDepth=8",
             ]);
 
             await Assert.That(code).IsEqualTo((int)ExitCode.Success);
@@ -248,7 +286,7 @@ internal sealed class CommandRunTests
         int code = await CliRun.ExportAsync([
             "random:count=1,mode=udp4",
             "-f", "json",
-            "-o", Path.Combine(Path.GetTempPath(), $"ni-blf-cache-{Guid.NewGuid():N}.json"),
+            "-o", Path.Combine(Path.GetTempPath(), Invariant($"ni-blf-cache-{Guid.NewGuid():N}.json")),
             "--blf-cache-size", "999999999999",
         ]);
 
@@ -292,7 +330,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Export_RandomToJsonFile_Succeeds()
     {
-        string path = Path.Combine(Path.GetTempPath(), $"ni-export-{Guid.NewGuid():N}.json");
+        string path = Path.Combine(Path.GetTempPath(), Invariant($"ni-export-{Guid.NewGuid():N}.json"));
         try
         {
             int code = await CliRun.ExportAsync([
@@ -317,7 +355,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Export_SplitCount_WritesNumberedFiles()
     {
-        string dir = Path.Combine(Path.GetTempPath(), $"ni-export-split-{Guid.NewGuid():N}");
+        string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-export-split-{Guid.NewGuid():N}"));
         Directory.CreateDirectory(dir);
         string basePath = Path.Combine(dir, "part.json");
         try
@@ -346,7 +384,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Export_Parquet_SplitCount_WritesNumberedDirectories()
     {
-        string dir = Path.Combine(Path.GetTempPath(), $"ni-export-parquet-split-{Guid.NewGuid():N}");
+        string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-export-parquet-split-{Guid.NewGuid():N}"));
         Directory.CreateDirectory(dir);
         string basePath = Path.Combine(dir, "dataset");
         try
@@ -378,7 +416,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Export_DuckDb_SplitCount_WritesNumberedFiles()
     {
-        string dir = Path.Combine(Path.GetTempPath(), $"ni-export-duckdb-split-{Guid.NewGuid():N}");
+        string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-export-duckdb-split-{Guid.NewGuid():N}"));
         Directory.CreateDirectory(dir);
         string basePath = Path.Combine(dir, "part.duckdb");
         try
@@ -407,7 +445,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Export_Parquet_WithoutSplit_WritesSingleDataset()
     {
-        string dir = Path.Combine(Path.GetTempPath(), $"ni-export-parquet-{Guid.NewGuid():N}");
+        string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-export-parquet-{Guid.NewGuid():N}"));
         Directory.CreateDirectory(dir);
         string basePath = Path.Combine(dir, "out_parquet");
         try
@@ -435,7 +473,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Convert_RandomToTempPcapng_Succeeds()
     {
-        string path = Path.Combine(Path.GetTempPath(), $"ni-convert-{Guid.NewGuid():N}.pcapng");
+        string path = Path.Combine(Path.GetTempPath(), Invariant($"ni-convert-{Guid.NewGuid():N}.pcapng"));
         try
         {
             int code = await CliRun.ConvertAsync([
@@ -459,7 +497,7 @@ internal sealed class CommandRunTests
     [Test]
     public async Task Convert_SplitCount_WritesNumberedFiles()
     {
-        string dir = Path.Combine(Path.GetTempPath(), $"ni-split-{Guid.NewGuid():N}");
+        string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-split-{Guid.NewGuid():N}"));
         Directory.CreateDirectory(dir);
         string basePath = Path.Combine(dir, "part.pcapng");
         try
@@ -502,7 +540,7 @@ internal sealed class CommandRunTests
         int code = await CliRun.ExportAsync([
             "definitely-missing-xyz.pcapng",
             "-f", "json",
-            "-o", Path.Combine(Path.GetTempPath(), $"ni-missing-{Guid.NewGuid():N}.json"),
+            "-o", Path.Combine(Path.GetTempPath(), Invariant($"ni-missing-{Guid.NewGuid():N}.json")),
         ]);
 
         await Assert.That(code).IsEqualTo((int)ExitCode.SourceOpenError);

@@ -102,8 +102,8 @@ internal static class FieldDisplayLine
         // noise). Concat costs one temporary for the value text; every consumer that cares about allocations uses TryFormat into
         // its own buffer.
         return label.Length > 0
-            ? string.Concat(label, _Separator, value.ToString())
-            : value.ToString();
+            ? string.Concat(label, _Separator, value.ToString(null, CultureInfo.InvariantCulture))
+            : value.ToString(null, CultureInfo.InvariantCulture);
     }
 
     /// <summary>Formats the display line of a field into a character span.</summary>

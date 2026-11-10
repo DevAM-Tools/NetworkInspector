@@ -95,7 +95,7 @@ internal static class SignalMessageConfigBridge
 
     /// <summary>Qualifies a layout-local encoder key as the JSON field name.</summary>
     private static string _QualifiedFieldName(string messageName, string signalName)
-        => $"{messageName}.{signalName}";
+        => Invariant($"{messageName}.{signalName}");
 
     /// <summary>Converts a signal array, writing JSON names in target form.</summary>
     private static SignalFieldConfig[] _ConvertSignals(string messageName, ImmutableArray<SignalSpec> signals)

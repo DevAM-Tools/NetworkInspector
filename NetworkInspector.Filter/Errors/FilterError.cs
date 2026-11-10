@@ -76,7 +76,7 @@ public sealed class FilterError
     public static FilterError UnsupportedFeature(string feature, int position, int length) =>
         new(
             FilterErrorKind.UnsupportedFeature,
-            $"'{feature}' was removed from the filter language in v1",
+            Invariant($"'{feature}' was removed from the filter language in v1"),
             position,
             length);
 
@@ -92,8 +92,8 @@ public sealed class FilterError
         new(
             FilterErrorKind.UnknownField,
             suggestion is null
-                ? $"Unknown field or protocol '{name}'"
-                : $"Unknown field or protocol '{name}'. Did you mean '{suggestion}'?",
+                ? Invariant($"Unknown field or protocol '{name}'")
+                : Invariant($"Unknown field or protocol '{name}'. Did you mean '{suggestion}'?"),
             position,
             length,
             suggestion);
@@ -116,7 +116,7 @@ public sealed class FilterError
 
     /// <summary>Creates the error raised when a user-supplied compile callback throws.</summary>
     public static FilterError CallbackFailed(string message) =>
-        new(FilterErrorKind.CallbackFailed, $"Filter compile callback threw: {message}", -1, -1);
+        new(FilterErrorKind.CallbackFailed, Invariant($"Filter compile callback threw: {message}"), -1, -1);
 
     /// <summary>Creates a packet-evaluation error.</summary>
     public static FilterError Runtime(string message) =>
@@ -126,7 +126,7 @@ public sealed class FilterError
     public static FilterError OutOfOrder(int packetId, int highestEvaluatedId) =>
         new(
             FilterErrorKind.OutOfOrder,
-            $"Stateful filter requires ascending packet order: packet {packetId} follows {highestEvaluatedId}. " +
+            Invariant($"Stateful filter requires ascending packet order: packet {packetId} follows {highestEvaluatedId}. ") +
             "Call ResetState() before replaying earlier packets.",
             -1,
             -1);

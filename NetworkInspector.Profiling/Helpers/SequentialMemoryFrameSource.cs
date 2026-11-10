@@ -43,7 +43,7 @@ internal sealed class SequentialMemoryFrameSource : IFrameSource
 
     /// <inheritdoc/>
     public string? Description =>
-        FormattableString.Invariant($"Sequential in-memory frames ({_Frames.Length} frames).");
+        Invariant($"Sequential in-memory frames ({_Frames.Length} frames).");
 
     /// <inheritdoc/>
     public int? EstimatedFrameCount => _Frames.Length;

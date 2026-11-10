@@ -203,7 +203,7 @@ internal sealed class Job : IDisposable
         }
         Thread thread = new(_RunCore)
         {
-            Name = $"session-job-{Id.Value}-{UiName}",
+            Name = Invariant($"session-job-{Id.Value}-{UiName}"),
             IsBackground = true,
             CurrentCulture = CultureInfo.InvariantCulture,
         };

@@ -4,7 +4,7 @@ namespace NetworkInspector.Core.Tables;
 
 /// <summary>
 /// Heuristic protocol dispatch table that tests data against registered parsers.
-/// First match wins for single-match queries.
+/// The first parser that accepts the data wins (<see cref="TryMatch"/>).
 /// <para>
 /// Order matters: entries are tested in registration order, so an earlier registration wins over a later one when both
 /// accept the same data. Lifecycle and thread safety: like <see cref="ProtocolTable"/>, the table is filled during stack
@@ -15,14 +15,8 @@ namespace NetworkInspector.Core.Tables;
 /// </summary>
 internal sealed class HeuristicProtocolTable
 {
-    #region Fields
-
     /// <summary>Registered parsers in registration order; the order is the test order.</summary>
     private readonly List<HeuristicParserEntry> _Entries = [];
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>Creates a heuristic table from its metadata.</summary>
     /// <param name="info">The table metadata.</param>
@@ -30,10 +24,6 @@ internal sealed class HeuristicProtocolTable
     {
         Info = info;
     }
-
-    #endregion
-
-    #region Properties
 
     /// <summary>The table metadata.</summary>
     internal HeuristicProtocolTableInfo Info { get; }
@@ -56,10 +46,6 @@ internal sealed class HeuristicProtocolTable
     /// <summary>Whether no parser is registered.</summary>
     internal bool IsEmpty => _Entries.Count == 0;
 
-    #endregion
-
-    #region Internal API
-
     /// <summary>Appends a parser; it is tested after every parser registered before it. Build phase only.</summary>
     /// <param name="entry">The parser entry; not validated here (the builder creates it from a non-null parser).</param>
     internal void AddEntry(HeuristicParserEntry entry) => _Entries.Add(entry);
@@ -67,65 +53,27 @@ internal sealed class HeuristicProtocolTable
     /// <summary>The registered entries in test order (a live view, not a copy).</summary>
     internal IReadOnlyList<HeuristicParserEntry> Entries => _Entries;
 
-    /// <summary>Finds an entry by parser name.</summary>
-    internal HeuristicParserEntry? FindByName(string name)
-    {
-        for (int i = 0; i < _Entries.Count; i++)
-        {
-            if (string.Equals(_Entries[i].Name, name, StringComparison.Ordinal))
-            {
-                return _Entries[i];
-            }
-        }
-        return null;
-    }
-
     /// <summary>
-    /// Tests data against all parsers, returns first match. Runs per packet for protocols that detect their payload
-    /// heuristically, hence an indexed loop over the list (no enumerator allocation) and no allocation at all.
+    /// Tests data against all parsers in registration order and reports the first match. Runs per packet for protocols that
+    /// detect their payload heuristically, hence an indexed loop over the list (no enumerator allocation) and no allocation at
+    /// all.
     /// </summary>
+    /// <param name="data">The bytes to test.</param>
+    /// <param name="protocolId">The protocol of the first parser that accepted <paramref name="data"/>; <see cref="ProtocolId.Invalid"/> when none did.</param>
+    /// <returns><see langword="true"/> when a parser matched.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ProtocolId? TryMatch(ReadOnlyMemory<byte> data)
+    internal bool TryMatch(ReadOnlyMemory<byte> data, out ProtocolId protocolId)
     {
         for (int i = 0; i < _Entries.Count; i++)
         {
             if (_Entries[i].Test(data))
             {
-                return _Entries[i].ProtocolId;
+                protocolId = _Entries[i].ProtocolId;
+                return true;
             }
         }
-        return null;
-    }
 
-    /// <summary>Tests data against all parsers, returns first match with name.</summary>
-    internal (ProtocolId Id, string Name)? TryMatchWithName(ReadOnlyMemory<byte> data)
-    {
-        for (int i = 0; i < _Entries.Count; i++)
-        {
-            if (_Entries[i].Test(data))
-            {
-                return (_Entries[i].ProtocolId, _Entries[i].Name);
-            }
-        }
-        return null;
+        protocolId = ProtocolId.Invalid;
+        return false;
     }
-
-    /// <summary>
-    /// Tests data against all parsers, returns all matches in test order. Allocates the result list, so it is for
-    /// diagnostics, not for the per-packet path (use <see cref="TryMatch"/> there).
-    /// </summary>
-    internal List<ProtocolId> TryMatchAll(ReadOnlyMemory<byte> data)
-    {
-        List<ProtocolId> results = new(1);
-        for (int i = 0; i < _Entries.Count; i++)
-        {
-            if (_Entries[i].Test(data))
-            {
-                results.Add(_Entries[i].ProtocolId);
-            }
-        }
-        return results;
-    }
-
-    #endregion
 }

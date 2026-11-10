@@ -17,7 +17,8 @@ internal sealed class DerivedBytesLimitTryBindTests
 
     private readonly record struct Result(bool Bound, DerivedBytesFailure Failure, ulong BoundBytesAfter);
 
-    /// <summary>Binds <paramref name="preBound"/> one-byte buffers directly, then one buffer per entry of <paramref name="sizes"/> through the helper.</summary>
+    /// <summary>Binds <paramref name="preBound"/> one-byte buffers directly, then one buffer per entry of
+    /// <paramref name="sizes"/> through the helper.</summary>
     private sealed class ScriptProtocol(ulong limit, int preBoundBytes, int preBoundBuffers, int[] sizes, List<Result> results) : IProtocol
     {
         public string Name => "bind.script";

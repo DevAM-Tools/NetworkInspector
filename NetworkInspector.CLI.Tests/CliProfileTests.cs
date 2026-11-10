@@ -93,7 +93,7 @@ internal sealed class CliProfileTests
             {
                 await Assert.That(result.Exit).IsEqualTo(1);
                 await Assert.That(result.ErrorMessages.Length).IsEqualTo(1);
-                await Assert.That(result.ErrorMessages[0]).Contains($"Profile name '{name}': {rule}.");
+                await Assert.That(result.ErrorMessages[0]).Contains(Invariant($"Profile name '{name}': {rule}."));
             }
 
             await Assert.That(Directory.Exists(sandbox.Base)).IsFalse();

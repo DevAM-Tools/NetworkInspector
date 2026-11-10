@@ -5,7 +5,7 @@ namespace NetworkInspector.Core.Tests;
 /// <summary>
 /// Tests for <see cref="LengthPrefixDetector"/> covering all length sizes (1/2/4),
 /// endianness, and the <c>lengthIncludesHeader</c> + <c>headerSize</c> permutations
-/// — including the constructor validation added by the audit (F-RA-01).
+/// — including the constructor validation.
 /// </summary>
 internal sealed class LengthPrefixDetectorTests
 {
@@ -254,10 +254,19 @@ internal sealed class LengthPrefixDetectorTests
     [Test]
     public async Task Detect_FourByteLengthAboveIntMax_ReturnsInvalid()
     {
-        LengthPrefixDetector det = new(0, 4, bigEndian: true, lengthIncludesHeader: true);
+        LengthPrefixDetector det = new(0, 4, bigEndian: true, lengthIncludesHeader: true, maxPduSize: 16 * 1024 * 1024);
         byte[] data = [0x7F, 0xFF, 0xFF, 0xFF];
         PduBoundaryResult result = det.Detect(data);
         await Assert.That(result.IsInvalid).IsTrue();
+    }
+
+    [Test]
+    public async Task Detect_WithoutAnOwnLimit_ReportsTheAnnouncedLengthAndLeavesTheBoundToTheStream()
+    {
+        LengthPrefixDetector det = new(0, 4, bigEndian: true, lengthIncludesHeader: true);
+        byte[] data = [0x7F, 0xFF, 0xFF, 0xFF];
+        PduBoundaryResult result = det.Detect(data);
+        await Assert.That(result.IsInvalid).IsFalse();
     }
 
     [Test]

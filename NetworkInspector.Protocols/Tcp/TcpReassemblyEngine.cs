@@ -90,6 +90,10 @@ internal sealed class TcpReassemblyEngine
             return null;
         }
 
+        // A size the registration left unassigned is the current value of its limit (settings reassembly.*), read once for the
+        // new stream: a change applies to streams that start afterwards. One small allocation per connection, not per segment.
+        config = config.WithLimits(_Stack.Limits);
+
         // The stream id is an engine-local counter handed to stream-aware boundary detectors as their per-stream key. It is
         // never reused for the life of the engine, so a detector that still holds state for a removed stream cannot confuse
         // it with a later one.

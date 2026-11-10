@@ -19,7 +19,7 @@ internal sealed class ParseIngestUdpScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"TryParse first parse with protocol-recorded replay state, {_BatchSize:N0} IPv6/UDP frames per iteration.");
 
     /// <inheritdoc/>

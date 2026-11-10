@@ -98,10 +98,10 @@ Read a capture, parse every frame, and print the DNS packets:
 ```csharp
 using NetworkInspector.Core;
 using NetworkInspector.Core.Ids;
-using NetworkInspector.Core.Settings;
 using NetworkInspector.Filter;
 using NetworkInspector.Filter.Errors;
 using NetworkInspector.Protocols;
+using NetworkInspector.Settings;
 using NetworkInspector.Sources.Pcapng;
 
 // One registry for the stack and the source.
@@ -154,6 +154,8 @@ listeners ([Sessions](NetworkInspector.Sessions/README.md)).
 | [NetworkInspector.Sessions](NetworkInspector.Sessions/README.md) | [![v][sess-v]][sess] | [![d][sess-d]][sess] | Multi-threaded capture sessions |
 | [NetworkInspector.FrameBuilder](NetworkInspector.FrameBuilder/README.md) | [![v][fb-v]][fb] | [![d][fb-d]][fb] | Build wire frames from typed layers |
 | [NetworkInspector.Values](NetworkInspector.Values/README.md) | [![v][val-v]][val] | [![d][val-d]][val] | MAC, IP, EUI-64, UUID, timestamp values |
+| [NetworkInspector.Limits](NetworkInspector.Limits/README.md) | [![v][lim-v]][lim] | [![d][lim-d]][lim] | Trust-boundary limits for any .NET application |
+| [NetworkInspector.Settings](NetworkInspector.Settings/README.md) | [![v][set-v]][set] | [![d][set-d]][set] | Typed, persisted settings and profiles for any .NET application |
 | [NetworkInspector.Plugins](NetworkInspector.Plugins/README.md) | [![v][plug-v]][plug] | [![d][plug-d]][plug] | Plugin contract for sources, exporters, protocols |
 | [NetworkInspector.Plugins.Loader](NetworkInspector.Plugins.Loader/README.md) | [![v][load-v]][load] | [![d][load-d]][load] | Find, load, start, and stop plugins |
 | [NetworkInspector.BuiltInPlugins](NetworkInspector.BuiltInPlugins/README.md) | [![v][bip-v]][bip] | [![d][bip-d]][bip] | Standard protocols, sources, and formats as plugins |
@@ -186,6 +188,12 @@ listeners ([Sessions](NetworkInspector.Sessions/README.md)).
 [val]: https://www.nuget.org/packages/NetworkInspector.Values
 [val-v]: https://img.shields.io/nuget/v/NetworkInspector.Values?label=
 [val-d]: https://img.shields.io/nuget/dt/NetworkInspector.Values?label=
+[lim]: https://www.nuget.org/packages/NetworkInspector.Limits
+[lim-v]: https://img.shields.io/nuget/v/NetworkInspector.Limits?label=
+[lim-d]: https://img.shields.io/nuget/dt/NetworkInspector.Limits?label=
+[set]: https://www.nuget.org/packages/NetworkInspector.Settings
+[set-v]: https://img.shields.io/nuget/v/NetworkInspector.Settings?label=
+[set-d]: https://img.shields.io/nuget/dt/NetworkInspector.Settings?label=
 [plug]: https://www.nuget.org/packages/NetworkInspector.Plugins
 [plug-v]: https://img.shields.io/nuget/v/NetworkInspector.Plugins?label=
 [plug-d]: https://img.shields.io/nuget/dt/NetworkInspector.Plugins?label=
@@ -308,6 +316,27 @@ ARM64.
 dotnet build NetworkInspector.slnx -c Release
 dotnet test NetworkInspector.slnx -c Release
 ```
+
+### Pack the NuGet packages
+
+```bash
+dotnet pack NetworkInspector.slnx -c Release
+```
+
+`dotnet pack` is the only command that produces packages; a build never writes to `artifacts/`. Every pack starts clean:
+
+- Every packed project deletes its `bin/<Configuration>` and `obj/<Configuration>` folders and rebuilds, so no older output
+  can reach a package. A solution pack does this for every project except the test projects, including the generator bundled
+  into `NetworkInspector.Core`. A pack of a single project does not clean the projects it references.
+- A solution pack first deletes the `*.nupkg` and `*.snupkg` files in `artifacts/<Version>/`, so that folder holds exactly the
+  packages of this run and can be uploaded as a whole. Other versions and the other folders in `artifacts/` stay.
+- A pack of a single project deletes only that project's own package of the current version, because the other packages in
+  the folder may be wanted. Pack the solution for a release.
+- `dotnet pack --no-build` fails with `NIPACK001`, because it would package the binaries of the last build.
+
+The rules live in [`Directory.Build.targets`](Directory.Build.targets) and [`Directory.Solution.targets`](Directory.Solution.targets).
+
+### Cross-validation tests
 
 The cross-validation tests need [tshark 4.6.x](https://www.wireshark.org/download/) (part of Wireshark) on `PATH`:
 

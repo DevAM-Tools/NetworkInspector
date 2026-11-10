@@ -144,15 +144,16 @@ internal sealed class TcpTsharkAnalysisTests
         if (!string.IsNullOrEmpty(dumpDirectory))
         {
             string tree = TsharkVerifier.RunOnTimedFrames(frames, micros, "-V -O tcp");
-            await File.WriteAllTextAsync(Path.Combine(dumpDirectory, $"{scenario}.txt"), tree).ConfigureAwait(false);
+            await File.WriteAllTextAsync(Path.Combine(dumpDirectory, Invariant($"{scenario}.txt")), tree).ConfigureAwait(false);
         }
 
         // tshark: one invocation for the whole conversation. JSON keeps the presence of valueless fields, which the tab
         // separated output cannot show. A field is present in a packet exactly when its key exists in the layers object.
-        string fieldArguments = string.Join(" ", _PresenceFields.Concat(numberFields).Concat(_SecondsFields).Select(f => $"-e {f}"));
-        string json = TsharkVerifier.RunOnTimedFrames(frames, micros, $"-T json {fieldArguments}");
+        string fieldArguments = string.Join(" ",
+            _PresenceFields.Concat(numberFields).Concat(_SecondsFields).Select(f => Invariant($"-e {f}")));
+        string json = TsharkVerifier.RunOnTimedFrames(frames, micros, Invariant($"-T json {fieldArguments}"));
         List<Dictionary<string, string>> tshark = _ParseTsharkJson(json);
-        await Assert.That(tshark.Count).IsEqualTo(frames.Count).Because($"{scenario}: tshark packet count");
+        await Assert.That(tshark.Count).IsEqualTo(frames.Count).Because(Invariant($"{scenario}: tshark packet count"));
 
         // Network Inspector: the same frames at the same times, in order, on one stack (the analysis is stateful).
         using Stack stack = ProtocolTestHelper.BuildStack();
@@ -181,7 +182,8 @@ internal sealed class TcpTsharkAnalysisTests
             bool theirs = tshark.ContainsKey(field);
             if (ours != theirs)
             {
-                mismatches.Add($"{scenario} frame {index + 1}: {field} ni={(ours ? "present" : "absent")} tshark={(theirs ? "present" : "absent")}");
+                mismatches.Add(Invariant($"{scenario} frame {index + 1}: {field} ni={(ours ? "present" : "absent")} ") +
+                    Invariant($"tshark={(theirs ? "present" : "absent")}"));
             }
         }
 
@@ -191,7 +193,7 @@ internal sealed class TcpTsharkAnalysisTests
             tshark.TryGetValue(field, out string? theirs);
             if (!_SameNumber(ours, theirs))
             {
-                mismatches.Add($"{scenario} frame {index + 1}: {field} ni={ours ?? "absent"} tshark={theirs ?? "absent"}");
+                mismatches.Add(Invariant($"{scenario} frame {index + 1}: {field} ni={ours ?? "absent"} tshark={theirs ?? "absent"}"));
             }
         }
 
@@ -201,7 +203,7 @@ internal sealed class TcpTsharkAnalysisTests
             tshark.TryGetValue(field, out string? theirs);
             if (!_SameSeconds(ours, theirs))
             {
-                mismatches.Add($"{scenario} frame {index + 1}: {field} ni={ours ?? "absent"} tshark={theirs ?? "absent"}");
+                mismatches.Add(Invariant($"{scenario} frame {index + 1}: {field} ni={ours ?? "absent"} tshark={theirs ?? "absent"}"));
             }
         }
     }
@@ -214,7 +216,7 @@ internal sealed class TcpTsharkAnalysisTests
             return null;
         }
 
-        return value.ToString();
+        return value.ToString(null, CultureInfo.InvariantCulture);
     }
 
     private static bool _SameNumber(string? ours, string? theirs)

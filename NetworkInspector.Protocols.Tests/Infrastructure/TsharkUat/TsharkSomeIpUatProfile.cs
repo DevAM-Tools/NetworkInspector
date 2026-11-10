@@ -46,7 +46,8 @@ internal sealed class TsharkSomeIpUatProfile
 
     private TsharkSomeIpUatProfile(SomeIpCompiledModel model) => _Model = model;
 
-    /// <summary>The registered name of a parser site to the full filter name of the tool (<c>someip.payload.data.fN</c>, the name the tool gives a value that a table declares).</summary>
+    /// <summary>The registered name of a parser site to the full filter name of the tool
+    /// (<c>someip.payload.data.fN</c>, the name the tool gives a value that a table declares).</summary>
     /// <param name="registeredName">The registered field name of the parser.</param>
     internal string FilterOf(string registeredName) => "someip.payload.data." + _FilterByName[registeredName];
 
@@ -141,7 +142,7 @@ internal sealed class TsharkSomeIpUatProfile
         _ = _FilterOfSite(site);
         if (site.TypeIndex < 0)
         {
-            throw new NotSupportedException($"The site '{site.RegisteredName}' has no type; the tool cannot decode it.");
+            throw new NotSupportedException(Invariant($"The site '{site.RegisteredName}' has no type; the tool cannot decode it."));
         }
 
         SomeIpTypeInfo type = _Model.Types.Span[site.TypeIndex];
@@ -161,7 +162,7 @@ internal sealed class TsharkSomeIpUatProfile
             case SomeIpTypeCategory.Bitfield:
                 return (_TypeBitfield, _EmitBitfield(site, type));
             default:
-                throw new NotSupportedException($"The type of '{site.RegisteredName}' ({type.Category}) has no counterpart in the tool.");
+                throw new NotSupportedException(Invariant($"The type of '{site.RegisteredName}' ({type.Category}) has no counterpart in the tool."));
         }
     }
 
@@ -179,7 +180,7 @@ internal sealed class TsharkSomeIpUatProfile
             SomeIpPrimitive.Int64 => ("int64", 64),
             SomeIpPrimitive.Float => ("float32", 32),
             SomeIpPrimitive.Double => ("float64", 64),
-            _ => throw new NotSupportedException($"The primitive {type.Primitive} of '{site.RegisteredName}' has no counterpart in the tool."),
+            _ => throw new NotSupportedException(Invariant($"The primitive {type.Primitive} of '{site.RegisteredName}' has no counterpart in the tool.")),
         };
         uint id = _NewId();
         _ = _BaseTypes.AppendLine(string.Join(',', _Hex(id), _Text(site.RegisteredName), _Text(name), _Bool(!type.LittleEndian), _Dec(bits), _Dec(bits)));

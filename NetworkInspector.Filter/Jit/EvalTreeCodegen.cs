@@ -121,7 +121,7 @@ internal sealed class EvalTreeCodegen : IFilterCodegen
                 return _EmitScope(scope);
 
             default:
-                return _Fail(FilterError.Compiler($"Unsupported node '{node.GetType().Name}'"));
+                return _Fail(FilterError.Compiler(Invariant($"Unsupported node '{node.GetType().Name}'")));
         }
     }
 

@@ -28,12 +28,12 @@ internal sealed class PduTransportSignalNestedTsharkTests
             pduWireId: AutomotivePduBench.PduTransportWireId,
             signalMessage: inner);
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_pt_nested_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_pt_nested_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         string pduJson = Path.Combine(work, "pdutr.json");
         string sigJson = Path.Combine(work, "signal_message.json");
 
-        string personalRoot = Path.Combine(Path.GetTempPath(), "ni_ws_personal_nested_" + Guid.NewGuid().ToString("N"));
+        string personalRoot = Path.Combine(Path.GetTempPath(), "ni_ws_personal_nested_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(personalRoot);
 
         try
@@ -57,8 +57,8 @@ internal sealed class PduTransportSignalNestedTsharkTests
 
             using (stack)
             {
-                string decodeAs =
-                    $"udp.port=={AutomotivePduBench.UdpPduTransportDestinationPort.ToString(System.Globalization.CultureInfo.InvariantCulture)},pdu_transport";
+                string decodeAs = Invariant(
+                    $"udp.port=={AutomotivePduBench.UdpPduTransportDestinationPort.ToString(CultureInfo.InvariantCulture)},pdu_transport");
 
                 string profileDir = TsharkPduTransportSignalMessageUatProfile.CreateProfileDirectoryUnderEphemeralPersonalDir(personalRoot, "nested");
                 TsharkPduTransportSignalMessageUatProfile.EmitPduTransportOverUdpWithSignalMessage(
@@ -90,7 +90,7 @@ internal sealed class PduTransportSignalNestedTsharkTests
             {
                 if (TestContext.Current?.OutputWriter is TextWriter tw)
                 {
-                    await tw.WriteLineAsync($"Warning: failed to delete temp directory '{work}': {ex.Message}").ConfigureAwait(false);
+                    await tw.WriteLineAsync(Invariant($"Warning: failed to delete temp directory '{work}': {ex.Message}")).ConfigureAwait(false);
                 }
             }
 
@@ -102,7 +102,7 @@ internal sealed class PduTransportSignalNestedTsharkTests
             {
                 if (TestContext.Current?.OutputWriter is TextWriter tw)
                 {
-                    await tw.WriteLineAsync($"Warning: failed to delete temp directory '{personalRoot}': {ex.Message}").ConfigureAwait(false);
+                    await tw.WriteLineAsync(Invariant($"Warning: failed to delete temp directory '{personalRoot}': {ex.Message}")).ConfigureAwait(false);
                 }
             }
         }

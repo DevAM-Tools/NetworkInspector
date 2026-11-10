@@ -413,6 +413,138 @@ internal sealed class StackBuilderTests
             () => builder.RegisterStreamReassemblyConfig(protoId, new()));
     }
 
+    [Test]
+    public async Task RegisterStreamReassemblyConfig_Duplicate_NamesTheProtocol()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("tcp", "TCP"));
+        builder.RegisterStreamReassemblyConfig(protoId, new());
+
+        DuplicateNameRegistrationException ex = Assert.Throws<DuplicateNameRegistrationException>(
+            () => builder.RegisterStreamReassemblyConfig(protoId, new()));
+
+        await Assert.That(ex.Name).IsEqualTo("tcp");
+    }
+
+    [Test]
+    public async Task RegisterStreamReassemblyConfig_BufferSmallerThanPdu_Throws()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("tcp", "TCP"));
+        StreamReassemblyConfig config = new() { MaxPduSize = 4096, MaxBufferSize = 1024 };
+
+        ArgumentException ex = Assert.Throws<ArgumentException>(() => builder.RegisterStreamReassemblyConfig(protoId, config));
+
+        await Assert.That(ex.Message).Contains("MaxBufferSize");
+        await Assert.That(builder.GetStreamReassemblyConfig(protoId)).IsNull();
+    }
+
+    [Test]
+    public async Task RegisterStreamReassemblyConfig_UnknownProtocol_Throws()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+
+        await Assert.That(() => builder.RegisterStreamReassemblyConfig(new ProtocolId(9999), new())).Throws<NotFoundRegistrationException>();
+        await Assert.That(() => builder.RegisterStreamReassemblyConfig(ProtocolId.Invalid, new())).Throws<NotFoundRegistrationException>();
+    }
+
+    [Test]
+    public async Task RegisterPostParser_UnknownProtocol_Throws()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        int before = builder.PostParserCount;
+
+        await Assert.That(() => builder.RegisterPostParser(new ProtocolId(9999))).Throws<NotFoundRegistrationException>();
+        await Assert.That(builder.PostParserCount).IsEqualTo(before);
+    }
+
+    [Test]
+    public async Task RegisterParserInU64Table_UnknownProtocol_Throws()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolTableId table = builder.RegisterProtocolTable("t.table", "Table", ProtocolTableKeyType.U64);
+
+        await Assert.That(() => builder.RegisterParserInU64Table(table, 1, new ProtocolId(9999))).Throws<NotFoundRegistrationException>();
+        await Assert.That(() => builder.RegisterParserInAnyTable(table, ProtocolId.Invalid)).Throws<NotFoundRegistrationException>();
+    }
+
+    [Test]
+    public async Task RegisterHeuristicProtocolTable_UnknownOwner_Throws_AndInvalidMeansNoOwner()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+
+        await Assert.That(() => builder.RegisterHeuristicProtocolTable(new ProtocolId(9999), "h.one", "One")).Throws<NotFoundRegistrationException>();
+        HeuristicProtocolTableId unowned = builder.RegisterHeuristicProtocolTable(ProtocolId.Invalid, "h.two", "Two");
+
+        await Assert.That(unowned.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task RegisterProtocol_Null_ThrowsArgumentNull()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        int before = builder.ProtocolCount;
+
+        StubProtocol stub = new("p.null", "Null");
+        await Assert.That(() => builder.RegisterProtocol(stub, null!)).Throws<ArgumentNullException>(); // Invariant: null on purpose.
+        await Assert.That(() => builder.RegisterProtocol(new StubProtocol("p.null", "Null"), null!)).Throws<ArgumentNullException>(); // Invariant: null on purpose.
+        await Assert.That(builder.ProtocolCount).IsEqualTo(before);
+    }
+
+    [Test]
+    public async Task WhenFieldRegistered_NullCallback_ThrowsArgumentNull()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+
+        await Assert.That(() => builder.WhenFieldRegistered("a.b", null!)).Throws<ArgumentNullException>(); // Invariant: null on purpose.
+        await Assert.That(() => builder.WhenProtocolRegistered("a.c", null!)).Throws<ArgumentNullException>(); // Invariant: null on purpose.
+        await Assert.That(() => builder.WhenProtocolTableRegistered("a.d", null!)).Throws<ArgumentNullException>(); // Invariant: null on purpose.
+    }
+
+    [Test]
+    public async Task RegisterFieldInGroup_SubscriberSeesTheGroup()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("grp", "Group"));
+        IndexGroupId seen = IndexGroupId.Invalid;
+
+        // The subscriber runs while the field is registered: it must already find the group.
+        builder.WhenFieldRegistered("grp.field", id => seen = builder.GetFieldIndexGroup(id));
+        _ = builder.RegisterFieldInGroup(protoId, "grp.field", "Field", FieldType.U64, "grp.group");
+
+        await Assert.That(seen.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task RegistrationAfterBuildIsRefused()
+    {
+        using SettingsManager settingsManager = new();
+        StackBuilder builder = new(settingsManager, new FrameInterfaceRegistry());
+        ProtocolId protoId = builder.RegisterProtocol(new StubProtocol("late", "Late"));
+        ProtocolTableId table = builder.RegisterProtocolTable("late.table", "Late", ProtocolTableKeyType.U64);
+        using Stack stack = builder.Build();
+
+        await Assert.That(() => builder.RegisterParserInU64Table(table, 1, protoId)).Throws<InvalidOperationException>();
+        await Assert.That(() => builder.RegisterProtocolTable("later.table", "Later", ProtocolTableKeyType.U64)).Throws<InvalidOperationException>();
+        await Assert.That(() => builder.RegisterProtocol(new StubProtocol("later", "Later"))).Throws<InvalidOperationException>();
+        await Assert.That(() => builder.RegisterField(protoId, "late.field", "Field", FieldType.U64)).Throws<InvalidOperationException>();
+        await Assert.That(() => builder.GetOrCreateIndexGroup("late.group")).Throws<InvalidOperationException>();
+        await Assert.That(() => builder.WhenFieldRegistered("late.field", static _ => { })).Throws<InvalidOperationException>();
+
+        // Lookups keep working after Build.
+        await Assert.That(builder.GetProtocolId("late")).IsEqualTo(protoId);
+        await Assert.That(stack.GetProtocolId("late")).IsEqualTo(protoId);
+    }
+
     // === Argument validation and single Build ===
 
     [Test]
@@ -1468,9 +1600,11 @@ internal sealed class StackBuilderTests
         ProtocolId child = builder.RegisterProtocol(new StubProtocol("child", "Child"));
         HeuristicProtocolTableId tableId = builder.RegisterHeuristicProtocolTable(owner, "h.tbl", "H");
         builder.RegisterHeuristicParser(tableId, new AlwaysMatchHeuristicParser(child));
-        ProtocolId? matched = builder.TryMatchHeuristic(tableId, new byte[] { 0x01 });
-        await Assert.That(matched).IsEqualTo(child);
-        await Assert.That(builder.TryMatchHeuristic(HeuristicProtocolTableId.Invalid, ReadOnlyMemory<byte>.Empty)).IsNull();
+        bool matched = builder.TryMatchHeuristic(tableId, new byte[] { 0x01 }, out ProtocolId matchedId);
+        await Assert.That(matched).IsTrue();
+        await Assert.That(matchedId).IsEqualTo(child);
+        await Assert.That(builder.TryMatchHeuristic(HeuristicProtocolTableId.Invalid, ReadOnlyMemory<byte>.Empty, out ProtocolId none)).IsFalse();
+        await Assert.That(none).IsEqualTo(ProtocolId.Invalid);
     }
 
     [Test]
@@ -1834,7 +1968,7 @@ internal sealed class StackBuilderTests
             started.Add(name);
             if (throwOnStart)
             {
-                throw new InvalidOperationException($"Startup failed for {name}.");
+                throw new InvalidOperationException(Invariant($"Startup failed for {name}."));
             }
         }
 
@@ -1843,7 +1977,7 @@ internal sealed class StackBuilderTests
             shutdown.Add(name);
             if (throwOnShutdown)
             {
-                throw new InvalidOperationException($"Shutdown failed for {name}.");
+                throw new InvalidOperationException(Invariant($"Shutdown failed for {name}."));
             }
         }
 

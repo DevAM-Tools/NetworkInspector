@@ -48,10 +48,10 @@ Read a capture in a session and print every packet from a listener thread:
 
 ```csharp
 using NetworkInspector.Core;
-using NetworkInspector.Core.Settings;
 using NetworkInspector.Protocols;
 using NetworkInspector.Sessions;
 using NetworkInspector.Sessions.Listeners;
+using NetworkInspector.Settings;
 using NetworkInspector.Sources.Pcapng;
 
 StackBuilder builder = new(new SettingsManager(), new FrameInterfaceRegistry());

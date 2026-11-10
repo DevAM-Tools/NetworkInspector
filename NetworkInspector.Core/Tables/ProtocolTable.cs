@@ -20,18 +20,25 @@ namespace NetworkInspector.Core.Tables;
 /// </summary>
 internal sealed class ProtocolTable
 {
-    #region Fields
+    #region Configuration and state
 
+    /// <summary>Protocols per numeric key, in registration order; null unless the key type is <see cref="ProtocolTableKeyType.U64"/>.</summary>
     private readonly Dictionary<ulong, List<ProtocolId>>? _U64Map;
+
+    /// <summary>Protocols per text key (ordinal), in registration order; null unless the key type is <see cref="ProtocolTableKeyType.String"/>.</summary>
     private readonly Dictionary<string, List<ProtocolId>>? _StringMap;
+
+    /// <summary>Protocols per byte-sequence key, in registration order; null unless the key type is <see cref="ProtocolTableKeyType.Bytes"/>.</summary>
     private readonly Dictionary<BytesKey, List<ProtocolId>>? _BytesMap;
+
+    /// <summary>Protocols under the key <see langword="true"/>; created by the first registration of a Bool table.</summary>
     private List<ProtocolId>? _BoolTrue;
+
+    /// <summary>Protocols under the key <see langword="false"/>; created by the first registration of a Bool table.</summary>
     private List<ProtocolId>? _BoolFalse;
+
+    /// <summary>Protocols of the key-less list; created with the table or by the first registration of an Any table.</summary>
     private List<ProtocolId>? _AnyList;
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>Creates a protocol dispatch table from its metadata.</summary>
     /// <param name="info">The table metadata; its key type decides which structure is created.</param>
@@ -60,15 +67,22 @@ internal sealed class ProtocolTable
         }
     }
 
-    #endregion
-
-    #region Properties
-
+    /// <summary>The metadata the table was created from: id, names, key type, description.</summary>
     internal ProtocolTableInfo Info { get; }
+
+    /// <summary>The id of this table within its stack.</summary>
     internal ProtocolTableId Id => Info.Id;
+
+    /// <summary>The machine-readable table name; also the name used in registration error messages.</summary>
     internal string Name => Info.Name;
+
+    /// <summary>The display name of the table.</summary>
     internal string UiName => Info.UiName;
+
+    /// <summary>The key type of the table; decides which registration and lookup members work.</summary>
     internal ProtocolTableKeyType KeyType => Info.KeyType;
+
+    /// <summary>The optional description of the table; null when none was given.</summary>
     internal string? Description => Info.Description;
 
     #endregion
@@ -82,13 +96,15 @@ internal sealed class ProtocolTable
     // Every Register* member rejects a table of another key type with InvalidOperationException.
 
     /// <summary>Registers <paramref name="protocolId"/> under a numeric key.</summary>
+    /// <param name="key">The numeric key.</param>
+    /// <param name="protocolId">The protocol to register; a protocol that is already under this key is not added a second time.</param>
     /// <exception cref="InvalidOperationException">This is not a U64-keyed table.</exception>
     internal void RegisterU64(ulong key, ProtocolId protocolId)
     {
         if (_U64Map is null)
         {
             throw new InvalidOperationException(
-                $"Cannot register U64 key on protocol table '{Name}' with KeyType {KeyType}.");
+                Invariant($"Cannot register U64 key on protocol table '{Name}' with KeyType {KeyType}."));
         }
         if (!_U64Map.TryGetValue(key, out List<ProtocolId>? list))
         {
@@ -102,13 +118,15 @@ internal sealed class ProtocolTable
     }
 
     /// <summary>Registers <paramref name="protocolId"/> under a text key (ordinal comparison).</summary>
+    /// <param name="key">The text key; compared ordinally.</param>
+    /// <param name="protocolId">The protocol to register; a protocol that is already under this key is not added a second time.</param>
     /// <exception cref="InvalidOperationException">This is not a String-keyed table.</exception>
     internal void RegisterString(string key, ProtocolId protocolId)
     {
         if (_StringMap is null)
         {
             throw new InvalidOperationException(
-                $"Cannot register String key on protocol table '{Name}' with KeyType {KeyType}.");
+                Invariant($"Cannot register String key on protocol table '{Name}' with KeyType {KeyType}."));
         }
         if (!_StringMap.TryGetValue(key, out List<ProtocolId>? list))
         {
@@ -122,13 +140,15 @@ internal sealed class ProtocolTable
     }
 
     /// <summary>Registers <paramref name="protocolId"/> under a byte-sequence key (value equality, see <see cref="BytesKey"/>).</summary>
+    /// <param name="key">The byte-sequence key.</param>
+    /// <param name="protocolId">The protocol to register; a protocol that is already under this key is not added a second time.</param>
     /// <exception cref="InvalidOperationException">This is not a Bytes-keyed table.</exception>
     internal void RegisterBytes(BytesKey key, ProtocolId protocolId)
     {
         if (_BytesMap is null)
         {
             throw new InvalidOperationException(
-                $"Cannot register Bytes key on protocol table '{Name}' with KeyType {KeyType}.");
+                Invariant($"Cannot register Bytes key on protocol table '{Name}' with KeyType {KeyType}."));
         }
         if (!_BytesMap.TryGetValue(key, out List<ProtocolId>? list))
         {
@@ -144,6 +164,8 @@ internal sealed class ProtocolTable
     /// <summary>
     /// Registers <paramref name="protocolId"/> under <see langword="true"/> or <see langword="false"/>.
     /// </summary>
+    /// <param name="key">The bool key.</param>
+    /// <param name="protocolId">The protocol to register; a protocol that is already under this key is not added a second time.</param>
     /// <exception cref="InvalidOperationException">This is not a Bool-keyed table.</exception>
     internal void RegisterBool(bool key, ProtocolId protocolId)
     {
@@ -153,11 +175,13 @@ internal sealed class ProtocolTable
         if (KeyType != ProtocolTableKeyType.Bool)
         {
             throw new InvalidOperationException(
-                $"Cannot register Bool key on protocol table '{Name}' with KeyType {KeyType}.");
+                Invariant($"Cannot register Bool key on protocol table '{Name}' with KeyType {KeyType}."));
         }
 
         // Select the field itself by ref, so that the lazily created list is stored back into _BoolTrue or _BoolFalse.
-        ref List<ProtocolId>? list = ref key ? ref _BoolTrue : ref _BoolFalse;
+        ref List<ProtocolId>? list = ref key
+            ? ref _BoolTrue
+            : ref _BoolFalse;
         list ??= new List<ProtocolId>(1);
         if (!list.Contains(protocolId))
         {
@@ -166,6 +190,7 @@ internal sealed class ProtocolTable
     }
 
     /// <summary>Registers <paramref name="protocolId"/> in the key-less list of an Any table.</summary>
+    /// <param name="protocolId">The protocol to register; a protocol that is already under this key is not added a second time.</param>
     /// <exception cref="InvalidOperationException">This is not an Any-keyed table.</exception>
     internal void RegisterAny(ProtocolId protocolId)
     {
@@ -173,7 +198,7 @@ internal sealed class ProtocolTable
         if (KeyType != ProtocolTableKeyType.Any)
         {
             throw new InvalidOperationException(
-                $"Cannot register Any entry on protocol table '{Name}' with KeyType {KeyType}.");
+                Invariant($"Cannot register Any entry on protocol table '{Name}' with KeyType {KeyType}."));
         }
 
         _AnyList ??= new List<ProtocolId>(1);
@@ -191,6 +216,8 @@ internal sealed class ProtocolTable
     // protocol, or the table has another key type. Tiny, hence AggressiveInlining. Allocation-free.
 
     /// <summary>First protocol registered under a numeric key, or <see langword="null"/>.</summary>
+    /// <param name="key">The numeric key.</param>
+    /// <returns>The first protocol of the key; null when the key is unknown, has no protocol, or the table has another key type.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ProtocolId? GetU64(ulong key)
     {
@@ -202,6 +229,8 @@ internal sealed class ProtocolTable
     }
 
     /// <summary>First protocol registered under a text key, or <see langword="null"/>.</summary>
+    /// <param name="key">The text key; compared ordinally.</param>
+    /// <returns>The first protocol of the key; null when the key is unknown, has no protocol, or the table has another key type.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ProtocolId? GetString(string key)
     {
@@ -213,6 +242,8 @@ internal sealed class ProtocolTable
     }
 
     /// <summary>First protocol registered under a byte-sequence key, or <see langword="null"/>.</summary>
+    /// <param name="key">The byte-sequence key.</param>
+    /// <returns>The first protocol of the key; null when the key is unknown, has no protocol, or the table has another key type.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ProtocolId? GetBytes(BytesKey key)
     {
@@ -224,6 +255,8 @@ internal sealed class ProtocolTable
     }
 
     /// <summary>First protocol registered under <see langword="true"/> or <see langword="false"/>, or <see langword="null"/>.</summary>
+    /// <param name="key">The bool key.</param>
+    /// <returns>The first protocol of the key; null when the key is unknown, has no protocol, or the table has another key type.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ProtocolId? GetBool(bool key)
     {
@@ -244,6 +277,7 @@ internal sealed class ProtocolTable
     }
 
     /// <summary>First protocol registered in the key-less list, or <see langword="null"/>.</summary>
+    /// <returns>The first protocol of the list; null when the list is empty or the table has another key type.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ProtocolId? GetAny()
     {
@@ -264,6 +298,8 @@ internal sealed class ProtocolTable
     // remarks); callers must not keep it beyond the dispatch.
 
     /// <summary>All protocols registered under a numeric key, in registration order; empty when none.</summary>
+    /// <param name="key">The numeric key.</param>
+    /// <returns>A span over the internal list (valid only while nothing registers into the table); empty when there is none.</returns>
     internal ReadOnlySpan<ProtocolId> GetAllU64(ulong key)
     {
         if (_U64Map is not null && _U64Map.TryGetValue(key, out List<ProtocolId>? list))
@@ -274,6 +310,8 @@ internal sealed class ProtocolTable
     }
 
     /// <summary>All protocols registered under a text key, in registration order; empty when none.</summary>
+    /// <param name="key">The text key; compared ordinally.</param>
+    /// <returns>A span over the internal list (valid only while nothing registers into the table); empty when there is none.</returns>
     internal ReadOnlySpan<ProtocolId> GetAllString(string key)
     {
         if (_StringMap is not null && _StringMap.TryGetValue(key, out List<ProtocolId>? list))
@@ -284,6 +322,8 @@ internal sealed class ProtocolTable
     }
 
     /// <summary>All protocols registered under a byte-sequence key, in registration order; empty when none.</summary>
+    /// <param name="key">The byte-sequence key.</param>
+    /// <returns>A span over the internal list (valid only while nothing registers into the table); empty when there is none.</returns>
     internal ReadOnlySpan<ProtocolId> GetAllBytes(BytesKey key)
     {
         if (_BytesMap is not null && _BytesMap.TryGetValue(key, out List<ProtocolId>? list))
@@ -294,6 +334,8 @@ internal sealed class ProtocolTable
     }
 
     /// <summary>All protocols registered under <see langword="true"/> or <see langword="false"/>, in registration order; empty when none.</summary>
+    /// <param name="key">The bool key.</param>
+    /// <returns>A span over the internal list (valid only while nothing registers into the table); empty when there is none.</returns>
     internal ReadOnlySpan<ProtocolId> GetAllBool(bool key)
     {
         List<ProtocolId>? list;
@@ -313,6 +355,7 @@ internal sealed class ProtocolTable
     }
 
     /// <summary>All protocols of the key-less list, in registration order; empty when none.</summary>
+    /// <returns>A span over the internal list (valid only while nothing registers into the table); empty when there is none.</returns>
     internal ReadOnlySpan<ProtocolId> GetAllAny()
     {
         if (_AnyList is not null)
@@ -478,11 +521,8 @@ internal sealed class ProtocolTable
 /// </summary>
 public readonly struct BytesKey : IEquatable<BytesKey>
 {
-
-
-    #region Constructors
-
     /// <summary>Creates a bytes key by copying the given span.</summary>
+    /// <param name="data">The key bytes; copied, so later changes of the source do not affect the key. Empty is allowed.</param>
     public BytesKey(ReadOnlySpan<byte> data)
     {
         Data = data.ToArray();
@@ -493,14 +533,11 @@ public readonly struct BytesKey : IEquatable<BytesKey>
     /// Used by <see cref="DispatchContext"/> to store the backing array in an <see cref="object"/>
     /// slot (already a heap reference) instead of boxing this struct.
     /// </summary>
+    /// <param name="data">The array to wrap; null for the empty key. The caller must not change it afterwards.</param>
     internal BytesKey(byte[]? data)
     {
         Data = data;
     }
-
-    #endregion
-
-    #region Properties
 
     /// <summary>The raw bytes of this key.</summary>
     public ReadOnlySpan<byte> Span
@@ -532,10 +569,6 @@ public readonly struct BytesKey : IEquatable<BytesKey>
     /// </summary>
     internal byte[]? Data { get; }
 
-    #endregion
-
-    #region Equality
-
     /// <inheritdoc/>
     public bool Equals(BytesKey other) =>
         // A default key has null Data; treating null as empty makes default and empty keys equal. SequenceEqual on spans
@@ -554,25 +587,21 @@ public readonly struct BytesKey : IEquatable<BytesKey>
         return hash.ToHashCode();
     }
 
-    #endregion
-
-    #region Formatting
-
     /// <summary>
     /// Upper-case hexadecimal text of the key bytes without separators (<c>AB01</c> for <c>[0xAB, 0x01]</c>); empty for
     /// an empty or default key. Used as the label of the <c>packet.choice</c> container of an ambiguous bytes dispatch.
     /// </summary>
     public override string ToString() => Convert.ToHexString(Span);
 
-    #endregion
-
-    #region Operators
-
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> contain identical bytes.</summary>
+    /// <summary>Whether two keys hold identical bytes (the default key and an empty key are equal).</summary>
+    /// <param name="left">The first key.</param>
+    /// <param name="right">The second key.</param>
+    /// <returns><see langword="true"/> when both keys contain identical bytes.</returns>
     public static bool operator ==(BytesKey left, BytesKey right) => left.Equals(right);
 
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/> do not contain identical bytes.</summary>
+    /// <summary>Whether two keys hold different bytes.</summary>
+    /// <param name="left">The first key.</param>
+    /// <param name="right">The second key.</param>
+    /// <returns><see langword="true"/> when the keys do not contain identical bytes.</returns>
     public static bool operator !=(BytesKey left, BytesKey right) => !left.Equals(right);
-
-    #endregion
 }

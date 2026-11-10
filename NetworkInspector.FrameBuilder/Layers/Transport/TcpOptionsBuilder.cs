@@ -179,7 +179,7 @@ public struct TcpOptionsBuilder
         if (_Length + additional > _MaxOptionBytes)
         {
             throw new InvalidOperationException(
-                $"TCP options would exceed the maximum of {_MaxOptionBytes} bytes (current {_Length}, adding {additional}).");
+                Invariant($"TCP options would exceed the maximum of {_MaxOptionBytes} bytes (current {_Length}, adding {additional})."));
         }
     }
 }

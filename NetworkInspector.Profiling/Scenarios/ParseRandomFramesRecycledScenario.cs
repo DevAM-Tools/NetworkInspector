@@ -67,9 +67,9 @@ internal sealed class ParseRandomFramesRecycledScenario : IProfilingScenario
 
     /// <inheritdoc/>
     public string Description => _Materialize
-        ? FormattableString.Invariant(
+        ? Invariant(
             $"TryParse(recycle) + MaterializeAll, {_BatchSize:N0} IPv6/UDP frames per iteration — zero Packet allocations.")
-        : FormattableString.Invariant(
+        : Invariant(
             $"TryParse(recycle) only (lazy field tree), {_BatchSize:N0} IPv6/UDP frames per iteration — zero Packet allocations.");
 
     /// <inheritdoc/>

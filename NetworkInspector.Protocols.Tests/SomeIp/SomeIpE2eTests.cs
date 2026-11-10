@@ -12,7 +12,8 @@ namespace NetworkInspector.Protocols.Tests.SomeIp;
 /// </summary>
 internal sealed class SomeIpE2eTests : SomeIpPayloadKit
 {
-    /// <summary>The header region of a message that <see cref="SomeIpBytes.Message"/> builds with its defaults: client 1, session 0x10, version 1/1, request, E_OK.</summary>
+    /// <summary>The header region of a message that <see cref="SomeIpBytes.Message"/> builds with its defaults:
+    /// client 1, session 0x10, version 1/1, request, E_OK.</summary>
     private static readonly byte[] _DefaultRegion = [0x00, 0x01, 0x00, 0x10, 0x01, 0x01, 0x00, 0x00];
 
     #region Reference

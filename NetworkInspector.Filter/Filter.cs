@@ -433,7 +433,7 @@ public sealed class Filter : IFilter
                 // Unbind always runs in the outer finally so a propagating throw cannot leave Bind sticky.
                 return _Poison(
                     FilterError.Runtime(
-                        $"Evaluating packet {packetId.ToString(CultureInfo.InvariantCulture)} threw {exception.GetType().Name}: {exception.Message}"),
+                        Invariant($"Evaluating packet {packetId.ToString(CultureInfo.InvariantCulture)} threw {exception.GetType().Name}: {exception.Message}")),
                     out matched,
                     out failure);
             }

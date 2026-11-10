@@ -13,7 +13,7 @@ namespace NetworkInspector.Core.Fields;
 /// </summary>
 internal sealed class FieldChunkPool
 {
-    #region Constants
+    #region Configuration and state
 
     // Limit: 1 024 slots (1 024 × 64 B = 64 KiB) per thread. It caps the memory a thread keeps pooled after parsing
     // large frames, so retained memory is bounded by thread count × 64 KiB; chunks beyond the cap are dropped and left
@@ -21,19 +21,11 @@ internal sealed class FieldChunkPool
     /// <summary>Largest number of pooled slots per thread: 1 024 × 64 B = 64 KiB.</summary>
     internal const int MaxPooledSlots = 1024;
 
-    #endregion
-
-    #region Fields
-
     /// <summary>Stack storage: entries <c>0 … _Count − 1</c> are pooled chunks, the rest are default. Fixed size, never grows.</summary>
     private readonly FieldBodyChunk[] _Items;
 
     /// <summary>Number of pooled chunks (the stack top).</summary>
     private int _Count;
-
-    #endregion
-
-    #region Constructors
 
     /// <summary>Creates an empty pool for chunks of <paramref name="chunkSize"/> slots.</summary>
     /// <param name="chunkSize">Slots per chunk, 1 … <see cref="MaxPooledSlots"/>.</param>
@@ -45,10 +37,6 @@ internal sealed class FieldChunkPool
         _Items = new FieldBodyChunk[MaxPooledSlots / chunkSize];
     }
 
-    #endregion
-
-    #region Properties
-
     /// <summary>Pooled chunks.</summary>
     internal int Count => _Count;
 
@@ -57,10 +45,11 @@ internal sealed class FieldChunkPool
 
     #endregion
 
-    #region Operations
+    #region Rent and return
 
     /// <summary>Takes the most recently returned chunk; false and a default chunk when the pool is empty.</summary>
     /// <param name="chunk">The pooled chunk (all slots zero), or <c>default</c> when the pool is empty.</param>
+    /// <returns><see langword="true"/> when a chunk was taken; <see langword="false"/> when the pool is empty.</returns>
     internal bool TryRent(out FieldBodyChunk chunk)
     {
         if (_Count == 0)
@@ -83,6 +72,7 @@ internal sealed class FieldChunkPool
     /// the caller guarantees every slot is zero, which is what lets a rented chunk be used without clearing it again.
     /// </summary>
     /// <param name="chunk">The chunk to pool; its buffer must not be null.</param>
+    /// <returns><see langword="true"/> when the chunk was pooled; <see langword="false"/> when the pool is full.</returns>
     /// <exception cref="ArgumentNullException">The chunk has no buffer.</exception>
     internal bool TryReturn(in FieldBodyChunk chunk)
     {

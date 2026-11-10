@@ -54,9 +54,9 @@ dotnet add package NetworkInspector.Protocols
 ```csharp
 using NetworkInspector.Core;
 using NetworkInspector.Core.Ids;
-using NetworkInspector.Core.Settings;
 using NetworkInspector.Exporters.Json;
 using NetworkInspector.Protocols;
+using NetworkInspector.Settings;
 using NetworkInspector.Sources.Pcapng;
 
 // One registry for the stack and the source; a different registry makes TryParse fail.

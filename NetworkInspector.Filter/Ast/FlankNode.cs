@@ -41,8 +41,8 @@ internal readonly record struct FlankWindow
             throw new ArgumentOutOfRangeException(
                 nameof(packets),
                 packets,
-                $"Packet window must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
-                $"(valid packet indices 0..{ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)}).");
+                Invariant($"Packet window must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} ") +
+                Invariant($"(valid packet indices 0..{ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)})."));
         }
 
         return new(true, 0, packets);

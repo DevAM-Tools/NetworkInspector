@@ -21,8 +21,8 @@ internal sealed class CliPluginSession : IAsyncDisposable
 {
     #region Constants
 
-    /// <summary>Folder of the application settings under the settings base.</summary>
-    internal const string ApplicationFolder = "application";
+    /// <summary>Folder of the application settings under the settings base; the name every layout reserves.</summary>
+    internal const string ApplicationFolder = SettingsStorageLayout.ApplicationFolderName;
 
     /// <summary>Folder of the plugin data folders under the settings base.</summary>
     private const string _PluginDataFolder = "plugins-data";
@@ -67,9 +67,10 @@ internal sealed class CliPluginSession : IAsyncDisposable
     #region Lifecycle
 
     private CliPluginSession(CliSettingsOptions options, string settingsBase, string profile, SettingsManager application,
-        PluginRegistry registry, PluginLoadReport report, CliIo io, CliLogFile? logFile)
+        SettingsLimitValues loaderLimits, PluginRegistry registry, PluginLoadReport report, CliIo io, CliLogFile? logFile)
     {
         Options = options;
+        LoaderLimits = loaderLimits;
         SettingsBase = settingsBase;
         Profile = profile;
         ApplicationSettings = application;
@@ -133,11 +134,36 @@ internal sealed class CliPluginSession : IAsyncDisposable
     /// <summary>The settings options of the command.</summary>
     internal CliSettingsOptions Options { get; }
 
+    /// <summary>
+    /// The values of the loader limits in effect for this run (stored values of the application settings and <c>--set</c>
+    /// overrides included), given to every profile manager so that it loads with the same limits.
+    /// </summary>
+    internal SettingsLimitValues LoaderLimits { get; }
+
+    /// <summary>
+    /// The <c>--set</c> overrides of profile settings, parsed and validated. A stack gets its own profile manager, which has to
+    /// start with these values (see <see cref="TryBuildStack"/>).
+    /// </summary>
+    private readonly List<KeyValuePair<string, SettingValue>> _ProfileOverrides = [];
+
     /// <summary>The application settings, with the plugin settings of scope application registered.</summary>
     internal SettingsManager ApplicationSettings { get; }
 
     /// <summary>The settings of the profile: every stack contribution and every plugin profile setting registered.</summary>
     internal SettingsManager ProfileSettings { get; private set; }
+
+    /// <summary>
+    /// Returns the stored value of a limit key: the profile's value when the profile stores one, otherwise the application's.
+    /// Plan order: a limit set for the profile wins over the application default, so one profile can differ from the others.
+    /// </summary>
+    /// <param name="key">The full key of the limit.</param>
+    /// <returns>The stored value, or <see langword="null"/> when neither scope stores the limit.</returns>
+    internal LimitValue? StoredLimit(string key)
+    {
+        LimitValue? stored = ProfileSettings.GetLimit(key);
+        stored ??= ApplicationSettings.GetLimit(key);
+        return stored;
+    }
 
     /// <summary>The registry of the loaded plugins' sources, exporters, settings, and stack contributions.</summary>
     internal PluginRegistry Registry { get; }
@@ -167,6 +193,15 @@ internal sealed class CliPluginSession : IAsyncDisposable
             return (null, resolveExit);
         }
 
+        // 1b. The overrides of the loader limits are read before anything is created: the manager enforces them while it loads its
+        //     first file, and a value that is refused is a usage error that touches nothing.
+        if (!CliSettingOverrides.TryReadLoaderLimits(options, out SettingsLimitValues startLimits, out bool limitsOverridden,
+            out string? limitError))
+        {
+            io.Error.WriteLine("Error: " + limitError);
+            return (null, (int)ExitCode.ArgumentError);
+        }
+
         // 2. Log: stderr always, the file when it can be opened. The folder "logs" under the base is a reserved name, so no
         //    profile can collide with it. A log that cannot be used is a warning, never a reason to fail the command; once
         //    open, a failing append reports once through the problem sink and switches the file off.
@@ -184,21 +219,57 @@ internal sealed class CliPluginSession : IAsyncDisposable
 
         // 3. Application settings, plugins, profile settings; then the application is composed and the plugins start.
         //    Everything created before the session object exists is released by the catch blocks below (_AbandonAsync).
-        SettingsManager application = SettingsManagerFactory.Create(settingsBase, ApplicationFolder, options.MaxConfigFileBytes,
-            options.MaxJsonDepth);
+        SettingsManager application = SettingsManagerFactory.Create(
+            CoreSettingsLayout.Instance, settingsBase, ApplicationFolder, startLimits);
         PluginRegistry registry = new();
         CliPluginSession? session = null;
         try
         {
-            // 3a. Application settings first: they hold plugins.paths (which plugins exist) and the start and stop timeouts.
-            //     A file that cannot be loaded (too large, too deep, malformed) is a warning; the setting keeps its default.
+            // 3a. Application settings first: they hold plugins.paths (which plugins exist) and the start and stop timeouts, and
+            //     the loader limits themselves (group settings, file settings.json). A file that cannot be loaded (too large, too
+            //     deep, malformed) is a warning; the setting keeps its default.
+            //     Normally the limits are registered before the load, so a stored limit bounds every other file of the load.
+            //     A --set for a loader limit has to win over the stored value, so the load then runs with the value of the
+            //     override and the limits become settings afterwards (their stored values apply from then on, the override is
+            //     applied again below). Their default is the normal default in both cases, never the value of the override.
+            if (!limitsOverridden)
+            {
+                _ = application.RegisterOwnLimits();
+            }
+
             foreach (SettingsLoadWarning warning in application.Load())
             {
                 _LogSession(io, logFile, "Warning", "settings", warning.Message);
             }
 
+            if (limitsOverridden)
+            {
+                foreach (SettingsLoadWarning warning in application.RegisterOwnLimits(SettingsLimitValues.Default))
+                {
+                    _LogSession(io, logFile, "Warning", "settings", warning.Message);
+                }
+            }
+
             PluginPathsSetting.Register(application);
             PluginTimeoutSettings.Register(application);
+
+            // 3a2. The overrides of the settings that exist now (the limits, plugins.paths, the timeouts) are applied before the
+            //      plugins are found, because plugins.paths decides which plugins exist. The others follow in 3d.
+            HashSet<string> applied = new(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, string> pair in options.Overrides)
+            {
+                if (application.TryGetSetting(pair.Key, out Setting? early))
+                {
+                    if (!CliSettingOverrides.TryApply(application, early, pair.Value, out _, out string? overrideError))
+                    {
+                        io.Error.WriteLine("Error: " + overrideError);
+                        await _AbandonAsync(null, registry, application, logFile).ConfigureAwait(false);
+                        return (null, (int)ExitCode.ArgumentError);
+                    }
+
+                    applied.Add(pair.Key);
+                }
+            }
 
             // 3b. Load the built-in plugins and those found in the configured folders into the registry. The application tier
             //     is Core: a plugin of a higher tier (it needs a host or the app) is recorded as skipped and its assembly is
@@ -215,10 +286,22 @@ internal sealed class CliPluginSession : IAsyncDisposable
 
             // 3d. The session object, then the real profile settings (they need the session's registry and writers), then the
             //     load problems, then the start. The start comes last so that a plugin sees complete settings in its context.
-            session = new CliPluginSession(options, settingsBase, profile, application, registry, report, io, logFile);
+            session = new CliPluginSession(options, settingsBase, profile, application, application.Limits, registry, report, io, logFile);
             session.ProfileSettings.Dispose();
             session.ProfileSettings = session._OpenProfileManager();
             session._LogLoadProblems();
+
+            // The remaining overrides: plugin settings of both scopes and the profile settings. They are resolved like the name of
+            // `ni settings set` (same rules, same messages), so an unknown key gets the same "did you mean". Nothing was written
+            // and no plugin has started, so a refusal ends the command here.
+            string? lateError = session._ApplyLateOverrides(applied);
+            if (lateError is not null)
+            {
+                io.Error.WriteLine("Error: " + lateError);
+                await session.DisposeAsync().ConfigureAwait(false);
+                return (null, (int)ExitCode.ArgumentError);
+            }
+
             session.Report = await PluginLifecycle.StartAsync(report, registry.Disable, session._ContextFor,
                 PluginTimeoutSettings.ReadStart(application.ReadOnly), cancellationToken).ConfigureAwait(false);
 
@@ -263,7 +346,7 @@ internal sealed class CliPluginSession : IAsyncDisposable
         // The base is made absolute once; an unusable path (invalid characters, too long) is refused with the runtime's message.
         try
         {
-            settingsBase = Path.GetFullPath(SettingsManagerFactory.ResolvePath(options.SettingsPath, null));
+            settingsBase = Path.GetFullPath(SettingsManagerFactory.ResolvePath(CoreSettingsLayout.Instance, options.SettingsPath, null));
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
@@ -276,7 +359,7 @@ internal sealed class CliPluginSession : IAsyncDisposable
         string requested = string.IsNullOrEmpty(options.Profile)
             ? SettingsProfiles.DefaultProfile
             : options.Profile;
-        if (!ProfileNames.TryValidate(requested, out string? profileError))
+        if (!ProfileNames.TryValidate(requested, CoreSettingsLayout.Instance, out string? profileError))
         {
             io.Error.WriteLine(Invariant($"Error: Profile name '{requested}': {profileError}."));
             return false;
@@ -285,7 +368,7 @@ internal sealed class CliPluginSession : IAsyncDisposable
         // An existing profile is used with the spelling it has on disk (names are unique ignoring case, so the match is exact);
         // a missing one is an error unless it is "default". An unknown profile is never created implicitly; the error
         // names the command that creates it.
-        string? existing = SettingsProfiles.List(settingsBase)
+        string? existing = SettingsProfiles.List(settingsBase, CoreSettingsLayout.Instance)
             .FirstOrDefault(name => string.Equals(name, requested, StringComparison.OrdinalIgnoreCase));
         if (existing is not null)
         {
@@ -301,8 +384,8 @@ internal sealed class CliPluginSession : IAsyncDisposable
 
         // Two commands that start together on a fresh base both try to create the profile; only one create can win, and the
         // loser has what it wanted once the profile exists, so only a create that left no profile behind is an error.
-        if (!SettingsProfiles.TryCreate(settingsBase, SettingsProfiles.DefaultProfile, null, out string? createError)
-            && !SettingsProfiles.Exists(settingsBase, SettingsProfiles.DefaultProfile))
+        if (!SettingsProfiles.TryCreate(settingsBase, CoreSettingsLayout.Instance, SettingsProfiles.DefaultProfile, null, out string? createError)
+            && !SettingsProfiles.Exists(settingsBase, CoreSettingsLayout.Instance, SettingsProfiles.DefaultProfile))
         {
             io.Error.WriteLine("Error: " + createError);
             exitCode = (int)ExitCode.RuntimeError;
@@ -337,8 +420,18 @@ internal sealed class CliPluginSession : IAsyncDisposable
             // protocols of the builder and by the plugins) starts with its stored value instead of its default. The stack
             // traces of exceptions stay out of the error text that a packet records for a failing protocol (explicitly off
             // here; off is also the default of the flag).
-            manager = SettingsManagerFactory.Create(SettingsBase, Profile, Options.MaxConfigFileBytes, Options.MaxJsonDepth);
+            manager = SettingsManagerFactory.Create(
+                CoreSettingsLayout.Instance, SettingsBase, Profile, LoaderLimits);
             _LogLoadWarnings(manager);
+
+            // The overrides of profile settings were applied to the profile manager of the session. This manager is a second one
+            // over the same folder, and the protocols read their settings while the stack is built, so each override is
+            // preloaded: it is applied when the setting registers and wins over the stored value.
+            foreach (KeyValuePair<string, SettingValue> profileOverride in _ProfileOverrides)
+            {
+                manager.PreloadValue(profileOverride.Key, profileOverride.Value);
+            }
+
             StackBuilder builder = new(manager, frames) { IncludeExceptionStackTrace = false };
 
             // Plugin contributions (protocols, fields) are plugin code; a contribution that fails is returned as a failure, reported
@@ -405,13 +498,55 @@ internal sealed class CliPluginSession : IAsyncDisposable
     #region Private Helpers
 
     /// <summary>
+    /// Applies the <c>--set</c> overrides that were not applied before the plugins were found: plugin settings of both scopes and
+    /// profile settings. Each is resolved with <see cref="SettingsLookup"/>, so the rules and the messages are those of
+    /// <c>ni settings set</c>. Nothing is saved.
+    /// </summary>
+    /// <param name="applied">The keys that were applied already; they are skipped.</param>
+    /// <returns>The refusal (one line), or <see langword="null"/> when every override is in effect.</returns>
+    private string? _ApplyLateOverrides(HashSet<string> applied)
+    {
+        foreach (KeyValuePair<string, string> pair in Options.Overrides)
+        {
+            if (applied.Contains(pair.Key))
+            {
+                continue;
+            }
+
+            if (!SettingsLookup.TryFind(this, pair.Key, null, null, out SettingsLookup.Match? match, out string? lookupError))
+            {
+                return lookupError;
+            }
+
+            // A stored value of a plugin that is not loaded has no type to parse against; an override needs a loaded setting.
+            if (match.Setting is null)
+            {
+                return Invariant($"Setting '{pair.Key}' is a stored value of a plugin that is not loaded; --set needs a loaded setting.");
+            }
+
+            if (!CliSettingOverrides.TryApply(match.Manager, match.Setting, pair.Value, out SettingValue value, out string? applyError))
+            {
+                return applyError;
+            }
+
+            if (match.Scope == SettingScope.Profile)
+            {
+                _ProfileOverrides.Add(new KeyValuePair<string, SettingValue>(pair.Key, value));
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Opens the profile manager that the settings command and the plugins read: files loaded, settings registered (the
     /// protocol settings through a stack builder that is never built, then the plugin settings of scope profile).
     /// </summary>
     /// <returns>The manager; the caller owns it.</returns>
     private SettingsManager _OpenProfileManager()
     {
-        SettingsManager manager = SettingsManagerFactory.Create(SettingsBase, Profile, Options.MaxConfigFileBytes, Options.MaxJsonDepth);
+        SettingsManager manager = SettingsManagerFactory.Create(
+            CoreSettingsLayout.Instance, SettingsBase, Profile, LoaderLimits);
         try
         {
             _LogLoadWarnings(manager);

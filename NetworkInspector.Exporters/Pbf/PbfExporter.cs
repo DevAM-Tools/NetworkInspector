@@ -378,7 +378,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IPars
         // escaping from OnPacket.
         if (!_Output.TryGetOrCreateUnderlyingStream(out Stream? underlyingStream, out string openFailure))
         {
-            _Core.ReportStartFailure(ExportErrorKind.IoError, $"PBF output could not be opened: {openFailure}");
+            _Core.ReportStartFailure(ExportErrorKind.IoError, Invariant($"PBF output could not be opened: {openFailure}"));
             return false;
         }
 
@@ -395,7 +395,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IPars
         {
             _Core.ReportStartFailure(
                 ex is IOException ? ExportErrorKind.IoError : ExportErrorKind.SerializationError,
-                $"PBF header write failed: {ex.Message}");
+                Invariant($"PBF header write failed: {ex.Message}"));
             return false;
         }
 
@@ -783,8 +783,8 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IPars
                 throw new ArgumentOutOfRangeException(
                     nameof(count),
                     count,
-                    $"Target packet count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
-                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+                    Invariant($"Target packet count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} ") +
+                    Invariant($"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)})."));
             }
 
             _TargetPacketCount = count;

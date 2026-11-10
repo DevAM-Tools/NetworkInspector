@@ -31,14 +31,14 @@ internal sealed class ProtocolRegistrationWarningTests
             }
             """;
 
-        string dir = Path.Combine(Path.GetTempPath(), "ni_std_warn_" + Guid.NewGuid().ToString("N"));
+        string dir = Path.Combine(Path.GetTempPath(), "ni_std_warn_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "signal_message.json");
         try
         {
             await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
 
-            using SettingsManager settings = new(dir);
+            using SettingsManager settings = new(dir, CoreSettingsLayout.Instance);
             settings.PreloadValue(SignalMessageRegistration.ConfigFileSetting, "signal_message.json");
             StackBuilder builder = new(settings, new FrameInterfaceRegistry());
 

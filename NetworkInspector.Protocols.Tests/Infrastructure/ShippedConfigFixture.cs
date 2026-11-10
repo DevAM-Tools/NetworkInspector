@@ -80,7 +80,7 @@ internal static class ShippedConfigFixture
     /// <param name="json">The file content.</param>
     internal static string WriteTemp(string json)
     {
-        string directory = Path.Combine(Path.GetTempPath(), "ni_config_" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), "ni_config_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, "config.json");
         File.WriteAllText(path, json);
@@ -96,7 +96,7 @@ internal static class ShippedConfigFixture
     /// <returns>The profile folder, to be used as the storage path of a settings manager.</returns>
     internal static string ProfileDirectory(params string[] groups)
     {
-        string directory = Path.Combine(Path.GetTempPath(), "ni_profile_" + Guid.NewGuid().ToString("N"));
+        string directory = Path.Combine(Path.GetTempPath(), "ni_profile_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         string configs = Path.Combine(directory, _ProfileConfigFolder);
         _ = Directory.CreateDirectory(configs);
 

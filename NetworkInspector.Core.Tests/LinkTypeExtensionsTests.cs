@@ -108,12 +108,13 @@ internal sealed class LinkTypeExtensionsTests
                 || long.TryParse(name, out _)
                 || name == rawIdentifier)
             {
-                missing.Add($"{linkType} ({(int)linkType}) -> UiName='{name}', identifier='{rawIdentifier}'");
+                missing.Add(Invariant($"{linkType} ({(int)linkType}) -> UiName='{name}', identifier='{rawIdentifier}'"));
             }
         }
 
         await Assert.That(missing).IsEmpty()
-            .Because($"every named LinkType must have an explicit UiName switch case that differs from the raw identifier; missing or falling back: [{string.Join(", ", missing)}]");
+            .Because(Invariant($"every named LinkType must have an explicit UiName switch case that differs from the raw identifier; ") +
+                Invariant($"missing or falling back: [{string.Join(", ", missing)}]"));
     }
 
     // === Unknown / fallback ===

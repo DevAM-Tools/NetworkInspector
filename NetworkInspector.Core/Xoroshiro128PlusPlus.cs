@@ -23,25 +23,31 @@ namespace NetworkInspector.Core;
 [StructLayout(LayoutKind.Sequential)]
 public struct Xoroshiro128PlusPlus
 {
-    #region Constants
+    #region Configuration and state
 
-    // Rotation/shift amounts from the xoroshiro128++ reference implementation.
-    // These values ensure the characteristic polynomial is primitive over GF(2),
-    // giving the generator its full period of 2^128 − 1.
-    private const int _ScramblerRotation = 17; // rotl(s0 + s1, 17)
-    private const int _StateRotationA = 49; // rotl(s0, 49)
-    private const int _StateShift = 21; // s1 << 21
-    private const int _StateRotationB = 28; // rotl(s1, 28)
+    /// <summary>
+    /// Rotation of the scrambler: <c>rotl(s0 + s1, 17)</c>. This and the three constants below are the rotation and shift
+    /// amounts of the xoroshiro128++ reference implementation. They ensure that the characteristic polynomial is primitive
+    /// over GF(2), which gives the generator its full period of 2^128 − 1.
+    /// </summary>
+    private const int _ScramblerRotation = 17;
 
-    // Minimum buffer length that justifies 4-stream parallel generation.
-    // One iteration produces 4 × 8 = 32 bytes. The bulk setup (six SplitMix64 rounds for the extra streams) is only
-    // worthwhile once one full iteration fits, so shorter buffers use the single-stream path. This constant is also the
-    // loop stride of every bulk path, and all paths store the streams in the order A, B, C, D, so their output is identical.
+    /// <summary>Rotation of the state update: <c>rotl(s0, 49)</c>.</summary>
+    private const int _StateRotationA = 49;
+
+    /// <summary>Shift of the state update: <c>s1 &lt;&lt; 21</c>.</summary>
+    private const int _StateShift = 21;
+
+    /// <summary>Second rotation of the state update: <c>rotl(s1, 28)</c>.</summary>
+    private const int _StateRotationB = 28;
+
+    /// <summary>
+    /// Minimum buffer length that justifies 4-stream parallel generation. One iteration produces 4 × 8 = 32 bytes. The bulk
+    /// setup (six SplitMix64 rounds for the extra streams) is only worthwhile once one full iteration fits, so shorter
+    /// buffers use the single-stream path. This constant is also the loop stride of every bulk path, and all paths store
+    /// the streams in the order A, B, C, D, so their output is identical.
+    /// </summary>
     private const int _BulkThreshold = 32;
-
-    #endregion
-
-    #region Fields
 
     /// <summary>First state word (s0).</summary>
     private ulong _S0;
@@ -49,14 +55,11 @@ public struct Xoroshiro128PlusPlus
     /// <summary>Second state word (s1).</summary>
     private ulong _S1;
 
-    #endregion
-
-    #region Constructor
-
     /// <summary>
     /// Creates a new instance seeded with <paramref name="seed"/>.
-    /// Uses two _SplitMix64 rounds to expand the seed into two decorrelated state words.
+    /// Uses two SplitMix64 rounds to expand the seed into two decorrelated state words.
     /// </summary>
+    /// <param name="seed">The seed; any value. Equal seeds produce equal sequences.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Xoroshiro128PlusPlus(ulong seed)
     {
@@ -73,7 +76,7 @@ public struct Xoroshiro128PlusPlus
 
     #endregion
 
-    #region Core Generation
+    #region Single values
 
     /// <summary>
     /// Produces the next 64-bit pseudo-random value and advances the state.
@@ -96,21 +99,24 @@ public struct Xoroshiro128PlusPlus
         return result;
     }
 
-    /// <summary>Produces the next 32-bit value (top 32 bits of a 64-bit draw).</summary>
+    /// <summary>Produces the next 32-bit value (top 32 bits of a 64-bit draw) and advances the state.</summary>
+    /// <returns>A uniformly distributed 32-bit value.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public uint NextU32() => (uint)(NextU64() >> 32);
 
-    /// <summary>Produces the next 16-bit value (top 16 bits of a 64-bit draw).</summary>
+    /// <summary>Produces the next 16-bit value (top 16 bits of a 64-bit draw) and advances the state.</summary>
+    /// <returns>A uniformly distributed 16-bit value.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ushort NextU16() => (ushort)(NextU64() >> 48);
 
-    /// <summary>Produces the next 8-bit value (top 8 bits of a 64-bit draw).</summary>
+    /// <summary>Produces the next 8-bit value (top 8 bits of a 64-bit draw) and advances the state.</summary>
+    /// <returns>A uniformly distributed 8-bit value.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public byte NextU8() => (byte)(NextU64() >> 56);
 
     #endregion
 
-    #region Bounded Generation
+    #region Bounded values
 
     /// <summary>
     /// Returns a uniformly distributed integer in [<paramref name="minInclusive"/>, <paramref name="maxExclusive"/>).
@@ -119,6 +125,9 @@ public struct Xoroshiro128PlusPlus
     /// The full <see cref="int"/> domain is supported, including
     /// <see cref="int.MinValue"/> … <see cref="int.MaxValue"/>.
     /// </summary>
+    /// <param name="minInclusive">Smallest value that can be returned.</param>
+    /// <param name="maxExclusive">Upper bound; never returned. A value not above <paramref name="minInclusive"/> makes the range empty.</param>
+    /// <returns>A value in the range, or <paramref name="minInclusive"/> for an empty or inverted range.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int NextRange(int minInclusive, int maxExclusive)
     {
@@ -202,13 +211,19 @@ public struct Xoroshiro128PlusPlus
         }
     }
 
-    // ─── Sub-stream derivation ───────────────────────────────────────────────
+    // Sub-stream derivation
 
     /// <summary>
     /// Derives 3 independent sub-streams (B, C, D) from the current state via
     /// <see cref="_SplitMix64"/> seeded with <c>_S0 ^ _S1</c>.
     /// Stream A (the instance state) is not returned — callers use <see cref="_S0"/>/<see cref="_S1"/> directly.
     /// </summary>
+    /// <param name="s0B">First state word of stream B.</param>
+    /// <param name="s1B">Second state word of stream B.</param>
+    /// <param name="s0C">First state word of stream C.</param>
+    /// <param name="s1C">Second state word of stream C.</param>
+    /// <param name="s0D">First state word of stream D.</param>
+    /// <param name="s1D">Second state word of stream D.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void _DeriveSubStreams(
         out ulong s0B, out ulong s1B,
@@ -242,13 +257,20 @@ public struct Xoroshiro128PlusPlus
         }
     }
 
-    // ─── AVX2 / Vector256 — 4 lanes × u64 per iteration ─────────────────────
+    // AVX2 / Vector256 — 4 lanes × u64 per iteration
 
     /// <summary>
     /// Fills the buffer using Vector256 operations (AVX2 on x86).
     /// All 4 xoroshiro128++ streams are packed into Vector256&lt;ulong&gt; registers.
     /// Each iteration produces 4 × 8 = 32 bytes via a single vector store.
     /// </summary>
+    /// <param name="buffer">The buffer to fill; at least <see cref="_BulkThreshold"/> bytes.</param>
+    /// <param name="s0B">First state word of stream B.</param>
+    /// <param name="s1B">Second state word of stream B.</param>
+    /// <param name="s0C">First state word of stream C.</param>
+    /// <param name="s1C">Second state word of stream C.</param>
+    /// <param name="s0D">First state word of stream D.</param>
+    /// <param name="s1D">Second state word of stream D.</param>
     private void _FillBytesVector256(
         Span<byte> buffer,
         ulong s0B, ulong s1B,
@@ -292,7 +314,7 @@ public struct Xoroshiro128PlusPlus
         _FillBytesSequential(buffer[offset..]);
     }
 
-    // ─── SSE2 / NEON / Vector128 — 2 × Vector128 (4 lanes total) ────────────
+    // SSE2 / NEON / Vector128 — 2 × Vector128 (4 lanes total)
 
     /// <summary>
     /// Fills the buffer using Vector128 operations (SSE2 on x86, NEON on ARM).
@@ -300,6 +322,13 @@ public struct Xoroshiro128PlusPlus
     /// Each iteration performs two Vector128 scrambler + state-update passes
     /// and writes 32 bytes total (16 + 16).
     /// </summary>
+    /// <param name="buffer">The buffer to fill; at least <see cref="_BulkThreshold"/> bytes.</param>
+    /// <param name="s0B">First state word of stream B.</param>
+    /// <param name="s1B">Second state word of stream B.</param>
+    /// <param name="s0C">First state word of stream C.</param>
+    /// <param name="s1C">Second state word of stream C.</param>
+    /// <param name="s0D">First state word of stream D.</param>
+    /// <param name="s1D">Second state word of stream D.</param>
     private void _FillBytesVector128(
         Span<byte> buffer,
         ulong s0B, ulong s1B,
@@ -318,7 +347,7 @@ public struct Xoroshiro128PlusPlus
 
         while (offset + _BulkThreshold <= buffer.Length)
         {
-            // ── Streams A, B: scrambler + state update ──
+            // Streams A, B: scrambler + state update
             Vector128<ulong> sumLo = Vector128.Add(vs0Lo, vs1Lo);
             Vector128<ulong> resultLo = Vector128.Add(_RotateLeft128(sumLo, _ScramblerRotation), vs0Lo);
 
@@ -328,7 +357,7 @@ public struct Xoroshiro128PlusPlus
                 Vector128.ShiftLeft(tLo, _StateShift));
             vs1Lo = _RotateLeft128(tLo, _StateRotationB);
 
-            // ── Streams C, D: scrambler + state update ──
+            // Streams C, D: scrambler + state update
             Vector128<ulong> sumHi = Vector128.Add(vs0Hi, vs1Hi);
             Vector128<ulong> resultHi = Vector128.Add(_RotateLeft128(sumHi, _ScramblerRotation), vs0Hi);
 
@@ -352,7 +381,7 @@ public struct Xoroshiro128PlusPlus
         _FillBytesSequential(buffer[offset..]);
     }
 
-    // ─── Scalar 4-stream — ILP-friendly, no SIMD required ────────────────────
+    // Scalar 4-stream — ILP-friendly, no SIMD required
 
     /// <summary>
     /// Scalar path: all 4 xoroshiro128++ streams are advanced using plain scalar
@@ -361,6 +390,13 @@ public struct Xoroshiro128PlusPlus
     /// and fill execution-port bubbles — typically achieving ~2–3× the throughput
     /// of a single-stream loop on modern superscalar CPUs.
     /// </summary>
+    /// <param name="buffer">The buffer to fill; at least <see cref="_BulkThreshold"/> bytes.</param>
+    /// <param name="s0B">First state word of stream B.</param>
+    /// <param name="s1B">Second state word of stream B.</param>
+    /// <param name="s0C">First state word of stream C.</param>
+    /// <param name="s1C">Second state word of stream C.</param>
+    /// <param name="s0D">First state word of stream D.</param>
+    /// <param name="s1D">Second state word of stream D.</param>
     private void _FillBytesScalar4(
         Span<byte> buffer,
         ulong s0B, ulong s1B,
@@ -377,13 +413,13 @@ public struct Xoroshiro128PlusPlus
 
         while (offset + _BulkThreshold <= buffer.Length)
         {
-            // ── Scrambler: compute output for all 4 streams ──────────────
+            // Scrambler: compute output for all 4 streams
             ulong rA = BitOperations.RotateLeft(s0A + s1A, _ScramblerRotation) + s0A;
             ulong rB = BitOperations.RotateLeft(s0B + s1B, _ScramblerRotation) + s0B;
             ulong rC = BitOperations.RotateLeft(s0C + s1C, _ScramblerRotation) + s0C;
             ulong rD = BitOperations.RotateLeft(s0D + s1D, _ScramblerRotation) + s0D;
 
-            // ── State update: 4 independent chains (no inter-dependency) ─
+            // State update: 4 independent chains (no inter-dependency)
             ulong tA = s1A ^ s0A;
             s0A = BitOperations.RotateLeft(s0A, _StateRotationA) ^ tA ^ (tA << _StateShift);
             s1A = BitOperations.RotateLeft(tA, _StateRotationB);
@@ -415,13 +451,14 @@ public struct Xoroshiro128PlusPlus
         _FillBytesSequential(buffer[offset..]);
     }
 
-    // ─── Sequential scalar — single stream, for short buffers and tails ──────
+    // Sequential scalar — single stream, for short buffers and tails
 
     /// <summary>
     /// Fills the buffer using sequential <see cref="NextU64"/> calls (single stream).
     /// Used for buffers shorter than <see cref="_BulkThreshold"/> and for the 0–31
     /// byte remainder after the 4-stream bulk loop.
     /// </summary>
+    /// <param name="buffer">The buffer to fill; may be empty.</param>
     private void _FillBytesSequential(Span<byte> buffer)
     {
         if (buffer.Length == 0)
@@ -454,14 +491,17 @@ public struct Xoroshiro128PlusPlus
 
     #endregion
 
-    #region SIMD Helpers
+    #region Vector rotate-left
 
-    // ─── Vector rotate-left ──────────────────────────────────────────────────
+    // Vector rotate-left
     // The portable Vector128/Vector256 API has no per-lane rotate (AVX-512 vprolq is not available on SSE2, AVX2, or
     // NEON), so rotl(x, k) is built as (x << k) | (x >> (64 - k)) using shift + OR. k is always one of the constants
     // above, so after inlining both shift counts are compile-time constants.
 
     /// <summary>Bitwise rotate-left on each u64 lane of a <see cref="Vector256{T}"/>.</summary>
+    /// <param name="v">The vector to rotate.</param>
+    /// <param name="k">Rotation in bits, 1 to 63.</param>
+    /// <returns>The vector with every lane rotated left by <paramref name="k"/> bits.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector256<ulong> _RotateLeft256(Vector256<ulong> v, int k) =>
         Vector256.BitwiseOr(
@@ -469,6 +509,9 @@ public struct Xoroshiro128PlusPlus
             Vector256.ShiftRightLogical(v, 64 - k));
 
     /// <summary>Bitwise rotate-left on each u64 lane of a <see cref="Vector128{T}"/>.</summary>
+    /// <param name="v">The vector to rotate.</param>
+    /// <param name="k">Rotation in bits, 1 to 63.</param>
+    /// <returns>The vector with every lane rotated left by <paramref name="k"/> bits.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector128<ulong> _RotateLeft128(Vector128<ulong> v, int k) =>
         Vector128.BitwiseOr(

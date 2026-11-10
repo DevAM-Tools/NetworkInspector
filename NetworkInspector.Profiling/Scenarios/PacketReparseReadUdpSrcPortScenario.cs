@@ -32,7 +32,7 @@ internal sealed class PacketReparseReadUdpSrcPortScenario : IProfilingScenario
     public string Name => "packet-reparse-read-udp-srcport";
 
     /// <inheritdoc/>
-    public string Description => FormattableString.Invariant(
+    public string Description => Invariant(
         $"TryParse(recycle) + IterFieldsDfs for udp.srcport, {_PacketCount:N0} IPv6/UDP frames per iteration.");
 
     /// <inheritdoc/>

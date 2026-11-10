@@ -88,7 +88,7 @@ internal static class SampleStack
             return null;
         }
 
-        return value.ToString();
+        return value.ToString(null, CultureInfo.InvariantCulture);
     }
 
     #endregion

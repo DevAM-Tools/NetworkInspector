@@ -7,8 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Pin 1.0.*: 1.1.0 adds CSC009 that Protocols has not absorbed yet. Widen again after Protocols cleanup. -->
-    <PackageVersion Include="CSharpStyleChecker" Version="1.0.*" />
+    <!-- 1.2.0 or later: 1.1.0 reports Invariant($"…") from InvariantStringHelper as CSC009. -->
+    <PackageVersion Include="CSharpStyleChecker" Version="1.2.0" />
+    <!-- .NET 6 and later only (netstandard2.0 has no handler overload). -->
+    <PackageVersion Include="InvariantStringHelper" Version="1.0.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="4.14.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
     <PackageVersion Include="TUnit" Version="1.*" />

@@ -238,7 +238,7 @@ internal sealed class SomeIpTsharkTests : SomeIpPayloadKit
                     theirs.AddRange(text.Split(',').Select(static t => _ParseHex(t)));
                 }
 
-                await Assert.That(own).IsEquivalentTo(theirs).Because($"message ids reported on packet {i}");
+                await Assert.That(own).IsEquivalentTo(theirs).Because(Invariant($"message ids reported on packet {i}"));
             }
         }
     }
@@ -290,7 +290,7 @@ internal sealed class SomeIpTsharkTests : SomeIpPayloadKit
             return;
         }
 
-        string work = Path.Combine(Path.GetTempPath(), "ni_someip_uat_" + Guid.NewGuid().ToString("N"));
+        string work = Path.Combine(Path.GetTempPath(), "ni_someip_uat_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
         _ = Directory.CreateDirectory(work);
         try
         {
@@ -343,9 +343,9 @@ internal sealed class SomeIpTsharkTests : SomeIpPayloadKit
             if (own.Count == 1 && own[0].Value.Data.TryGetAsString(out string? text))
             {
                 PdmlField? shown = TsharkVerifier.GetPdmlField(frame, profile.FilterOf(name), 1, _UdpDecodeAs, profileDirectory);
-                await Assert.That(shown).IsNotNull().Because($"the tool reports '{profile.FilterOf(name)}' for '{name}'");
+                await Assert.That(shown).IsNotNull().Because(Invariant($"the tool reports '{profile.FilterOf(name)}' for '{name}'"));
                 await Assert.That(shown!.Value.ShowName!.EndsWith(": " + text, StringComparison.Ordinal)).IsTrue()
-                    .Because($"'{name}': parser '{text}' vs tool '{shown.Value.ShowName}'");
+                    .Because(Invariant($"'{name}': parser '{text}' vs tool '{shown.Value.ShowName}'"));
                 compared++;
                 continue;
             }
@@ -358,7 +358,7 @@ internal sealed class SomeIpTsharkTests : SomeIpPayloadKit
             {
                 string enumName = ((string)named)[..((string)named).IndexOf(" (", StringComparison.Ordinal)];
                 PdmlField? shown = TsharkVerifier.GetPdmlField(frame, profile.FilterOf(name), 1, _UdpDecodeAs, profileDirectory);
-                await Assert.That(shown!.Value.ShowName!).Contains("(" + enumName + ")").Because($"the enumeration name of '{name}'");
+                await Assert.That(shown!.Value.ShowName!).Contains("(" + enumName + ")").Because(Invariant($"the enumeration name of '{name}'"));
             }
 
             List<string?> values = [.. own.Select(static f => _Text(f))];
@@ -368,14 +368,14 @@ internal sealed class SomeIpTsharkTests : SomeIpPayloadKit
             }
 
             string? tool = TsharkVerifier.GetFieldValue(frame, profile.FilterOf(name), 1, _UdpDecodeAs, profileDirectory);
-            await Assert.That(tool).IsNotNull().Because($"the tool reports '{profile.FilterOf(name)}' for '{name}'");
+            await Assert.That(tool).IsNotNull().Because(Invariant($"the tool reports '{profile.FilterOf(name)}' for '{name}'"));
             List<string?> theirs = [.. tool!.Split(',')];
             await Assert.That(TsharkEquivalence.AreEquivalentSet(values, theirs)).IsTrue()
-                .Because($"'{name}': parser [{string.Join(", ", values)}] vs tool [{tool}]");
+                .Because(Invariant($"'{name}': parser [{string.Join(", ", values)}] vs tool [{tool}]"));
             compared++;
         }
 
-        await Assert.That(compared).IsGreaterThan(0).Because($"leaves of '{prefix}' compared");
+        await Assert.That(compared).IsGreaterThan(0).Because(Invariant($"leaves of '{prefix}' compared"));
     }
 
     /// <summary>The registered names of the fields under <paramref name="prefix"/> that have a counterpart in the tool, in tree order.</summary>

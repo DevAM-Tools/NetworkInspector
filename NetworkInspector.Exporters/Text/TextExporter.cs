@@ -968,7 +968,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IPar
                 return;
             }
 
-            _WriteSpan(data.ToString(), _MaxTextLength);
+            _WriteSpan(data.ToString(null, CultureInfo.InvariantCulture), _MaxTextLength);
             return;
         }
 
@@ -1004,7 +1004,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IPar
 
         // Fallback: ToString() — one allocation, covers exotic or future value types, and is reached when the value cannot report
         // its size or formatting into the buffer failed.
-        _WriteSpan(data.ToString(), _MaxTextLength);
+        _WriteSpan(data.ToString(null, CultureInfo.InvariantCulture), _MaxTextLength);
     }
 
     #endregion

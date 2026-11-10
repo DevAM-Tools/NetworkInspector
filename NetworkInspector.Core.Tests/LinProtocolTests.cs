@@ -54,7 +54,8 @@ internal sealed class LinProtocolTests
         {
             FieldId? pidField = stack.GetFieldId("lin.pid");
             await Assert.That(pidField).IsNotNull();
-            bool has = packet.TryGetFieldValue(pidField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(pidField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x3CUL);
@@ -72,7 +73,8 @@ internal sealed class LinProtocolTests
         {
             FieldId? idField = stack.GetFieldId("lin.id");
             await Assert.That(idField).IsNotNull();
-            bool has = packet.TryGetFieldValue(idField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(idField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x3CUL);
@@ -90,7 +92,8 @@ internal sealed class LinProtocolTests
         {
             FieldId? parityField = stack.GetFieldId("lin.parity");
             await Assert.That(parityField).IsNotNull();
-            bool has = packet.TryGetFieldValue(parityField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(parityField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(3UL);
@@ -108,7 +111,8 @@ internal sealed class LinProtocolTests
         {
             FieldId? lengthField = stack.GetFieldId("lin.length");
             await Assert.That(lengthField).IsNotNull();
-            bool has = packet.TryGetFieldValue(lengthField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(lengthField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(4UL);
@@ -125,7 +129,8 @@ internal sealed class LinProtocolTests
         {
             FieldId? checksumField = stack.GetFieldId("lin.checksum");
             await Assert.That(checksumField).IsNotNull();
-            bool has = packet.TryGetFieldValue(checksumField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(checksumField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0xABUL);
@@ -200,7 +205,8 @@ internal sealed class LinProtocolTests
         {
             FieldId? field = stack.GetFieldId("lin.checksum_type");
             await Assert.That(field).IsNotNull();
-            bool has = packet.TryGetFieldValue(field!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(field!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsString(out string strVal);
             await Assert.That(strVal).IsEqualTo("Enhanced");
@@ -221,7 +227,8 @@ internal sealed class LinProtocolTests
         {
             FieldId? field = stack.GetFieldId("lin.parity.valid");
             await Assert.That(field).IsNotNull();
-            bool has = packet.TryGetFieldValue(field!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(field!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -244,7 +251,8 @@ internal sealed class LinProtocolTests
         {
             FieldId? field = stack.GetFieldId("lin.parity.valid");
             await Assert.That(field).IsNotNull();
-            bool has = packet.TryGetFieldValue(field!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(field!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsFalse();

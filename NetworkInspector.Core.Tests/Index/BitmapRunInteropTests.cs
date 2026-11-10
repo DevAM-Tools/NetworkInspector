@@ -3,7 +3,7 @@
 namespace NetworkInspector.Core.Tests;
 
 /// <summary>
-/// Tests for the direct BitmapContainer × RunContainer set operations (F-IX-01).
+/// Tests for the direct BitmapContainer × RunContainer set operations.
 /// Validates that the new ulong-mask paths produce identical results to the
 /// reference value-by-value behavior.
 /// </summary>
@@ -243,14 +243,65 @@ internal sealed class BitmapRunInteropTests
         await Assert.That(andNotResult.Contains(100)).IsTrue();
         await Assert.That(xorResult.Contains(400)).IsTrue();
 
-        BitmapContainer inPlace = (BitmapContainer)a.Clone();
-        BitmapContainer mask = new();
-        mask.Add(200);
-        inPlace.AndWith(mask);
-        inPlace.OrWith(mask);
-        inPlace.AndNotWith(mask);
-        inPlace.XorWith(mask);
-        await Assert.That(inPlace.Cardinality).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task RunContainer_OrAndXor_OfTwoLongRuns_HaveTheExactSets()
+    {
+        RunContainer left = _Runs((0, 59_999));        // 0..59999
+        RunContainer right = _Runs((30_000, 35_535));  // 30000..65535
+
+        IContainer union = left.Or(right);
+        IContainer symmetric = left.Xor(right);
+
+        await Assert.That(union.Cardinality).IsEqualTo(65_536);
+        await Assert.That(union.Contains(0)).IsTrue();
+        await Assert.That(union.Contains(65_535)).IsTrue();
+        await Assert.That(symmetric.Cardinality).IsEqualTo(35_536);
+        await Assert.That(symmetric.Contains(29_999)).IsTrue();
+        await Assert.That(symmetric.Contains(30_000)).IsFalse();
+        await Assert.That(symmetric.Contains(59_999)).IsFalse();
+        await Assert.That(symmetric.Contains(60_000)).IsTrue();
+
+        // The operands are not mutated by either operation.
+        await Assert.That(left.Cardinality).IsEqualTo(60_000);
+        await Assert.That(right.Cardinality).IsEqualTo(35_536);
+    }
+
+    [Test]
+    public async Task RunContainer_Or_WithAnArrayOperand_KeepsEveryValue()
+    {
+        RunContainer run = _Runs((0, 4_999));          // 0..4999
+        ArrayContainer array = new();
+        array = (ArrayContainer)array.Add(5_000);
+        array = (ArrayContainer)array.Add(7_000);
+
+        IContainer union = run.Or(array);
+
+        await Assert.That(union.Cardinality).IsEqualTo(5_002);
+        await Assert.That(union.Contains(7_000)).IsTrue();
+        await Assert.That(union.Contains(5_001)).IsFalse();
+    }
+
+    [Test]
+    public async Task RunContainer_Xor_WithABitmapOperand_RemovesTheOverlap()
+    {
+        RunContainer run = _Runs((0, 9));              // 0..9
+        BitmapContainer bitmap = new();
+        for (int v = 5; v <= 11; v++)
+        {
+            bitmap.Add((ushort)v);
+        }
+
+
+        IContainer symmetric = run.Xor(bitmap);
+
+        await Assert.That(symmetric.Cardinality).IsEqualTo(7);
+        await Assert.That(symmetric.Contains(0)).IsTrue();
+        await Assert.That(symmetric.Contains(4)).IsTrue();
+        await Assert.That(symmetric.Contains(5)).IsFalse();
+        await Assert.That(symmetric.Contains(10)).IsTrue();
+        await Assert.That(symmetric.Contains(11)).IsTrue();
     }
 
     [Test]

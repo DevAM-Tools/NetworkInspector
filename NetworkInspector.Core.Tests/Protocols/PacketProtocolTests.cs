@@ -39,7 +39,8 @@ internal sealed class PacketProtocolTests
             packet = parsed;
         }
 
-        bool found = packet.TryGetFieldValue(stack.PacketErrorFieldId, out FieldValue err, materialize: true); // materialize: true — need complete field tree for assertion
+        bool found = packet.TryGetFieldValue(stack.PacketErrorFieldId, out FieldValue err,
+            materialize: true); // materialize: true — need complete field tree for assertion
         err.Data.TryGetAsString(out string msg);
 
         await Assert.That(found).IsTrue();

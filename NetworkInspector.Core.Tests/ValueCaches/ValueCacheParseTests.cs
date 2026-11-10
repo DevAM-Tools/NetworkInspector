@@ -2,7 +2,8 @@
 
 namespace NetworkInspector.Core.Tests;
 
-/// <summary>Parse-time record, <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>, recycle, and custom-text mutation.</summary>
+/// <summary>Parse-time record, <see cref="Packet.TryParse(PacketId, Stack, Frame, in ParseOptions, out Packet?, out ParseFailure)"/>,
+/// recycle, and custom-text mutation.</summary>
 internal sealed class ValueCacheParseTests
 {
     #region Helpers

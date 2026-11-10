@@ -7,8 +7,6 @@ namespace NetworkInspector.Core;
 /// </summary>
 public enum ScanMode
 {
-    #region Enum Values
-
     /// <summary>
     /// Scans the entire file upfront, while the source is opened, before any frame is returned.
     /// Slower to open, but <see cref="IFrameSource.EstimatedFrameCount"/> is
@@ -23,6 +21,4 @@ public enum ScanMode
     /// <c>null</c> until the file is fully consumed.
     /// </summary>
     Lazy,
-
-    #endregion
 }

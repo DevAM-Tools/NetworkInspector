@@ -11,8 +11,6 @@ namespace NetworkInspector.Core.Interfaces;
 /// </summary>
 public interface IExporterStatistics
 {
-    #region Properties
-
     /// <summary>Number of frames/packets successfully written.</summary>
     int WrittenCount
     {
@@ -48,6 +46,4 @@ public interface IExporterStatistics
     {
         get;
     }
-
-    #endregion
 }

@@ -1355,7 +1355,7 @@ public sealed class CsvExporter : IPacketListener, IErrorTolerantExporter, IPars
         }
 
         // Rare: estimate too small — fall back to the string path.
-        return _EncodeNullable(data.ToString());
+        return _EncodeNullable(data.ToString(null, CultureInfo.InvariantCulture));
     }
 
     /// <summary>

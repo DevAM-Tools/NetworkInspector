@@ -21,7 +21,8 @@ public sealed class LazyAppendDiagnostics : IIncrementalGenerator
     private static readonly DiagnosticDescriptor _DiagLazyAppend = new(
         id: "NIGEN015",
         title: "Prebuilt LazyString passed to MutField custom-text append",
-        messageFormat: "Pass format arguments to AppendWithCustomText so skip-tree can omit display-text allocation. Do not wrap them in LazyString.FormatLazy first.",
+        messageFormat: "Pass format arguments to AppendWithCustomText so skip-tree can omit display-text allocation. "
+            + "Do not wrap them in LazyString.FormatLazy first.",
         category: _DiagCategory,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true);

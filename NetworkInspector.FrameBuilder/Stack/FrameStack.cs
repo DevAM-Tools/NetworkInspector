@@ -9,7 +9,8 @@ namespace NetworkInspector.FrameBuilder;
 /// <remarks>
 /// <para>Typical usage:</para>
 /// <code>
-/// CreatedStack&lt;StatelessStack&lt;UdpLayer, StatelessStack&lt;IPv4Layer, StatelessStack&lt;EthernetLayer, StackEnd&gt;&gt;&gt;, NoTrailer, NoInterceptor&gt; stack =
+/// CreatedStack&lt;StatelessStack&lt;UdpLayer, StatelessStack&lt;IPv4Layer, StatelessStack&lt;EthernetLayer, StackEnd&gt;&gt;&gt;,
+/// NoTrailer, NoInterceptor&gt; stack =
 ///     FrameStack
 ///         .Start(new EthernetLayer(dstMac, srcMac))
 ///         .Then(new IPv4Layer(srcIp, dstIp))

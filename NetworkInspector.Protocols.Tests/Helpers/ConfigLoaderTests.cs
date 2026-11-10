@@ -25,7 +25,7 @@ internal sealed class ConfigLoaderTests
     [Test]
     public async Task LoadMissingFileReturnsNotFoundError()
     {
-        string path = Path.Combine(Path.GetTempPath(), "ni-config-loader-missing-" + Guid.NewGuid().ToString("N") + ".json");
+        string path = Path.Combine(Path.GetTempPath(), "ni-config-loader-missing-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".json");
 
         CanConfig? config = ConfigLoader.Load(path, CanConfigContext.Default.CanConfig, out string? error);
 

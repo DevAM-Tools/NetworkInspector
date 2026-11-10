@@ -322,7 +322,7 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
         }
         catch (Exception ex)
         {
-            _Core.ReportStartFailure(ExportErrorKind.IoError, $"Parquet output initialization failed: {ex.Message}");
+            _Core.ReportStartFailure(ExportErrorKind.IoError, Invariant($"Parquet output initialization failed: {ex.Message}"));
             return false;
         }
     }
@@ -516,8 +516,8 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
                 throw new ArgumentOutOfRangeException(
                     nameof(count),
                     count,
-                    $"Target packet count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} " +
-                    $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+                    Invariant($"Target packet count must not exceed {ArrayIndexIdRange.MaxCount.ToString(CultureInfo.InvariantCulture)} ") +
+                    Invariant($"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)})."));
             }
 
             _TargetPacketCount = count;
@@ -632,7 +632,7 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
                 throw new ArgumentOutOfRangeException(
                     nameof(compression),
                     compression,
-                    $"Compression must be one of {ParquetCompressions.AllowedCompressionText}.");
+                    Invariant($"Compression must be one of {ParquetCompressions.AllowedCompressionText}."));
             }
 
             if (!level.TryGetLevel(out CompressionLevel mappedLevel))
@@ -640,7 +640,7 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
                 throw new ArgumentOutOfRangeException(
                     nameof(level),
                     level,
-                    $"Compression level must be one of {ParquetCompressions.AllowedLevelText}.");
+                    Invariant($"Compression level must be one of {ParquetCompressions.AllowedLevelText}."));
             }
 
             _CompressionMethod = method;

@@ -46,10 +46,10 @@ internal sealed class PacketIndexQueryTests
         {
             builder.RegisterFieldInGroup(
                 protocolId,
-                $"large.proto.field{i}",
-                $"Field {i}",
+                Invariant($"large.proto.field{i}"),
+                Invariant($"Field {i}"),
                 FieldType.U64,
-                $"group{i}");
+                Invariant($"group{i}"));
         }
 
         fieldId = builder.RegisterFieldInGroup(
@@ -408,6 +408,41 @@ internal sealed class PacketIndexQueryTests
             long countP2 = index.Query().SelectProtocol(p2).Count();
             await Assert.That(countP1).IsEqualTo(3L);
             await Assert.That(countP2).IsEqualTo(3L);
+        }
+    }
+
+    [Test]
+    public async Task Query_SelectAfterOperations_StartsTheQueryAgain()
+    {
+        (Stack stack, ProtocolId p1, ProtocolId p2, _, _, _, _) = _BuildIndexTestStack();
+        using (stack)
+        {
+            PacketIndex index = new(stack);
+
+            // Packets 0-2 have p1, packets 1-3 have p2; the intersection is {1, 2}.
+            index.BeginPacket(0);
+            index.RecordProtocolPresence(p1);
+            index.EndPacket();
+            index.BeginPacket(1);
+            index.RecordProtocolPresence(p1);
+            index.RecordProtocolPresence(p2);
+            index.EndPacket();
+            index.BeginPacket(2);
+            index.RecordProtocolPresence(p1);
+            index.RecordProtocolPresence(p2);
+            index.EndPacket();
+            index.BeginPacket(3);
+            index.RecordProtocolPresence(p2);
+            index.EndPacket();
+
+            long selectTwice = index.Query().SelectProtocol(p1).SelectProtocol(p2).Count();
+            long selectAfterAnd = index.Query().SelectProtocol(p1).AndProtocol(p2).SelectProtocol(p1).Count();
+            bool replacedContainsFirst = index.Query().SelectProtocol(p2).SelectProtocol(p1).Contains(0);
+
+            // The second select replaces the result instead of intersecting with it.
+            await Assert.That(selectTwice).IsEqualTo(3L);
+            await Assert.That(selectAfterAnd).IsEqualTo(3L);
+            await Assert.That(replacedContainsFirst).IsTrue();
         }
     }
 

@@ -10,7 +10,7 @@ global using System.Threading;
 global using NetworkInspector.Core;
 global using NetworkInspector.Core.Ids;
 global using NetworkInspector.Core.Interfaces;
-global using NetworkInspector.Core.Settings;
+global using NetworkInspector.Settings;
 #endregion
 
 #region NetworkInspector.Protocols

@@ -20,7 +20,9 @@ namespace NetworkInspector.Core.Fields;
 [StructLayout(LayoutKind.Auto)]
 public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldValue>, ISpanFormattable, IUtf8SpanFormattable
 {
-    /// <summary>None value constant (container fields).</summary>
+    #region Data and custom representation
+
+    /// <summary>The value of a container field: no data and no custom representation.</summary>
     public static readonly FieldValue None;
 
     /// <summary>
@@ -58,6 +60,8 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     }
 
     /// <summary>Creates a field value from raw data and optional custom representation.</summary>
+    /// <param name="data">The value data; decides equality, ordering, and hashing.</param>
+    /// <param name="customRepresentation">The custom display representation, or the default <see cref="LazyString"/> for none.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private FieldValue(FieldValueData data, LazyString customRepresentation)
     {
@@ -65,80 +69,107 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
         _CustomRepresentation = customRepresentation;
     }
 
-    /// <summary>The field type discriminant.</summary>
+    /// <summary>The field type discriminant of <see cref="Data"/>.</summary>
     public FieldType Type
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => Data.Type;
     }
 
-    /// <summary>Creates a new FieldValue with a custom representation.</summary>
+    /// <summary>Creates a copy of this value that shows <paramref name="text"/> instead of the default text of the data.</summary>
+    /// <param name="text">The custom representation; the default <see cref="LazyString"/> removes it.</param>
+    /// <returns>A value with the same <see cref="Data"/> (so it equals this value) and the given representation.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public FieldValue WithCustomRepresentation(LazyString text) => new(Data, text);
 
-    #region Factory methods
+    #endregion
+
+    #region Creating values
 
     /// <summary>Creates a <see cref="FieldType.Bool"/> field value with an optional custom display representation.</summary>
     /// <param name="value">Boolean payload.</param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
+    /// <returns>A <see cref="FieldType.Bool"/> value holding <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewBool(bool value, LazyString custom = default) => new(FieldValueData.NewBool(value), custom);
+
     /// <summary>Creates a <see cref="FieldType.I64"/> (signed 64-bit integer) field value with an optional custom display representation.</summary>
     /// <param name="value">Signed 64-bit integer payload.</param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
+    /// <returns>An <see cref="FieldType.I64"/> value holding <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewI64(long value, LazyString custom = default) => new(FieldValueData.NewI64(value), custom);
+
     /// <summary>Creates a <see cref="FieldType.U64"/> (unsigned 64-bit integer) field value with an optional custom display representation.</summary>
     /// <param name="value">Unsigned 64-bit integer payload.</param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
+    /// <returns>A <see cref="FieldType.U64"/> value holding <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewU64(ulong value, LazyString custom = default) => new(FieldValueData.NewU64(value), custom);
+
     /// <summary>Creates a <see cref="FieldType.F64"/> (IEEE-754 double-precision) field value with an optional custom display representation.</summary>
     /// <param name="value">Double-precision floating-point payload.</param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
+    /// <returns>An <see cref="FieldType.F64"/> value holding <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewF64(double value, LazyString custom = default) => new(FieldValueData.NewF64(value), custom);
+
     /// <summary>Creates a <see cref="FieldType.String"/> field value with an optional custom display representation.</summary>
     /// <param name="value">String payload. The reference is stored as-is (no copy); <see langword="null"/> is stored as the empty string.</param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
+    /// <returns>A <see cref="FieldType.String"/> value holding <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewString(string value, LazyString custom = default) => new(FieldValueData.NewString(value), custom);
+
     /// <summary>Creates a <see cref="FieldType.Bytes"/> field value referencing the given byte memory and an optional custom display representation.</summary>
     /// <param name="value">
     /// Byte memory payload. Array-backed memory is referenced without copying, so the caller must not mutate the
     /// underlying array while the value is in use; memory that is not array-backed is copied.
     /// </param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
+    /// <returns>A <see cref="FieldType.Bytes"/> value over <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewBytes(ReadOnlyMemory<byte> value, LazyString custom = default) => new(FieldValueData.NewBytes(value), custom);
+
     /// <summary>Creates a <see cref="FieldType.MacAddress"/> field value with an optional custom display representation.</summary>
     /// <param name="value">48-bit MAC address payload.</param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
+    /// <returns>A <see cref="FieldType.MacAddress"/> value holding <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewMacAddress(MacAddress value, LazyString custom = default) => new(FieldValueData.NewMacAddress(value), custom);
+
     /// <summary>Creates a <see cref="FieldType.IPv4Address"/> field value with an optional custom display representation.</summary>
     /// <param name="value">IPv4 address payload.</param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
+    /// <returns>An <see cref="FieldType.IPv4Address"/> value holding <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewIPv4(IPv4Address value, LazyString custom = default) => new(FieldValueData.NewIPv4(value), custom);
+
     /// <summary>Creates a <see cref="FieldType.IPv6Address"/> field value with an optional custom display representation.</summary>
     /// <param name="value">IPv6 address payload.</param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
+    /// <returns>An <see cref="FieldType.IPv6Address"/> value holding <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewIPv6(IPv6Address value, LazyString custom = default) => new(FieldValueData.NewIPv6(value), custom);
+
     /// <summary>Creates a <see cref="FieldType.Eui64"/> field value with an optional custom display representation.</summary>
     /// <param name="value">64-bit EUI-64 identifier payload.</param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
+    /// <returns>An <see cref="FieldType.Eui64"/> value holding <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewEui64(Eui64 value, LazyString custom = default) => new(FieldValueData.NewEui64(value), custom);
+
     /// <summary>Creates a <see cref="FieldType.Uuid"/> field value with an optional custom display representation.</summary>
     /// <param name="value">128-bit UUID payload.</param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
+    /// <returns>A <see cref="FieldType.Uuid"/> value holding <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewUuid(Values.Uuid value, LazyString custom = default) => new(FieldValueData.NewUuid(value), custom);
+
     /// <summary>Creates a <see cref="FieldType.Timestamp"/> field value with an optional custom display representation.</summary>
     /// <param name="value">Timestamp payload (high-resolution, time-zone-agnostic).</param>
     /// <param name="custom">Optional custom display text. Pass <see langword="default"/> to use the type's default formatting.</param>
+    /// <returns>A <see cref="FieldType.Timestamp"/> value holding <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static FieldValue NewTimestamp(Timestamp value, LazyString custom = default) => new(FieldValueData.NewTimestamp(value), custom);
 
@@ -149,6 +180,8 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// evaluated result is cached in-place and shared across all copies of this
     /// <see cref="FieldValue"/>.
     /// </summary>
+    /// <param name="lazy">The deferred text that becomes the string payload.</param>
+    /// <returns>A <see cref="FieldType.String"/> value without a custom representation.</returns>
     internal static FieldValue NewLazyString(LazyString lazy) => new(FieldValueData.NewLazyString(lazy), default);
 
     #endregion
@@ -160,16 +193,23 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
 
     /// <inheritdoc/>
     public bool Equals(FieldValue other) => Data.Equals(other.Data);
+
     /// <inheritdoc/>
     public override bool Equals(object? obj) => obj is FieldValue other && Equals(other);
+
     /// <inheritdoc/>
     public override int GetHashCode() => Data.GetHashCode();
 
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/>
-    /// are equal (data only; custom representation ignored).</summary>
+    /// <summary>Whether two values are equal (data only; custom representation ignored).</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns><see langword="true"/> when <see cref="Data"/> of both values is equal.</returns>
     public static bool operator ==(FieldValue left, FieldValue right) => left.Equals(right);
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> and <paramref name="right"/>
-    /// are not equal (data only; custom representation ignored).</summary>
+
+    /// <summary>Whether two values are not equal (data only; custom representation ignored).</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns><see langword="true"/> when <see cref="Data"/> of the values differs.</returns>
     public static bool operator !=(FieldValue left, FieldValue right) => !left.Equals(right);
 
     #endregion
@@ -180,15 +220,32 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// Compares by data only, ignoring custom representation.
     /// Supports cross-type numeric comparison (I64 vs U64 vs F64).
     /// </summary>
+    /// <param name="other">The value to compare with.</param>
+    /// <returns>A negative number, zero, or a positive number when this value sorts before, equal to, or after <paramref name="other"/>.</returns>
     public int CompareTo(FieldValue other) => Data.CompareTo(other.Data);
 
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than <paramref name="right"/>.</summary>
+    /// <summary>Whether <paramref name="left"/> sorts before <paramref name="right"/> (data only).</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns><see langword="true"/> when <paramref name="left"/> is less than <paramref name="right"/>.</returns>
     public static bool operator <(FieldValue left, FieldValue right) => left.CompareTo(right) < 0;
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is greater than <paramref name="right"/>.</summary>
+
+    /// <summary>Whether <paramref name="left"/> sorts after <paramref name="right"/> (data only).</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns><see langword="true"/> when <paramref name="left"/> is greater than <paramref name="right"/>.</returns>
     public static bool operator >(FieldValue left, FieldValue right) => left.CompareTo(right) > 0;
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is less than or equal to <paramref name="right"/>.</summary>
+
+    /// <summary>Whether <paramref name="left"/> sorts before or equal to <paramref name="right"/> (data only).</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns><see langword="true"/> when <paramref name="left"/> is less than or equal to <paramref name="right"/>.</returns>
     public static bool operator <=(FieldValue left, FieldValue right) => left.CompareTo(right) <= 0;
-    /// <summary>Returns <see langword="true"/> if <paramref name="left"/> is greater than or equal to <paramref name="right"/>.</summary>
+
+    /// <summary>Whether <paramref name="left"/> sorts after or equal to <paramref name="right"/> (data only).</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns><see langword="true"/> when <paramref name="left"/> is greater than or equal to <paramref name="right"/>.</returns>
     public static bool operator >=(FieldValue left, FieldValue right) => left.CompareTo(right) >= 0;
 
     #endregion
@@ -203,8 +260,8 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// </summary>
     /// <param name="destination">Target span.</param>
     /// <param name="charsWritten">Characters written; 0 when the method returns <see langword="false"/>.</param>
-    /// <param name="format">Format string forwarded to the data formatter; ignored for a custom representation.</param>
-    /// <param name="provider">Format provider forwarded to the data formatter; ignored for a custom representation.</param>
+    /// <param name="format">Accepted for <see cref="ISpanFormattable"/> and ignored: a field value has one invariant text form.</param>
+    /// <param name="provider">Accepted for <see cref="ISpanFormattable"/> and ignored: a field value has one invariant text form.</param>
     /// <returns><see langword="false"/> when <paramref name="destination"/> is too small.</returns>
     public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
@@ -230,8 +287,8 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// </summary>
     /// <param name="utf8Destination">Target span.</param>
     /// <param name="bytesWritten">Bytes written; 0 when the method returns <see langword="false"/>.</param>
-    /// <param name="format">Format string forwarded to the data formatter; ignored for a custom representation.</param>
-    /// <param name="provider">Format provider forwarded to the data formatter; ignored for a custom representation.</param>
+    /// <param name="format">Accepted for <see cref="IUtf8SpanFormattable"/> and ignored: a field value has one invariant text form.</param>
+    /// <param name="provider">Accepted for <see cref="IUtf8SpanFormattable"/> and ignored: a field value has one invariant text form.</param>
     /// <returns><see langword="false"/> when <paramref name="utf8Destination"/> is too small.</returns>
     public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
@@ -254,16 +311,20 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// Returns the default string representation of the value: the custom representation if present, otherwise the formatted
     /// data value. It is the value part of the default display line of a field (see <see cref="Field.ToString()"/>).
     /// </summary>
+    /// <returns>The text; numbers use the invariant culture. A deferred custom representation is evaluated and cached.</returns>
     public override string ToString()
     {
         if (!CustomRepresentation.IsNull)
         {
             return CustomRepresentation.AsString;
         }
-        return Data.ToString();
+        return Data.ToString(null, CultureInfo.InvariantCulture);
     }
 
-    /// <summary>Returns the custom representation if present, otherwise the formatted data value.</summary>
+    /// <summary>Returns the custom representation if present, otherwise the formatted data value; both arguments are ignored.</summary>
+    /// <param name="format">Ignored: a field value has one invariant text form.</param>
+    /// <param name="formatProvider">Ignored: a field value has one invariant text form.</param>
+    /// <returns>The same text as <see cref="ToString()"/>.</returns>
     public string ToString(string? format, IFormatProvider? formatProvider) => ToString();
 
     #endregion
@@ -278,6 +339,10 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
     /// method (no interface) because every caller names the concrete type. The exporters format the data text, so they presize
     /// with <see cref="FieldValueData.TryGetStringSize"/>.
     /// </summary>
+    /// <param name="format">Ignored for a custom representation; passed to <see cref="FieldValueData.TryGetStringSize"/> otherwise.</param>
+    /// <param name="provider">Ignored for a custom representation; passed to <see cref="FieldValueData.TryGetStringSize"/> otherwise.</param>
+    /// <param name="size">The character count when the method returns <see langword="true"/>; 0 otherwise.</param>
+    /// <returns><see langword="true"/> when the size is known without formatting (see <see cref="FieldValueData.TryGetStringSize"/>).</returns>
     public bool TryGetStringSize(ReadOnlySpan<char> format, IFormatProvider? provider, out int size)
     {
         if (!CustomRepresentation.IsNull)
@@ -290,33 +355,65 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
 
     #endregion
 
-    #region Implicit operators
+    #region Implicit conversions
 
     // Integral conversions keep the signedness of the source type: signed sources produce I64, unsigned sources U64
     // (narrow types are widened first). So the field type, and therefore comparison and display behavior, follows the
     // C# type the protocol author passes in. Floating point maps to F64. Null strings and byte arrays map to None.
 
     /// <summary>Creates a Bool field value.</summary>
+    /// <param name="value">The boolean to wrap.</param>
+    /// <returns>A <see cref="FieldType.Bool"/> value.</returns>
     public static implicit operator FieldValue(bool value) => NewBool(value);
+
     /// <summary>Creates an I64 field value from a signed 64-bit integer.</summary>
+    /// <param name="value">The integer to wrap.</param>
+    /// <returns>An <see cref="FieldType.I64"/> value.</returns>
     public static implicit operator FieldValue(long value) => NewI64(value);
+
     /// <summary>Creates a U64 field value from an unsigned 64-bit integer.</summary>
+    /// <param name="value">The integer to wrap.</param>
+    /// <returns>A <see cref="FieldType.U64"/> value.</returns>
     public static implicit operator FieldValue(ulong value) => NewU64(value);
+
     /// <summary>Creates an I64 field value from a signed 32-bit integer.</summary>
+    /// <param name="value">The integer to wrap (widened to 64 bits).</param>
+    /// <returns>An <see cref="FieldType.I64"/> value.</returns>
     public static implicit operator FieldValue(int value) => NewI64(value);
+
     /// <summary>Creates a U64 field value from an unsigned 32-bit integer.</summary>
+    /// <param name="value">The integer to wrap (widened to 64 bits).</param>
+    /// <returns>A <see cref="FieldType.U64"/> value.</returns>
     public static implicit operator FieldValue(uint value) => NewU64(value);
+
     /// <summary>Creates an I64 field value from a signed 16-bit integer.</summary>
+    /// <param name="value">The integer to wrap (widened to 64 bits).</param>
+    /// <returns>An <see cref="FieldType.I64"/> value.</returns>
     public static implicit operator FieldValue(short value) => NewI64(value);
+
     /// <summary>Creates a U64 field value from an unsigned 16-bit integer.</summary>
+    /// <param name="value">The integer to wrap (widened to 64 bits).</param>
+    /// <returns>A <see cref="FieldType.U64"/> value.</returns>
     public static implicit operator FieldValue(ushort value) => NewU64(value);
+
     /// <summary>Creates an I64 field value from a signed byte.</summary>
+    /// <param name="value">The integer to wrap (widened to 64 bits).</param>
+    /// <returns>An <see cref="FieldType.I64"/> value.</returns>
     public static implicit operator FieldValue(sbyte value) => NewI64(value);
+
     /// <summary>Creates a U64 field value from an unsigned byte.</summary>
+    /// <param name="value">The integer to wrap (widened to 64 bits).</param>
+    /// <returns>A <see cref="FieldType.U64"/> value.</returns>
     public static implicit operator FieldValue(byte value) => NewU64(value);
+
     /// <summary>Creates an F64 field value.</summary>
+    /// <param name="value">The number to wrap.</param>
+    /// <returns>An <see cref="FieldType.F64"/> value.</returns>
     public static implicit operator FieldValue(double value) => NewF64(value);
+
     /// <summary>Creates a String field value (null produces None).</summary>
+    /// <param name="value">The string to wrap; <see langword="null"/> gives <see cref="None"/>.</param>
+    /// <returns>A <see cref="FieldType.String"/> value, or <see cref="None"/> for <see langword="null"/>.</returns>
     public static implicit operator FieldValue(string? value)
     {
         if (value is null)
@@ -325,9 +422,15 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
         }
         return NewString(value);
     }
+
     /// <summary>Creates a Bytes field value.</summary>
+    /// <param name="value">The memory to reference (see <see cref="NewBytes"/> for aliasing).</param>
+    /// <returns>A <see cref="FieldType.Bytes"/> value.</returns>
     public static implicit operator FieldValue(ReadOnlyMemory<byte> value) => NewBytes(value);
+
     /// <summary>Creates a Bytes field value from a byte array (null produces None).</summary>
+    /// <param name="value">The array to reference without copying; <see langword="null"/> gives <see cref="None"/>.</param>
+    /// <returns>A <see cref="FieldType.Bytes"/> value, or <see cref="None"/> for <see langword="null"/>.</returns>
     public static implicit operator FieldValue(byte[]? value)
     {
         if (value is null)
@@ -336,17 +439,35 @@ public readonly struct FieldValue : IEquatable<FieldValue>, IComparable<FieldVal
         }
         return NewBytes(value);
     }
+
     /// <summary>Creates a MacAddress field value.</summary>
+    /// <param name="value">The address to wrap.</param>
+    /// <returns>A <see cref="FieldType.MacAddress"/> value.</returns>
     public static implicit operator FieldValue(MacAddress value) => NewMacAddress(value);
+
     /// <summary>Creates an IPv4Address field value.</summary>
+    /// <param name="value">The address to wrap.</param>
+    /// <returns>An <see cref="FieldType.IPv4Address"/> value.</returns>
     public static implicit operator FieldValue(IPv4Address value) => NewIPv4(value);
+
     /// <summary>Creates an IPv6Address field value.</summary>
+    /// <param name="value">The address to wrap.</param>
+    /// <returns>An <see cref="FieldType.IPv6Address"/> value.</returns>
     public static implicit operator FieldValue(IPv6Address value) => NewIPv6(value);
+
     /// <summary>Creates an Eui64 field value.</summary>
+    /// <param name="value">The identifier to wrap.</param>
+    /// <returns>An <see cref="FieldType.Eui64"/> value.</returns>
     public static implicit operator FieldValue(Eui64 value) => NewEui64(value);
+
     /// <summary>Creates a Uuid field value.</summary>
+    /// <param name="value">The UUID to wrap.</param>
+    /// <returns>A <see cref="FieldType.Uuid"/> value.</returns>
     public static implicit operator FieldValue(Values.Uuid value) => NewUuid(value);
+
     /// <summary>Creates a Timestamp field value.</summary>
+    /// <param name="value">The timestamp to wrap.</param>
+    /// <returns>A <see cref="FieldType.Timestamp"/> value.</returns>
     public static implicit operator FieldValue(Timestamp value) => NewTimestamp(value);
 
     #endregion

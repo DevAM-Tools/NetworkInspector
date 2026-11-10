@@ -25,8 +25,6 @@ namespace NetworkInspector.Core.Interfaces;
 /// </remarks>
 public interface IErrorTolerantFrameSource : IFrameSource, IFrameSourceStatistics
 {
-    #region Properties
-
     /// <summary>
     /// Gets or sets the error tolerance mode.
     /// May be changed at any time, even while reading.
@@ -38,10 +36,6 @@ public interface IErrorTolerantFrameSource : IFrameSource, IFrameSourceStatistic
         get; set;
     }
 
-    #endregion
-
-    #region Events
-
     /// <summary>
     /// Event raised when a frame is skipped due to a recoverable error, in both modes: in
     /// <see cref="ErrorToleranceMode.Strict"/> mode it is raised once, for the error that ends sequential reading.
@@ -51,6 +45,4 @@ public interface IErrorTolerantFrameSource : IFrameSource, IFrameSourceStatistic
     /// </para>
     /// </summary>
     event EventHandler<FrameReadErrorEventArgs>? FrameSkipped;
-
-    #endregion
 }

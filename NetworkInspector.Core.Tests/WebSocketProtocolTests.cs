@@ -199,7 +199,8 @@ internal sealed class WebSocketProtocolTests
         {
             FieldId? opcodeField = stack.GetFieldId("websocket.opcode");
             await Assert.That(opcodeField).IsNotNull();
-            bool has = packet.TryGetFieldValue(opcodeField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(opcodeField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(1UL); // Text
@@ -216,7 +217,8 @@ internal sealed class WebSocketProtocolTests
         {
             FieldId? finField = stack.GetFieldId("websocket.fin");
             await Assert.That(finField).IsNotNull();
-            bool has = packet.TryGetFieldValue(finField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(finField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
@@ -234,7 +236,8 @@ internal sealed class WebSocketProtocolTests
         {
             FieldId? lenField = stack.GetFieldId("websocket.payload_length");
             await Assert.That(lenField).IsNotNull();
-            bool has = packet.TryGetFieldValue(lenField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(lenField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(50UL);
@@ -252,14 +255,16 @@ internal sealed class WebSocketProtocolTests
         {
             FieldId? maskField = stack.GetFieldId("websocket.mask");
             await Assert.That(maskField).IsNotNull();
-            bool hasMask = packet.TryGetFieldValue(maskField!.Value, out FieldValue maskVal, materialize: true); // materialize: true — need complete field tree for assertion
+            bool hasMask = packet.TryGetFieldValue(maskField!.Value, out FieldValue maskVal,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasMask).IsTrue();
             maskVal.Data.TryGetAsBool(out bool boolVal);
             await Assert.That(boolVal).IsTrue();
 
             FieldId? keyField = stack.GetFieldId("websocket.masking_key");
             await Assert.That(keyField).IsNotNull();
-            bool hasKey = packet.TryGetFieldValue(keyField!.Value, out FieldValue keyVal, materialize: true); // materialize: true — need complete field tree for assertion
+            bool hasKey = packet.TryGetFieldValue(keyField!.Value, out FieldValue keyVal,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(hasKey).IsTrue();
             keyVal.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(0x12345678UL);
@@ -279,7 +284,8 @@ internal sealed class WebSocketProtocolTests
         {
             FieldId? payloadField = stack.GetFieldId("websocket.payload");
             await Assert.That(payloadField).IsNotNull();
-            bool has = packet.TryGetFieldValue(payloadField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(payloadField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> bytesVal);
             // After unmasking, we should get back the original "Hello"
@@ -297,7 +303,8 @@ internal sealed class WebSocketProtocolTests
         {
             FieldId? opcodeField = stack.GetFieldId("websocket.opcode");
             await Assert.That(opcodeField).IsNotNull();
-            bool has = packet.TryGetFieldValue(opcodeField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(opcodeField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(8UL); // Close
@@ -316,7 +323,8 @@ internal sealed class WebSocketProtocolTests
         {
             FieldId? lenField = stack.GetFieldId("websocket.payload_length");
             await Assert.That(lenField).IsNotNull();
-            bool has = packet.TryGetFieldValue(lenField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(lenField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(200UL);

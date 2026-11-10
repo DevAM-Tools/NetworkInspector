@@ -99,7 +99,7 @@ internal sealed class SymbolResolver
         if (!symbol.IsValueSource)
         {
             return FilterError.TypeMismatch(
-                $"'{name}' is a protocol and has no value; compare one of its fields instead",
+                Invariant($"'{name}' is a protocol and has no value; compare one of its fields instead"),
                 position,
                 length);
         }
@@ -126,7 +126,7 @@ internal sealed class SymbolResolver
             if (fieldType is not FieldType.I64 and not FieldType.U64)
             {
                 return FilterError.TypeMismatch(
-                    $"'by:' requires an integer field, but '{name}' has type {fieldType}",
+                    Invariant($"'by:' requires an integer field, but '{name}' has type {fieldType}"),
                     position,
                     length);
             }

@@ -134,7 +134,7 @@ internal sealed class SettingsIntegrationTests
         builder.SettingsRegistrar.RegisterBoolSetting("test.a", "A", "test", true);
         builder.SettingsRegistrar.RegisterBoolSetting("test.b", "B", "test", false);
         Stack stack = builder.Build();
-        await Assert.That(stack.Settings.AllSettings.Count).IsEqualTo(2); // 2 user settings, no system settings
+        await Assert.That(stack.Settings.AllSettings.Count).IsEqualTo(2 + CoreLimits.All.Count); // 2 user settings plus the limits of Core
     }
 
     [Test]
@@ -145,7 +145,7 @@ internal sealed class SettingsIntegrationTests
         builder.SettingsRegistrar.RegisterBoolSetting("test.a", "A", "test", true);
         builder.SettingsRegistrar.RegisterStringSetting("test.b", "B", "test", "x");
         Stack stack = builder.Build();
-        await Assert.That(stack.Settings.SettingCount).IsEqualTo(2); // 2 user settings, no system settings
+        await Assert.That(stack.Settings.SettingCount).IsEqualTo(2 + CoreLimits.All.Count); // 2 user settings plus the limits of Core
     }
 
     [Test]
@@ -178,7 +178,8 @@ internal sealed class SettingsIntegrationTests
         builder.SettingsRegistrar.RegisterBoolSetting("b.y", "Y", "group2", false);
         Stack stack = builder.Build();
         IReadOnlyList<string> groups = stack.Settings.AllGroups;
-        await Assert.That(groups.Count).IsEqualTo(2); // group1, group2
+        int limitGroups = CoreLimits.All.Select(static definition => definition.Group).Distinct().Count();
+        await Assert.That(groups.Count).IsEqualTo(2 + limitGroups); // group1, group2, and the groups of the limits of Core
     }
 
     [Test]

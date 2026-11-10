@@ -18,7 +18,7 @@ internal sealed class LiteralParserTests
         FilterResult<FieldValueData> result = LiteralParser.Parse(_Token(kind, text));
         if (result.IsSuccess)
         {
-            throw new InvalidOperationException($"Expected '{text}' to fail as {kind}.");
+            throw new InvalidOperationException(Invariant($"Expected '{text}' to fail as {kind}."));
         }
         return result.Error;
     }

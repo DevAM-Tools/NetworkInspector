@@ -70,7 +70,7 @@ public readonly struct DhcpV4Layer : IStatelessLayer, IPayloadLayer, IPseudoHead
             if (options[i].Data.Length > 255)
             {
                 throw new ArgumentOutOfRangeException(nameof(options), options[i].Data.Length,
-                    $"DHCP option {options[i].Type} data must not exceed 255 bytes.");
+                    Invariant($"DHCP option {options[i].Type} data must not exceed 255 bytes."));
             }
             optionsLen += 2 + options[i].Data.Length;
         }

@@ -68,7 +68,7 @@ internal sealed class LazyStringTests
     public async Task LazyString_FormatLazy()
     {
         int x = 42;
-        LazyString s = LazyString.FormatLazy(x, static val => $"Value: {val}");
+        LazyString s = LazyString.FormatLazy(x, static val => Invariant($"Value: {val}"));
         await Assert.That(s.AsString).IsEqualTo("Value: 42");
     }
 

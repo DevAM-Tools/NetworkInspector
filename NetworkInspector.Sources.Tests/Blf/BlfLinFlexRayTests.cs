@@ -224,15 +224,15 @@ internal sealed class BlfLinFlexRayTests
             await Assert.That(cycleField).IsNotNull();
             await Assert.That(channelField).IsNotNull();
 
-            packet.TryGetFieldValue(frameIdField!.Value, out FieldValue frameIdValue, materialize: true); // materialize: true — need complete field tree for assertion
+            packet.TryGetFieldValue(frameIdField!.Value, out FieldValue frameIdValue, materialize: true); // materialize: true for the full field tree
             frameIdValue.Data.TryGetAsU64(out ulong frameId);
             await Assert.That(frameId).IsEqualTo(42UL);
 
-            packet.TryGetFieldValue(cycleField!.Value, out FieldValue cycleValue, materialize: true); // materialize: true — need complete field tree for assertion
+            packet.TryGetFieldValue(cycleField!.Value, out FieldValue cycleValue, materialize: true); // materialize: true for the full field tree
             cycleValue.Data.TryGetAsU64(out ulong cycle);
             await Assert.That(cycle).IsEqualTo(7UL);
 
-            packet.TryGetFieldValue(channelField!.Value, out FieldValue channelValue, materialize: true); // materialize: true — need complete field tree for assertion
+            packet.TryGetFieldValue(channelField!.Value, out FieldValue channelValue, materialize: true); // materialize: true for the full field tree
             channelValue.Data.TryGetAsString(out string? channel);
             await Assert.That(channel).IsEqualTo("Channel A");
         }

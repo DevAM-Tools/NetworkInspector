@@ -15,7 +15,7 @@ internal sealed class FilterFlankPruneScenario : FilterScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Flank with tcp gate \"{Expression}\" on UDP-only traffic (eval short-circuit, not candidate prune).");
 
     /// <inheritdoc/>

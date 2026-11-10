@@ -840,7 +840,7 @@ public sealed class Session : ISession, ISessionReader
         {
             failure = new SessionFailure(
                 SessionErrorCode.InvalidPhase,
-                FormattableString.Invariant(
+                Invariant(
                     $"TryRestart requires a Running, Stopped or Faulted phase and no shutdown. Current phase: {_State.Phase}."));
             return false;
         }
@@ -1533,7 +1533,7 @@ public sealed class Session : ISession, ISessionReader
         };
         return new SessionException(
             SessionErrorCode.FrameUnavailable,
-            FormattableString.Invariant(
+            Invariant(
                 $"Restart cannot re-parse PacketId {id.Value.ToString(CultureInfo.InvariantCulture)}: {reason}."));
     }
 
@@ -2139,7 +2139,7 @@ public sealed class Session : ISession, ISessionReader
             Job job = new(
                 jobId,
                 uiName,
-                $"Source: {uiName}",
+                Invariant($"Source: {uiName}"),
                 JobStackBinding.Independent,
                 generation: -1,
                 ct => _RunSourceLoop(source, sourceInfo, ct),
@@ -2772,7 +2772,7 @@ public sealed class Session : ISession, ISessionReader
     {
         // An invalid id here means the id allocator and the packet-id range disagree: a broken invariant, so it throws.
         throw new InvalidOperationException(
-            $"Failed to record mapping for PacketId {packetId.Value.ToString(CultureInfo.InvariantCulture)}. " +
+            Invariant($"Failed to record mapping for PacketId {packetId.Value.ToString(CultureInfo.InvariantCulture)}. ") +
             "The packet ID is invalid.");
     }
 
@@ -2836,8 +2836,8 @@ public sealed class Session : ISession, ISessionReader
         {
             throw new SessionException(
                 SessionErrorCode.PacketIdExhausted,
-                $"Maximum packet ID count exceeded. Valid packet IDs are 0..{Core.Ids.ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)} " +
-                $"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)}).");
+                Invariant($"Maximum packet ID count exceeded. Valid packet IDs are 0..{Core.Ids.ArrayIndexIdRange.MaxValue.ToString(CultureInfo.InvariantCulture)} ") +
+                Invariant($"(Array.MaxLength={Array.MaxLength.ToString(CultureInfo.InvariantCulture)})."));
         }
 
         return idValue;
@@ -3140,7 +3140,7 @@ public sealed class Session : ISession, ISessionReader
         {
             // The '!' below is safe: a null filter is returned as is by _TryBindFilterToStack and cannot fail to bind.
             throw new ArgumentException(
-                FormattableString.Invariant(
+                Invariant(
                     $"The filter '{filter!.Expression}' was compiled for another stack and cannot be re-bound to the session stack: ")
                 + bindFailure.Message,
                 nameof(filter));

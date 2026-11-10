@@ -24,9 +24,9 @@ public enum ParseDepth : byte
 /// <summary>
 /// What one consumer needs from the parse of every packet of a run. Combine demands with <see cref="ParsePlan.TryCreate"/>.
 /// <para>
-/// <b>Why demands exist:</b> before the parse plan the pipeline fixed the parse work (the CLI always built a field tree) and
-/// every consumer adapted to it, so an export of two values paid for the tree of every packet. A demand turns this around: each
-/// consumer states what it needs, and the plan takes the least work that serves all of them.
+/// <b>Why demands exist:</b> when the pipeline fixes the parse work (always a field tree), every consumer pays for it, so an
+/// export of two values pays for the tree of every packet. A demand turns this around: each consumer states what it needs, and
+/// the plan takes the least work that serves all of them.
 /// </para>
 /// <para>
 /// A demand that carries an observer, a cache, or an index needs at least <see cref="ParseDepth.Packet"/>; the plan raises a
@@ -62,6 +62,7 @@ public readonly struct ParseDemand
 
     /// <summary>A consumer that receives fields through <paramref name="observer"/> during a parse without field tree.</summary>
     /// <param name="observer">Observer and watches; the observer must not be null.</param>
+    /// <returns>A demand of depth <see cref="ParseDepth.Packet"/> that carries <paramref name="observer"/>.</returns>
     /// <exception cref="ArgumentException"><paramref name="observer"/> has no observer.</exception>
     public static ParseDemand Fields(in ParseObserver observer)
     {

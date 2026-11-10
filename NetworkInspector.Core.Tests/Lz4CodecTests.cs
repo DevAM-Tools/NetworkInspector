@@ -35,14 +35,14 @@ internal sealed class Lz4CodecTests
         int maxSize = Lz4Codec.MaxCompressedSize(input.Length);
         if (maxSize < 0)
         {
-            throw new InvalidOperationException($"Lz4Codec.MaxCompressedSize returned {maxSize} for {input.Length}-byte input");
+            throw new InvalidOperationException(Invariant($"Lz4Codec.MaxCompressedSize returned {maxSize} for {input.Length}-byte input"));
         }
 
         byte[] buf = new byte[maxSize];
         int len = Lz4Codec.Compress(input, buf);
         if (len < 0)
         {
-            throw new InvalidOperationException($"Lz4Codec.Compress returned {len} for {input.Length}-byte input");
+            throw new InvalidOperationException(Invariant($"Lz4Codec.Compress returned {len} for {input.Length}-byte input"));
         }
         return buf[0..len];
     }
@@ -54,7 +54,7 @@ internal sealed class Lz4CodecTests
         int written = Lz4Codec.Decompress(compressed, output);
         if (written != originalSize)
         {
-            throw new InvalidOperationException($"Lz4Codec.Decompress wrote {written}, expected {originalSize}");
+            throw new InvalidOperationException(Invariant($"Lz4Codec.Decompress wrote {written}, expected {originalSize}"));
         }
         return output;
     }
@@ -532,19 +532,19 @@ internal sealed class Lz4CodecTests
                     int len = Lz4Codec.Compress(input, buf);
                     if (len <= 0)
                     {
-                        throw new InvalidOperationException($"Thread {threadId}: Compress returned {len}");
+                        throw new InvalidOperationException(Invariant($"Thread {threadId}: Compress returned {len}"));
                     }
 
                     byte[] recovered = new byte[input.Length];
                     int written = Lz4Codec.Decompress(buf.AsSpan(0, len), recovered);
                     if (written != input.Length)
                     {
-                        throw new InvalidOperationException($"Thread {threadId}: Decompress returned {written}, expected {input.Length}");
+                        throw new InvalidOperationException(Invariant($"Thread {threadId}: Decompress returned {written}, expected {input.Length}"));
                     }
 
                     if (!recovered.AsSpan().SequenceEqual(input))
                     {
-                        throw new InvalidOperationException($"Thread {threadId}: Roundtrip data mismatch");
+                        throw new InvalidOperationException(Invariant($"Thread {threadId}: Roundtrip data mismatch"));
                     }
                 }
             });

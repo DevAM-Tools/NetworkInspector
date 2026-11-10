@@ -7,8 +7,6 @@ namespace NetworkInspector.Core.Interfaces;
 /// </summary>
 public interface IFileSourceOptions
 {
-    #region Properties
-
     /// <summary>
     /// Scan mode: Full scans the entire file upfront, Lazy scans on demand.
     /// A source that cannot scan lazily reports <see cref="ScanMode.Full"/> (the ASC options always do).
@@ -38,6 +36,4 @@ public interface IFileSourceOptions
     {
         get;
     }
-
-    #endregion
 }

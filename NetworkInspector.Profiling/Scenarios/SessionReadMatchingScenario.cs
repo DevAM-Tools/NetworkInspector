@@ -68,7 +68,7 @@ internal sealed class SessionReadMatchingScenario : IProfilingScenario, IDisposa
     };
 
     /// <inheritdoc/>
-    public string Description => FormattableString.Invariant(
+    public string Description => Invariant(
         $"PrepareIteration: Session+index+listener \"{_Expression}\"; Run: ingest + Matching pulls, {FrameCount:N0} frames.");
 
     /// <inheritdoc/>
@@ -153,7 +153,7 @@ internal sealed class SessionReadMatchingScenario : IProfilingScenario, IDisposa
     /// <inheritdoc/>
     public void Cleanup()
     {
-        Console.WriteLine(FormattableString.Invariant($"  Matched packets in last iteration: {_Listener?.Matched:N0}."));
+        Console.WriteLine(Invariant($"  Matched packets in last iteration: {_Listener?.Matched:N0}."));
         Dispose();
     }
 

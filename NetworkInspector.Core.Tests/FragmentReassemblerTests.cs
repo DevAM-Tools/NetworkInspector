@@ -418,7 +418,8 @@ internal sealed class FragmentReassemblerTests
         FragmentBuffer<IntKey> buffer = _Buffer();
         FragmentReassemblyOptions options = FragmentReassemblyOptions.IPv4;
         _ = _BufferAdd(buffer, 0, false, [0x01, 0x02, 0x03, 0x04], in options);
-        System.Reflection.FieldInfo? totalLengthField = typeof(FragmentBuffer<IntKey>).GetField("_TotalLength", BindingFlags.NonPublic | BindingFlags.Instance);
+        System.Reflection.FieldInfo? totalLengthField = typeof(FragmentBuffer<IntKey>).GetField("_TotalLength",
+            BindingFlags.NonPublic | BindingFlags.Instance);
         await Assert.That(totalLengthField).IsNotNull();
         totalLengthField!.SetValue(buffer, 2);
 
@@ -433,7 +434,8 @@ internal sealed class FragmentReassemblerTests
         FragmentReassemblyOptions options = FragmentReassemblyOptions.IPv4;
         _ = _BufferAdd(buffer, 0, true, [0x01, 0x02, 0x03, 0x04], in options);
         _ = _BufferAdd(buffer, 6, false, [0x05, 0x06], in options);
-        System.Reflection.FieldInfo? storedBytesField = typeof(FragmentBuffer<IntKey>).GetField("_StoredBytes", BindingFlags.NonPublic | BindingFlags.Instance);
+        System.Reflection.FieldInfo? storedBytesField = typeof(FragmentBuffer<IntKey>).GetField("_StoredBytes",
+            BindingFlags.NonPublic | BindingFlags.Instance);
         await Assert.That(storedBytesField).IsNotNull();
         storedBytesField!.SetValue(buffer, 8L);
 
@@ -476,7 +478,7 @@ internal sealed class FragmentReassemblerTests
     }
 
     [Test]
-    public async Task IpPresetsHaveTheOriginalValues()
+    public async Task IpPresetsTakeTheDefaultsOfTheLimits()
     {
         FragmentReassemblyOptions v4 = FragmentReassemblyOptions.IPv4;
         FragmentReassemblyOptions v6 = FragmentReassemblyOptions.IPv6;
@@ -484,7 +486,7 @@ internal sealed class FragmentReassemblerTests
         await Assert.That(v4.MaxPending).IsEqualTo(1024);
         await Assert.That(v4.MaxDatagramLength).IsEqualTo(65535);
         await Assert.That(v4.MaxFragments).IsEqualTo(8192);
-        await Assert.That(v4.MaxBufferedBytes).IsEqualTo(long.MaxValue);
+        await Assert.That(v4.MaxBufferedBytes).IsEqualTo(64L << 20);
         await Assert.That(v4.OverlapPolicy).IsEqualTo(FragmentOverlapPolicy.KeepLargestDuplicate);
         await Assert.That(v6.OverlapPolicy).IsEqualTo(FragmentOverlapPolicy.DiscardDatagram);
         await Assert.That(v6.EvictionPolicy).IsEqualTo(FragmentEvictionPolicy.OldestCreated);
@@ -1126,7 +1128,7 @@ internal sealed class FragmentReassemblerTests
                 }
             }
 
-            await Assert.That(result.Kind).IsEqualTo(FragmentOutcomeKind.Complete).Because($"seed {seed} round {round}");
+            await Assert.That(result.Kind).IsEqualTo(FragmentOutcomeKind.Complete).Because(Invariant($"seed {seed} round {round}"));
             await Assert.That(result.Payload).IsEquivalentTo(original);
             int[] contributors = result.Contributors!;
             await Assert.That(contributors.Distinct().Count()).IsEqualTo(contributors.Length);
@@ -1175,7 +1177,8 @@ internal sealed class FragmentReassemblerTests
         long beyond = allocated - allowed;
         await Assert.That(last.Kind).IsEqualTo(FragmentOutcomeKind.Complete);
         await Assert.That(last.Payload.Length).IsEqualTo(Count * fragment.Length);
-        await Assert.That(beyond).IsLessThan(64 * 1024).Because($"allocated {allocated} bytes, {beyond} beyond the payload and the contributor array");
+        await Assert.That(beyond).IsLessThan(64 * 1024)
+            .Because(Invariant($"allocated {allocated} bytes, {beyond} beyond the payload and the contributor array"));
     }
 
     #endregion

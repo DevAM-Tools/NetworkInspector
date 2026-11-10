@@ -119,8 +119,7 @@ ni convert <input> [<input2> ...] --output <path> [options]
 | `--tolerant` | Skip unreadable records instead of aborting; a source that fails again before it delivered a frame is dropped |
 | `--blf-cache-size <MiB>` | BLF container cache budget (max 2047) |
 | `--profile <name>`, `--settings-path <dir>` | Protocol settings profile and storage (used with `--filter`) |
-| `--settings-max-config-file-bytes <bytes>` | Max settings/config JSON size (default 1073741824; `<= 0` disables) |
-| `--settings-max-json-depth <n>` | Max settings/config JSON depth (default 1024; `<= 0` disables) |
+| `--set <key>=<value>` | Override one setting for this run only (repeatable; nothing is written). A limit takes a number with a unit such as `64MiB`, or `off`, for example `--set settings.maxFileSize=1GiB`. See [`ni settings describe --limits`](#ni-settings) |
 
 Output formats:
 
@@ -165,7 +164,7 @@ ni export <input> [<input2> ...] --output <path> [--format <spec>] [options]
 | `--filter <expr>` | Export only matching packets |
 | `--progress <N>`, `--tolerant`, `--blf-cache-size <MiB>` | As for `convert` |
 | `--verbose` | Print one line `parse: …` before the first frame that says which parse work the run chose (see Choosing what to export) |
-| `--profile <name>`, `--settings-path <dir>`, `--settings-max-*` | Protocol settings |
+| `--profile <name>`, `--settings-path <dir>`, `--set <key>=<value>` | Protocol settings, and a one-run override of any setting |
 
 Export formats:
 
@@ -315,12 +314,29 @@ ni settings list  [--scope application|profile|all] [--group <group>] [--json]
 ni settings get   <name> [--scope application|profile] [--group <group>]
 ni settings set   <name> <value> [--scope application|profile] [--group <group>]
 ni settings reset <name> [--scope application|profile]
+ni settings describe <name> [--format text|json]
+ni settings describe --limits [--format text|json|markdown]
 ```
 
 Reads and changes the application settings and the settings of one profile (`--profile`, default `default`), the
 settings of plugins included. `list` prints `scope  name  type  value` per line (`--json` adds the default, the
 description, the activation, and whether a value is stored); `get` prints the value; `set` prints `name = value`;
-`reset` removes the stored value so that the default applies again.
+`reset` removes the stored value so that the default applies again. `describe` says what a setting is; for a limit it
+prints the unit, the value and the default, the allowed range, and in plain words what the limit bounds, why it exists, how
+it helps, what a smaller and a larger value do, and what `off` means. `describe --limits` lists every limit (a table, a JSON
+array with the same fields as one key, or Markdown with one section per limit).
+
+- **Limits.** The limits of the settings library are settings of the application scope: `settings.maxFileSize` (64 MiB),
+  `settings.maxJsonDepth` (64), `settings.folderLockTimeout` (2 s), `settings.maxGroupFiles` (1,024), and
+  `settings.maxTextLength` (1,048,576 characters). A limit takes a number with a unit (`256MiB`, `90s`) or `off`; a decimal
+  unit such as `MB` is refused with the binary spelling. A stored limit lives in `application/settings.json`, is read first,
+  and bounds every other settings file of the run.
+- **`--set <key>=<value>`.** Every command accepts it, any number of times. The value is in effect for this run only and
+  nothing is written (`settings set` and `settings reset` refuse it, because they store or remove values); a repeated key
+  takes the last value. The loader limits are in effect before the first settings file is read, so
+  `ni settings list --set settings.maxFileSize=1GiB` loads a file that the stored limit would skip. An unknown key or a value
+  that does not fit is refused before any work, with the same message as `settings set` (and the closest known names).
+  `--settings-max-config-file-bytes` and `--settings-max-json-depth` are gone: the program names the `--set` to use.
 
 - **Text form.** Values are `true`/`false`, numbers, hex bytes (`0A1B`), enumeration names, text, and arrays as JSON
   (`[1,2]`) or comma lists. A value that does not fit is refused with one line that names the setting, the problem, and the

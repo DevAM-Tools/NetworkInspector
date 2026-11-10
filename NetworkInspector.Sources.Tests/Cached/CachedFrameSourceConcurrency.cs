@@ -69,21 +69,21 @@ internal static class CachedFrameSourceConcurrency
                     Frame? cached = source.FrameById(i);
                     if (cached is null)
                     {
-                        throw new InvalidOperationException($"FrameById returned null for published id {i}.");
+                        throw new InvalidOperationException(Invariant($"FrameById returned null for published id {i}."));
                     }
 
                     Frame expected = snapshots[i];
                     byte[] expectedPayload = payloadClones[i];
                     if (!cached.Value.Data.Span.SequenceEqual(expectedPayload))
                     {
-                        throw new InvalidOperationException($"Payload mismatch at id {i}.");
+                        throw new InvalidOperationException(Invariant($"Payload mismatch at id {i}."));
                     }
 
                     if (cached.Value.Timestamp != expected.Timestamp
                         || cached.Value.LinkType != expected.LinkType
                         || cached.Value.InterfaceId != expected.InterfaceId)
                     {
-                        throw new InvalidOperationException($"Metadata mismatch at id {i}.");
+                        throw new InvalidOperationException(Invariant($"Metadata mismatch at id {i}."));
                     }
                 }
             }));

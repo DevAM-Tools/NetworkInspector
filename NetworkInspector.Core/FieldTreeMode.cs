@@ -8,8 +8,6 @@ namespace NetworkInspector.Core;
 /// </summary>
 public enum FieldTreeMode : byte
 {
-    #region Public API
-
     /// <summary>
     /// Default. FieldBodies and tree links are written. The sealed packet is safe to retain, filter, export, and walk.
     /// </summary>
@@ -24,6 +22,4 @@ public enum FieldTreeMode : byte
     /// <see langword="false"/>.
     /// </summary>
     Skip = 1,
-
-    #endregion
 }

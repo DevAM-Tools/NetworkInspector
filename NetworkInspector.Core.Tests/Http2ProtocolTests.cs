@@ -148,7 +148,8 @@ internal sealed class Http2ProtocolTests
         {
             FieldId? typeField = stack.GetFieldId("http2.frame.type");
             await Assert.That(typeField).IsNotNull();
-            bool has = packet.TryGetFieldValue(typeField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(typeField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(4UL); // SETTINGS
@@ -167,7 +168,8 @@ internal sealed class Http2ProtocolTests
         {
             FieldId? streamField = stack.GetFieldId("http2.frame.stream_id");
             await Assert.That(streamField).IsNotNull();
-            bool has = packet.TryGetFieldValue(streamField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(streamField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(1UL);
@@ -186,7 +188,8 @@ internal sealed class Http2ProtocolTests
         {
             FieldId? lenField = stack.GetFieldId("http2.frame.length");
             await Assert.That(lenField).IsNotNull();
-            bool has = packet.TryGetFieldValue(lenField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(lenField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(100UL);
@@ -204,7 +207,8 @@ internal sealed class Http2ProtocolTests
         {
             FieldId? flagsField = stack.GetFieldId("http2.frame.flags");
             await Assert.That(flagsField).IsNotNull();
-            bool has = packet.TryGetFieldValue(flagsField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(flagsField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsU64(out ulong u64Val);
             await Assert.That(u64Val).IsEqualTo(1UL);
@@ -222,7 +226,8 @@ internal sealed class Http2ProtocolTests
         {
             FieldId? payloadField = stack.GetFieldId("http2.frame.payload");
             await Assert.That(payloadField).IsNotNull();
-            bool has = packet.TryGetFieldValue(payloadField!.Value, out FieldValue value, materialize: true); // materialize: true — need complete field tree for assertion
+            bool has = packet.TryGetFieldValue(payloadField!.Value, out FieldValue value,
+                materialize: true); // materialize: true — need complete field tree for assertion
             await Assert.That(has).IsTrue();
             value.Data.TryGetAsBytes(out ReadOnlyMemory<byte> bytesVal);
             await Assert.That(bytesVal.Length).IsEqualTo(4);

@@ -20,7 +20,7 @@ internal sealed class FilterFlankScenario : FilterScenarioBase
 
     /// <inheritdoc/>
     public override string Description =>
-        FormattableString.Invariant(
+        Invariant(
             $"Flank match \"{Expression}\" with srcport spikes every {SpikePeriod} packets.");
 
     /// <inheritdoc/>

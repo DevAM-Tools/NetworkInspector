@@ -10,20 +10,13 @@ namespace NetworkInspector.Core.Errors;
 /// </summary>
 /// <param name="name">The rejected name; also reported in the message.</param>
 public sealed class InvalidNameRegistrationException(string name)
-    : RegistrationException($"Invalid name: '{name}'. Names must be dot-separated C-style identifiers (e.g. \"ip.src\", \"tcp.flags.syn\").")
+    : RegistrationException(Invariant($"Invalid name: '{name}'. Names must be dot-separated C-style identifiers (e.g. \"ip.src\", \"tcp.flags.syn\")."))
 {
-    #region Properties
-
     /// <summary>The invalid name that failed validation.</summary>
     public string Name { get; } = name;
 
-    #endregion
-
-    #region Factory Methods
-
     /// <summary>Creates an invalid-name exception for the given name.</summary>
     /// <param name="name">The rejected name.</param>
+    /// <returns>The exception, ready to be thrown by the core.</returns>
     internal static InvalidNameRegistrationException For(string name) => new(name);
-
-    #endregion
 }

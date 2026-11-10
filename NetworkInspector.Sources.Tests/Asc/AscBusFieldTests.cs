@@ -43,7 +43,7 @@ internal sealed class AscBusFieldTests
     [Arguments("", (byte)0)]
     public async Task LinLineCarriesTheProtectedIdAndTheChecksumModel(string csm, byte expectedBits)
     {
-        byte[] line = Encoding.ASCII.GetBytes($"0.100000 Li 10 Rx 2 01 02 checksum = 7A {csm}".TrimEnd());
+        byte[] line = Encoding.ASCII.GetBytes(Invariant($"0.100000 Li 10 Rx 2 01 02 checksum = 7A {csm}").TrimEnd());
 
         bool ok = AscLinParser.TryParse(line, 16, out _, out _, out byte[] frame);
 
