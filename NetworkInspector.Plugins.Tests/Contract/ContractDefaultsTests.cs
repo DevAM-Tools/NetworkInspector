@@ -55,7 +55,7 @@ internal sealed class ContractDefaultsTests
         return false;
     }
 
-    private static bool _RefuseExporter(ExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
+    private static bool _RefuseExporter(StreamExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         listener = null;
@@ -106,15 +106,15 @@ internal sealed class ContractDefaultsTests
     }
 
     [Test]
-    public async Task ExporterRegistrationKeepsGivenDelegatesAndValues()
+    public async Task ExporterRegistrationKeepsGivenCreationAndValues()
     {
         Action<SettingsRegistrar> options = static registrar => registrar.RegisterBoolSetting("flag", "Flag", "", true);
-        ExporterCreate<IPacketListener> create = _RefuseExporter;
+        ExporterCreation<IPacketListener> create = ExporterCreation.ForStreams<IPacketListener>(_RefuseExporter);
 
         ExporterRegistration<IPacketListener> registration = new("Fmt", "Name", "Description", ".fmt", options, create);
 
         await Assert.That(registration.RegisterOptions).IsSameReferenceAs(options);
-        await Assert.That(registration.Create).IsSameReferenceAs(create);
+        await Assert.That(registration.Creation).IsSameReferenceAs(create);
         await Assert.That(registration.FileExtension).IsEqualTo(".fmt");
     }
 
@@ -151,9 +151,9 @@ internal sealed class ContractDefaultsTests
     {
         string[] expected =
         [
-            "ExportRequest", "ExporterCreate`1", "ExporterRegistration`1", "IPlugin", "IPluginBuilder", "IPluginContext",
-            "IPluginLog", "PluginDependency", "PluginError", "PluginErrorCode", "PluginInfo", "SourceCreate", "SourceRegistration",
-            "SourceRequest",
+            "ExporterCreation", "ExporterCreation`1", "ExporterRegistration`1", "FileExporterCreate`1", "FileExportRequest",
+            "IPlugin", "IPluginBuilder", "IPluginContext", "IPluginLog", "PluginDependency", "PluginError", "PluginErrorCode",
+            "PluginInfo", "SourceCreate", "SourceRegistration", "SourceRequest", "StreamExporterCreate`1", "StreamExportRequest",
         ];
 
         string[] exported = [.. typeof(IPlugin).Assembly.GetExportedTypes().Select(static type => type.Name).Order(StringComparer.Ordinal)];

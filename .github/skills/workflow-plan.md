@@ -1,10 +1,17 @@
 # Plan Workflow
 
-Load on `/plan`. Apply `copilot-instructions.md` Sections 2–4.
+Load on `/plan`, or from `/evolve`. Also load now: `tech-spec.md`, `tech-reqtrace.md`, `tech-docs.md`, `tech-sweep.md`. Apply `copilot-instructions.md`.
 
-Plans are for **human acceptance** and for a **weaker executing agent**. Before/After, locked `How`, test **content** (`TEST-<AREA>-<TOPIC>`), and step acceptance criteria are the handoff. Prefer fenced snippets over prose when describing types, APIs, algorithms, control flow, or file shape; prose carries why, constraints, and what code cannot show. Extra illustrative snippets (call-site usage, data examples, test shape) are welcome throughout the plan. They do not replace locked Before/After or `TEST-<AREA>-<TOPIC>` **Content**. Do not treat existing files under `plans/` as style examples unless the user points at one. Do not compress step `How`, Test case **Content**, or Requirements-fit. Do not copy the requirement list into the plan.
+A plan is the handoff to a **weaker executing agent**. Locked `How`, Before/After, and test cards leave no choice. A person reads Step Overview and Expected Experience. Prefer fenced snippets over prose for types, APIs, algorithms, control flow, and file shape; prose carries why and constraints. Never compress step `How`. Never copy requirements or test cards into the plan: link. Do not treat files under `plans/` as style examples unless the user names one.
 
-## Stage Order
+## Modes
+
+| Mode | When | Approval | Open points |
+|------|------|----------|-------------|
+| Interactive | `/plan` | The person approves the plan | Grill Me in chat |
+| Autonomous | Inside `/evolve` | Gate A already covers it; start implementing | Decision class → card in `spec/open.md`; the steps that do not depend on it continue |
+
+## Stages
 
 0. Requirements
 1. Gather Context
@@ -12,468 +19,135 @@ Plans are for **human acceptance** and for a **weaker executing agent**. Before/
 3. Grill Me
 4. Reconcile
 5. Decision Loop
-6. Write Plan
+6. Write Plan (read `workflow-plan-templates.md` now)
 7. Coverage Check
 
 ## Stage 0 — Requirements
 
-- If a requirements file already exists (user path, attached workspace doc, or `requirements/req_<slug>.md`): **read it in full** and use it. Do not rewrite outcomes that are already clear. That file is the high-level **user-view** system description (`workflow-requirements.md`). Do not turn it into a task list in the plan.
-- Else execute `workflow-requirements.md` (write `requirements/req_<slug>.md` from an explicit list without reinventing, or run the full requirements workflow), then continue.
-- The plan **links** that file. It does **not** copy the requirement list or Done-when text. Section 4.6: every file reference is a clickable relative Markdown link (from `plans/`, or the user-given path). Bare backticks are not enough.
-- Map every requirement ID that has Done-when in Target Solution and Coverage. Cite each ID as written in the linked file (`REQ-<AREA>-<TOPIC>` when this workflow wrote it). Do not renumber a supplied list. Steps do **not** cite requirement IDs in `How`. Tick `Met` in the **requirements file** on each requirement whose Done-when this check ran (step close and Requirements-fit).
+- A requirements source exists (`spec/`, user path, attached doc): read the entries in scope in full. Do not rewrite clear outcomes. Do not turn them into a task list.
+- Else execute `workflow-requirements.md`, then continue.
+- The plan links the area files. Map every requirement in scope in Target Solution and Coverage. Never cite requirement IDs inside a step `How`.
 
 ## Stage 1 — Gather Context
 
-- Run Tech Load Protocol per `copilot-instructions.md` Section 3 (`tech-docs.md` always).
-- Read before acting (Section 4.6, `tech-docs.md` § Reading tiers). Record what was read and which docs are missing in the Context Anchor.
-- Read relevant code, tests, docs, interfaces, build config.
-- Read every user-attached architecture, guide, requirement, or brief **in full**.
-- Run the Impact search (`tech-docs.md` § Impact search). Enumerate all affected files from it, docs included, before planning.
-- A design that breaks a documented boundary, dependency direction, flow, or invariant is a Grill Me question (Section 4.16 form), never a silent choice.
-- Identify interface candidates, hot paths, and (for web UI) Playwright journeys.
-- Build test **content** (Stage 6 Test cases). Apply `tech-test.md`.
-- Identify public API surface when this is a library or other public contract.
+- Run the Tech Load Protocol (Section 3). Read before acting (`tech-docs.md` § Reading tiers). Record what was read and which docs are missing on the Context Anchor `Read:` line.
+- Read relevant code, tests, docs, interfaces, build config. Read user-attached docs in full.
+- Run the Impact search (`tech-docs.md` § Impact search). Enumerate all affected files, docs included. Each later lands in a step `Where` or `Docs` field, or in Out with a reason.
+- ❗ A design that breaks a documented boundary, dependency, flow, or invariant is Decision class, never a silent choice.
+- ❗ Check every existing member the plan names against the code by name. A snippet that calls a missing member is a gap.
+- Identify interface candidates, hot paths, public API surface, and web UI journeys.
 
 ## Stage 2 — Perspective Sweep
 
-- Sweep per `workflow-council.md`. Same agent. No subagents. No `councils/` file.
-- Promote Grill Me → Stage 3, Council candidates → Stage 5, Act → plan constraints.
-- Record `workflow-council.md` in Context Anchor `Loaded skills:`.
+Sweep per `tech-sweep.md` with all five views. **Ask** → Stage 3. **Council candidate** → Stage 5. **Act** → plan constraint.
 
 ## Stage 3 — Grill Me
 
-Use this template. Ask all unresolved questions in one round. Do not re-ask answered questions. Follow-ups only for new ambiguities; cite the prior answer.
+Walk every topic of the table. Classify each open point (Section 4.16): Covered, Detail, or Assumption → decide and continue. ❗ Ask only Decision class. Ask all in one round. Never re-ask; follow up only on new ambiguity and cite the prior answer.
 
-Include unresolved Sweep/Council follow-ups. Tag `Source`. Council candidates → Stage 5.
+❗ Record one line per topic in the Context Anchor **Topics**: what was settled, and its class with the source. A topic that does not apply says `n/a — {why}`. A topic without a line was not walked.
 
-Cover every topic before finalizing scope:
-
-- functional outcomes and **concrete** acceptance criteria (not “it builds”)
-- test **content** (minimum the plan must cover): important scenarios; edges;
-  special constellations; contradictions; gaps; what is out; time budget
-  (`tech-test.md`). IDs are `TEST-<AREA>-<TOPIC>`. Class and Layer may be
-  named. Test code may appear later in the plan; agree content here.
-- public API snippet + usage when a public surface exists; interfaces, traits,
-  or the language’s other contract types the steps will implement (locked
-  later in **API and interfaces**)
-- web UI: load per Section 3 (`tech-web.md`, `tech-playwright.md`, `tech-test.md`, stack UI skill); dark mode (other themes out of scope); mandatory responsive layout and locked breakpoints (`tech-web.md`); journeys; debug story
-- performance and allocations (hot paths, budgets) — performance is a feature
-- edge cases and error handling
-- security boundaries and STRIDE
-- trust-boundary limits per Section 4.2: threat; proposed default or range; constant vs configurable (where, who: code / operator / end user); posture (secure or open by default) and why; end-user help text
-- concurrency, TOCTOU, async interleaving
-- compatibility, migration, breaking change
-- new dependencies: id, what it does, why needed, license, alternatives
-- architecture boundaries
-- agentic debug path (smallest command, filterable tests, traces)
-- API misuse / abuse vectors
-- automation when the same edit hits more than ten call sites (approved script or codemod)
-- docs: which docs and comment sets change; doc–code mismatches found in Stage 1 (which side is right); doc gaps in touched files beyond the touched members (Out with `/docs-repair`, or in scope)
-
-Each question follows the Section 4.16 question form. The user may see only the question.
-
-```markdown
-## Q{n} — {topic}
-**Source:** Sweep | Council | Plan | Requirements
-**Context:** {task and plan stage in one line; what was found, quoted or linked; what was already checked}
-**Why it matters:** {what changes in the plan depending on the answer}
-**Question:** {single-part question}
-**Options:** 1) {option} — {consequence} · 2) {option} — {consequence} · or answer in your own words
-**Recommendation:** {option} — {why}
+```text
+Right: Performance: hot path = the row loop in `InvoiceReader.Read`; no allocation per row (Assumption: no budget stated)
+Right: Limits: import size 1 GB, set by the end user, secure by default (Decision: Q2 answered)
+Right: Concurrency: n/a — single-threaded CLI, no shared state
+Wrong: Performance: considered.
+Wrong: Security: OK.
 ```
 
-Do not proceed while ambiguities remain. New blocking fork → Stage 5 before Write Plan.
+| Topic | What to settle |
+|-------|----------------|
+| Outcomes | Concrete acceptance, not “it builds” |
+| Test content | The card minimum: scenarios, edges, constellations, contradictions, gaps, what is out, time budget (`tech-test.md` § Card tests). Cards live in `spec/tests/`. Code tests follow from the written code at implement time (`tech-test.md` § Code tests); never settle them here |
+| Public API | Snippet plus usage; interfaces, traits, or contract types the steps implement |
+| Agent surface | Which surface an agent uses (CLI, REST, MCP, library) and its parity with the UI, or the waiver (`tech-agent-access.md`) |
+| Web UI | Dark mode, responsive, tables, journeys, debug story (`tech-web.md`, `tech-playwright.md`, `tech-test.md`) |
+| Performance | Named hot paths, time and memory budgets, allocations per item |
+| Errors | Each expected failure and its result type or error code; empty, missing, malformed, and oversized input |
+| Security | Each trust boundary; per external input the STRIDE threats and their mitigations |
+| Limits | Threat, default or range, constant vs configurable, posture and why, register and policy slots (`tech-limits.md`) |
+| Concurrency | Shared mutable state, TOCTOU, async interleaving; the chosen primitive (Section 4.3) |
+| Compatibility | What breaks for existing users in persisted formats, public API, and config keys; the migration |
+| Dependencies | Each new package, vendored file, or tool: id, exact version, purpose, license, alternatives including none (Section 4.7) |
+| Architecture | The component that owns the change; its allowed dependencies (Overview **May depend on**); a break is Decision class |
+| Debug | Smallest command that reproduces, filterable tests, traces |
+| Misuse | How a caller can use the API wrongly, how an attacker can abuse it, and what makes each impossible or visible |
+| Scale | Same edit on more than ten call sites: approved script or codemod |
+| Docs | Which docs change; mismatches found in Stage 1 (which side is right); gaps beyond touched members (Out with `/docs-repair`, or in scope) |
+
+Form: Section 4.16, with `**Source:** Sweep | Council | Plan | Requirements`.
 
 ## Stage 4 — Reconcile
 
-- Cross-check request, requirements artifact, Grill-Me answers, Sweep, council verdicts, code, docs, decision records, and Section 4.
-- Record a **preference** when both sides cannot hold (`C{n}`).
-- Apply Rule Priority (§4.13), then explicit user choice, then scope split.
-- Align docs ↔ code ↔ tests when source-of-truth is unclear; ask.
-- Gate: Write Plan when no undecided preference blocks scope. Else Stage 5.
+- Cross-check request, requirements, answers, Sweep, council verdicts, code, docs, decision records, and Section 4.
+- Record a preference when both sides cannot hold (`C{n}`; form: `workflow-plan-templates.md` § Closing sections). Apply Section 4.13, then an explicit user choice, then a scope split.
+- Align docs, code, and tests when the source of truth is unclear; ask only when Decision class.
+- Write Plan when no undecided preference blocks scope. Else Stage 5.
 
 ## Stage 5 — Decision Loop
 
-Grill Me ↔ Council per `workflow-council.md` until no blocking fork. Lite default; Full if `/council` or security / public-API / irreversible. Verdict → `C{n}`. Cap 3. Do not Write Plan while open.
+Grill Me ↔ Council (`workflow-council.md`) until no blocking fork. Lite default; Full for `/council`, security, public API, or irreversible choices. Verdict → `C{n}`. Cap 3 iterations. Do not write the plan while one is open, except in Autonomous mode: card it and plan around it.
 
 ## Stage 6 — Write Plan
 
-- User path when provided; else `plans/plans_<slug>.md`.
-- English (Section 4.6).
-- Slug: lowercase, punctuation/whitespace → `-`, collapse `-`, trim, fallback `task`.
-- Step Overview at top. Status starts `⬜`.
-- Next: **Expected Experience** (see section below), before Requirements and Test cases.
-- Then Requirements — **link only**. Real Markdown link to the Stage 0 file. Do not paste the requirement list.
-- Map every requirement ID that has Done-when in Target Solution (design completeness). Unmapped = incomplete. Extra design with no matching requirement ID: justify or cut. Do not restate full requirement text here. **Do not** cite requirement IDs inside step `How`.
-- Test cases are first-class **content** (index + `TEST-<AREA>-<TOPIC>` cards). Cover everything **important** in the plan. Extra tests at implement time are allowed. An executing agent must be able to prove each card without inventing the scenario.
-- End with Requirements fit, then its Step `{n}R`.
-- Record `Loaded skills:` (include `workflow-council.md` and `tech-test.md` when tests exist), Sweep table, council paths as Section 4.6 links, Decision Loop count, step dependencies. Leave Coverage for Stage 7. Every file named in the plan (Context, Where, Coverage, Target Solution) is a clickable relative link (Section 4.6).
-- Every step needs a fully specified `How` and Before/After (Shared Block below). Prefer snippets over a prose-only `How` or Target Solution. Extra illustration snippets are welcome.
-- Immediately before the steps, write **API and interfaces**: schematic fenced
-  signatures for the public API and for interfaces, traits, or equivalent
-  contract types.
-- Do not present the plan for approval. Run Stage 7.
+Read `workflow-plan-templates.md`.
 
-### Step Overview
-
-Narrow table. Experience lives in the step block, not as an extra column.
-
-❗ Link every Step cell to its step block (`#` + the GitHub slug of the block heading: lowercase, punctuation other than `-` dropped, spaces → `-`; `## Step 1 - Create export` → `#step-1---create-export`). Link `Step {n}R` to the block of Step `{n}`.
-
-```markdown
-| Step | Status | Delivers |
-|------|--------|----------|
-| [Step 1 — Create export](#step-1---create-export) | ⬜ | {one sentence} |
-| [Step 1R — Review Step 1](#step-1---create-export) | ⬜ | Zero Error findings; iterate until clean |
-| [Step 2 — Requirements fit](#step-2---requirements-fit) | ⬜ | Every requirement with Done-when Met |
-| [Step 2R — Review Step 2](#step-2---requirements-fit) | ⬜ | Zero Error findings; iterate until clean |
-```
-
-### Expected Experience
-
-Second section, directly after Step Overview. The reader sees what they get
-before they read how. It aggregates step `Experience`; it adds no new claim.
-
-- No phases: one block `### Result` for the whole plan.
-- Phases (use when >10 steps or multiple areas): one `### Phase {P} — {title}`
-  block per phase, in step order. Each step belongs to exactly one phase.
-- Fields per block: `Steps` (links as in Step Overview) · `After this phase a
-  person can` · `They should see` · `How to try` · `Not yet`.
-- Describe the cumulative state after the phase. Mark what is new since the
-  previous phase with `New:`.
-- Trace every claim to a step `Experience` in the phase. `How to try` is a
-  runnable command, Playwright spec, or usage snippet.
-- Cover each `Not yet` of a phase by a later phase or by Out. The last block's
-  `Not yet` is `nothing` or Out.
-
-```markdown
-## Expected Experience
-
-### Phase 1 — Create and list exports
-Steps: [Step 1](#step-1---create-export) · [Step 2](#step-2---list-exports)
-After this phase a person can: create an export and see it listed.
-They should see: one row per export; a duplicate name shows an error.
-How to try: `dotnet run --project src/App -c Release -- export create Report`
-Not yet: deleting an export.
-```
-
-### Shared Block (plan steps)
-
-Field order: `What` → `Why` → `How` → `Experience` → `Acceptance` → `Tests` → `[Public API]` → `[Size]` → `[Context]` → `[Where]` → `Docs` → `Verify` → `Debug` → `[If it fails]`.
-
-Always require `What`, `Why`, `How`, `Experience`, `Acceptance`, `Docs`, `Verify`.
-Require `Tests` when the step ships behavior (cite the test ID this step adds or runs; **Content** lives on the card).
-Require `Public API` when the step ships or changes a public surface. That field matches **API and interfaces**. It does not introduce a second signature.
-Require `Size` when the step may exceed the soft budget (see Step Rules).
-Omit `Context` only when neither constraints nor sources exist. Omit `Where` when no file is touched.
-Require `If it fails` for schema, state, or external-system risks.
-Require `Debug` so the executing agent can probe a red `Verify` (command, Playwright, collision).
-
-❗Specify the concrete implementation. Intent-only `How` is incomplete.
-❗Write `How` so another agent can implement without inventing types, items, signatures, algorithms, control flow, or file structure.
-❗Write `How` exhaustively: types, items, visibility, signatures, parameters, return values, call-site edits, validation, error paths, control flow, data flow, thread-safety / performance / security constraints, prerequisite state, decision rationale, and important edge cases.
-❗Include fenced **Before** and **After** in every step `How` — current code, then Target Solution shape (real signatures and key bodies); anchor with path/symbol. Not stubs, not pseudocode-only, not an intermediate shape later steps will replace. New file: After only. Requirements-fit: skip unless a gap needs a fix.
-Prefer those fences over a paragraph that restates the same shape. Extra snippets that illustrate usage, edges, or the test that proves the step are welcome.
-❗Cite a concrete source in `Context` when an external reference exists.
-Test code in `How` or on a `TEST-<AREA>-<TOPIC>` card is allowed and welcome. It does not replace Test case **Content**.
-
-`Where`: clickable relative Markdown link (Section 4.6), approximate lines, symbol. Mark `primary` (create/rewrite) or `call-site` or `additive` (append-only).
-`Docs`: every doc this step updates, from the Impact search — clickable link plus section (code-map row, architecture section, domain entry, README section, guide, decision record) — and the comment work in code (contract doc comments with Related links for new and changed members, block comments, tags, sections, `Sync:` pairs). Or `none — {why no doc states what this step changes}`. The step `After` shows the doc comments of new members.
-`Verify`: exact command in optimized/Release per loaded tech skill, plus expected result.
-`Experience`: what a person can try after this step, what they should see, how to try it, and what is **not yet** true. Expected Experience aggregates these per phase.
-
-```markdown
-## {ID} - {Title}
-Status: ⬜ {Initial} · {Depends on}
-### What
-### Why
-### How
-Fenced **Before** / **After** (required). Prefer snippets over prose. Extra illustration snippets welcome.
-### Experience
-After this step a person can: …
-They should see: …
-How to try: {command | Playwright spec | usage snippet}
-Not yet: …
-### Acceptance
-- [ ] {observable check for this step — may be deeper than R-level}
-### Tests
-- TEST-EXPORT-NO-DUPLICATE — {in this step: add | run}
-### Public API
-### Size
-Prod files: {n} · ~LOC: {n} (tests excluded) · over budget because: {or n/a}
-### Context
-### Where
-### Docs
-- [docs/architecture.md](../docs/architecture.md) § {component} — {flow, invariant, or Easy to miss line changed}
-- Code: doc comments on {members}; `Sync:` pair {file ↔ file}
-### Verify
-### Debug
-Reproduce: …
-First probe if red: …
-UI: {Playwright trace / headed / n/a}
-Collision: other agents locking build/test?
-### If it fails
-```
-
-## Plan Structure
-
-1. Step Overview (linked rows)
-2. Expected Experience (`Result`, or one block per phase)
-3. Requirements — Markdown link to the requirements file (no copied table)
-4. Test cases (index + content cards)
-5. Summary / Context Anchor (include Coverage table)
-6. Target Solution (Vision)
-7. Slices
-8. API and interfaces — schematic snippets, immediately before the steps
-9. Steps (Shared Block; last = Requirements fit + `{n}R`)
-10. Edge Cases and Risks
-11. Decisions & Trade-offs (`C{n}`; omit when none)
-12. Open Questions (each one that blocks a step is a blocker per `copilot-instructions.md` Section 4.16: what blocks, evidence, impact, scope, to unblock)
-13. Closing Summary
-14. Task Checklist (linked rows; Step N, tests that are their own steps, Step `{n}R`; include Requirements fit)
-
-## Requirements
-
-```markdown
-## Requirements
-
-Source: [requirements/req_<slug>.md](../requirements/req_<slug>.md)
-```
-
-- Use the real relative (or user-given) path. The label should match the file name. Do not paste the requirement list.
-- `Met` lives in the requirements file on every requirement ID that has Done-when. Fill it only when Done-when **ran**. Start `⬜` there.
-- Reject the plan when a requirement ID with Done-when in the linked file cannot be observed by a user.
-- Step `How` does not say “implements REQ-EXPORT-CREATE”. At step close the agent re-reads the **linked** file and ticks `Met` on each requirement whose Done-when now holds.
-
-## Test cases
-
-First-class **content**. The cards are the **minimum** the implementing agent must prove. Cover everything important here (strategy classes that apply, plus content-level edges, special constellations, contradictions, and gaps). Extra tests at implement time are allowed and are not scope creep unless they contradict agreed Out.
-
-Form: `TEST-<AREA>-<TOPIC>`. Same token rules as `REQ-<AREA>-<TOPIC>` in `workflow-requirements.md`.
-
-- `TEST-` plus 2 to 4 tokens. A token is uppercase `A–Z` and digits, contains at least one letter, and tokens split on a single `-`.
-- The first token is the **area**. When the case proves a requirement, use that requirement’s area token.
-- The other tokens **hint at the case**. When the case is that requirement,
-  reuse its topic (`REQ-EXPORT-NO-DUPLICATE` → `TEST-EXPORT-NO-DUPLICATE`).
-  Another case on the same requirement adds a topic token
-  (`TEST-EXPORT-EMPTY-NAME`).
-- English. Unique in the plan. Stable: inserting a case does not rename others. Do not reuse an ID after delete.
-- Class stays on the card. Do not encode happy or error as `HAPPY` or `ERROR` in the ID.
-- The ID is plan content. It is not a test file name or a test method name. Do not copy it into code. Method names follow the loaded tech skill.
-- Cite each ID as written. Do not renumber a plan the user already wrote.
-
-```text
-Accept: TEST-EXPORT-NO-DUPLICATE · TEST-EXPORT-EMPTY-NAME · TEST-SESSION-STABLE-ID
-Reject: TEST1 · TEST01 · TEST-1 · TEST-EXPORT-1 · TEST-ExportFormTests
-```
-
-Index (narrow). Details live in the cards, not extra columns.
-
-```markdown
-## Test cases
-
-| ID | Case | Step | Status |
-|----|------|------|--------|
-| [TEST-EXPORT-NO-DUPLICATE](#test-export-no-duplicate) | Duplicate name rejected | [Step 2](#step-2---list-exports) | ⬜ |
-```
-
-Link each ID to its card and each Step to its block.
-
-Every test ID needs a card. **Content** is required. **Class** and **Layer**
-may be named. Test code or a short fenced example of setup / expected
-observation is welcome; it does not replace Content.
-
-```markdown
-### TEST-<AREA>-<TOPIC>
-
-- **Class:** happy · error · boundary · collection · absence · concurrency · trust-boundary
-- **Layer:** unit · UI
-- **Content:** {domain scenario: what is set up, what happens, what must be observable. Name the edges, special constellations, contradictions, or gaps this case exists to catch when they apply.}
-- **Out:** {what this case does not cover}
-```
-
-Omit **Class**, **Layer**, or **Out** when they add nothing. Do not omit **Content**. Do not use Class/Layer tags, a test file name, or a method name as the only description.
-
-Accept:
-
-```markdown
-### TEST-EXPORT-NO-DUPLICATE
-
-- **Class:** error
-- **Layer:** UI
-- **Content:** An export named Report already exists. The user submits Report again. A duplicate-name error is visible and the list still has one row. This catches silent overwrite versus the uniqueness rule. Proves REQ-EXPORT-NO-DUPLICATE.
-```
-
-Reject as the whole card: `TEST1 — error · UI` · `TEST-EXPORT-1 — ExportFormTests.cs` · `TEST-EXPORT-ADD-TESTS`.
-
-Exhaustive = the **classes** in `tech-test.md` plus named content (edges,
-constellations, contradictions, gaps), not every integer. Keep the suite
-fast. An applicable class with no test ID and no Out = gap.
-
-## Target Solution (Vision)
-
-- Concrete end-state: types, files, APIs, data flow, invariants, algorithms. Show that shape in snippets, not only in prose. Not a slogan.
-- Map every requirement ID that has Done-when to a design element here (completeness). Do not paste Done-when from the requirements file. Steps then apply this shape.
-- SSOT for final file layout, data flow, invariants, and algorithms. **API and interfaces** is the SSOT for public signatures and contract types; do not paste a second shape here, link to it. A primary-file `After` that differs from either section is an incomplete plan.
-- Trust-boundary limits (Section 4.2): one table row per limit. A limit without threat or posture is incomplete. Each limit gets the limit cases in `tech-test.md` as test cards.
-- **Doc delta:** the architecture Overview rows and sections, concept and domain entries, README sections, guides, and decision records the end state changes, with one line each on the new truth. A new decision with rejected options, and every agreed change to the architecture, gets a decision record (`tech-docs-templates.md`). Domain facts from Grill Me answers land in `docs/domain.md`.
-
-```markdown
-| Limit | Default · range | Kind · who | Posture · why |
-|-------|-----------------|------------|---------------|
-| Import size (memory exhaustion) | 1 GB · 1 MB–host RAM | config · end user | secure: files from strangers |
-```
-
-- Do not use step order here.
-
-## Slices
-
-- Group steps by what becomes **tryable** (Experience), not by stub-then-fill.
-- Cut a real thin slice. Do not fake end-to-end. `Not yet:` must be honest.
-- Ban scaffolding that later steps delete (`NotImplemented`, dummy types, temporary wrappers).
-- Build each cross-cutting concern in target shape. Later slices call it.
-- Extract a repeated pattern before a second slice copies it.
-- Preserve layer boundaries.
-
-## API and interfaces
-
-This section sits immediately before the steps. It is the schematic contract those steps implement.
-
-- Fenced snippets: signatures and how the types connect. Not method bodies, and not the step `How`.
-- **Public API**, when the work has a public surface: the signatures a caller
-  uses, then a usage snippet. This is the snippet Section 4.12 locks.
-  Changing it after approval needs a new Grill Me.
-- **Interfaces and traits**, or the language’s equivalent contract types, that
-  the steps add or change: the type, its members, which type implements it,
-  and which type calls it.
-- One heading per group. Above each fence, a clickable relative link to the file that will hold the type (Section 4.6).
-- A step `After` uses these signatures. A different public signature or interface member in a step is an incomplete plan.
-- When the plan adds or changes neither a public API nor a contract type, keep the heading and write one sentence: no public API or interface in this plan.
-
-````markdown
-## API and interfaces
-
-### Public API
-
-[`src/Export.cs`](../src/Export.cs)
-
-```csharp
-public static class Export
-{
-    public static Result<ExportId> Create(string name);
-}
-```
-
-Usage:
-
-```csharp
-Result<ExportId> created = Export.Create("Report");
-```
-
-### Interfaces
-
-[`src/IExportStore.cs`](../src/IExportStore.cs)
-
-```csharp
-public interface IExportStore
-{
-    Result<ExportId> Add(string name);
-    bool Contains(string name);
-}
-```
-
-`FileExportStore` implements `IExportStore`. `Export.Create` calls `Add`.
-````
-
-The fence shows the shape. Use the language of the plan (C# interface, Rust trait, Python protocol, or the equivalent).
+- Path: user path, else `plans/plans_<slug>.md`. English. Slug: lowercase, punctuation and whitespace → `-`, collapse, trim, fallback `task`.
+- Write new or changed test cards to `spec/tests/<area>.md` first (`tech-spec.md` § Test card). Per behavior, each applicable class of `tech-test.md` (happy, error, boundary, collection 0/1/2, absence, concurrency, trust-boundary) has a card, or an `Out` with a reason. So does each edge, constellation, and contradiction named in Stage 3. **Content** states setup, action, and observable, so an executing agent proves the card without inventing the scenario.
+- New cards are `proposed` in Interactive mode and `active` in Autonomous mode (Gate A covers them). Before changing or retiring an existing card: `reqtrace show <TEST-ID>`; each test it lists gets a step.
+- After writing the cards: `reqtrace check`. L4 and L6 on entries this plan builds are expected (`tech-reqtrace.md` § Findings); fix every other Error now.
+- Write every section of `workflow-plan-templates.md` § Plan Structure, in that order, from its template.
+- Every file named in the plan is a clickable relative link (Section 4.6).
+- Do not present the plan. Run Stage 7.
 
 ## Step Rules
 
-Soft budgets — justify when exceeded; do not split an atomic cutover just to hit a number:
+Soft budgets; justify when exceeded; do not split an atomic cutover just to hit a number:
 
-- Cap a step at ≤12 production files and ≤~3000 production LOC. Tests do not count.
-- Make edits additive (`Where` = `additive`) when the file shape can stay. Rewrite when the shape must change.
-- Do not list the same file as `primary` in many steps unless each increment is a complete Experience and splitting would be worse.
-- Leave each step as something a person can see or try (`Experience`).
+- ≤ 12 production files and ≤ ~3000 production lines per step. Tests do not count.
+- Prefer additive edits when the file shape can stay.
+- Do not list one file as `primary` in many steps unless each increment is a complete Experience.
+- Leave each step as something a person can see or try.
 
-Still required:
+Required:
 
 - Freeze file shape in Target Solution. `After` is that shape, not an intermediate.
 - Write new types complete (signature, body, errors, tests) before consumers call them.
-- Keep rename/move separate from behavior change.
-- Ship tests with the production behavior they prove. Dedicated test steps are welcome when the cases are large; do not dump all tests at the end by default.
-- Size a step so a human can accept the Before/After.
-- Analyze dependencies. Order topologically. State depends-on.
-- Reject a `How` that allows more than one implementation, or whose `After` is not Target Solution for primary files.
-- Reject a step `After` whose public signature or contract member differs from **API and interfaces**.
+- Keep rename or move separate from behavior change.
+- Ship tests with the behavior they prove. Dedicated test steps are welcome when cases are large; do not dump all tests at the end.
+- Size a step so its Before/After can be accepted.
+- Order topologically. State depends-on.
+- ❗ Reject a `How` that allows more than one implementation, or whose `After` is not Target Solution for primary files.
+- ❗ Reject a step `After` whose public signature or interface member differs from **API and interfaces**.
 - Close with Requirements fit.
+
+**Slices:** group steps by what becomes tryable. Cut a real thin slice; do not fake end-to-end. Ban scaffolding later steps delete. Build each cross-cutting concern in target shape. Extract a repeated pattern before a second slice copies it. Preserve layer boundaries.
 
 ## Stage 7 — Coverage Check
 
-Run after the plan file is written. **Walk the plan twice.** Patch until both walks are clean. Do not enter Completion with gaps.
+Run after the plan is written. ❗ Walk twice. Patch until clean. After every patch, run both walks and the three checks again.
 
-1. **Requirements walk** — Re-read the **linked** requirements file **in full**. Do not treat anything in the plan as a copy of that list. Every requirement ID that has Done-when lands in Target Solution **and** in a step `Acceptance`. Every test ID lands in a step `Tests` field **and** has a card with **Content**. IDs never land in a step `How`. A test ID without **Content** = gap. An applicable `tech-test.md` class with no test ID and no Out = gap. Unmapped = gap. Cite each test ID as written. Do not renumber a supplied plan.
-2. **Conversation walk** — Re-read the conversation, Grill Me Q/A, Sweep, council, and attached docs **in full**, then the **entire** written plan. Every relevant user ask, constraint, non-goal, named type/path/command, accepted proposal, rejected option with leftover constraint, and named edge / constellation / contradiction / gap must land somewhere (a requirement ID, a test ID **Content**, Out, `C{n}`, or out of scope). Unmapped = gap. “Implied” without a citation = gap.
+1. **Requirements walk:** re-read the linked entries in full; never treat the plan as a copy of them. Every requirement in scope lands in Target Solution and in a step `Acceptance`; an unmapped one = gap. Every test ID lands in a step `Tests` field and has a card with **Content**. An applicable `tech-test.md` class with no card and no Out = gap. IDs never land in `How`.
+2. **Conversation walk:** re-read the conversation, answers, Sweep, council, and attached docs in full, then the plan. Every relevant ask, constraint, non-goal, named type or path or command, accepted proposal, rejected option with leftover constraint, and named edge lands on an ID, a card **Content**, Out, or `C{n}`. “Implied” without a citation = gap.
 
-Then run three cheap checks:
+Then:
 
-- **Link check:** every `#` link (Step Overview, Task Checklist, Test cases index, Expected Experience) matches a heading slug in the plan. Patch the link or the heading.
-- **Experience check:** every Expected Experience claim traces to a step `Experience`. Every `Not yet` is covered by a later block or Out.
-- **Doc check:** every Impact-search hit and every Doc delta line lands in a step `Docs` field, or in Out with a reason.
-
-Include every requirement ID with Done-when, every test ID, and every Grill Me answer as a row. Record dropped items with reason. Write both tables into Context Anchor. Re-run this stage after any patch.
-
-```markdown
-**Coverage (requirements → plan):**
-
-| ID | Lands in |
-|----|----------|
-| REQ-EXPORT-CREATE | Target Solution · Step 2 Acceptance |
-| TEST-EXPORT-NO-DUPLICATE | Step 2 Tests · TEST-EXPORT-NO-DUPLICATE Content |
-
-**Coverage (conversation → plan):**
-
-| Item | Source | Lands in |
-|------|--------|----------|
-| {one-line item} | User · Q{n} · Sweep · Council · Doc | REQ-EXPORT-CREATE · TEST-EXPORT-NO-DUPLICATE · Step {n} · C{n} · Out of scope ({reason}) |
-```
-
-## Requirements Fit (last step)
-
-```markdown
-## Step {N} - Requirements fit
-Status: ⬜ Depends on all prior steps
-### What
-Walk the built solution as a user. Check every requirement ID with Done-when and every test ID.
-### Why
-A green build can still miss the user outcome.
-### How
-- Re-read the linked requirements file and Test cases. Ignore implementer intent.
-- For each requirement ID with Done-when: run Done-when. Cite evidence (command, UI, API, file, output). Tick Met in the requirements file.
-- For each test ID: confirm the Content exists as a test that can fail (extra tests beyond the planned IDs are fine).
-- Mark Met / Status ✅ only when the check holds with no caveats.
-- Any ❌ or leftover ⬜ = blocker. Write it per `copilot-instructions.md` Section 4.16 (what blocks, evidence, impact, scope, to unblock).
-- Skip Before/After unless a gap needs a code fix; then stop and file the gap.
-### Experience
-A person can execute every Done-when without reading the source.
-### Acceptance
-- [ ] Every requirement ID with Done-when Met = ✅
-- [ ] Every test ID Status = ✅
-### Verify
-Every requirement ID with Done-when Met = ✅. Every test ID ✅. Zero leftover ⬜.
-### Debug
-Re-run the failing Done-when in isolation. Check agent collision before redesign.
-```
+- **Link check:** every `#` link matches a heading slug.
+- **Experience check:** each Expected Experience claim traces to a step `Experience`. Each `Not yet` is covered by a later block or Out.
+- **Doc check:** each Impact-search hit and Doc delta line lands in a step `Docs` field or in Out with a reason.
 
 ## Checklist Rules
 
-- Flat ordered list: Step N, any dedicated test steps, Step `{n}R`. Include Requirements fit. Link each entry as in Step Overview.
-- Tick Status on every transition on **all three** surfaces: Step Overview, Shared Block, Task Checklist.
-- Zero Error findings at each review gate before the next step.
+- Flat ordered list: Step N, dedicated test steps, Step `{n}R`, Requirements fit. Link each entry.
+- Tick status on all three surfaces together. Zero Error findings at each review gate before the next step.
 
 ## Completion
 
-- Stage 7 clean: both coverage walks green (requirements **and** conversation).
-- Return plan path. Cite requirements path and council paths if any.
-- Chat: path only. Do not recap Coverage.
-- Wait for explicit user approval per Section 6 before implementation.
+Both walks green. Chat: the plan path only. Interactive: wait for explicit approval (Section 6). Autonomous: continue.
+
+Interactive approval, before `/implement` starts:
+
+1. Set every `proposed` requirement and card the plan links to `active`.
+2. Run `reqtrace accept --allow-gap "tests follow in /implement of plans/plans_<slug>.md"` (`tech-reqtrace.md` § Accept). Refused for anything but L4 or L6 → fix, accept again.
+
+A question or a change request is no approval: patch the plan, run Stage 7, wait again.

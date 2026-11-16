@@ -7,6 +7,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.22.0] — Exports write through host targets
+
+Delta since 0.21.0. Version is `0.22.0` in `Directory.Build.props`. Exports write through named streams that the host hands out.
+
+### Added
+
+- **Export targets.** `IExportTarget` (in `NetworkInspector.Core`) is where an export writes: the host hands an exporter a target
+  instead of a path, and the exporter receives one write-only stream per entry. The streams need not seek or report a position.
+  A single-file format opens one entry, `ExportEntryName.Main`; the Parquet exporter opens one entry per table file
+  (`packets.parquet`, `protocols.parquet`, `export_info.parquet`, `catalog.parquet`, `topology.parquet`,
+  `packet_buffers.parquet`, and `fields/field_{id}.parquet`). `ExportEntryName` has a closed grammar (lower case, no `..`, no
+  backslash, no device names, at most 255 characters per segment), so every target can rely on it. A refused entry is an
+  export error with the target's reason, never an exception.
+- **Three ready targets** in `NetworkInspector.Exporters`: `FileExportTarget` (one lazy file), `StreamExportTarget` (a caller
+  stream that stays open, or standard output), and `DirectoryExportTarget` (named entries below a folder).
+- **`ToTarget(IExportTarget)`** on the builders of CSV, JSON, Text, PBF, PCAPNG, BLF, ASC, and Parquet. `ToFile`, `ToStream`,
+  `ToStdout`, and `ToDirectory` stay and build a target; they behave as before.
+- **Plugin contract.** A registration says how its format receives the output: `ExporterCreation.ForStreams<T>(create)` for a
+  format that writes forward (it gets a `StreamExportRequest` with the host's `IExportTarget`) or `ExporterCreation.ForFile<T>(create)`
+  for a format whose library opens the file itself (it gets a `FileExportRequest` with a prepared path). DuckDB is the one
+  built-in file format. The loader refuses a file registration without a file extension.
+
+### Changed
+
+- **Parquet writes through a target.** `ParquetExporter` holds no path: `ToDirectory` builds an internal target that creates the
+  folder and removes an earlier dataset on the first entry, as before; `ToTarget` uses the host's target as given.
+- **`ToStream(null)` throws at the call** (`ArgumentNullException`) instead of failing at the first item; a stream that cannot
+  be written is an `ArgumentException` at the call.
+- The sample plugin writes the main entry of its target and no longer checks paths or deletes a partial file: the host owns
+  the target.
+- **The output methods replace each other.** `ToFile`, `ToStream`, `ToStdout`, and `ToTarget` of a builder (`ToDirectory` and
+  `ToTarget` for Parquet) do not add up: the last call before `Build` wins, and a replaced output was never opened, so it
+  creates no file and holds no resource. Every builder documents it. Build each exporter from its own builder: a second
+  `Build` hands both exporters the same output.
+- The error of `Build` without an output now names `ToTarget` next to the other output methods.
+- The DuckDB exporter stays on `ToFile`: its library opens the file itself, so it has no stream, stdout, or target output (the
+  README says so).
+- **For contributors:** the exporter tests read their output from memory instead of temporary folders, one shared contract test
+  runs every exporter kind, and a test above 100 ms (measured one test at a time) carries `[Category("Slow")]`, so
+  `--treenode-filter "/*/*/*/*[Category!=Slow]"` runs the fast set.
+
+### Upgrade notes
+
+| Before (0.21) | Now |
+| --- | --- |
+| `ExportRequest` | `StreamExportRequest` (with `Target`) or `FileExportRequest` (with `FilePath`) |
+| `ExporterCreate<T>` | `StreamExporterCreate<T>` or `FileExporterCreate<T>` |
+| `ExporterRegistration(..., Create: TryCreate)` | `ExporterRegistration(..., Creation: ExporterCreation.ForStreams<T>(TryCreate))` or `ForFile<T>(TryCreate)` |
+| `request.TargetPath` | `request.Target.TryOpenWrite(ExportEntryName.Main, out stream, out failure)`, or `FileExportRequest.FilePath` |
+
+Plugins built against 0.21 must be rebuilt: the contract assembly changed.
+
 ## [0.21.0] — Settings and limits as packages, invariant text, and a full review of Core
 
 Delta since 0.20.0. Version is `0.21.0` in `Directory.Build.props`.

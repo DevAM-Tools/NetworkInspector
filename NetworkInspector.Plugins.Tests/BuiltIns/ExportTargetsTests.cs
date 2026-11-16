@@ -57,6 +57,7 @@ internal sealed class ExportTargetsTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task OverwriteMovesTheOldTargetAsideAndSettlingRemovesItOnceTheNewOutputExists()
     {
         using TempFolder folder = new("targets-overwrite");

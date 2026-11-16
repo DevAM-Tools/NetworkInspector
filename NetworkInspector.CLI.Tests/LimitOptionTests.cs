@@ -91,7 +91,8 @@ internal sealed class LimitOptionTests
             builder.AddSource(new SourceRegistration("LimitDemo", "Limit demo", "A source that creates nothing.", [], false,
                 static registrar => registrar.RegisterLimitOption(_OptionDefinition), _TryCreateSource));
             builder.AddPacketExporter(new ExporterRegistration<IPacketListener>("LimitDemo", "Limit demo", "Writes nothing.", ".limitdemo",
-                static registrar => registrar.RegisterLimitOption(_OptionDefinition), _TryCreateFormat));
+                static registrar => registrar.RegisterLimitOption(_OptionDefinition),
+                ExporterCreation.ForStreams<IPacketListener>(_TryCreateFormat)));
         }
 
         public ValueTask StartAsync(IPluginContext context, CancellationToken cancellationToken) => ValueTask.CompletedTask;
@@ -107,7 +108,7 @@ internal sealed class LimitOptionTests
             return false;
         }
 
-        private bool _TryCreateFormat(ExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
+        private bool _TryCreateFormat(StreamExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
             [NotNullWhen(false)] out PluginError? error)
         {
             SeenByFormat = request.Options.GetLimit("maxSize");

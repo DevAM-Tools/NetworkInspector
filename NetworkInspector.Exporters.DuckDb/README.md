@@ -267,7 +267,8 @@ database file is created; the exporter always creates a fresh file.
 - Not thread-safe; call `OnPacket()` and `OnFinish()` from one thread. Internally one writer thread ("DuckDB export
   writer") writes the full batches while the caller's thread fills the next one; counters and `ItemSkipped` stay on the
   caller's thread.
-- There is no stream or stdout target.
+- There is no stream, stdout, or `ToTarget` output: the DuckDB library opens and seeks the database file itself, so the host hands
+  it a prepared path. A plugin registers it with `ExporterCreation.ForFile`; every other built-in format uses `ForStreams`.
 - If no packets arrive, no database file is created.
 - In tolerant mode an unwritable path raises `ItemSkipped` and the export ends cleanly; strict mode aborts.
 - In the hierarchy shape a packet parsed without a field tree (`FieldTreeMode.Skip`) is skipped and counted: `ItemSkipped`

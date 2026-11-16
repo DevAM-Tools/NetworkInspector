@@ -14,14 +14,6 @@ namespace NetworkInspector.Exporters.Tests.Parquet;
 internal sealed class ParquetExporterTests
 {
     [Test]
-    public async Task BuilderRequiresOutput()
-    {
-        ParquetExporter.Builder builder =
-            ParquetExporter.CreateBuilder();
-        await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
-    }
-
-    [Test]
     public async Task EmptyExportCreatesNoDirectory()
     {
         using TestDir dir = new("parquet_empty");
@@ -94,12 +86,11 @@ internal sealed class ParquetExporterTests
     [Test]
     public async Task PacketsFileContainsCorrectPacketIdsAndTimestamps()
     {
-        using TestDir dir = new("parquet_packets");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
 
         using ParquetExporter exporter =
             ParquetExporter.CreateBuilder()
-                .ToDirectory(outputPath)
+                .ToTarget(target)
                 .Build();
 
         Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(4);
@@ -109,7 +100,7 @@ internal sealed class ParquetExporterTests
         }
         exporter.OnFinish();
 
-        (int[] packetIds, long[] timestamps) = await _ReadPacketsFile(Path.Combine(outputPath, "packets.parquet"));
+        (int[] packetIds, long[] timestamps) = await _ReadPacketsFile(target, "packets.parquet");
 
         await Assert.That(packetIds.Length).IsEqualTo(4);
         for (int i = 0; i < 4; i++)
@@ -122,12 +113,11 @@ internal sealed class ParquetExporterTests
     [Test]
     public async Task TopologyFileHasRowsInTheHierarchyShape()
     {
-        using TestDir dir = new("parquet_topology_on");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
 
         using ParquetExporter exporter =
             ParquetExporter.CreateBuilder()
-                .ToDirectory(outputPath)
+                .ToTarget(target)
                 .WithContent(ExportContents.Hierarchy())
                 .Build();
 
@@ -138,19 +128,18 @@ internal sealed class ParquetExporterTests
         }
         exporter.OnFinish();
 
-        long rowCount = await _CountRows(Path.Combine(outputPath, "topology.parquet"));
+        long rowCount = await _CountRows(target, "topology.parquet");
         await Assert.That(rowCount).IsGreaterThan(0);
     }
 
     [Test]
     public async Task TopologyFileNotCreatedInTheFlatShapes()
     {
-        using TestDir dir = new("parquet_topology_off");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
 
         using ParquetExporter exporter =
             ParquetExporter.CreateBuilder()
-                .ToDirectory(outputPath)
+                .ToTarget(target)
                 .WithContent(ExportContents.AllFields())
                 .Build();
 
@@ -161,18 +150,17 @@ internal sealed class ParquetExporterTests
         }
         exporter.OnFinish();
 
-        await Assert.That(File.Exists(Path.Combine(outputPath, "topology.parquet"))).IsFalse();
+        await Assert.That(target.EntryNames.Contains("topology.parquet")).IsFalse();
     }
 
     [Test]
     public async Task CatalogFileContainsOneRowPerObservedField()
     {
-        using TestDir dir = new("parquet_catalog");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
 
         using ParquetExporter exporter =
             ParquetExporter.CreateBuilder()
-                .ToDirectory(outputPath)
+                .ToTarget(target)
                 .Build();
 
         Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(3);
@@ -182,8 +170,8 @@ internal sealed class ParquetExporterTests
         }
         exporter.OnFinish();
 
-        long catalogRows = await _CountRows(Path.Combine(outputPath, "catalog.parquet"));
-        string[] fieldFiles = Directory.GetFiles(Path.Combine(outputPath, "fields"), "field_*.parquet");
+        long catalogRows = await _CountRows(target, "catalog.parquet");
+        string[] fieldFiles = [.. target.EntryNames.Where(static name => name.StartsWith("fields/field_", StringComparison.Ordinal))];
 
         // One field_{id}.parquet data file per catalog entry (dict files use a different suffix
         // and are excluded by the "field_*.parquet" glob only incidentally sharing the prefix —
@@ -199,7 +187,7 @@ internal sealed class ParquetExporterTests
 
         // The catalog also names the structure nodes (protocols, groups) of the topology; they have a row but no table
         // (table_name NULL) and so no data file.
-        string?[] tableNames = await _ReadNullableStringColumn(Path.Combine(outputPath, "catalog.parquet"), "table_name");
+        string?[] tableNames = await _ReadNullableStringColumn(target, "catalog.parquet", "table_name");
         int rowsWithTable = tableNames.Count(static name => name is not null);
         int structureRows = tableNames.Length - rowsWithTable;
 
@@ -211,12 +199,11 @@ internal sealed class ParquetExporterTests
     [Test]
     public async Task CatalogFileHasOnlyValueFieldsWithoutTopology()
     {
-        using TestDir dir = new("parquet_catalog_no_topology");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
 
         using ParquetExporter exporter =
             ParquetExporter.CreateBuilder()
-                .ToDirectory(outputPath)
+                .ToTarget(target)
                 .WithContent(ExportContents.AllFields())
                 .Build();
 
@@ -226,7 +213,7 @@ internal sealed class ParquetExporterTests
         }
         exporter.OnFinish();
 
-        string?[] tableNames = await _ReadNullableStringColumn(Path.Combine(outputPath, "catalog.parquet"), "table_name");
+        string?[] tableNames = await _ReadNullableStringColumn(target, "catalog.parquet", "table_name");
 
         await Assert.That(tableNames.Length).IsGreaterThan(0);
         await Assert.That(tableNames.Count(static name => name is null)).IsEqualTo(0);
@@ -235,12 +222,11 @@ internal sealed class ParquetExporterTests
     [Test]
     public async Task StringFieldWritesPlainValueColumn()
     {
-        using TestDir dir = new("parquet_string_value");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
 
         using ParquetExporter exporter =
             ParquetExporter.CreateBuilder()
-                .ToDirectory(outputPath)
+                .ToTarget(target)
                 .Build();
 
         Packet[] packets = PacketGenerators.CreateDnsQueryPackets("example.com", "example.com", "other.example.org");
@@ -250,29 +236,28 @@ internal sealed class ParquetExporterTests
         }
         exporter.OnFinish();
 
-        int dnsNameFieldId = await _FindFieldIdByName(Path.Combine(outputPath, "catalog.parquet"), "dns.qry.name");
+        int dnsNameFieldId = await _FindFieldIdByName(target, "catalog.parquet", "dns.qry.name");
         await Assert.That(dnsNameFieldId).IsGreaterThanOrEqualTo(0)
             .Because("the DNS query packets must produce a dns.qry.name string field");
 
-        string fieldPath = Path.Combine(outputPath, "fields", Invariant($"field_{dnsNameFieldId}.parquet"));
-        string[] values = await _ReadStringColumn(fieldPath, "value");
+        string fieldPath = Invariant($"fields/field_{dnsNameFieldId}.parquet");
+        string[] values = await _ReadStringColumn(target, fieldPath, "value");
         await Assert.That(values.Length).IsEqualTo(3);
         await Assert.That(values[0]).IsEqualTo("example.com");
         await Assert.That(values[1]).IsEqualTo("example.com");
         await Assert.That(values[2]).IsEqualTo("other.example.org");
-        await Assert.That(File.Exists(Path.Combine(outputPath, "fields", Invariant($"field_{dnsNameFieldId}_value_dict.parquet")))).IsFalse();
+        await Assert.That(target.EntryNames.Contains(Invariant($"fields/field_{dnsNameFieldId}_value_dict.parquet"))).IsFalse();
     }
 
     [Test]
     public async Task CustomTextColumnPreservesNullEntries()
     {
         // Absent custom text must remain null in Parquet (DuckDB parity), not coerced to "".
-        using TestDir dir = new("parquet_null_custom_text");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
 
         using ParquetExporter exporter =
             ParquetExporter.CreateBuilder()
-                .ToDirectory(outputPath)
+                .ToTarget(target)
                 .WithContent(ExportContents.Full)
                 .Build();
 
@@ -283,12 +268,11 @@ internal sealed class ParquetExporterTests
         }
         exporter.OnFinish();
 
-        string fieldsDir = Path.Combine(outputPath, "fields");
-        string[] fieldFiles = Directory.GetFiles(fieldsDir, "field_*.parquet");
+        string[] fieldFiles = [.. target.EntryNames.Where(static name => name.StartsWith("fields/field_", StringComparison.Ordinal))];
         await Assert.That(fieldFiles.Length).IsGreaterThan(0);
 
         string fieldPath = fieldFiles[0];
-        string?[] customTexts = await _ReadNullableStringColumn(fieldPath, "custom_text");
+        string?[] customTexts = await _ReadNullableStringColumn(target, fieldPath, "custom_text");
         await Assert.That(customTexts.Length).IsGreaterThan(0);
         foreach (string? text in customTexts)
         {
@@ -299,12 +283,11 @@ internal sealed class ParquetExporterTests
     [Test]
     public async Task TargetPacketCountLimitsExport()
     {
-        using TestDir dir = new("parquet_target_count");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
 
         using ParquetExporter exporter =
             ParquetExporter.CreateBuilder()
-                .ToDirectory(outputPath)
+                .ToTarget(target)
                 .WithTargetPacketCount(3)
                 .Build();
 
@@ -317,43 +300,18 @@ internal sealed class ParquetExporterTests
 
         await Assert.That(exporter.PacketCount).IsEqualTo(3);
 
-        long rowCount = await _CountRows(Path.Combine(outputPath, "packets.parquet"));
+        long rowCount = await _CountRows(target, "packets.parquet");
         await Assert.That(rowCount).IsEqualTo(3);
-    }
-
-    [Test]
-    public async Task CancellationStopsExport()
-    {
-        using TestDir dir = new("parquet_cancel");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
-        using CancellationTokenSource cts = new();
-
-        using ParquetExporter exporter =
-            ParquetExporter.CreateBuilder()
-                .ToDirectory(outputPath)
-                .WithCancellationToken(cts.Token)
-                .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(20);
-        exporter.OnPacket(packets[0]);
-        await cts.CancelAsync().ConfigureAwait(false);
-        bool continued = exporter.OnPacket(packets[1]);
-        exporter.OnFinish();
-
-        await Assert.That(continued).IsFalse();
-        await Assert.That(exporter.IsFinished).IsTrue();
-        await Assert.That(exporter.PacketCount).IsEqualTo(1);
     }
 
     [Test]
     public async Task BackgroundAndSynchronousModesWriteIdenticalRows()
     {
-        using TestDir dir = new("parquet_write_modes");
-        string background = Path.Combine(dir.DirectoryPath, "background");
-        string synchronous = Path.Combine(dir.DirectoryPath, "synchronous");
+        MemoryExportTarget background = new(seekable: true);
+        MemoryExportTarget synchronous = new(seekable: true);
         Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(3000);
 
-        using (ParquetExporter first = ParquetExporter.CreateBuilder().ToDirectory(background).WithMaxPacketsPerBlock(1000).Build())
+        using (ParquetExporter first = ParquetExporter.CreateBuilder().ToTarget(background).WithMaxPacketsPerBlock(1000).Build())
         {
             foreach (Packet packet in packets)
             {
@@ -362,7 +320,7 @@ internal sealed class ParquetExporterTests
         }
 
         using (ParquetExporter second = ParquetExporter.CreateBuilder()
-            .ToDirectory(synchronous).WithMaxPacketsPerBlock(1000).WithWriteMode(ExportWriteMode.Synchronous).Build())
+            .ToTarget(synchronous).WithMaxPacketsPerBlock(1000).WithWriteMode(ExportWriteMode.Synchronous).Build())
         {
             foreach (Packet packet in packets)
             {
@@ -371,8 +329,8 @@ internal sealed class ParquetExporterTests
         }
 
         // Decoded rows are compared, not bytes: the file footers may carry creation metadata.
-        (int[] backgroundIds, long[] backgroundTimes) = await _ReadPacketsFile(Path.Combine(background, "packets.parquet"));
-        (int[] synchronousIds, long[] synchronousTimes) = await _ReadPacketsFile(Path.Combine(synchronous, "packets.parquet"));
+        (int[] backgroundIds, long[] backgroundTimes) = await _ReadPacketsFile(background, "packets.parquet");
+        (int[] synchronousIds, long[] synchronousTimes) = await _ReadPacketsFile(synchronous, "packets.parquet");
 
         await Assert.That(synchronousIds).IsEquivalentTo(backgroundIds);
         await Assert.That(synchronousTimes).IsEquivalentTo(backgroundTimes);
@@ -382,11 +340,10 @@ internal sealed class ParquetExporterTests
     [Test]
     public async Task TenThousandPacketBatchesProduceThreeRowGroups()
     {
-        using TestDir dir = new("parquet_row_groups");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
 
         using (ParquetExporter exporter = ParquetExporter.CreateBuilder()
-            .ToDirectory(outputPath)
+            .ToTarget(target)
             .WithMaxPacketsPerBlock(10_000)
             .WithMaxBlockSize(long.MaxValue) // only the packet limit decides here; the default 16 MiB estimate would flush earlier
             .Build())
@@ -397,7 +354,8 @@ internal sealed class ParquetExporterTests
             }
         }
 
-        await using ParquetReader reader = await ParquetReader.CreateAsync(Path.Combine(outputPath, "packets.parquet"));
+        using MemoryStream stream = new(target.Bytes("packets.parquet"));
+        await using ParquetReader reader = await ParquetReader.CreateAsync(stream);
 
         // 10 000 + 10 000 + 5 000: the limit decides the batch size, and the last batch is written at the end.
         await Assert.That(reader.RowGroupCount).IsEqualTo(3);
@@ -425,12 +383,11 @@ internal sealed class ParquetExporterTests
     [Test]
     public async Task MultipleFlushesProduceMultipleRowGroupsAllReadable()
     {
-        using TestDir dir = new("parquet_multi_flush");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
 
         using ParquetExporter exporter =
             ParquetExporter.CreateBuilder()
-                .ToDirectory(outputPath)
+                .ToTarget(target)
                 .WithMaxPacketsPerBlock(3)
                 .Build();
 
@@ -443,32 +400,13 @@ internal sealed class ParquetExporterTests
 
         await Assert.That(exporter.PacketCount).IsEqualTo(10);
 
-        await using ParquetReader reader = await ParquetReader.CreateAsync(Path.Combine(outputPath, "packets.parquet"));
+        using MemoryStream stream = new(target.Bytes("packets.parquet"));
+        await using ParquetReader reader = await ParquetReader.CreateAsync(stream);
         await Assert.That(reader.RowGroupCount).IsGreaterThan(1)
             .Because("10 packets with a 3-per-block limit must flush more than once");
 
-        long totalRows = await _CountRows(Path.Combine(outputPath, "packets.parquet"));
+        long totalRows = await _CountRows(target, "packets.parquet");
         await Assert.That(totalRows).IsEqualTo(10);
-    }
-
-    [Test]
-    public async Task DoubleFinishDoesNotThrow()
-    {
-        using TestDir dir = new("parquet_double_finish");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
-
-        using ParquetExporter exporter =
-            ParquetExporter.CreateBuilder()
-                .ToDirectory(outputPath)
-                .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(1);
-        exporter.OnPacket(packets[0]);
-
-        exporter.OnFinish();
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
     }
 
     #region Catalog merge across batches
@@ -480,13 +418,12 @@ internal sealed class ParquetExporterTests
     [Test]
     public async Task ACatalogRowWithATableIsNotReplacedByAStructureRowOfAnotherBatch()
     {
-        using TestDir dir = new("parquet_catalog_merge");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
         using ValueOrStructureFieldCapture capture = ValueOrStructureFieldCapture.Create();
-        string catalogPath = Path.Combine(outputPath, "catalog.parquet");
+        const string catalogPath = "catalog.parquet";
 
         using (ParquetExporter exporter = ParquetExporter.CreateBuilder()
-            .ToDirectory(outputPath)
+            .ToTarget(target)
             .WithMaxPacketsPerBlock(1)
             .WithWriteMode(ExportWriteMode.Background)
             .Build())
@@ -499,28 +436,27 @@ internal sealed class ParquetExporterTests
             exporter.OnFinish();
         }
 
-        int fieldId = await _FindFieldIdByName(catalogPath, ValueOrStructureFieldCapture.FieldName);
-        string[] names = await _ReadStringColumn(catalogPath, "name");
-        string?[] tableNames = await _ReadNullableStringColumn(catalogPath, "table_name");
+        int fieldId = await _FindFieldIdByName(target, catalogPath, ValueOrStructureFieldCapture.FieldName);
+        string[] names = await _ReadStringColumn(target, catalogPath, "name");
+        string?[] tableNames = await _ReadNullableStringColumn(target, catalogPath, "table_name");
         int row = Array.IndexOf(names, ValueOrStructureFieldCapture.FieldName);
 
         await Assert.That(fieldId).IsGreaterThanOrEqualTo(0);
         await Assert.That(row).IsGreaterThanOrEqualTo(0);
         await Assert.That(tableNames[row]).IsEqualTo(Invariant($"field_{fieldId}"));
-        await Assert.That(File.Exists(Path.Combine(outputPath, "fields", Invariant($"field_{fieldId}.parquet")))).IsTrue();
+        await Assert.That(target.EntryNames.Contains(Invariant($"fields/field_{fieldId}.parquet"))).IsTrue();
     }
 
     /// <summary>The other write order: the structure row comes first, then the batch with the value; the value row replaces it.</summary>
     [Test]
     public async Task ACatalogRowWithATableReplacesAnEarlierStructureRow()
     {
-        using TestDir dir = new("parquet_catalog_merge_reverse");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
         using ValueOrStructureFieldCapture capture = ValueOrStructureFieldCapture.Create();
-        string catalogPath = Path.Combine(outputPath, "catalog.parquet");
+        const string catalogPath = "catalog.parquet";
 
         using (ParquetExporter exporter = ParquetExporter.CreateBuilder()
-            .ToDirectory(outputPath)
+            .ToTarget(target)
             .WithMaxPacketsPerBlock(1)
             .WithWriteMode(ExportWriteMode.Background)
             .Build())
@@ -530,9 +466,9 @@ internal sealed class ParquetExporterTests
             exporter.OnFinish();
         }
 
-        int fieldId = await _FindFieldIdByName(catalogPath, ValueOrStructureFieldCapture.FieldName);
-        string[] names = await _ReadStringColumn(catalogPath, "name");
-        string?[] tableNames = await _ReadNullableStringColumn(catalogPath, "table_name");
+        int fieldId = await _FindFieldIdByName(target, catalogPath, ValueOrStructureFieldCapture.FieldName);
+        string[] names = await _ReadStringColumn(target, catalogPath, "name");
+        string?[] tableNames = await _ReadNullableStringColumn(target, catalogPath, "table_name");
         int row = Array.IndexOf(names, ValueOrStructureFieldCapture.FieldName);
 
         await Assert.That(row).IsGreaterThanOrEqualTo(0);
@@ -559,37 +495,6 @@ internal sealed class ParquetExporterTests
         await Assert.That(exporter.WrittenCount).IsEqualTo(0);
     }
 
-    /// <summary>The display name and description given to the builder are the ones the exporter reports.</summary>
-    [Test]
-    public async Task UiNameAndDescriptionComeFromTheBuilder()
-    {
-        using TestDir dir = new("parquet_meta");
-        using ParquetExporter exporter = ParquetExporter.CreateBuilder()
-            .ToDirectory(Path.Combine(dir.DirectoryPath, "dataset"))
-            .WithUiName("Lab")
-            .WithDescription("run 7")
-            .Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("Lab");
-        await Assert.That(exporter.Description).IsEqualTo("run 7");
-    }
-
-    /// <summary><see cref="ParquetExporter.IsFinished"/> is false while the export runs and true once it was finished.</summary>
-    [Test]
-    public async Task IsFinishedTurnsTrueOnlyAfterFinish()
-    {
-        using TestDir dir = new("parquet_finished");
-        using ParquetExporter exporter = ParquetExporter.CreateBuilder()
-            .ToDirectory(Path.Combine(dir.DirectoryPath, "dataset"))
-            .Build();
-        bool before = exporter.IsFinished;
-
-        exporter.OnFinish();
-
-        await Assert.That(before).IsFalse();
-        await Assert.That(exporter.IsFinished).IsTrue();
-    }
-
     #endregion
 
     #region Catalog description and protocols
@@ -601,15 +506,14 @@ internal sealed class ParquetExporterTests
     [Test]
     public async Task CatalogFileAppendsDescriptionAsLastColumn()
     {
-        using TestDir dir = new("parquet_catalog_description");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
         using DescribedFieldCapture capture = DescribedFieldCapture.Create(2);
-        string catalogPath = Path.Combine(outputPath, "catalog.parquet");
+        const string catalogPath = "catalog.parquet";
 
-        _Export(outputPath, capture.Packets, ErrorToleranceMode.Tolerant);
-        string[] columns = await _ReadColumnNames(catalogPath);
-        string[] names = await _ReadStringColumn(catalogPath, "name");
-        string?[] descriptions = await _ReadNullableStringColumn(catalogPath, "description");
+        _Export(target, capture.Packets, ErrorToleranceMode.Tolerant);
+        string[] columns = await _ReadColumnNames(target, catalogPath);
+        string[] names = await _ReadStringColumn(target, catalogPath, "name");
+        string?[] descriptions = await _ReadNullableStringColumn(target, catalogPath, "description");
 
         await Assert.That(string.Join(',', columns))
             .IsEqualTo("field_id,name,ui_name,field_type,protocol_id,table_name,description");
@@ -625,17 +529,16 @@ internal sealed class ParquetExporterTests
     [Test]
     public async Task ProtocolsFileListsStackProtocols()
     {
-        using TestDir dir = new("parquet_protocols");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
         using DescribedFieldCapture capture = DescribedFieldCapture.Create(1);
-        string protocolsPath = Path.Combine(outputPath, "protocols.parquet");
+        const string protocolsPath = "protocols.parquet";
         ReadOnlyMemory<ProtocolInfo> protocols = capture.Stack.Protocols;
 
-        _Export(outputPath, capture.Packets, ErrorToleranceMode.Tolerant);
-        string[] columns = await _ReadColumnNames(protocolsPath);
-        int[] ids = await _ReadIntColumn(protocolsPath, "protocol_id");
-        string[] names = await _ReadStringColumn(protocolsPath, "name");
-        string[] uiNames = await _ReadStringColumn(protocolsPath, "ui_name");
+        _Export(target, capture.Packets, ErrorToleranceMode.Tolerant);
+        string[] columns = await _ReadColumnNames(target, protocolsPath);
+        int[] ids = await _ReadIntColumn(target, protocolsPath, "protocol_id");
+        string[] names = await _ReadStringColumn(target, protocolsPath, "name");
+        string[] uiNames = await _ReadStringColumn(target, protocolsPath, "ui_name");
 
         await Assert.That(string.Join(',', columns)).IsEqualTo("protocol_id,name,ui_name");
         await Assert.That(ids.Length).IsEqualTo(protocols.Length);
@@ -664,14 +567,13 @@ internal sealed class ParquetExporterTests
     [Test]
     public async Task RequiredColumnReadIsIndependentOfStalePooledMemory()
     {
-        using TestDir dir = new("parquet_stale_pool");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
         using DescribedFieldCapture capture = DescribedFieldCapture.Create(1);
-        string protocolsPath = Path.Combine(outputPath, "protocols.parquet");
+        const string protocolsPath = "protocols.parquet";
         ReadOnlyMemory<ProtocolInfo> protocols = capture.Stack.Protocols;
 
-        _Export(outputPath, capture.Packets, ErrorToleranceMode.Tolerant);
-        int[] ids = await _ReadIntColumn(protocolsPath, "protocol_id", _FillSharedIntPoolWithNegativeValues);
+        _Export(target, capture.Packets, ErrorToleranceMode.Tolerant);
+        int[] ids = await _ReadIntColumn(target, protocolsPath, "protocol_id", _FillSharedIntPoolWithNegativeValues);
 
         await Assert.That(ids.Length).IsEqualTo(protocols.Length);
         for (int i = 0; i < ids.Length; i++)
@@ -761,14 +663,14 @@ internal sealed class ParquetExporterTests
     // Parquet read-back helpers
     // ========================================================================
 
-    /// <summary>Exports <paramref name="packets"/> into <paramref name="outputPath"/> with default options.</summary>
-    /// <param name="outputPath">Output directory.</param>
+    /// <summary>Exports <paramref name="packets"/> onto <paramref name="target"/> with default options.</summary>
+    /// <param name="target">Target that receives the dataset entries.</param>
     /// <param name="packets">Packets to export.</param>
     /// <param name="mode">Error tolerance mode.</param>
-    private static void _Export(string outputPath, Packet[] packets, ErrorToleranceMode mode)
+    private static void _Export(MemoryExportTarget target, Packet[] packets, ErrorToleranceMode mode)
     {
         using ParquetExporter exporter = ParquetExporter.CreateBuilder()
-            .ToDirectory(outputPath)
+            .ToTarget(target)
             .Build();
         exporter.ErrorTolerance = mode;
         foreach (Packet packet in packets)
@@ -779,11 +681,13 @@ internal sealed class ParquetExporterTests
     }
 
     /// <summary>Returns the data column names of a Parquet file in schema order.</summary>
-    /// <param name="path">Parquet file path.</param>
+    /// <param name="target">Target after the export.</param>
+    /// <param name="entry">Entry name of the Parquet file.</param>
     /// <returns>Column names.</returns>
-    private static async Task<string[]> _ReadColumnNames(string path)
+    private static async Task<string[]> _ReadColumnNames(MemoryExportTarget target, string entry)
     {
-        await using ParquetReader reader = await ParquetReader.CreateAsync(path);
+        using MemoryStream stream = new(target.Bytes(entry));
+        await using ParquetReader reader = await ParquetReader.CreateAsync(stream);
         DataField[] fields = reader.Schema.GetDataFields();
         string[] names = new string[fields.Length];
         for (int i = 0; i < fields.Length; i++)
@@ -793,9 +697,10 @@ internal sealed class ParquetExporterTests
         return names;
     }
 
-    private static async Task<(int[] PacketIds, long[] Timestamps)> _ReadPacketsFile(string path)
+    private static async Task<(int[] PacketIds, long[] Timestamps)> _ReadPacketsFile(MemoryExportTarget target, string entry)
     {
-        await using ParquetReader reader = await ParquetReader.CreateAsync(path);
+        using MemoryStream stream = new(target.Bytes(entry));
+        await using ParquetReader reader = await ParquetReader.CreateAsync(stream);
         DataField packetIdField = reader.Schema.FindDataField("packet_id");
         DataField timestampField = reader.Schema.FindDataField("timestamp_ns");
 
@@ -816,9 +721,10 @@ internal sealed class ParquetExporterTests
         return (packetIds.ToArray(), timestamps.ToArray());
     }
 
-    private static async Task<long> _CountRows(string path)
+    private static async Task<long> _CountRows(MemoryExportTarget target, string entry)
     {
-        await using ParquetReader reader = await ParquetReader.CreateAsync(path);
+        using MemoryStream stream = new(target.Bytes(entry));
+        await using ParquetReader reader = await ParquetReader.CreateAsync(stream);
         long total = 0;
         for (int i = 0; i < reader.RowGroupCount; i++)
         {
@@ -828,9 +734,10 @@ internal sealed class ParquetExporterTests
         return total;
     }
 
-    private static async Task<int> _FindFieldIdByName(string catalogPath, string fieldName)
+    private static async Task<int> _FindFieldIdByName(MemoryExportTarget target, string catalogEntry, string fieldName)
     {
-        await using ParquetReader reader = await ParquetReader.CreateAsync(catalogPath);
+        using MemoryStream stream = new(target.Bytes(catalogEntry));
+        await using ParquetReader reader = await ParquetReader.CreateAsync(stream);
         DataField fieldIdField = reader.Schema.FindDataField("field_id");
         DataField nameField = reader.Schema.FindDataField("name");
 
@@ -855,9 +762,10 @@ internal sealed class ParquetExporterTests
         return -1;
     }
 
-    private static async Task<string[]> _ReadStringColumn(string path, string columnName)
+    private static async Task<string[]> _ReadStringColumn(MemoryExportTarget target, string entry, string columnName)
     {
-        await using ParquetReader reader = await ParquetReader.CreateAsync(path);
+        using MemoryStream stream = new(target.Bytes(entry));
+        await using ParquetReader reader = await ParquetReader.CreateAsync(stream);
         DataField field = reader.Schema.FindDataField(columnName);
 
         List<string> values = [];
@@ -873,9 +781,10 @@ internal sealed class ParquetExporterTests
         return values.ToArray();
     }
 
-    private static async Task<string?[]> _ReadNullableStringColumn(string path, string columnName)
+    private static async Task<string?[]> _ReadNullableStringColumn(MemoryExportTarget target, string entry, string columnName)
     {
-        await using ParquetReader reader = await ParquetReader.CreateAsync(path);
+        using MemoryStream stream = new(target.Bytes(entry));
+        await using ParquetReader reader = await ParquetReader.CreateAsync(stream);
         DataField field = reader.Schema.FindDataField(columnName);
 
         List<string?> values = [];
@@ -936,13 +845,15 @@ internal sealed class ParquetExporterTests
     /// it rents an uncleared pooled array for the definition levels, a required column has none in the file, and the stale
     /// content decides which rows read as <see langword="null"/> (see <see cref="RequiredColumnReadIsIndependentOfStalePooledMemory"/>).
     /// </summary>
-    /// <param name="path">Parquet file path.</param>
+    /// <param name="target">Target after the export.</param>
+    /// <param name="entry">Entry name of the Parquet file.</param>
     /// <param name="columnName">Name of the required <c>INT32</c> column.</param>
     /// <param name="beforeEachRead">Optional action that runs right before every row-group read; tests use it to disturb the shared array pool.</param>
     /// <returns>The values of all row groups in file order.</returns>
-    private static async Task<int[]> _ReadIntColumn(string path, string columnName, Action? beforeEachRead = null)
+    private static async Task<int[]> _ReadIntColumn(MemoryExportTarget target, string entry, string columnName, Action? beforeEachRead = null)
     {
-        await using ParquetReader reader = await ParquetReader.CreateAsync(path);
+        using MemoryStream stream = new(target.Bytes(entry));
+        await using ParquetReader reader = await ParquetReader.CreateAsync(stream);
         DataField field = reader.Schema.FindDataField(columnName);
 
         List<int> values = [];

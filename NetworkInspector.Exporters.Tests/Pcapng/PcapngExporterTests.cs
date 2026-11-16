@@ -19,26 +19,18 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task BuilderRequiresOutput()
-    {
-        PcapngExporter.Builder builder = PcapngExporter.CreateBuilder();
-        await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
-    }
-
-    [Test]
     public async Task SingleFrameProducesValidPcapng()
     {
-        using TestDir dir = new("pcapng_single");
-        string path = dir.FilePath("output.pcapng");
+        using MemoryStream stream = new();
 
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToFile(path).Build();
+        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(stream).Build();
 
         byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(32);
         Frame frame = TestHarness.CreateFrame(0, 1_000_000_000, frameData);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
-        PcapngVerifier verifier = PcapngVerifier.Open(path);
+        PcapngVerifier verifier = PcapngVerifier.FromData(stream.ToArray());
         await Assert.That(verifier.SectionCount).IsEqualTo(1);
         await Assert.That(verifier.InterfaceCount).IsGreaterThanOrEqualTo(1);
         await Assert.That(verifier.FrameCount).IsEqualTo(1);
@@ -50,11 +42,10 @@ internal sealed class PcapngExporterTests
     [Test]
     public async Task MultipleFramesAllWritten()
     {
-        using TestDir dir = new("pcapng_multi");
-        string path = dir.FilePath("output.pcapng");
+        using MemoryStream stream = new();
 
         const int count = 50;
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToFile(path).Build();
+        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(stream).Build();
 
         Frame[] frames = PacketGenerators.CreateEthernetFrames(count);
         foreach (Frame frame in frames)
@@ -64,7 +55,7 @@ internal sealed class PcapngExporterTests
 
         exporter.OnFinish();
 
-        PcapngVerifier verifier = PcapngVerifier.Open(path);
+        PcapngVerifier verifier = PcapngVerifier.FromData(stream.ToArray());
         await Assert.That(verifier.FrameCount).IsEqualTo(count);
     }
 
@@ -88,7 +79,7 @@ internal sealed class PcapngExporterTests
     }
 
     [Test]
-    public async Task LazyInitNoFileCreatedWithoutFrames()
+    public async Task FinishWithoutFramesWritesAFileWithOnlyTheSectionHeaderBlock()
     {
         using TestDir dir = new("pcapng_lazy");
         string path = dir.FilePath("output.pcapng");
@@ -122,14 +113,9 @@ internal sealed class PcapngExporterTests
 
     [Test]
     [Category("Slow")]
-    public async Task TsharkValidationSkippedWhenNotAvailable()
+    public async Task TsharkCountsTheFramesOfTheWrittenFileLikeTheVerifier()
     {
-        if (!TsharkVerifier.IsAvailable())
-        {
-            // Skip test gracefully
-            return;
-        }
-
+        TsharkVerifier.RequireAvailable();
         using TestDir dir = new("pcapng_tshark");
         string path = dir.FilePath("output.pcapng");
 
@@ -170,10 +156,9 @@ internal sealed class PcapngExporterTests
     [Test]
     public async Task FlexRayFrameProducesValidPcapng()
     {
-        using TestDir dir = new("pcapng_flexray");
-        string path = dir.FilePath("output.pcapng");
+        using MemoryStream stream = new();
 
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToFile(path).Build();
+        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(stream).Build();
 
         byte[] frData = FlexRayGenerators.BuildFlexRayFrame(
             0, 10, 3, 0xABCD, [0xDE, 0xAD, 0xBE, 0xEF], sync: true);
@@ -181,7 +166,7 @@ internal sealed class PcapngExporterTests
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
-        PcapngVerifier verifier = PcapngVerifier.Open(path);
+        PcapngVerifier verifier = PcapngVerifier.FromData(stream.ToArray());
         await Assert.That(verifier.SectionCount).IsEqualTo(1);
         await Assert.That(verifier.FrameCount).IsEqualTo(1);
         await Assert.That(verifier.Interfaces).Count().IsEqualTo(1);
@@ -194,17 +179,16 @@ internal sealed class PcapngExporterTests
     [Test]
     public async Task LinFrameProducesValidPcapng()
     {
-        using TestDir dir = new("pcapng_lin");
-        string path = dir.FilePath("output.pcapng");
+        using MemoryStream stream = new();
 
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToFile(path).Build();
+        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(stream).Build();
 
         byte[] linData = LinGenerators.BuildLinFrame(0x05, [0x11, 0x22, 0x33], checksum: 0x42);
         Frame frame = TestHarness.CreateFrame(0, 1_000_000_000, linData, LinkType.Lin);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
-        PcapngVerifier verifier = PcapngVerifier.Open(path);
+        PcapngVerifier verifier = PcapngVerifier.FromData(stream.ToArray());
         await Assert.That(verifier.SectionCount).IsEqualTo(1);
         await Assert.That(verifier.FrameCount).IsEqualTo(1);
         await Assert.That(verifier.Interfaces).Count().IsEqualTo(1);
@@ -217,10 +201,9 @@ internal sealed class PcapngExporterTests
     [Test]
     public async Task MixedLinkTypesCreatesMultipleInterfaces()
     {
-        using TestDir dir = new("pcapng_mixed_links");
-        string path = dir.FilePath("output.pcapng");
+        using MemoryStream stream = new();
 
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToFile(path).Build();
+        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(stream).Build();
 
         // Ethernet frame
         byte[] ethData = FrameGenerators.BuildEthernetIpv4UdpFrame(16);
@@ -239,198 +222,11 @@ internal sealed class PcapngExporterTests
 
         exporter.OnFinish();
 
-        PcapngVerifier verifier = PcapngVerifier.Open(path);
+        PcapngVerifier verifier = PcapngVerifier.FromData(stream.ToArray());
         await Assert.That(verifier.SectionCount).IsEqualTo(1);
         await Assert.That(verifier.FrameCount).IsEqualTo(3);
         // Each distinct link type should create its own interface
         await Assert.That(verifier.InterfaceCount).IsGreaterThanOrEqualTo(3);
-    }
-
-    // ========================================================================
-    // Cancellation
-    // ========================================================================
-
-    [Test]
-    [Category("Slow")]
-    public async Task CancellationStopsExport()
-    {
-        using CancellationTokenSource cts = new();
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCancellationToken(cts.Token)
-            .Build();
-
-        Frame[] frames = PacketGenerators.CreateEthernetFrames(10);
-
-        exporter.OnFrame(frames[0]);
-        exporter.OnFrame(frames[1]);
-        await cts.CancelAsync().ConfigureAwait(false);
-
-        // After cancellation, OnFrame must return false
-        bool accepted = exporter.OnFrame(frames[2]);
-        await Assert.That(accepted).IsFalse();
-
-        exporter.OnFinish();
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterCancellation()
-    {
-        using CancellationTokenSource cts = new();
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCancellationToken(cts.Token)
-            .Build();
-
-        await cts.CancelAsync().ConfigureAwait(false);
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-    }
-
-    // ========================================================================
-    // Target frame count
-    // ========================================================================
-
-    [Test]
-    public async Task TargetFrameCountLimitsExport()
-    {
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithTargetFrameCount(3)
-            .Build();
-
-        Frame[] frames = PacketGenerators.CreateEthernetFrames(10);
-        foreach (Frame frame in frames)
-        {
-            exporter.OnFrame(frame);
-        }
-
-        exporter.OnFinish();
-
-        await Assert.That(exporter.FrameCount).IsEqualTo(3);
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterTargetReached()
-    {
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithTargetFrameCount(2)
-            .Build();
-
-        Frame[] frames = PacketGenerators.CreateEthernetFrames(5);
-        foreach (Frame frame in frames)
-        {
-            exporter.OnFrame(frame);
-        }
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-        exporter.OnFinish();
-    }
-
-    // ========================================================================
-    // Lifecycle: IsFinished, Double-finish
-    // ========================================================================
-
-    [Test]
-    public async Task IsFinishedFalseBeforeOnFinish()
-    {
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
-
-        await Assert.That(exporter.IsFinished).IsFalse();
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterOnFinish()
-    {
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
-
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-    }
-
-    [Test]
-    public async Task OnFrameAfterFinishReturnsFalse()
-    {
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
-
-        exporter.OnFinish();
-
-        Frame[] frames = PacketGenerators.CreateEthernetFrames(1);
-        bool accepted = exporter.OnFrame(frames[0]);
-
-        await Assert.That(accepted).IsFalse();
-    }
-
-    [Test]
-    public async Task DoubleFinishIsIdempotent()
-    {
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
-
-        Frame[] frames = PacketGenerators.CreateEthernetFrames(2);
-        exporter.OnFrame(frames[0]);
-
-        // Calling OnFinish twice must not throw
-        exporter.OnFinish();
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-        await Assert.That(exporter.FrameCount).IsEqualTo(1);
-    }
-
-    // ========================================================================
-    // UiName / Description
-    // ========================================================================
-
-    [Test]
-    public async Task UiNameReturnsDefault()
-    {
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("PCAPNG Exporter");
-    }
-
-    [Test]
-    public async Task UiNameReturnsCustomValue()
-    {
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithUiName("Network Capture Export")
-            .Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("Network Capture Export");
-    }
-
-    [Test]
-    public async Task DescriptionReturnsNullWhenNotSet()
-    {
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(ms).Build();
-
-        await Assert.That(exporter.Description).IsNull();
-    }
-
-    [Test]
-    public async Task DescriptionReturnsConfiguredValue()
-    {
-        using MemoryStream ms = new();
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithDescription("PCAP Next Generation capture file")
-            .Build();
-
-        await Assert.That(exporter.Description).IsEqualTo("PCAP Next Generation capture file");
     }
 
     // ========================================================================

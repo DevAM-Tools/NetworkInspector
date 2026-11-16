@@ -4,7 +4,7 @@ namespace NetworkInspector.Exporters.Tests;
 
 /// <summary>
 /// Start-up failure tests shared by the exporters that open their output lazily on the first item: a file that cannot be
-/// created, or an output without a stream, must end in the normal error path (counter and event) and must never throw out of
+/// created, or a target that refuses its entry, must end in the normal error path (counter and event) and must never throw out of
 /// <c>OnFrame</c> or <c>OnPacket</c>.
 /// </summary>
 internal sealed class ExporterStartFailureTests
@@ -27,9 +27,11 @@ internal sealed class ExporterStartFailureTests
     }
 
     [Test]
-    public async Task PbfMissingOutputStreamIsReportedAsExportError()
+    public async Task PbfRefusedOutputEntryIsReportedAsExportError()
     {
-        using PbfExporter exporter = PbfExporter.CreateBuilder().ToStream(null!).Build(); // null! : deliberately invalid stream
+        using PbfExporter exporter = PbfExporter.CreateBuilder()
+            .ToTarget(new MemoryExportTarget(refuse: static _ => "offline"))
+            .Build();
         List<ExportErrorEventArgs> events = [];
         exporter.ItemSkipped += (_, args) => events.Add(args);
 
@@ -58,9 +60,11 @@ internal sealed class ExporterStartFailureTests
     }
 
     [Test]
-    public async Task PcapngMissingOutputStreamIsReportedAsExportError()
+    public async Task PcapngRefusedOutputEntryIsReportedAsExportError()
     {
-        using PcapngExporter exporter = PcapngExporter.CreateBuilder().ToStream(null!).Build(); // null! : deliberately invalid stream
+        using PcapngExporter exporter = PcapngExporter.CreateBuilder()
+            .ToTarget(new MemoryExportTarget(refuse: static _ => "offline"))
+            .Build();
         List<ExportErrorEventArgs> events = [];
         exporter.ItemSkipped += (_, args) => events.Add(args);
 
@@ -89,9 +93,11 @@ internal sealed class ExporterStartFailureTests
     }
 
     [Test]
-    public async Task JsonMissingOutputStreamIsReportedAsExportError()
+    public async Task JsonRefusedOutputEntryIsReportedAsExportError()
     {
-        using JsonExporter exporter = JsonExporter.CreateBuilder().ToStream(null!).Build(); // null! : deliberately invalid stream
+        using JsonExporter exporter = JsonExporter.CreateBuilder()
+            .ToTarget(new MemoryExportTarget(refuse: static _ => "offline"))
+            .Build();
         List<ExportErrorEventArgs> events = [];
         exporter.ItemSkipped += (_, args) => events.Add(args);
 

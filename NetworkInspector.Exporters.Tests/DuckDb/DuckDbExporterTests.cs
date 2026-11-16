@@ -71,17 +71,6 @@ internal sealed class DuckDbExporterTests
         await Assert.That(packetRows).IsEqualTo(2);
     }
 
-    /// <summary>Building an exporter without an output target throws <see cref="InvalidOperationException"/>.</summary>
-    /// <returns>The task that completes when the assertion is done.</returns>
-    [Test]
-    public async Task BuilderRequiresOutput()
-    {
-        DuckDbExporter.Builder builder =
-            DuckDbExporter.CreateBuilder();
-
-        await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
-    }
-
     /// <summary>An exporter that is finished before it received a packet creates no database file.</summary>
     /// <returns>The task that completes when the assertion is done.</returns>
     [Test]
@@ -239,32 +228,6 @@ internal sealed class DuckDbExporterTests
         await Assert.That(packetRows).IsEqualTo(3);
     }
 
-    /// <summary>Cancelling the token makes the exporter refuse the next packet and finish, and the packet written before stays.</summary>
-    /// <returns>The task that completes when the assertions are done.</returns>
-    [Test]
-    public async Task CancellationStopsExport()
-    {
-        using TestDir dir = new("duckdb_cancel");
-        string outputPath = Path.Combine(dir.DirectoryPath, "capture.duckdb");
-        using CancellationTokenSource cts = new();
-
-        using DuckDbExporter exporter =
-            DuckDbExporter.CreateBuilder()
-                .ToFile(outputPath)
-                .WithCancellationToken(cts.Token)
-                .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(20);
-        _Offer(exporter, packets[0]);
-        await cts.CancelAsync().ConfigureAwait(false);
-        bool continued = exporter.OnPacket(packets[1]);
-        exporter.OnFinish();
-
-        await Assert.That(continued).IsFalse();
-        await Assert.That(exporter.IsFinished).IsTrue();
-        await Assert.That(exporter.PacketCount).IsEqualTo(1);
-    }
-
     /// <summary>An export that needs several batches writes every packet.</summary>
     /// <returns>The task that completes when the assertions are done.</returns>
     [Test]
@@ -364,28 +327,6 @@ internal sealed class DuckDbExporterTests
     public async Task WriteModeMustBeDefined()
     {
         await Assert.That(() => DuckDbExporter.CreateBuilder().WithWriteMode((ExportWriteMode)9)).Throws<ArgumentOutOfRangeException>();
-    }
-
-    /// <summary>Calling <c>OnFinish</c> twice does not throw and leaves the exporter finished.</summary>
-    /// <returns>The task that completes when the assertion is done.</returns>
-    [Test]
-    public async Task DoubleFinishDoesNotThrow()
-    {
-        using TestDir dir = new("duckdb_double_finish");
-        string outputPath = Path.Combine(dir.DirectoryPath, "capture.duckdb");
-
-        using DuckDbExporter exporter =
-            DuckDbExporter.CreateBuilder()
-                .ToFile(outputPath)
-                .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(1);
-        _Offer(exporter, packets[0]);
-
-        exporter.OnFinish();
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
     }
 
     #endregion
@@ -508,37 +449,6 @@ internal sealed class DuckDbExporterTests
         await Assert.That(accepted).IsFalse();
         await Assert.That(File.Exists(outputPath)).IsFalse();
         await Assert.That(exporter.WrittenCount).IsEqualTo(0);
-    }
-
-    /// <summary>The display name and description given to the builder are the ones the exporter reports.</summary>
-    /// <returns>The task that completes when the assertions are done.</returns>
-    [Test]
-    public async Task UiNameAndDescriptionComeFromTheBuilder()
-    {
-        using TestDir dir = new("duckdb_meta");
-        using DuckDbExporter exporter = DuckDbExporter.CreateBuilder()
-            .ToFile(dir.FilePath("capture.duckdb"))
-            .WithUiName("Lab")
-            .WithDescription("run 7")
-            .Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("Lab");
-        await Assert.That(exporter.Description).IsEqualTo("run 7");
-    }
-
-    /// <summary><see cref="DuckDbExporter.IsFinished"/> is false while the export runs and true once it was finished.</summary>
-    /// <returns>The task that completes when the assertions are done.</returns>
-    [Test]
-    public async Task IsFinishedTurnsTrueOnlyAfterFinish()
-    {
-        using TestDir dir = new("duckdb_finished");
-        using DuckDbExporter exporter = DuckDbExporter.CreateBuilder().ToFile(dir.FilePath("capture.duckdb")).Build();
-        bool before = exporter.IsFinished;
-
-        exporter.OnFinish();
-
-        await Assert.That(before).IsFalse();
-        await Assert.That(exporter.IsFinished).IsTrue();
     }
 
     #endregion

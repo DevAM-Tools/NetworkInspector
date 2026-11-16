@@ -277,6 +277,7 @@ internal sealed class RetirableStackTests
     #region Races
 
     [Test]
+    [Category("Slow")]
     public async Task ConcurrentReadersAndRetireDisposeExactlyOnceAndNeverUnderALease()
     {
         // Repeated: each round races four readers (acquire, hold, release in a loop) against one retire, starting on a

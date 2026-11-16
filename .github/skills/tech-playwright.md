@@ -292,7 +292,7 @@ public sealed class HomePageLoads : JourneyTest
     [Test]
     public async Task ExportHeadingIsVisible()
     {
-        await Page.SetViewportSizeAsync(375, 667);
+        await Page.SetViewportSizeAsync(320, 568);
         await Page.GotoAsync(url);
         await Assert.That(await Page.GetByRole(AriaRole.Heading, new() { Name = "Export" }).IsVisibleAsync()).IsTrue();
     }
@@ -355,7 +355,8 @@ Mechanics only. Case design and suite size: `tech-test.md`.
 - One journey per spec/class when possible. Node name: `feature_scenario.spec.ts`. C#: PascalCase (`tech-tunit.md`).
 - Assert what the user can see (heading, table row, error text, URL).
 - **Named UI requirements:** each concrete UI requirement ID / `TEST-<AREA>-<TOPIC>` gets an observable assert. Do not stop at smoke (“heading visible”) when the requirement names validation, navigation, or layout.
-- **Product UI:** run the journey at the phone (`375 × 667`) and desktop (`1280 × 720`) viewports in `tech-web.md` unless the user waived responsiveness. Add tablet (`768 × 1024`) when layout changes at 768px.
+- **Product UI:** run the journey at the viewports of `tech-web.md` § Breakpoints unless the user waived responsiveness.
+- **Product UI, at each viewport:** assert `document.documentElement.scrollWidth <= window.innerWidth`, and that no visible element has `scrollWidth > clientWidth` unless it is a scroll region or an ellipsis with a tooltip. Assert that a table below its container width renders as cards.
 - **Illustrations:** asserts in `workflow-illustrate.md` only. Do not apply
   product viewports from `tech-web.md`. Spec files are optional keep-tests in
   the repo, never part of the zip. Illustrations are not required to be

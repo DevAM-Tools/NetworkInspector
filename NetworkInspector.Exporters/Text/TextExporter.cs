@@ -1582,7 +1582,13 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IPar
     #region Builder
 
     /// <summary>Fluent builder for <see cref="TextExporter"/>.</summary>
-    /// <remarks>Not thread-safe. Setters return the builder itself.</remarks>
+    /// <remarks>
+    /// Not thread-safe. Setters return the builder itself.
+    /// Output: <c>ToFile</c>, <c>ToStream</c>, <c>ToStdout</c>, and <c>ToTarget</c> replace each other, and the last call before
+    /// <c>Build</c> wins. Nothing is opened before the first item, so a replaced output creates no file and holds no resource.
+    /// The output belongs to the exporter that <c>Build</c> returns: build every further exporter from a new builder, because a
+    /// second <c>Build</c> hands both exporters the same output.
+    /// </remarks>
     public sealed class Builder
     {
         /// <summary>The output chosen by <c>ToFile</c>, <c>ToStream</c>, or <c>ToStdout</c>; required by <see cref="Build"/>.</summary>
@@ -1625,13 +1631,28 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IPar
         /// </summary>
         /// <param name="stream">A writable stream.</param>
         /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
+        /// <exception cref="ArgumentException"><paramref name="stream"/> is not writable.</exception>
         /// <remarks>
-        /// Throws nothing: the stream is not validated here. A missing or unwritable stream fails the first write, and the packet is
-        /// reported as skipped through <see cref="ItemSkipped"/>, like any other failed write.
+        /// A stream that fails during the export reports the packet as skipped through <see cref="ItemSkipped"/>, like any other
+        /// failed write.
         /// </remarks>
         public Builder ToStream(Stream stream)
         {
             _Output = ExportOutput.FromStream(stream);
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the output to a host target: the exporter opens one entry, <see cref="ExportEntryName.Main"/>, on its first packet
+        /// and never learns where it lands.
+        /// </summary>
+        /// <param name="target">The target; a refused entry becomes an export error of the first packet.</param>
+        /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="target"/> is <see langword="null"/>.</exception>
+        public Builder ToTarget(IExportTarget target)
+        {
+            _Output = ExportOutput.FromTarget(target);
             return this;
         }
 
@@ -1762,7 +1783,7 @@ public sealed class TextExporter : IPacketListener, IErrorTolerantExporter, IPar
             if (_Output is null)
             {
                 throw new InvalidOperationException(
-                    "No output target configured. Call ToFile(), ToStream(), or ToStdout().");
+                    "No output target configured. Call ToFile(), ToStream(), ToStdout(), or ToTarget().");
             }
 
             return new TextExporter(

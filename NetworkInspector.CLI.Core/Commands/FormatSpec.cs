@@ -67,6 +67,7 @@ internal static class FormatSpec
     /// <param name="registration">The export format.</param>
     /// <param name="optionTexts">The option texts of the spec.</param>
     /// <param name="fullPath">The prepared output path (see <c>ExportTargets.TryPrepare</c>).</param>
+    /// <param name="isDirectory">Whether the format writes a dataset into a folder at <paramref name="fullPath"/>.</param>
     /// <param name="stack">The stack that parsed the packets.</param>
     /// <param name="storedLimit">
     /// Returns the stored value of a limit key, or <see langword="null"/>; a limit option takes its default from it.
@@ -77,9 +78,9 @@ internal static class FormatSpec
     /// <param name="onIgnoredStoredValue">Receives each stored limit that was refused and replaced by the definition default.</param>
     /// <returns><see langword="true"/> when <paramref name="listener"/> is set.</returns>
     internal static bool TryCreate<TListener>(ExporterRegistration<TListener> registration,
-        IReadOnlyList<KeyValuePair<string, string>> optionTexts, string fullPath, IStack stack, Func<string, LimitValue?> storedLimit,
-        Action<PluginError> onIgnoredStoredValue, [NotNullWhen(true)] out TListener? listener, [NotNullWhen(false)] out PluginError? error,
-        CancellationToken cancellationToken)
+        IReadOnlyList<KeyValuePair<string, string>> optionTexts, string fullPath, bool isDirectory, IStack stack,
+        Func<string, LimitValue?> storedLimit, Action<PluginError> onIgnoredStoredValue, [NotNullWhen(true)] out TListener? listener,
+        [NotNullWhen(false)] out PluginError? error, CancellationToken cancellationToken)
         where TListener : class
     {
         // The option settings live only for this call (the using): the factories read their option values while they create the
@@ -101,7 +102,22 @@ internal static class FormatSpec
 
         // The item count is 0 (unknown): the command streams the sources and cannot tell the total in advance; the field is
         // informational for progress only, never a stop condition.
-        return registration.Create(new ExportRequest(fullPath, options.ReadOnly, stack, 0, cancellationToken), out listener, out error);
+        // A format whose library opens the file itself gets the prepared path; every other format gets a target on that path, a
+        // folder for a dataset format, one file otherwise. ExportTargets prepared the path before this call either way.
+        if (registration.Creation.TryGetForFile(out FileExporterCreate<TListener>? forFile))
+        {
+            return forFile(new FileExportRequest(fullPath, options.ReadOnly, stack, 0, cancellationToken), out listener, out error);
+        }
+
+        if (!registration.Creation.TryGetForStreams(out StreamExporterCreate<TListener>? forStreams))
+        {
+            throw new InvalidOperationException("An exporter creation holds exactly one way to create."); // Invariant of ExporterCreation.
+        }
+
+        IExportTarget target = isDirectory
+            ? new DirectoryExportTarget(fullPath)
+            : new FileExportTarget(fullPath);
+        return forStreams(new StreamExportRequest(target, options.ReadOnly, stack, 0, cancellationToken), out listener, out error);
     }
 
     #endregion

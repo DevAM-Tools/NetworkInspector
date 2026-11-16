@@ -21,7 +21,7 @@ Right: --accent in app.css; this card’s grid in card.css
 
 - Ship a real phone layout, then enhance at the locked breakpoints. Do not design desktop first and squeeze it.
 - Supported width **floor is 320 CSS pixels**. Content, primary actions, and chrome stay usable from that floor up.
-- Do **not** require page-level horizontal scroll. Isolated widgets (wide tables, code, charts) may scroll **inside** their own region.
+- ❗ Do **not** require page-level horizontal scroll. Code blocks, charts, and maps may scroll **inside** their own region. Tables may not (§ Tables).
 - `overflow-x: hidden` on `body` / the viewport is not a responsive layout. Fix the overflowing box.
 - Stack on phone. Do not hide primary actions off-canvas with no visible control and no alternative.
 - Breakpoints are for **layout changes** (stack vs columns, header vs side nav). Do not add a query just to bump font size or padding by a few pixels — use `clamp()` / fluid spacing instead.
@@ -29,33 +29,32 @@ Right: --accent in app.css; this card’s grid in card.css
 
 ```text
 Wrong: min-width 1100px app; phone users pinch-zoom
-Right: column flex on phone; row + side nav from 1024px
+Right: column flex on phone; row + side nav from 1280px
 ```
 
 ## Breakpoints
 
-Lock these values. Do not invent 576 / 640 / 992 / 1400 extra bands unless the user asks. They come from the usual layout hops (tablet portrait, small laptop, desktop) used by Bootstrap `md`/`lg`, Tailwind `md`/`lg`/`xl`, and this repo’s Playwright sizes — not from a single device.
+Lock these values. Do not invent extra bands unless the user asks. Custom properties **cannot** drive `@media` conditions: repeat the **literal pixels** in CSS and in `matchMedia`.
 
-Custom properties **cannot** drive `@media` conditions. Repeat the **literal pixels** in CSS and in `matchMedia`.
+| Band | CSS | Reference devices | Layout duty |
+|------|-----|-------------------|-------------|
+| **phone** | no query (default) | iPhone SE 1st gen (320), SE 2nd/3rd gen (375) | one column; cards; stacked chrome |
+| **tablet** | `@media (min-width: 744px)` | iPad Mini (744 portrait, 1133 landscape) | two columns; tables that fit |
+| **notebook** | `@media (min-width: 1280px)` | 14-inch notebook (1280–1536) | full chrome; side nav |
+| **desktop** | `@media (min-width: 1920px)` | Full HD; 28–32-inch 4K at 200 % | more columns or panels |
+| **ultrawide** | `@media (min-width: 2560px)` | 4K at 150 %; 34–49-inch ultrawide | per § Width policy |
 
-| Band | CSS | Width | Layout duty |
-|------|-----|-------|-------------|
-| **phone** | no query (default) | `< 768px` | one column; stacked chrome; 320px floor |
-| **tablet** | `@media (min-width: 768px)` | `≥ 768px` | two columns allowed; more padding |
-| **desktop** | `@media (min-width: 1024px)` | `≥ 1024px` | full chrome; side nav OK |
-| **wide** | `@media (min-width: 1280px)` | `≥ 1280px` | optional; max content width, extra columns |
-
-Write **mobile-first** `min-width` queries. Do not use `max-width` as the primary way to define the phone layout.
+Write **mobile-first** `min-width` queries. Never define the phone layout with `max-width`.
 
 ```css
 /* Right — phone is the default; larger bands add layout */
 .toolbar { display: flex; flex-direction: column; gap: 0.75rem; }
 
-@media (min-width: 768px) {
+@media (min-width: 744px) {
   .toolbar { flex-direction: row; align-items: center; }
 }
 
-@media (min-width: 1024px) {
+@media (min-width: 1280px) {
   .shell { grid-template-columns: 16rem minmax(0, 1fr); }
 }
 ```
@@ -64,20 +63,81 @@ Write **mobile-first** `min-width` queries. Do not use `max-width` as the primar
 /* Wrong — desktop-first; phone is an afterthought */
 .toolbar { display: flex; flex-direction: row; }
 
-@media (max-width: 767px) {
+@media (max-width: 743px) {
   .toolbar { flex-direction: column; }
 }
 ```
 
 **Verify** with these viewports (Playwright: `tech-playwright.md`):
 
-| Band | Viewport |
-|------|----------|
-| phone | `375 × 667` |
-| tablet | `768 × 1024` |
-| desktop | `1280 × 720` |
+| Band | Viewport | Required |
+|------|----------|----------|
+| phone | `320 × 568` | Always |
+| tablet | `744 × 1133` | Always |
+| notebook | `1440 × 900` | Always |
+| desktop | `1920 × 1080` | The page changes at 1920 |
+| ultrawide | `3440 × 1440` | The page changes at 2560 |
 
-Phone **and** desktop journeys are required. Add tablet when the UI actually changes at 768px.
+## Width policy
+
+❗ Decide the width per page type in the plan. Neither a narrow column for everything nor stretched text by default.
+
+| Page type | Width |
+|-----------|-------|
+| Reading text | Lines ≤ ~75ch, centered |
+| Forms | ≤ ~40rem |
+| Data, lists, dashboards, editors | Use the full width: add columns or panels at each larger band |
+
+Offer ultrawide layouts where the application gains from them. Otherwise cap the shell and center it.
+
+## Tables
+
+❗ A table only where its columns fit. On smaller screens the same data is a card list that scrolls vertically only. Design the card first.
+
+- ❗ Never let a table scroll horizontally. Never hide a column on small screens without showing its value in the card.
+- Default CSS is the card layout. Raise it to a table with a **container query** at the width where all columns fit: the sum of their minimum widths. That width is a property of the table, not a new band.
+- Keep one markup. Label each card field from `data-label`. Set `role="table"`, `row`, `columnheader`, `cell` where a `display` change removes table semantics.
+- Sorting and filtering stay available in card mode; column headers are gone there.
+- In a card: the primary field is the title; actions are an icon row.
+
+```css
+.list-slot { container-type: inline-size; }
+
+/* Default: cards */
+.data-table, .data-table tbody, .data-table tr, .data-table td { display: block; }
+.data-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.data-table td::before { content: attr(data-label); font-weight: 600; margin-inline-end: 0.5rem; }
+
+/* All five columns need 52rem */
+@container (min-width: 52rem) {
+  .data-table { display: table; }
+  .data-table thead { display: table-header-group; position: static; width: auto; height: auto; clip-path: none; }
+  .data-table tbody { display: table-row-group; }
+  .data-table tr { display: table-row; }
+  .data-table td { display: table-cell; }
+  .data-table td::before { content: none; }
+}
+```
+
+## Overflow
+
+❗ No element paints outside its box, at any band.
+
+- Set `min-width: 0` on flex and grid children that hold text. Prefer `minmax(0, 1fr)`.
+- Set `overflow-wrap: anywhere` on user text, IDs, paths, and URLs.
+- No fixed width on content. Media: `max-width: 100%`.
+- `overflow: hidden` to hide an overflow is a defect, unless it truncates with an ellipsis and the full value stays reachable by tooltip.
+
+## Icons and tooltips
+
+Prefer an icon language: small icon buttons with tooltips over long text buttons.
+
+- Default: icon button plus tooltip. Add visible text when an icon is ambiguous, and on destructive or irreversible actions.
+- ❗ Every icon button has an accessible name (`aria-label`). The icon is `aria-hidden`.
+- ❗ A tooltip opens on hover and on keyboard focus, closes with `Escape`, and stays open while pointed at. A native `title` alone fails keyboard and touch.
+- ❗ Touch has no hover: open the tooltip on long-press, and never put information the task needs only in a tooltip on a touch layout.
+- One icon set, inline SVG. One icon, one meaning across the app. An icon package is a dependency (Section 4.7).
+- Target size ≥ 24 × 24 CSS px; ≥ 44 × 44 under `@media (pointer: coarse)`.
 
 ## CSS
 
@@ -125,13 +185,13 @@ JavaScript is for **behavior** (events, fetch, dialogs, charts). CSS owns **layo
 ```js
 // Wrong
 window.addEventListener("resize", () => {
-  document.body.classList.toggle("mobile", innerWidth < 768);
+  document.body.classList.toggle("mobile", innerWidth < 744);
 });
 
 // Right — JS branches only when CSS cannot
-const desktop = window.matchMedia("(min-width: 1024px)");
-desktop.addEventListener("change", syncChartSize);
-syncChartSize(desktop);
+const notebook = window.matchMedia("(min-width: 1280px)");
+notebook.addEventListener("change", syncChartSize);
+syncChartSize(notebook);
 ```
 
 ## Accessibility

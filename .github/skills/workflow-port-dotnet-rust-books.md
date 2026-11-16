@@ -206,7 +206,7 @@ Short by design; read first on resume. Lists, not wide tables.
 **Deviations:** {count by class, link list}
 **Suspected source bugs:** {list}
 **Performance:** {scenarios vs target}
-**Reviews:** {review-loop paths per crate}
+**Reviews:** {review paths per crate}
 **How to verify:** {commands}
 ```
 

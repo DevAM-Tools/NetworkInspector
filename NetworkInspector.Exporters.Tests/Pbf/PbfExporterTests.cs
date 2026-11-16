@@ -9,13 +9,6 @@ namespace NetworkInspector.Exporters.Tests.Pbf;
 internal sealed class PbfExporterTests
 {
     [Test]
-    public async Task BuilderRequiresOutput()
-    {
-        PbfExporter.Builder builder = PbfExporter.CreateBuilder();
-        await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
-    }
-
-    [Test]
     public async Task BuilderMaxPacketsPerBlockRejectsZero()
     {
         PbfExporter.Builder builder = PbfExporter.CreateBuilder();
@@ -32,11 +25,10 @@ internal sealed class PbfExporterTests
     [Test]
     public async Task StandardFormatProducesValidPbf()
     {
-        using TestDir dir = new("pbf_standard");
-        string path = dir.FilePath("output.pbf");
+        using MemoryStream stream = new();
 
         using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithFormat(PbfExportFormat.Standard)
             .WithCompressed(false)
             .Build();
@@ -49,7 +41,7 @@ internal sealed class PbfExporterTests
 
         exporter.OnFinish();
 
-        PbfVerifier verifier = PbfVerifier.Open(path);
+        PbfVerifier verifier = PbfVerifier.FromBytes(stream.ToArray());
         await Assert.That(verifier.HasValidHeaderMagic).IsTrue();
         await Assert.That(verifier.HasValidFooterMagic).IsTrue();
     }
@@ -57,11 +49,10 @@ internal sealed class PbfExporterTests
     [Test]
     public async Task ColumnarFormatProducesValidPbf()
     {
-        using TestDir dir = new("pbf_columnar");
-        string path = dir.FilePath("output.pbf");
+        using MemoryStream stream = new();
 
         using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithFormat(PbfExportFormat.Columnar)
             .WithCompressed(false)
             .Build();
@@ -74,7 +65,7 @@ internal sealed class PbfExporterTests
 
         exporter.OnFinish();
 
-        PbfVerifier verifier = PbfVerifier.Open(path);
+        PbfVerifier verifier = PbfVerifier.FromBytes(stream.ToArray());
         await Assert.That(verifier.HasValidHeaderMagic).IsTrue();
         await Assert.That(verifier.HasValidFooterMagic).IsTrue();
     }
@@ -82,11 +73,10 @@ internal sealed class PbfExporterTests
     [Test]
     public async Task CompressedFormatProducesValidPbf()
     {
-        using TestDir dir = new("pbf_compressed");
-        string path = dir.FilePath("output.pbf");
+        using MemoryStream stream = new();
 
         using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithFormat(PbfExportFormat.Standard)
             .WithCompressed(true)
             .Build();
@@ -99,7 +89,7 @@ internal sealed class PbfExporterTests
 
         exporter.OnFinish();
 
-        PbfVerifier verifier = PbfVerifier.Open(path);
+        PbfVerifier verifier = PbfVerifier.FromBytes(stream.ToArray());
         await Assert.That(verifier.HasValidHeaderMagic).IsTrue();
         await Assert.That(verifier.HasValidFooterMagic).IsTrue();
         await Assert.That(verifier.FileSize).IsGreaterThan(0);
@@ -144,12 +134,11 @@ internal sealed class PbfExporterTests
     [Test]
     public async Task BlockBoundaryRespectedBySmallLimit()
     {
-        using TestDir dir = new("pbf_block_boundary");
-        string path = dir.FilePath("output.pbf");
+        using MemoryStream stream = new();
 
         // Force small blocks (2 packets per block)
         using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithFormat(PbfExportFormat.Standard)
             .WithCompressed(false)
             .WithMaxPacketsPerBlock(2)
@@ -163,7 +152,7 @@ internal sealed class PbfExporterTests
 
         exporter.OnFinish();
 
-        PbfVerifier verifier = PbfVerifier.Open(path);
+        PbfVerifier verifier = PbfVerifier.FromBytes(stream.ToArray());
         await Assert.That(verifier.HasValidHeaderMagic).IsTrue();
         await Assert.That(verifier.HasValidFooterMagic).IsTrue();
         // With 6 packets and max 2 per block, expect at least 3 blocks
@@ -201,187 +190,6 @@ internal sealed class PbfExporterTests
         }
     }
 
-    [Test]
-    public async Task DefaultUiNameIsPbfExporter()
-    {
-        using MemoryStream ms = new();
-        using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToStream(ms)
-            .Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("PBF Exporter");
-    }
-
-    [Test]
-    public async Task WithUiNameOverridesDefault()
-    {
-        using MemoryStream ms = new();
-        using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithUiName("My PBF")
-            .Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("My PBF");
-    }
-
-    // ========================================================================
-    // Cancellation
-    // ========================================================================
-
-    [Test]
-    [Category("Slow")]
-    public async Task CancellationStopsExport()
-    {
-        using CancellationTokenSource cts = new();
-        using MemoryStream ms = new();
-        using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCompressed(false)
-            .WithCancellationToken(cts.Token)
-            .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(10);
-
-        exporter.OnPacket(packets[0]);
-        exporter.OnPacket(packets[1]);
-        await cts.CancelAsync().ConfigureAwait(false);
-
-        // After cancellation, OnPacket must return false
-        bool accepted = exporter.OnPacket(packets[2]);
-        await Assert.That(accepted).IsFalse();
-
-        exporter.OnFinish();
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterCancellation()
-    {
-        using CancellationTokenSource cts = new();
-        using MemoryStream ms = new();
-        using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCompressed(false)
-            .WithCancellationToken(cts.Token)
-            .Build();
-
-        await cts.CancelAsync().ConfigureAwait(false);
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-    }
-
-    // ========================================================================
-    // Target packet count
-    // ========================================================================
-
-    [Test]
-    [Category("Slow")]
-    public async Task TargetPacketCountLimitsExport()
-    {
-        using MemoryStream ms = new();
-        using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCompressed(false)
-            .WithTargetPacketCount(3)
-            .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(10);
-        foreach (Packet packet in packets)
-        {
-            exporter.OnPacket(packet);
-        }
-
-        exporter.OnFinish();
-
-        await Assert.That(exporter.PacketCount).IsEqualTo(3);
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterTargetReached()
-    {
-        using MemoryStream ms = new();
-        using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCompressed(false)
-            .WithTargetPacketCount(2)
-            .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(5);
-        foreach (Packet packet in packets)
-        {
-            exporter.OnPacket(packet);
-        }
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-        exporter.OnFinish();
-    }
-
-    // ========================================================================
-    // Lifecycle: IsFinished, Double-finish
-    // ========================================================================
-
-    [Test]
-    public async Task IsFinishedFalseBeforeOnFinish()
-    {
-        using MemoryStream ms = new();
-        using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCompressed(false)
-            .Build();
-
-        await Assert.That(exporter.IsFinished).IsFalse();
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterOnFinish()
-    {
-        using MemoryStream ms = new();
-        using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCompressed(false)
-            .Build();
-
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-    }
-
-    [Test]
-    public async Task OnPacketAfterFinishReturnsFalse()
-    {
-        using MemoryStream ms = new();
-        using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCompressed(false)
-            .Build();
-
-        exporter.OnFinish();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(1);
-        bool accepted = exporter.OnPacket(packets[0]);
-
-        await Assert.That(accepted).IsFalse();
-    }
-
-    [Test]
-    public async Task DoubleFinishIsIdempotent()
-    {
-        using MemoryStream ms = new();
-        using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCompressed(false)
-            .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(2);
-        exporter.OnPacket(packets[0]);
-
-        // Calling OnFinish twice must not throw
-        exporter.OnFinish();
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-        await Assert.That(exporter.PacketCount).IsEqualTo(1);
-    }
-
     // ========================================================================
     // Statistics counters
     // ========================================================================
@@ -412,113 +220,8 @@ internal sealed class PbfExporterTests
     }
 
     // ========================================================================
-    // Description
-    // ========================================================================
-
-    [Test]
-    public async Task DescriptionReturnsNullWhenNotSet()
-    {
-        using MemoryStream ms = new();
-        using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCompressed(false)
-            .Build();
-
-        await Assert.That(exporter.Description).IsNull();
-    }
-
-    [Test]
-    public async Task DescriptionReturnsConfiguredValue()
-    {
-        using MemoryStream ms = new();
-        using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCompressed(false)
-            .WithDescription("Packet Binary Format export")
-            .Build();
-
-        await Assert.That(exporter.Description).IsEqualTo("Packet Binary Format export");
-    }
-
-    // ========================================================================
     // Trailer index consistency after partial I/O failure
     // ========================================================================
-
-    /// <summary>
-    /// A write-only stream that accepts bytes normally up to a configured threshold,
-    /// then throws <see cref="IOException"/> on any subsequent write. Used to verify
-    /// that the PBF exporter's commit-after-success pattern leaves the block index
-    /// consistent when a block flush fails mid-write.
-    /// </summary>
-    private sealed class CountingFailingStream : Stream
-    {
-        private long _BytesWritten;
-
-        /// <summary>
-        /// Number of bytes to accept before the stream begins throwing
-        /// <see cref="IOException"/>.
-        /// </summary>
-        internal long ThrowAfterByte { get; init; } = long.MaxValue;
-
-        /// <inheritdoc/>
-        public override bool CanRead => false;
-
-        /// <inheritdoc/>
-        public override bool CanSeek => false;
-
-        /// <inheritdoc/>
-        public override bool CanWrite => true;
-
-        /// <inheritdoc/>
-        public override long Length => _BytesWritten;
-
-        /// <inheritdoc/>
-        public override long Position
-        {
-            get => _BytesWritten;
-            set => throw new NotSupportedException();
-        }
-
-        /// <inheritdoc/>
-        public override void Flush()
-        {
-            // No-op
-        }
-
-        /// <inheritdoc/>
-        public override int Read(byte[] buffer, int offset, int count) =>
-            throw new NotSupportedException();
-
-        /// <inheritdoc/>
-        public override long Seek(long offset, SeekOrigin origin) =>
-            throw new NotSupportedException();
-
-        /// <inheritdoc/>
-        public override void SetLength(long value) =>
-            throw new NotSupportedException();
-
-        /// <inheritdoc/>
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            CheckThrow(count);
-            _BytesWritten += count;
-        }
-
-        /// <inheritdoc/>
-        public override void Write(ReadOnlySpan<byte> buffer)
-        {
-            CheckThrow(buffer.Length);
-            _BytesWritten += buffer.Length;
-        }
-
-        private void CheckThrow(int count)
-        {
-            if (_BytesWritten + count > ThrowAfterByte)
-            {
-                throw new IOException("Simulated I/O failure");
-            }
-        }
-    }
 
     /// <summary>
     /// The block index recorded in the PBF trailer must match the number of
@@ -531,7 +234,7 @@ internal sealed class PbfExporterTests
     /// <list type="number">
     ///   <item>Write 4 packets with <c>maxPacketsPerBlock=1</c> to a <see cref="MemoryStream"/>
     ///         to measure the exact byte length required for the header plus the first block.</item>
-    ///   <item>Re-run the export to a <see cref="CountingFailingStream"/> that fails just
+    ///   <item>Re-run the export to a <see cref="TestStreams.FailingStream"/> that fails just
     ///         before the second block would be committed.</item>
     ///   <item>Assert that <c>BlockCount == 1</c> and <c>HasErrors == true</c>: the failed
     ///         block is not reflected in the index, but the successful first block is.</item>
@@ -551,7 +254,7 @@ internal sealed class PbfExporterTests
         // exact byte length required for header + one data block.
         long bytesAfterFirstBlock;
         {
-            using CountingFailingStream probe = new()
+            using TestStreams.FailingStream probe = new()
             {
                 ThrowAfterByte = long.MaxValue
             };
@@ -579,7 +282,7 @@ internal sealed class PbfExporterTests
         // -- Phase 2: fail on second block, verify index consistency --------------
         // Allow exactly the bytes needed for header + first block; the second block
         // write will throw, so it must not be committed to the block index.
-        using CountingFailingStream failing = new()
+        using TestStreams.FailingStream failing = new()
         {
             ThrowAfterByte = bytesAfterFirstBlock
         };

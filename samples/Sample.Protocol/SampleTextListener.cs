@@ -4,7 +4,8 @@ namespace Sample.Protocol;
 
 /// <summary>
 /// Writes one UTF-8 line per packet that carries the sample fields; packets without them are counted as skipped. If the
-/// listener is disposed without <see cref="OnFinish"/>, it deletes the partial file (the contract rule for exporters).
+/// listener is disposed without <see cref="OnFinish"/>, the partial output stays where the host's target put it: the host owns
+/// the target and removes what it does not want (the contract rule for a format that writes through streams).
 /// <para>
 /// Thread safety: single writer. The export runner calls <see cref="OnPacket"/>, <see cref="OnFinish"/>, and
 /// <see cref="Dispose"/> from one thread; the statistics are readable from other threads.
@@ -22,8 +23,6 @@ internal sealed class SampleTextListener : IPacketListener, IExporterStatistics,
     #endregion
 
     #region Fields
-
-    private readonly string _Path;
 
     private readonly FieldId _CounterField;
 
@@ -45,18 +44,15 @@ internal sealed class SampleTextListener : IPacketListener, IExporterStatistics,
 
     #region Lifecycle
 
-    /// <summary>Creates a listener over an already created exclusive file stream.</summary>
-    /// <param name="stream">The newly created output file; the listener owns and closes it.</param>
-    /// <param name="path">Full path of the file, used to delete it when the export did not finish.</param>
+    /// <summary>Creates a listener over the main entry stream of the host's target.</summary>
+    /// <param name="stream">The write-only entry stream; the listener owns it and disposes it.</param>
     /// <param name="includeHeader">Whether to write the header line first.</param>
     /// <param name="counter">Field id of <c>sample.counter</c>.</param>
     /// <param name="gear">Field id of <c>sample.gear</c>.</param>
     /// <param name="speed">Field id of <c>sample.speed</c>.</param>
-    internal SampleTextListener(FileStream stream, string path, bool includeHeader, FieldId counter, FieldId gear, FieldId speed)
+    internal SampleTextListener(Stream stream, bool includeHeader, FieldId counter, FieldId gear, FieldId speed)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        ArgumentException.ThrowIfNullOrEmpty(path);
-        _Path = path;
         _CounterField = counter;
         _GearField = gear;
         _SpeedField = speed;
@@ -68,30 +64,13 @@ internal sealed class SampleTextListener : IPacketListener, IExporterStatistics,
     }
 
     /// <summary>
-    /// Closes the file. When <see cref="OnFinish"/> was not called, the partial output is deleted. Deleting is best effort and
-    /// never throws, because disposal runs on cleanup paths: if the file stays (locked by a scanner, for example), the
-    /// application's export runner removes the target afterwards and reports a failure there.
+    /// Ends the entry: disposing the writer flushes and disposes the entry stream. An export that did not finish leaves its
+    /// partial output to the host, which owns the target. A second call does nothing.
     /// </summary>
     public void Dispose()
     {
         StreamWriter? writer = Interlocked.Exchange(ref _Writer, null);
-        if (writer is null)
-        {
-            return;
-        }
-
-        writer.Dispose();
-        if (Volatile.Read(ref _Finished) == 0)
-        {
-            try
-            {
-                File.Delete(_Path);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // Intentionally ignored, see the summary: the export runner owns the final cleanup and its report.
-            }
-        }
+        writer?.Dispose();
     }
 
     #endregion

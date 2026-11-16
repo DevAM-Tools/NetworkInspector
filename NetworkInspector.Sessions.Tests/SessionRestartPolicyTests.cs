@@ -200,6 +200,7 @@ internal sealed class SessionRestartPolicyTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task CancellingTheWaitContinuesTheRestartAsCancelNow()
     {
         using RestartRig rig = new(frameCount: 8);
@@ -519,6 +520,7 @@ internal sealed class SessionRestartPolicyTests
     #region Shutdown during the wait
 
     [Test]
+    [Category("Slow")]
     public async Task ShutdownDuringTheWaitAbandonsTheRestartAndEndsTheJobWithSessionShutdown()
     {
         using RestartRig rig = new(frameCount: 8);

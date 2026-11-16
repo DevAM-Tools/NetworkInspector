@@ -17,6 +17,7 @@ internal sealed class CliPluginLifecycleTests
     #region Start and stop lines
 
     [Test]
+    [Category("Slow")]
     public async Task ACommandStartsAndStopsTheConfiguredPluginsOnce()
     {
         using CliSandbox sandbox = new();
@@ -47,6 +48,7 @@ internal sealed class CliPluginLifecycleTests
     #region Failures
 
     [Test]
+    [Category("Slow")]
     public async Task AFailedStartIsOneErrorLineAndTheKindIsRefused()
     {
         using CliSandbox sandbox = new();

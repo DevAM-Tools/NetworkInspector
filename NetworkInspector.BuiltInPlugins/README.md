@@ -46,6 +46,12 @@ defaults of the command line (for example `scanMode`, `errorTolerance`, `preload
 `timestampTimeZone`, `delimiter`, `columns`, `style`). The option names and values are listed in the
 [CLI README](../NetworkInspector.CLI/README.md); `ni plugins list` shows the counts per plugin.
 
+Every exporter registration also declares how its format receives the output: `ExporterCreation.ForStreams` (the host hands a
+`StreamExportRequest` with an `IExportTarget` of named write-only streams; all formats except DuckDB) or
+`ExporterCreation.ForFile` (a `FileExportRequest` with a prepared path; DuckDB). `ni` builds a file target for a file format
+and a folder target for a format without a file extension (the Parquet dataset). The contract is in the
+[plugin reference](../docs/plugins/reference.md#exporters).
+
 ## Thread safety
 
 The stack contributions and the source and exporter factories keep no shared state and may run concurrently, as the

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "isRoot": true,
+  "tools": {
+    "reqtrace": {
+      "version": "0.2.0",
+      "commands": [
+        "reqtrace"
+      ],
+      "rollForward": false
+    }
+  }
+}

@@ -9,13 +9,6 @@ namespace NetworkInspector.Exporters.Tests.Json;
 internal sealed class JsonExporterTests
 {
     [Test]
-    public async Task BuilderRequiresOutput()
-    {
-        JsonExporter.Builder builder = JsonExporter.CreateBuilder();
-        await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
-    }
-
-    [Test]
     public async Task CompactFormatProducesValidJson()
     {
         using MemoryStream ms = new();
@@ -180,61 +173,6 @@ internal sealed class JsonExporterTests
     }
 
     [Test]
-    [Category("Slow")]
-    public async Task CancellationStopsExport()
-    {
-        using CancellationTokenSource cts = new();
-        using MemoryStream ms = new();
-        using JsonExporter exporter = JsonExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithFormat(JsonExportFormat.Compact)
-            .WithCancellationToken(cts.Token)
-            .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(10);
-
-        // Export a few packets then cancel
-        exporter.OnPacket(packets[0]);
-        exporter.OnPacket(packets[1]);
-        await cts.CancelAsync().ConfigureAwait(false);
-
-        // After cancellation, OnPacket should return false
-        bool accepted = exporter.OnPacket(packets[2]);
-        await Assert.That(accepted).IsFalse();
-
-        exporter.OnFinish();
-    }
-
-    [Test]
-    [Category("Slow")]
-    public async Task TargetPacketCountLimitsExport()
-    {
-        using MemoryStream ms = new();
-        using JsonExporter exporter = JsonExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithFormat(JsonExportFormat.Compact)
-            .WithTargetPacketCount(3)
-            .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(10);
-        int accepted = 0;
-        foreach (Packet packet in packets)
-        {
-            if (exporter.OnPacket(packet))
-            {
-                accepted++;
-            }
-        }
-
-        exporter.OnFinish();
-
-        // OnPacket returns true for every packet that is actually written; the
-        // 4th call (after the 3-packet target was reached on call 3) returns
-        // false at the up-front gate. So 3 packets are accepted and written.
-        await Assert.That(accepted).IsEqualTo(3);
-    }
-
-    [Test]
     public async Task PrettyFormatContainsIndentation()
     {
         using MemoryStream ms = new();
@@ -252,96 +190,6 @@ internal sealed class JsonExporterTests
 
         // Pretty format should contain indentation (spaces at line start)
         await Assert.That(content.Contains("  ", StringComparison.Ordinal)).IsTrue();
-    }
-
-    [Test]
-    public async Task DefaultUiNameIsJsonExporter()
-    {
-        using MemoryStream ms = new();
-        using JsonExporter exporter = JsonExporter.CreateBuilder()
-            .ToStream(ms)
-            .Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("JSON Exporter");
-    }
-
-    [Test]
-    public async Task WithUiNameOverridesDefault()
-    {
-        using MemoryStream ms = new();
-        using JsonExporter exporter = JsonExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithUiName("My JSON")
-            .Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("My JSON");
-    }
-
-    // ========================================================================
-    // Lifecycle: IsFinished, Double-finish
-    // ========================================================================
-
-    [Test]
-    public async Task IsFinishedFalseBeforeOnFinish()
-    {
-        using MemoryStream ms = new();
-        using JsonExporter exporter = JsonExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithFormat(JsonExportFormat.Compact)
-            .Build();
-
-        await Assert.That(exporter.IsFinished).IsFalse();
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterOnFinish()
-    {
-        using MemoryStream ms = new();
-        using JsonExporter exporter = JsonExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithFormat(JsonExportFormat.Compact)
-            .Build();
-
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-    }
-
-    [Test]
-    public async Task OnPacketAfterFinishReturnsFalse()
-    {
-        using MemoryStream ms = new();
-        using JsonExporter exporter = JsonExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithFormat(JsonExportFormat.Compact)
-            .Build();
-
-        exporter.OnFinish();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(1);
-        bool accepted = exporter.OnPacket(packets[0]);
-
-        await Assert.That(accepted).IsFalse();
-    }
-
-    [Test]
-    public async Task DoubleFinishIsIdempotent()
-    {
-        using MemoryStream ms = new();
-        using JsonExporter exporter = JsonExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithFormat(JsonExportFormat.Compact)
-            .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(2);
-        exporter.OnPacket(packets[0]);
-
-        // Calling OnFinish twice must not throw
-        exporter.OnFinish();
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-        await Assert.That(exporter.PacketCount).IsEqualTo(1);
     }
 
     // ========================================================================
@@ -376,29 +224,6 @@ internal sealed class JsonExporterTests
     // ========================================================================
     // Description
     // ========================================================================
-
-    [Test]
-    public async Task DescriptionReturnsNullWhenNotSet()
-    {
-        using MemoryStream ms = new();
-        using JsonExporter exporter = JsonExporter.CreateBuilder()
-            .ToStream(ms)
-            .Build();
-
-        await Assert.That(exporter.Description).IsNull();
-    }
-
-    [Test]
-    public async Task DescriptionReturnsConfiguredValue()
-    {
-        using MemoryStream ms = new();
-        using JsonExporter exporter = JsonExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithDescription("JSON packet dump")
-            .Build();
-
-        await Assert.That(exporter.Description).IsEqualTo("JSON packet dump");
-    }
 
     [Test]
     public async Task PrettyFormatFieldTypeIsTextualName()

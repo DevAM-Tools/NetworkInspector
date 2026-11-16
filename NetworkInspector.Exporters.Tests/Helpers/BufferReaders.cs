@@ -55,6 +55,31 @@ internal static class BufferReaders
         return _ReadRows(connection, Invariant($"SELECT packet_id, buffer_index, bytes FROM read_parquet('{file}')"));
     }
 
+    /// <summary>Reads <c>packet_buffers.parquet</c> of a Parquet dataset held in memory in stored order, without a database.</summary>
+    /// <param name="target">The target after the export; the export must be finished.</param>
+    /// <returns>The rows; <see langword="null"/> when the dataset has no such entry.</returns>
+    internal static async Task<List<BufferRow>?> ReadParquetAsync(MemoryExportTarget target)
+    {
+        const string entry = "packet_buffers.parquet";
+        if (!target.EntryNames.Contains(entry))
+        {
+            return null;
+        }
+
+        byte[] file = target.Bytes(entry);
+        int[] packetIds = await ParquetReads.IntsAsync(file, "packet_id");
+        byte[] indexes = await ParquetReads.BytesAsync(file, "buffer_index");
+        byte[][] bytes = await ParquetReads.BinariesAsync(file, "bytes");
+        List<BufferRow> rows = new(packetIds.Length);
+        for (int i = 0; i < packetIds.Length; i++)
+        {
+            // A NULL buffer would be an absent buffer: an empty buffer is an empty array, so a NULL is read as a failure of the writer.
+            rows.Add(new BufferRow(packetIds[i], indexes[i], bytes[i] ?? throw new InvalidOperationException("A buffer row has no bytes.")));
+        }
+
+        return rows;
+    }
+
     /// <summary>Runs a query of three columns (packet id, buffer index, bytes) and returns its rows in result order.</summary>
     /// <param name="connection">The open connection to query.</param>
     /// <param name="sql">The query; it selects the packet id, the buffer index, and the bytes, in that order.</param>
@@ -88,11 +113,11 @@ internal static class BufferReaders
     /// Reads the repeated packet field 7 of every packet of a standard PBF file: a sub-message with the index (sub-field 1, varint)
     /// and the bytes (sub-field 2). The packet id is the packet's field 1.
     /// </summary>
-    /// <param name="path">The PBF file written without compression.</param>
+    /// <param name="file">The bytes of the PBF file written without compression.</param>
     /// <returns>The rows; <see langword="null"/> when no packet has the field.</returns>
-    internal static List<BufferRow>? ReadPbfStandard(string path)
+    internal static List<BufferRow>? ReadPbfStandard(byte[] file)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         List<BufferRow> rows = [];
         foreach (List<PbfField> block in blocks)
         {
@@ -125,12 +150,12 @@ internal static class BufferReaders
     /// ids as a base value (its sub-field 1) and differences (its sub-field 2), both zigzag varints; sub-field 2 repeats the index as a
     /// varint; sub-field 3 repeats the bytes.
     /// </summary>
-    /// <param name="path">The PBF file written without compression.</param>
+    /// <param name="file">The bytes of the PBF file written without compression.</param>
     /// <returns>The rows; <see langword="null"/> when no block has the field.</returns>
     /// <exception cref="InvalidOperationException">The three columns of a block differ in length.</exception>
-    internal static List<BufferRow>? ReadPbfColumnar(string path)
+    internal static List<BufferRow>? ReadPbfColumnar(byte[] file)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         List<BufferRow> rows = [];
         foreach (List<PbfField> block in blocks)
         {

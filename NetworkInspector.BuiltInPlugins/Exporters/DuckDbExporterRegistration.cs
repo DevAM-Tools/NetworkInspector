@@ -45,7 +45,7 @@ internal static class DuckDbExporterRegistration
         Description: "Writes parsed packets into a DuckDB database file.",
         FileExtension: ".duckdb",
         RegisterOptions: _RegisterOptions,
-        Create: _TryCreate);
+        Creation: ExporterCreation.ForFile<IPacketListener>(_TryCreate));
 
     #endregion
 
@@ -84,7 +84,7 @@ internal static class DuckDbExporterRegistration
     }
 
     /// <summary>Creates the Core DuckDB exporter.</summary>
-    private static bool _TryCreate(ExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
+    private static bool _TryCreate(FileExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -114,7 +114,7 @@ internal static class DuckDbExporterRegistration
             () =>
             {
                 DuckDbExporter.Builder builder = DuckDbExporter.CreateBuilder()
-                    .ToFile(request.TargetPath)
+                    .ToFile(request.FilePath)
                     .WithContent(content!) // Invariant: only the CSV "packets" shape has no content.
                     .WithWriteMode(batching.WriteMode)
                     .WithMaxPacketsPerBlock(batching.MaxPacketsPerBatch)
@@ -135,7 +135,7 @@ internal static class DuckDbExporterRegistration
 
                 return builder.Build();
             },
-            request.TargetPath, out listener, out error);
+            request.FilePath, out listener, out error);
     }
 
     #endregion

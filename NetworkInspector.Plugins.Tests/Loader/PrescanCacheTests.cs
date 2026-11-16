@@ -79,6 +79,7 @@ internal sealed class PrescanCacheTests
 
     [Test]
     [ClassDataSource<RuntimeDllFolder>(Shared = SharedType.PerTestSession)]
+    [Category("Slow")]
     public async Task AnUnchangedSecondScanInspectsNothingAndWritesNothing(RuntimeDllFolder runtime)
     {
         using LoaderHarness harness = new("cache-hit");
@@ -100,6 +101,7 @@ internal sealed class PrescanCacheTests
 
     [Test]
     [ClassDataSource<RuntimeDllFolder>(Shared = SharedType.PerTestSession)]
+    [Category("Slow")]
     public async Task AChangedLengthOrTimeIsInspectedAgain(RuntimeDllFolder runtime)
     {
         using LoaderHarness harness = new("cache-change");
@@ -123,6 +125,7 @@ internal sealed class PrescanCacheTests
 
     [Test]
     [ClassDataSource<RuntimeDllFolder>(Shared = SharedType.PerTestSession)]
+    [Category("Slow")]
     public async Task ADeletedFileDisappearsFromTheRewrittenCache(RuntimeDllFolder runtime)
     {
         using LoaderHarness harness = new("cache-delete");
@@ -196,6 +199,7 @@ internal sealed class PrescanCacheTests
     #region Concurrent writers
 
     [Test]
+    [Category("Slow")]
     public async Task FourLoadersWritingOneCacheFileLeaveItValid()
     {
         using TempFolder shared = new("cache-concurrent");

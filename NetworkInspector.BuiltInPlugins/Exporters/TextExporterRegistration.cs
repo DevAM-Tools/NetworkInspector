@@ -38,7 +38,7 @@ internal static class TextExporterRegistration
         Description: "Writes each packet as a human-readable protocol tree.",
         FileExtension: ".txt",
         RegisterOptions: _RegisterOptions,
-        Create: _TryCreate);
+        Creation: ExporterCreation.ForStreams<IPacketListener>(_TryCreate));
 
     #endregion
 
@@ -59,7 +59,7 @@ internal static class TextExporterRegistration
     }
 
     /// <summary>Creates the Core text exporter.</summary>
-    private static bool _TryCreate(ExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
+    private static bool _TryCreate(StreamExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -83,15 +83,15 @@ internal static class TextExporterRegistration
             return false;
         }
 
-        return ExporterBuild.TryBuild<IPacketListener>(
+        return ExporterBuild.TryBuildOnTarget<IPacketListener>(
             () => TextExporter.CreateBuilder()
-                .ToFile(request.TargetPath)
+                .ToTarget(request.Target)
                 .WithContent(content!) // Invariant: only the CSV "packets" shape has no content.
                 .WithDetailLevel(level)
                 .WithMaxTextLength(truncate)
                 .WithCancellationToken(request.CancellationToken)
                 .Build(),
-            request.TargetPath, out listener, out error);
+            out listener, out error);
     }
 
     #endregion

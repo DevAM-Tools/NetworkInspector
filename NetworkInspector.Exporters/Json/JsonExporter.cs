@@ -696,6 +696,12 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IPar
     /// Fluent builder for constructing a <see cref="JsonExporter"/>. Not thread-safe: configure it from one thread; setters return the
     /// builder itself.
     /// </summary>
+    /// <remarks>
+    /// Output: <c>ToFile</c>, <c>ToStream</c>, <c>ToStdout</c>, and <c>ToTarget</c> replace each other, and the last call before
+    /// <c>Build</c> wins. Nothing is opened before the first item, so a replaced output creates no file and holds no resource.
+    /// The output belongs to the exporter that <c>Build</c> returns: build every further exporter from a new builder, because a
+    /// second <c>Build</c> hands both exporters the same output.
+    /// </remarks>
     public sealed class Builder
     {
         /// <summary>The output target; <see langword="null"/> until one of the <c>To…</c> methods ran.</summary>
@@ -735,13 +741,27 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IPar
         /// <summary>Sets the output to an existing stream.</summary>
         /// <param name="stream">The writable target stream; the caller keeps ownership and closes it.</param>
         /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
+        /// <exception cref="ArgumentException"><paramref name="stream"/> is not writable.</exception>
         /// <remarks>
-        /// Throws nothing: the stream is not validated here. A missing or unwritable stream is reported when the output is opened, through
-        /// <see cref="ItemSkipped"/>.
+        /// A stream that fails during the export is reported through <see cref="ItemSkipped"/>.
         /// </remarks>
         public Builder ToStream(Stream stream)
         {
             _Output = ExportOutput.FromStream(stream);
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the output to a host target: the exporter opens one entry, <see cref="ExportEntryName.Main"/>, on its first packet
+        /// and never learns where it lands.
+        /// </summary>
+        /// <param name="target">The target; a refused entry becomes an export error of the first packet.</param>
+        /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="target"/> is <see langword="null"/>.</exception>
+        public Builder ToTarget(IExportTarget target)
+        {
+            _Output = ExportOutput.FromTarget(target);
             return this;
         }
 
@@ -870,7 +890,7 @@ public sealed class JsonExporter : IPacketListener, IErrorTolerantExporter, IPar
         {
             if (_Output is null)
             {
-                throw new InvalidOperationException("No output target configured. Call ToFile(), ToStream(), or ToStdout().");
+                throw new InvalidOperationException("No output target configured. Call ToFile(), ToStream(), ToStdout(), or ToTarget().");
             }
 
             return new JsonExporter(

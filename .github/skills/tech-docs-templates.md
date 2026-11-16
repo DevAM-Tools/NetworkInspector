@@ -25,7 +25,7 @@ Copy the depth, not the content. Every section is required unless marked optiona
 
 ## Documentation
 
-[Architecture](docs/architecture.md) · [Concepts](docs/concepts.md) · [Domain](docs/domain.md) · [Decisions](docs/decisions/) · [Changelog](CHANGELOG.md)
+[Architecture](docs/architecture.md) · [Concepts](docs/concepts.md) · [Domain](docs/domain/index.md) · [Spec](spec/index.md) · [Agents](docs/agents.md) · [Decisions](docs/decisions/) · [Changelog](CHANGELOG.md)
 {List only the docs that exist.}
 
 ## License
@@ -82,7 +82,7 @@ Created with the first concept. Read by heading, never in full.
 ```markdown
 # Concepts — {system}
 
-How the solution works inside, across components. Structure: [architecture](architecture.md). Problem terms: [domain](domain.md).
+How the solution works inside, across components. Structure: [architecture](architecture.md). Problem terms: [domain](domain/index.md).
 
 ## {Concept}
 
@@ -92,12 +92,12 @@ How the solution works inside, across components. Structure: [architecture](arch
 **Rejected:** {the simpler idea and why it fails, or a link to the decision record}
 ```
 
-## docs/domain.md
+## docs/domain/{topic}.md
 
-Created with the first domain fact. Grows during the project: every workflow adds what it learns. Read by heading.
+Created with the first domain fact. Layout, index, inbox, and capture rules: `tech-spec.md` § Domain knowledge. Read by heading.
 
 ```markdown
-# Domain — {system}
+# Domain — {topic}
 
 The problem world: true even if the code were rewritten.
 
@@ -119,8 +119,6 @@ The problem world: true even if the code were rewritten.
 |------|--------|
 | A currency code has three uppercase letters | [ISO 4217](https://…) § codes |
 ```
-
-Over ~300 lines: split into `docs/domain/<area>.md`; `docs/domain.md` becomes the index.
 
 ## docs/decisions/{slug}.md
 

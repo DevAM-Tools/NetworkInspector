@@ -288,6 +288,9 @@ if (SessionExport.TryStart(
 }
 ```
 
+A host that routes its exports (a network share, memory) builds the exporter with `.ToTarget(hostTarget)` instead of `.ToFile(path)`:
+the exporter then opens only the streams the target hands out and never learns a path.
+
 `TryVisitPackets(from, to, in options, view, visitor, …)` is the same pull without a job: your visitor receives each packet of
 the range, parsed with your own `ParseOptions`, on your thread, under one stack lease per call. See
 [`SESSION_GUIDE.md`](SESSION_GUIDE.md) section 8.6.

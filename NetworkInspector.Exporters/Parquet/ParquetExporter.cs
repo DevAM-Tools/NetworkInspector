@@ -3,7 +3,8 @@
 namespace NetworkInspector.Exporters.Parquet;
 
 /// <summary>
-/// Parquet packet exporter. Writes parsed packets to a directory of Parquet files forming a
+/// Parquet packet exporter. Writes parsed packets to a dataset of Parquet files, one entry of an <see cref="IExportTarget"/> per
+/// file (a folder of files for <see cref="Builder.ToDirectory"/>), forming a
 /// small relational dataset: <c>packets.parquet</c>, <c>packet_buffers.parquet</c> (only with <see cref="ExportContent.Buffers"/>),
 /// <c>topology.parquet</c>, <c>catalog.parquet</c>, <c>protocols.parquet</c>, <c>export_info.parquet</c>, and one
 /// <c>fields/field_{id}.parquet</c> file per distinct field ID observed (see <see cref="ParquetBatchSink"/> for the full layout).
@@ -70,8 +71,11 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
 {
     #region Configuration and state
 
-    /// <summary>The full path of the dataset directory; created on the first packet.</summary>
-    private readonly string _RootDirectory;
+    /// <summary>
+    /// Receives the table files as entries; for <see cref="Builder.ToDirectory"/> the internal <see cref="ParquetDirectoryTarget"/>.
+    /// Nothing is opened before the first packet.
+    /// </summary>
+    private readonly IExportTarget _Target;
 
     /// <summary>Packets per batch before the batch is handed to the writer (a flush limit, see <see cref="BatchLimits"/>).</summary>
     private readonly int _MaxPacketsPerBlock;
@@ -120,7 +124,7 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     private readonly ColumnarBatchExportCore _Core;
 
     /// <summary>Creates a new exporter (use <see cref="CreateBuilder"/> for construction).</summary>
-    /// <param name="rootDirectory">The full path of the dataset directory.</param>
+    /// <param name="target">The target that receives the table files.</param>
     /// <param name="uiName">The display name.</param>
     /// <param name="description">The description; <see langword="null"/> for none.</param>
     /// <param name="maxPacketsPerBlock">Packets per batch.</param>
@@ -133,7 +137,7 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     /// <param name="writeMode">Whether full batches are written on a writer thread or inline.</param>
     /// <param name="cancellationToken">Cooperative cancellation.</param>
     private ParquetExporter(
-        string rootDirectory,
+        IExportTarget target,
         string uiName,
         string? description,
         int maxPacketsPerBlock,
@@ -146,7 +150,7 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
         ExportWriteMode writeMode,
         CancellationToken cancellationToken)
     {
-        _RootDirectory = rootDirectory;
+        _Target = target;
         _CompressionMethod = compressionMethod;
         _CompressionLevel = compressionLevel;
         UiName = uiName;
@@ -182,7 +186,10 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     }
 
     /// <summary>Creates a new builder for configuring the exporter.</summary>
-    /// <returns>A builder with the defaults; <see cref="Builder.ToDirectory"/> is required before <see cref="Builder.Build"/>.</returns>
+    /// <returns>
+    /// A builder with the defaults; one of <see cref="Builder.ToDirectory"/> or <see cref="Builder.ToTarget"/> is required before
+    /// <see cref="Builder.Build"/>.
+    /// </returns>
     public static Builder CreateBuilder() => new();
 
     /// <summary>
@@ -306,14 +313,14 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     private bool _Start(Packet firstPacket)
     {
         // The start is marked before the work so a failed start is not retried with the next packet; the error flag
-        // below then stops the export. The sink constructor already deletes the previous dataset and writes
-        // protocols.parquet, so this step is the first (and only) place where existing files are removed.
+        // below then stops the export. The sink constructor writes protocols.parquet and export_info.parquet, so this step
+        // is the first (and only) place where the target is asked for an entry; a ToDirectory target clears the earlier dataset
+        // with that first open. A refused entry is an IOException of the sink and ends here as the start failure.
         _Core.MarkStarted();
         try
         {
-            Directory.CreateDirectory(_RootDirectory);
             _Sink = new ParquetBatchSink(
-                _RootDirectory,
+                _Target,
                 _Content,
                 ProtocolCatalogEntry.FromStack(firstPacket.Stack),
                 _CompressionMethod,
@@ -405,10 +412,19 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
     #region Builder
 
     /// <summary>Fluent builder for constructing a <see cref="ParquetExporter"/>.</summary>
+    /// <remarks>
+    /// Output: <c>ToDirectory</c> and <c>ToTarget</c> replace each other, and the last call before <c>Build</c> wins. Nothing is
+    /// opened before the first packet, so a replaced output creates no folder and holds no resource. The output belongs to the
+    /// exporter that <c>Build</c> returns: build every further exporter from a new builder, because a second <c>Build</c> hands both
+    /// exporters the same target.
+    /// </remarks>
     public sealed class Builder
     {
-        /// <summary>The full path of the output directory; <see langword="null"/> until <see cref="ToDirectory"/> was called.</summary>
-        private string? _RootDirectory;
+        /// <summary>
+        /// The output; <see langword="null"/> until <see cref="ToDirectory"/> or <see cref="ToTarget"/> was called, and replaced
+        /// by a later call of either.
+        /// </summary>
+        private IExportTarget? _Target;
 
         /// <summary>The display name.</summary>
         private string _UiName = "Parquet Exporter";
@@ -450,8 +466,8 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
         private CompressionLevel _CompressionLevel = ParquetCompressions.DefaultLevel;
 
         /// <summary>
-        /// Sets the output directory. Required — Parquet output is always a directory of files
-        /// (see <see cref="ParquetBatchSink"/> for the layout), never a single stream.
+        /// Sets the output to a directory of Parquet files (see <see cref="ParquetBatchSink"/> for the layout); a host that wants the
+        /// files as streams uses <see cref="ToTarget"/>. One of the two is required.
         /// The directory is created lazily on the first <see cref="OnPacket"/> call. Existing dataset files in it
         /// (the six table files <c>packets</c>, <c>packet_buffers</c>, <c>topology</c>, <c>catalog</c>, <c>protocols</c>,
         /// <c>export_info</c> and <c>fields/*.parquet</c>) are deleted at that point.
@@ -462,7 +478,23 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
         public Builder ToDirectory(string path)
         {
             ArgumentException.ThrowIfNullOrEmpty(path);
-            _RootDirectory = Path.GetFullPath(path);
+            _Target = new ParquetDirectoryTarget(Path.GetFullPath(path));
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the output to a host target: the exporter opens one entry per table file (<c>packets.parquet</c>,
+        /// <c>fields/field_{id}.parquet</c>, …) and never learns where they land. The streams may be write-only and non-seekable.
+        /// The target is used as given: an earlier dataset is not cleared (that is a behavior of <see cref="ToDirectory"/>).
+        /// Nothing is opened before the first <see cref="OnPacket"/> call.
+        /// </summary>
+        /// <param name="target">The target; a refused entry becomes an export error.</param>
+        /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="target"/> is <see langword="null"/>.</exception>
+        public Builder ToTarget(IExportTarget target)
+        {
+            ArgumentNullException.ThrowIfNull(target);
+            _Target = target;
             return this;
         }
 
@@ -648,18 +680,18 @@ public sealed class ParquetExporter : IPacketListener, IErrorTolerantExporter, I
             return this;
         }
 
-        /// <summary>Builds the exporter. Throws if no output directory was configured.</summary>
-        /// <returns>A new exporter; no file or directory exists until its first packet.</returns>
-        /// <exception cref="InvalidOperationException">No output directory was configured.</exception>
+        /// <summary>Builds the exporter. Throws if no output was configured.</summary>
+        /// <returns>A new exporter; no entry, file, or directory exists until its first packet.</returns>
+        /// <exception cref="InvalidOperationException">No output was configured.</exception>
         public ParquetExporter Build()
         {
-            if (_RootDirectory is null)
+            if (_Target is null)
             {
-                throw new InvalidOperationException("No output directory configured. Call ToDirectory().");
+                throw new InvalidOperationException("No output configured. Call ToDirectory() or ToTarget().");
             }
 
             return new ParquetExporter(
-                _RootDirectory,
+                _Target,
                 _UiName,
                 _Description,
                 _MaxPacketsPerBlock,

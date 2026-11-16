@@ -49,7 +49,7 @@ static void WritePcapng(IEnumerable<Frame> frames)
 
 | Method | Purpose | Default |
 | --- | --- | --- |
-| `ToFile` / `ToStream` / `ToStdout` | Output target | required |
+| `ToFile` / `ToStream` / `ToStdout` / `ToTarget` | Output target (`ToTarget` takes a host `IExportTarget` and writes the one entry `Main`) | required |
 | `WithUiName` / `WithDescription` | User-facing metadata | — |
 | `WithSnapLength(uint)` | Truncate stored bytes per frame (1 to `int.MaxValue`) | 262 144 |
 | `WithTimestampResolution(byte)` | Power-of-ten exponent 0..19 | 9 (ns) |

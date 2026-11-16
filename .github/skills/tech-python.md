@@ -24,7 +24,7 @@ Load when `*.py`, `pyproject.toml`, or `*.pyi` is in scope. Python mechanisms fo
 
 ## Style
 
-- Format with `ruff format`; line length 160.
+- Format with `ruff format`; line length 130.
 - ❗ One callable exit per line; in a conditional expression put each calling branch on its own line.
 - Use `match` for structural branching instead of `isinstance` ladders.
 - ❗ Pass `encoding="utf-8"` explicitly; never depend on the process locale.
@@ -37,21 +37,13 @@ Load when `*.py`, `pyproject.toml`, or `*.pyi` is in scope. Python mechanisms fo
 - Mark overrides with `@override`.
 
 ```python
-MAX_NAME_LENGTH: Final = 200
-
-
-class Pairer(Protocol):
-    def pair(self, path: str) -> int | None: ...
-
-
 @dataclass(frozen=True, slots=True)
 class Export:
     name: str
     tags: tuple[str, ...]
 
 
-def first[T](items: Sequence[T]) -> T | None:
-    return items[0] if items else None
+def first[T](items: Sequence[T]) -> T | None: ...
 ```
 
 ## Errors and logging
@@ -111,7 +103,7 @@ match parse_port(raw):
 requires-python = ">=3.13"
 
 [tool.ruff]
-line-length = 160
+line-length = 130
 target-version = "py313"
 
 [tool.ruff.lint]
@@ -159,34 +151,36 @@ raw: Any = lib.call()  # pyright: ignore[reportUnknownMemberType]  # Reason: {wh
 class InvoiceReader:
     """Stream one invoice CSV file into an `invoices.model.InvoiceBatch`.
 
-    Reads forward-only; memory stays bounded by the longest row, not the file.
-    Not thread-safe: create one reader per file.
+    Memory stays bounded by the longest row. Not thread-safe: create one reader per file.
 
     Related:
         `invoices.model.InvoiceBatch`: the model this reader fills.
-        `invoices.detect.InvoiceFileDetector`: decides which files are invoice files.
         Architecture: docs/architecture.md § Import.
         Sync: README.md § Options (--input).
     """
 
+    # region Row parsing
+    def route(self, path: str) -> int | None:
+        """Return the index of the supplier that owns the file at `path`.
 
-# region Row parsing
+        Args:
+            path: Invoice file path, relative to the import root.
+
+        Returns:
+            The supplier index, or None when no supplier owns the path.
+        """
+        # --supplier wins. Do not consult the index on that branch.
+        if self._override_supplier is not None:
+            return self._override_supplier
+
+        # Index is immutable after build. Keys match OS paths.
+        index = SupplierIndex.build(self._root)
+        return index.get(path)
+
+    # endregion
 ```
 
-```python
-def route(self, path: str) -> int | None:
-    """Return the index of the supplier that owns the invoice file at `path`.
-
-    Args:
-        path: Invoice file path, relative to the import root.
-
-    Returns:
-        The supplier index, or None when no supplier owns the path.
-    """
-    # Index is immutable after build. Keys match OS paths.
-    index = SupplierIndex.build(self._root)
-    return index.get(path)
-```
+Each block opens with a comment that states its intent and what to watch; one blank line separates the blocks.
 
 ## Integer arithmetic
 
@@ -198,14 +192,7 @@ def route(self, path: str) -> int | None:
 - **Deserialization:** never `pickle`, `marshal`, `shelve`, or `yaml.load` on untrusted data; use `json` / `yaml.safe_load`, then validate into typed objects.
 - **Code execution:** no `eval`, `exec`, or `compile` on input.
 - **SQL:** driver placeholders (`cursor.execute("… WHERE id = ?", (item_id,))`); never f-strings or `%`.
-- **Limits** (Section 4.2): a frozen dataclass with documented defaults; check ranges in `__post_init__` and raise the package's configuration error. Host-derived defaults: `os.process_cpu_count()` (3.13+, else `os.cpu_count()`). Format and protocol facts are `Final` constants. Comment the security decision at the definition:
-
-```python
-# Threat: a huge CSV floods memory. Open by default: the tool reads the user's own local files.
-# User may tighten it with --max-rows (1 or more). Rejected: a fixed cap (blocks large local datasets).
-# Residual risk: an untrusted file can still exhaust memory unless the user sets --max-rows.
-max_rows: int | None = None
-```
+- **Limits** (`tech-limits.md`): no reference implementation yet; implement the mechanism as a frozen dataclass with documented defaults; check ranges in `__post_init__` and raise the package's configuration error; one fixed default per limit for the reference machine of the project. Format and protocol facts are `Final` constants. Comment the security decision at the definition.
 - **Paths:** resolve, then confirm the result stays under the root.
 
 ```python
@@ -230,14 +217,6 @@ def resolve_inside(root: Path, relative: str) -> Path | None:
 - ❗ Let `CancelledError` propagate; clean up in `finally`.
 - Use `asyncio.Lock` in the loop; `threading.Lock` only for thread-shared state, never across `await`.
 
-```python
-async def fetch_all(urls: Sequence[str]) -> list[bytes]:
-    async with asyncio.timeout(30):
-        async with asyncio.TaskGroup() as group:
-            tasks = [group.create_task(fetch(url)) for url in urls]
-    return [task.result() for task in tasks]
-```
-
 ## Thread safety
 
 - ❗ Protect shared mutable state and document the primitive.
@@ -247,7 +226,7 @@ async def fetch_all(urls: Sequence[str]) -> list[bytes]:
 
 ## Performance and allocation
 
-❗ Every object is an allocation the runtime must reclaim, and Python allocates on almost every operation. Avoid needless objects on **every** path; on hot paths (per item, per byte) create none that the result does not need.
+❗ Python allocates on almost every operation. Avoid needless objects on **every** path; on hot paths create none that the result does not need (Section 4.4).
 
 - Use `slots=True` dataclasses; reuse `bytearray` and `memoryview` slices instead of new `bytes`.
 - Stream with generators; never materialize a full list that is only iterated once.
@@ -257,7 +236,7 @@ async def fetch_all(urls: Sequence[str]) -> list[bytes]:
 
 ### Profiling
 
-Load `tech-python-profiling.md` when a measurement is needed (Section 3). Never use a profiler that needs admin rights (Section 4.15).
+Load `tech-python-profiling.md` when a measurement is needed (Section 3).
 
 ## Console and files
 

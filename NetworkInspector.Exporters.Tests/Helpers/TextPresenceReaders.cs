@@ -135,6 +135,34 @@ internal static class TextPresenceReaders
         return result;
     }
 
+    /// <summary>Reads the same texts from the per-field entries of a Parquet dataset held in memory, without a database.</summary>
+    /// <param name="target">The target after the export; the export must be finished.</param>
+    /// <param name="factory">The factory that parsed the exported packet (names the field entries).</param>
+    /// <returns>The texts per probe field name; a field with no entry is absent from the map.</returns>
+    internal static async Task<Dictionary<string, Texts>> ReadParquetAsync(MemoryExportTarget target, TextProbePacketFactory factory)
+    {
+        Dictionary<string, Texts> result = [];
+        foreach (string name in TextProbePacketFactory.FieldNames)
+        {
+            string entry = Invariant($"fields/field_{factory.IdOf(name).Value.ToString(CultureInfo.InvariantCulture)}.parquet");
+            if (!target.EntryNames.Contains(entry))
+            {
+                continue;
+            }
+
+            // The first row decides, as the first row of the file; an entry without a row has no texts. A NULL is an absent text.
+            byte[] file = target.Bytes(entry);
+            string?[] representations = await ParquetReads.TextsAsync(file, "custom_repr");
+            string?[] texts = await ParquetReads.TextsAsync(file, "custom_text");
+            if (representations.Length > 0)
+            {
+                result[name] = new Texts(representations[0], texts[0]);
+            }
+        }
+
+        return result;
+    }
+
     /// <summary>Reads the first row of a two-column text query; a NULL is an absent text.</summary>
     /// <param name="connection">An open connection.</param>
     /// <param name="sql">A query that selects the representation and the text column.</param>
@@ -226,6 +254,29 @@ internal static class TextPresenceReaders
             Invariant($"SELECT node_id, field_id, parent_node_id, custom_text FROM read_parquet('{file}') ORDER BY packet_id, node_id"));
     }
 
+    /// <summary>Reads the rows of <c>topology.parquet</c> held in memory (with the <c>custom_text</c> column) in node order, without a database.</summary>
+    /// <param name="target">The target after the export; the export must be finished.</param>
+    /// <returns>The rows ordered by packet id, then node id.</returns>
+    internal static async Task<List<TopologyRow>> ReadParquetTopologyAsync(MemoryExportTarget target)
+    {
+        byte[] file = target.Bytes("topology.parquet");
+        int[] packetIds = await ParquetReads.IntsAsync(file, "packet_id");
+        int[] nodeIds = await ParquetReads.IntsAsync(file, "node_id");
+        int[] fieldIds = await ParquetReads.IntsAsync(file, "field_id");
+        int[] parents = await ParquetReads.IntsAsync(file, "parent_node_id");
+        string?[] texts = await ParquetReads.TextsAsync(file, "custom_text");
+        return [.. Enumerable.Range(0, packetIds.Length)
+            .OrderBy(i => packetIds[i]).ThenBy(i => nodeIds[i])
+            .Select(i => new TopologyRow(nodeIds[i], fieldIds[i], parents[i], texts[i]))];
+    }
+
+    /// <summary>Whether <c>topology.parquet</c> held in memory has a column with the given name.</summary>
+    /// <param name="target">The target after the export; the export must be finished.</param>
+    /// <param name="column">The column name.</param>
+    /// <returns><see langword="true"/> when the entry has the column.</returns>
+    internal static Task<bool> ParquetTopologyHasColumnAsync(MemoryExportTarget target, string column) =>
+        ParquetReads.HasColumnAsync(target.Bytes("topology.parquet"), column);
+
     /// <summary>Whether <c>topology.parquet</c> has a column with the given name.</summary>
     /// <param name="directory">The dataset directory.</param>
     /// <param name="column">The column name.</param>
@@ -268,12 +319,12 @@ internal static class TextPresenceReaders
     /// (field 3), and parents (field 4, zigzag), one entry per row, and the presence-encoded text column (field 5): a present entry
     /// (also an empty one) is a text, an absent-run entry is that many rows without a text, and a missing column is every row absent.
     /// </summary>
-    /// <param name="path">The PBF file written without compression, columnar layout.</param>
+    /// <param name="file">The bytes of the PBF file written without compression, columnar layout.</param>
     /// <returns>The rows in file order.</returns>
     /// <exception cref="InvalidOperationException">The columns of a topology message differ in length.</exception>
-    internal static List<TopologyRow> ReadPbfColumnarTopology(string path)
+    internal static List<TopologyRow> ReadPbfColumnarTopology(byte[] file)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         List<TopologyRow> rows = [];
         foreach (List<PbfField> block in blocks)
         {
@@ -307,15 +358,15 @@ internal static class TextPresenceReaders
     #region PBF
 
     /// <summary>Reads the texts of the probe fields from an uncompressed PBF file in the standard layout.</summary>
-    /// <param name="path">The PBF file.</param>
+    /// <param name="file">The bytes of the PBF file.</param>
     /// <param name="factory">The factory that parsed the exported packet (names the field ids).</param>
     /// <returns>
     /// The texts per probe field name: a field record without a representation (field 6) or text (field 7) is absent, a
     /// zero-length field is the empty string.
     /// </returns>
-    internal static Dictionary<string, Texts> ReadPbfStandard(string path, TextProbePacketFactory factory)
+    internal static Dictionary<string, Texts> ReadPbfStandard(byte[] file, TextProbePacketFactory factory)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         Dictionary<string, Texts> result = [];
         foreach (List<PbfField> block in blocks)
         {
@@ -388,15 +439,15 @@ internal static class TextPresenceReaders
     /// Reads the texts of the probe fields from an uncompressed PBF file in the columnar layout: the representation and text columns
     /// of every field column, decoded row by row.
     /// </summary>
-    /// <param name="path">The PBF file.</param>
+    /// <param name="file">The bytes of the PBF file.</param>
     /// <param name="factory">The factory that parsed the exported packet (names the field ids).</param>
     /// <returns>
     /// The texts of the first row per probe field name; a missing text column is the absent text of every row, an absent-run entry
     /// an absent row, a present entry (also an empty one) a present text.
     /// </returns>
-    internal static Dictionary<string, Texts> ReadPbfColumnar(string path, TextProbePacketFactory factory)
+    internal static Dictionary<string, Texts> ReadPbfColumnar(byte[] file, TextProbePacketFactory factory)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         Dictionary<string, Texts> result = [];
         foreach (List<PbfField> block in blocks)
         {
@@ -445,12 +496,12 @@ internal static class TextPresenceReaders
     }
 
     /// <summary>Whether a field column message of the file holds a column with the given number for any probe field.</summary>
-    /// <param name="path">The PBF file (columnar layout).</param>
+    /// <param name="file">The bytes of the PBF file (columnar layout).</param>
     /// <param name="number">The column number, for example <see cref="PbfNumbers.ColumnCustomTexts"/>.</param>
     /// <returns><see langword="true"/> when some field column carries it.</returns>
-    internal static bool PbfColumnarHasColumn(string path, int number)
+    internal static bool PbfColumnarHasColumn(byte[] file, int number)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         foreach (List<PbfField> block in blocks)
         {
             foreach (PbfField columnField in block)
@@ -467,12 +518,12 @@ internal static class TextPresenceReaders
     }
 
     /// <summary>Whether a field record of a standard-layout file carries a field with the given number, anywhere in its packets.</summary>
-    /// <param name="path">The PBF file (standard layout).</param>
+    /// <param name="file">The bytes of the PBF file (standard layout).</param>
     /// <param name="number">The field number, for example <see cref="PbfNumbers.FieldCustomText"/>.</param>
     /// <returns><see langword="true"/> when some field record carries it.</returns>
-    internal static bool PbfStandardHasField(string path, int number)
+    internal static bool PbfStandardHasField(byte[] file, int number)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         foreach (List<PbfField> block in blocks)
         {
             foreach (PbfField packet in block)

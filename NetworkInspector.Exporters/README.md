@@ -199,8 +199,12 @@ ParseOptions options = plan.Options;   // fields only, no tree (2 fields, 1 obse
 | [`ParquetExporter`](Parquet/README.md) | Packets | directory | DuckDB, pandas, Polars, Spark |
 | [`DuckDbExporter`](../NetworkInspector.Exporters.DuckDb/README.md) | Packets | `.duckdb` | SQL in one file |
 
-Output targets: every exporter supports `ToFile`. All except Parquet and DuckDB also support `ToStream` (the caller
-keeps the stream open and owns it) and `ToStdout` (the exporter closes stdout when it finishes).
+Output targets: every exporter except Parquet supports `ToFile`. All except Parquet and DuckDB also support `ToStream` (the
+caller keeps the stream open and owns it), `ToStdout` (the exporter closes stdout when it finishes), and
+`ToTarget(IExportTarget)`: the host's target, from which the exporter opens the one entry `ExportEntryName.Main` on its first
+item. Parquet writes a dataset: `ToDirectory` (a folder) or `ToTarget`, which receives one named entry per table file.
+DuckDB supports `ToFile` only, because its library opens the file itself. The target contract and the three ready targets
+(`FileExportTarget`, `StreamExportTarget`, `DirectoryExportTarget`) are in the [exporter guide](EXPORTER_GUIDE.md).
 
 ## Lifecycle And Errors
 
@@ -242,8 +246,9 @@ Frames read by `NetworkInspector.Sources` and written back keep their bus fields
   and BLF additionally write full batches on a writer thread of their own (`WithWriteMode(ExportWriteMode.Background)`, the
   default); a stream passed to them must not be used until `OnFinish` returned. `ExportWriteMode.Synchronous` keeps every
   write on the calling thread. See the [exporter guide](EXPORTER_GUIDE.md) §9.5.
-- File targets do not create missing parent directories (Parquet creates its own directory) and overwrite
-  existing files.
+- File targets do not create missing parent directories and overwrite existing files. `ToDirectory` and
+  `DirectoryExportTarget` create the folders of their entries; `ToDirectory` also removes an earlier Parquet dataset first.
+  A host target's `TryOpenWrite` may be called from the writer thread, so it must not depend on thread affinity.
 - Exporters do not validate upstream trust assumptions; validate and bound input at the source and parse boundary.
 - Format details (compression, schemas, dialects) are documented in each format README.
 

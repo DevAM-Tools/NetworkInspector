@@ -49,7 +49,7 @@ internal static class CsvExporterRegistration
         Description: "Writes one row per packet; the default columns are number, time, info, and length.",
         FileExtension: ".csv",
         RegisterOptions: _RegisterOptions,
-        Create: _TryCreate);
+        Creation: ExporterCreation.ForStreams<IPacketListener>(_TryCreate));
 
     #endregion
 
@@ -83,7 +83,7 @@ internal static class CsvExporterRegistration
     }
 
     /// <summary>Creates the Core CSV exporter.</summary>
-    private static bool _TryCreate(ExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
+    private static bool _TryCreate(StreamExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -132,11 +132,11 @@ internal static class CsvExporterRegistration
         bool header = OptionValues.GetBool(values, _HeaderOption);
         bool bom = OptionValues.GetBool(values, _BomOption);
         bool neutralizeFormulas = OptionValues.GetBool(values, _NeutralizeFormulasOption);
-        return ExporterBuild.TryBuild<IPacketListener>(
+        return ExporterBuild.TryBuildOnTarget<IPacketListener>(
             () =>
             {
                 CsvExporter.Builder builder = CsvExporter.CreateBuilder()
-                    .ToFile(request.TargetPath)
+                    .ToTarget(request.Target)
                     .WithDelimiter(delimiter)
                     .WithHeader(header)
                     .WithBom(bom)
@@ -178,7 +178,7 @@ internal static class CsvExporterRegistration
 
                 return builder.Build();
             },
-            request.TargetPath, out listener, out error);
+            out listener, out error);
     }
 
     /// <summary>Checks the occurrence separator against the rule of the Core builder, so that the error names the option.</summary>

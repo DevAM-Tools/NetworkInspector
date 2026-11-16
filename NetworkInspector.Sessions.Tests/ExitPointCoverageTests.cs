@@ -9,6 +9,7 @@ namespace NetworkInspector.Sessions.Tests;
 internal sealed class ExitPointCoverageTests
 {
     [Test]
+    [Category("Slow")]
     public async Task TryGetPacket_ReparseWithMismatchedStack_ThrowsRegistryMismatch()
     {
         using Stack stack = TestHarness.CreateStack();
@@ -49,6 +50,7 @@ internal sealed class ExitPointCoverageTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task RunSourceLoop_PacketIdExhausted_FailsSourceJob()
     {
         using Stack stack = TestHarness.CreateStack();

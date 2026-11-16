@@ -24,6 +24,7 @@ internal sealed class CliExportFormatTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task CsvOptionsChangeDelimiterHeaderBomAndColumns()
     {
         using CliSandbox sandbox = new();
@@ -307,6 +308,7 @@ internal sealed class CliExportFormatTests
     #region Plugin kinds and formats
 
     [Test]
+    [Category("Slow")]
     public async Task ThePluginSourceAndFormatWorkLikeBuiltInOnes()
     {
         using CliSandbox sandbox = new();
@@ -441,6 +443,7 @@ internal sealed class CliExportFormatTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task OverwriteNeverDeletesAFolderThatNoExportWrote()
     {
         using CliSandbox sandbox = new();
@@ -456,6 +459,7 @@ internal sealed class CliExportFormatTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task ADatasetWrittenByAnExportIsReplacedByTheNextOverwriteRun()
     {
         using CliSandbox sandbox = new();

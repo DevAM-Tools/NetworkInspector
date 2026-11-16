@@ -12,7 +12,7 @@ they are used together. How to build a plugin: [plugin guide](guide.md).
 | Configuration | [`IPluginBuilder`](#ipluginbuilder) |
 | Running plugin | [`IPluginContext`](#iplugincontext), [`IPluginLog`](#ipluginlog) |
 | Sources | [`SourceRegistration`](#sourceregistration), [`SourceCreate`](#sourcecreate), [`SourceRequest`](#sourcerequest) |
-| Exporters | [`ExporterRegistration<TListener>`](#exporterregistrationtlistener), [`ExporterCreate<TListener>`](#exportercreatetlistener), [`ExportRequest`](#exportrequest) |
+| Exporters | [`ExporterRegistration<TListener>`](#exporterregistrationtlistener), [`ExporterCreation<TListener>`](#exportercreationtlistener), [`StreamExportRequest`](#streamexportrequest), [`FileExportRequest`](#fileexportrequest), [`StreamExporterCreate<TListener>`, `FileExporterCreate<TListener>`](#streamexportercreatetlistener-and-fileexportercreatetlistener) |
 | Expected failures | [`PluginError`](#pluginerror), [`PluginErrorCode`](#pluginerrorcode) |
 
 The contract adds registrations and a lifecycle only. Sources and exporters are the Core types `IFrameSource`,
@@ -208,13 +208,15 @@ Usage: `request.Options.GetI64Setting("count") ?? 100` reads an option that Core
 ### ExporterRegistration<TListener>
 
 `sealed record ExporterRegistration<TListener>(string Format, string UiName, string Description, string FileExtension,
-Action<SettingsRegistrar> RegisterOptions, ExporterCreate<TListener> Create) where TListener : class` — an export
+Action<SettingsRegistrar> RegisterOptions, ExporterCreation<TListener> Creation) where TListener : class` — an export
 format. `TListener` is `IFrameListener` (frame formats, `ni convert`) or `IPacketListener` (packet formats,
 `ni export`). `Format` follows the rule of source kinds and is unique across all formats; `FileExtension` starts with
-`.` or is empty for directory output.
+`.` or is empty for directory output. A format that receives a file path (`ExporterCreation.ForFile`) must have an
+extension: the loader refuses the plugin otherwise.
 
-Contract rule: a listener that is disposed without `OnFinish` leaves no partial output. Either it deletes its output
-itself, or the application's export runner deletes the target afterwards.
+Contract rule: a listener that is disposed without `OnFinish` leaves no partial output. A format that writes through the
+streams of a target leaves the removal to the host, which owns the target; a format that opens a file itself deletes its
+file itself, or the host deletes the path afterwards.
 
 Usage:
 
@@ -222,26 +224,49 @@ Usage:
 builder.AddPacketExporter(new ExporterRegistration<IPacketListener>("SampleText", "Sample text",
     "One line per sample packet.", ".sampletxt",
     static options => options.RegisterBoolSetting("includeHeader", "Header line", "", true),
-    SampleTextExporter.TryCreate));
+    ExporterCreation.ForStreams<IPacketListener>(SampleTextExporter.TryCreate)));
 ```
 
-### ExporterCreate<TListener>
+### ExporterCreation<TListener>
 
-`delegate bool ExporterCreate<TListener>(ExportRequest request, out TListener? listener, out PluginError? error) where
-TListener : class` — creates the listener for one export. The application prepared the target (existence and overwrite
-are decided before this call). Returns `false` with an error for every expected failure; a throw signals a bug.
+`sealed class ExporterCreation<TListener> where TListener : class` — how a format receives its output: exactly one of a
+target of named streams or a prepared file path. Create it with `ExporterCreation.ForStreams<TListener>(create)` for every
+format that writes forward (the host hands it an [`IExportTarget`](../../NetworkInspector.Core/Interfaces/IExportTarget.cs)),
+or with `ExporterCreation.ForFile<TListener>(create)` for a format whose library opens the file itself, such as DuckDB. The
+factories sit on the non-generic static class `ExporterCreation`; the type has no public constructor, so a registration
+cannot hold both kinds or none. `WritesFile`, `TryGetForStreams`, and `TryGetForFile` tell the host which kind it holds.
 
-Usage: return `PluginErrorCode.TargetExists` when the listener would have to replace a file the application did not
-clear, and `PluginErrorCode.FileUnreadable` when the folder is not writable.
+Usage: `ExporterCreation.ForStreams<IPacketListener>(SampleTextExporter.TryCreate)`.
 
-### ExportRequest
+### StreamExporterCreate<TListener> and FileExporterCreate<TListener>
 
-`sealed record ExportRequest(string TargetPath, ReadOnlySettingsManagerView Options, IStack Stack, long
-ExpectedItemCount, CancellationToken CancellationToken)` — one export: the full output path, the applied options, the
-stack that parsed the packets (resolve field ids by name here, once), an informational item count for progress, and
-the cancellation of the export.
+`delegate bool StreamExporterCreate<TListener>(StreamExportRequest request, out TListener? listener, out PluginError?
+error)` and `delegate bool FileExporterCreate<TListener>(FileExportRequest request, out TListener? listener, out
+PluginError? error)`, both `where TListener : class` — create the listener for one export. The host prepared the target or
+the path before the call. Return `false` with an error for every expected failure; a throw signals a bug.
 
-Usage: `FieldId? speed = request.Stack.GetFieldId("sample.speed");` once in `Create`, then read the field per packet.
+Usage: open the entry in the stream delegate and return `PluginErrorCode.FileUnreadable` with the reason the target gave
+when it refuses (`request.Target.TryOpenWrite(ExportEntryName.Main, out Stream? stream, out string failure)`).
+
+### StreamExportRequest
+
+`sealed record StreamExportRequest(IExportTarget Target, ReadOnlySettingsManagerView Options, IStack Stack, long
+ExpectedItemCount, CancellationToken CancellationToken)` — one export through streams: the host's target, the applied
+options, the stack that parsed the packets (resolve field ids by name here, once), an informational item count for
+progress, and the cancellation of the export. A single-file format opens the one entry `ExportEntryName.Main`; a dataset
+format opens one named entry per file. The names follow the grammar in the doc comment of
+[`ExportEntryName`](../../NetworkInspector.Core/Interfaces/ExportEntryName.cs). The format never sees a path.
+
+Usage: `FieldId? speed = request.Stack.GetFieldId("sample.speed");` once in the delegate, then read the field per packet.
+
+### FileExportRequest
+
+`sealed record FileExportRequest(string FilePath, ReadOnlySettingsManagerView Options, IStack Stack, long
+ExpectedItemCount, CancellationToken CancellationToken)` — one export through a file the library opens itself: the full
+path of the output file, which the host prepared (its folder exists and nothing lies at the path), and the same options,
+stack, item count, and cancellation as `StreamExportRequest`.
+
+Usage: pass `request.FilePath` to the library that opens the file.
 
 ## Expected failures
 

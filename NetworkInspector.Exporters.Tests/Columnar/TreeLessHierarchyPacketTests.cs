@@ -39,19 +39,22 @@ internal sealed class TreeLessHierarchyPacketTests
             .WithContent(hierarchy)
             .WithWriteMode(ExportWriteMode.Synchronous)
             .Build();
+        MemoryExportTarget parquetTarget = new(seekable: true);
         using ParquetExporter parquet = ParquetExporter.CreateBuilder()
-            .ToDirectory(Path.Combine(dir.DirectoryPath, "dataset"))
+            .ToTarget(parquetTarget)
             .WithContent(hierarchy)
             .WithWriteMode(ExportWriteMode.Synchronous)
             .Build();
+        using MemoryStream pbfStream = new();
         using PbfExporter pbf = PbfExporter.CreateBuilder()
-            .ToFile(dir.FilePath("capture.pbf"))
+            .ToStream(pbfStream)
             .WithFormat(PbfExportFormat.Columnar)
             .WithContent(hierarchy)
             .WithWriteMode(ExportWriteMode.Synchronous)
             .Build();
+        using MemoryStream pbfStandardStream = new();
         using PbfExporter pbfStandard = PbfExporter.CreateBuilder()
-            .ToFile(dir.FilePath("standard.pbf"))
+            .ToStream(pbfStandardStream)
             .WithFormat(PbfExportFormat.Standard)
             .WithContent(hierarchy)
             .WithWriteMode(ExportWriteMode.Synchronous)

@@ -105,7 +105,6 @@ internal sealed class ExportFieldCollectorTests
     }
 
     [Test]
-    [Category("Slow")]
     public async Task APlainPacketGivesOneRowInEveryModeAndAPacketWithoutTheFieldGivesNone()
     {
         foreach (Occurrences choice in new[] { Occurrences.First, Occurrences.Last, Occurrences.All })

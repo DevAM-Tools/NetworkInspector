@@ -596,6 +596,7 @@ internal sealed class SessionApiTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task WaitForCompletionTimeoutIsASingleBudget()
     {
         // Six sources that never finish: a budget applied per job would take 6 x 300 ms = 1.8 s, one shared budget about 300 ms.

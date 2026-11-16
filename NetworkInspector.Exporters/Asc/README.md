@@ -62,7 +62,7 @@ reported as `IoError` when the output stream threw an `IOException` and as `Seri
 
 | Method | Purpose | Default |
 | --- | --- | --- |
-| `ToFile` / `ToStream` / `ToStdout` | Output target | required |
+| `ToFile` / `ToStream` / `ToStdout` / `ToTarget` | Output target (`ToTarget` takes a host `IExportTarget` and writes the one entry `Main`) | required |
 | `WithUiName` / `WithDescription` | User-facing metadata | — |
 | `WithTimestampDecimals(int)` | Fraction digits, `MinTimestampDecimals` (6) to `MaxTimestampDecimals` (9) | 6 |
 | `WithTargetFrameCount(int)` | Stop after N frames (`0` = no limit) | 0 |

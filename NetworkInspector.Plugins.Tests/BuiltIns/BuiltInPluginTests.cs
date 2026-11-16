@@ -91,6 +91,7 @@ internal sealed class BuiltInPluginTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task ACopyOfTheAssemblyInAPluginFolderIsADuplicateNotASecondLoad()
     {
         using LoaderHarness harness = new("builtins-duplicate");

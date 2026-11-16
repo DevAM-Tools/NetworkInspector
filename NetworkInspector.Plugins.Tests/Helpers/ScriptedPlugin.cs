@@ -56,7 +56,7 @@ internal sealed class ScriptedPlugin : IPlugin
     /// <param name="listener">Always <see langword="null"/>.</param>
     /// <param name="error">Always an error.</param>
     /// <returns>Always <see langword="false"/>.</returns>
-    internal static bool NoPacketExporter(ExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
+    internal static bool NoPacketExporter(StreamExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         listener = null;
@@ -69,7 +69,7 @@ internal sealed class ScriptedPlugin : IPlugin
     /// <param name="listener">Always <see langword="null"/>.</param>
     /// <param name="error">Always an error.</param>
     /// <returns>Always <see langword="false"/>.</returns>
-    internal static bool NoFrameExporter(ExportRequest request, [NotNullWhen(true)] out IFrameListener? listener,
+    internal static bool NoFrameExporter(StreamExportRequest request, [NotNullWhen(true)] out IFrameListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         listener = null;
@@ -86,13 +86,15 @@ internal sealed class ScriptedPlugin : IPlugin
     /// <param name="format">Format name.</param>
     /// <returns>The registration.</returns>
     internal static ExporterRegistration<IPacketListener> PacketExporter(string format) =>
-        new(format, format, "Test format " + format, "." + format.ToLowerInvariant(), static _ => { }, NoPacketExporter);
+        new(format, format, "Test format " + format, "." + format.ToLowerInvariant(), static _ => { },
+            ExporterCreation.ForStreams<IPacketListener>(NoPacketExporter));
 
     /// <summary>Shorthand for a frame exporter registration without options.</summary>
     /// <param name="format">Format name.</param>
     /// <returns>The registration.</returns>
     internal static ExporterRegistration<IFrameListener> FrameExporter(string format) =>
-        new(format, format, "Test format " + format, "." + format.ToLowerInvariant(), static _ => { }, NoFrameExporter);
+        new(format, format, "Test format " + format, "." + format.ToLowerInvariant(), static _ => { },
+            ExporterCreation.ForStreams<IFrameListener>(NoFrameExporter));
 
     #endregion
 }

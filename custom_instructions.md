@@ -45,3 +45,8 @@ values; the reasons and the rejected options are in [`docs/decisions/limits-poli
 
 - Write every interpolated string that formats a number, a GUID, or another culture-dependent value as `Invariant($"…")` from `InvariantStringHelper` (`using static`). The package is a reference of every .NET 6+ project through `Directory.Build.targets`.
 - In `NetworkInspector.Limits` use `string.Create(CultureInfo.InvariantCulture, $"…")`: that package lists no dependency.
+
+## Line length
+
+- The line length of this project is 160 characters, not the 130 of the workflow kit. `build_property.csc_max_line_length` in
+  `.editorconfig` sets it and CSC001 enforces it. Wrap a line at 160; do not shorten the existing ones to 130.

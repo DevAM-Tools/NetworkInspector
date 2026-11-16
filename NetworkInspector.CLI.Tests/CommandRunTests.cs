@@ -382,6 +382,7 @@ internal sealed class CommandRunTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task Export_Parquet_SplitCount_WritesNumberedDirectories()
     {
         string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-export-parquet-split-{Guid.NewGuid():N}"));
@@ -414,6 +415,7 @@ internal sealed class CommandRunTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task Export_DuckDb_SplitCount_WritesNumberedFiles()
     {
         string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-export-duckdb-split-{Guid.NewGuid():N}"));
@@ -443,6 +445,7 @@ internal sealed class CommandRunTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task Export_Parquet_WithoutSplit_WritesSingleDataset()
     {
         string dir = Path.Combine(Path.GetTempPath(), Invariant($"ni-export-parquet-{Guid.NewGuid():N}"));

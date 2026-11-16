@@ -40,6 +40,7 @@ internal sealed class CliSettingOverrideTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task AnOverrideOfAPluginSettingIsInEffectBeforeThePluginStarts()
     {
         using CliSandbox sandbox = new();

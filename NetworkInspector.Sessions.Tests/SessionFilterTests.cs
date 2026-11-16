@@ -767,6 +767,7 @@ internal sealed class SessionFilterTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task MatchAllFilterOverManyPacketsReturnsEveryId()
     {
         // "udp" matches every packet: the adaptive switch turns the pre-check off, verdicts must not change.

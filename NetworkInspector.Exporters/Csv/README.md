@@ -180,7 +180,7 @@ using CsvExporter exporter = CsvExporter.CreateBuilder()
 
 | Method | Purpose | Default |
 | --- | --- | --- |
-| `ToFile` / `ToStream` / `ToStdout` | Output target | required |
+| `ToFile` / `ToStream` / `ToStdout` / `ToTarget` | Output target (`ToTarget` takes a host `IExportTarget` and writes the one entry `Main`) | required |
 | `WithUiName` / `WithDescription` | User-facing metadata | — |
 | `WithBom(bool)` | UTF-8 byte order mark | `true` |
 | `WithDelimiter(char)` | Column delimiter | `,` |

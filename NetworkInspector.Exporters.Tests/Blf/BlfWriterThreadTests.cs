@@ -80,8 +80,7 @@ internal sealed class BlfWriterThreadTests
     public async Task ANonSeekableStreamKeepsThePlaceholderHeader(ExportWriteMode mode)
     {
         Frame[] frames = PacketGenerators.CreateEthernetFrames(50);
-        using MemoryStream inner = new();
-        using NonSeekableStream stream = new(inner);
+        using ForwardOnlyStream stream = new();
 
         using (BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(stream).WithWriteMode(mode).Build())
         {
@@ -93,7 +92,7 @@ internal sealed class BlfWriterThreadTests
             exporter.OnFinish();
         }
 
-        byte[] file = inner.ToArray();
+        byte[] file = stream.ToArray();
 
         // No seek was possible, so the object count of the header is still the placeholder.
         await Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(32, 4))).IsEqualTo(0u);
@@ -106,7 +105,7 @@ internal sealed class BlfWriterThreadTests
     public async Task AFailingStreamIsReportedAsALostContainer(ExportWriteMode mode)
     {
         Frame[] frames = PacketGenerators.CreateEthernetFrames(3000);
-        using FailingStream stream = new(failOnWriteNumber: 2);
+        using TestStreams.FailingStream stream = new(failOnWriteNumber: 2);
         List<ExportErrorEventArgs> events = [];
         using BlfExporter exporter = BlfExporter.CreateBuilder()
             .ToStream(stream)
@@ -134,7 +133,7 @@ internal sealed class BlfWriterThreadTests
     public async Task AStrictSynchronousContainerFailureReturnsFalseInTheSameCall()
     {
         Frame[] frames = PacketGenerators.CreateEthernetFrames(3000);
-        using FailingStream stream = new(failOnWriteNumber: 2);
+        using TestStreams.FailingStream stream = new(failOnWriteNumber: 2);
         using BlfExporter exporter = BlfExporter.CreateBuilder()
             .ToStream(stream)
             .WithMaxContainerSize(_MinContainerSize)
@@ -171,8 +170,13 @@ internal sealed class BlfWriterThreadTests
     {
         if (accepted)
         {
-            BlfExporter.Builder builder = BlfExporter.CreateBuilder().WithMaxContainerSize(bytes);
-            await Assert.That(builder).IsNotNull();
+            // An accepted size must yield a working exporter: one frame goes in and is counted as written.
+            using MemoryStream stream = new();
+            using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(stream).WithMaxContainerSize(bytes).Build();
+            exporter.OnFrame(PacketGenerators.CreateEthernetFrames(1)[0]);
+            exporter.OnFinish();
+
+            await Assert.That(exporter.WrittenCount).IsEqualTo(1);
             return;
         }
 
@@ -211,53 +215,5 @@ internal sealed class BlfWriterThreadTests
     public async Task WriteModeMustBeDefined()
     {
         await Assert.That(() => BlfExporter.CreateBuilder().WithWriteMode((ExportWriteMode)9)).Throws<ArgumentOutOfRangeException>();
-    }
-
-    /// <summary>A stream that cannot seek: the header patch is skipped and the placeholder stays.</summary>
-    private sealed class NonSeekableStream(Stream inner) : Stream
-    {
-        public override bool CanRead => false;
-
-        public override bool CanSeek => false;
-
-        public override bool CanWrite => true;
-
-        public override long Length => throw new NotSupportedException();
-
-        public override long Position
-        {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
-        }
-
-        public override void Flush() => inner.Flush();
-
-        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-
-        public override void SetLength(long value) => throw new NotSupportedException();
-
-        public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
-
-        public override void Write(ReadOnlySpan<byte> buffer) => inner.Write(buffer);
-    }
-
-    /// <summary>A stream that throws on the n-th write call (1-based) and accepts all others.</summary>
-    private sealed class FailingStream(int failOnWriteNumber) : MemoryStream
-    {
-        private int _Writes;
-
-        // Only the array overload is overridden: MemoryStream.Write(ReadOnlySpan) of a derived type calls it, so every write is
-        // counted once (overriding both would recurse).
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            if (Interlocked.Increment(ref _Writes) == failOnWriteNumber)
-            {
-                throw new IOException("test write failure");
-            }
-
-            base.Write(buffer, offset, count);
-        }
     }
 }

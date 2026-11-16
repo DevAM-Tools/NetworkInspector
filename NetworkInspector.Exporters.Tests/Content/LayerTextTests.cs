@@ -66,39 +66,37 @@ internal sealed class LayerTextTests
             : throw new InvalidOperationException("The DuckDB exporter refused the packet.");
     }
 
-    /// <summary>Writes the packet as a Parquet dataset (synchronous).</summary>
+    /// <summary>Writes the packet as a Parquet dataset onto memory (synchronous).</summary>
     /// <param name="packet">The packet.</param>
-    /// <param name="dir">The directory of the output.</param>
     /// <param name="customText">Whether custom texts are written.</param>
-    /// <returns>The path of the finished dataset directory.</returns>
+    /// <returns>The target that holds the finished dataset.</returns>
     /// <exception cref="InvalidOperationException">The exporter refused the packet.</exception>
-    private static string _ExportParquet(Packet packet, TestDir dir, bool customText)
+    private static MemoryExportTarget _ExportParquet(Packet packet, bool customText)
     {
-        string path = dir.FilePath(Invariant($"layers_{customText}_parquet"));
-        using ParquetExporter exporter = ParquetExporter.CreateBuilder().ToDirectory(path).WithContent(_Content(customText))
+        MemoryExportTarget target = new(seekable: true);
+        using ParquetExporter exporter = ParquetExporter.CreateBuilder().ToTarget(target).WithContent(_Content(customText))
             .WithWriteMode(ExportWriteMode.Synchronous).Build();
         bool accepted = exporter.OnPacket(packet);
         exporter.OnFinish();
         return accepted
-            ? path
+            ? target
             : throw new InvalidOperationException("The Parquet exporter refused the packet.");
     }
 
-    /// <summary>Writes the packet as an uncompressed columnar PBF file (synchronous).</summary>
+    /// <summary>Writes the packet as an uncompressed columnar PBF file in memory (synchronous).</summary>
     /// <param name="packet">The packet.</param>
-    /// <param name="dir">The directory of the output.</param>
     /// <param name="customText">Whether custom texts are written.</param>
-    /// <returns>The path of the finished file.</returns>
+    /// <returns>The bytes of the finished file.</returns>
     /// <exception cref="InvalidOperationException">The exporter refused the packet.</exception>
-    private static string _ExportPbfColumnar(Packet packet, TestDir dir, bool customText)
+    private static byte[] _ExportPbfColumnar(Packet packet, bool customText)
     {
-        string path = dir.FilePath(Invariant($"layers_{customText}.pbf"));
-        using PbfExporter exporter = PbfExporter.CreateBuilder().ToFile(path).WithFormat(PbfExportFormat.Columnar).WithCompressed(false)
+        using MemoryStream stream = new();
+        using PbfExporter exporter = PbfExporter.CreateBuilder().ToStream(stream).WithFormat(PbfExportFormat.Columnar).WithCompressed(false)
             .WithContent(_Content(customText)).WithWriteMode(ExportWriteMode.Synchronous).Build();
         bool accepted = exporter.OnPacket(packet);
         exporter.OnFinish();
         return accepted
-            ? path
+            ? stream.ToArray()
             : throw new InvalidOperationException("The PBF exporter refused the packet.");
     }
 
@@ -159,10 +157,9 @@ internal sealed class LayerTextTests
     public async Task PbfColumnarStoresTheLineOfEveryNodeWithoutAValueAsTheTextExportShowsIt(LayerPacket which)
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("layer_text_pbf");
         Packet packet = _Packet(which, probe);
 
-        List<TextPresenceReaders.TopologyRow> rows = TextPresenceReaders.ReadPbfColumnarTopology(_ExportPbfColumnar(packet, dir, customText: true));
+        List<TextPresenceReaders.TopologyRow> rows = TextPresenceReaders.ReadPbfColumnarTopology(_ExportPbfColumnar(packet, customText: true));
         string[] lines = _TextLines(packet);
         List<(string Stored, string Line)> pairs = _StoredTextsWithLines(rows, lines);
 
@@ -180,10 +177,9 @@ internal sealed class LayerTextTests
     public async Task PbfColumnarKeepsTheProbeLayerTextAndLeavesTheGroupAndTheValueNodesAbsent()
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("layer_text_pbf_probe");
-
+        
         List<TextPresenceReaders.TopologyRow> rows = TextPresenceReaders.ReadPbfColumnarTopology(
-            _ExportPbfColumnar(probe.CreateTreePacket(), dir, customText: true));
+            _ExportPbfColumnar(probe.CreateTreePacket(), customText: true));
 
         await Assert.That(rows.First(row => row.FieldId == probe.IdOf("txp").Value).Text).IsEqualTo(TextProbePacketFactory.LayerText);
         await Assert.That(rows.First(row => row.FieldId == probe.IdOf("txp.group").Value).Text).IsNull();
@@ -196,15 +192,14 @@ internal sealed class LayerTextTests
     public async Task PbfColumnarWritesNoTopologyTextColumnWhenTheTextIsSwitchedOff()
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("layer_text_pbf_off");
-
-        string path = _ExportPbfColumnar(probe.CreateTreePacket(), dir, customText: false);
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        
+        byte[] file = _ExportPbfColumnar(probe.CreateTreePacket(), customText: false);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         List<PbfField> topology = PbfFileScanner.Fields(blocks.SelectMany(static block => block)
             .First(static field => field.Number == TextPresenceReaders.PbfNumbers.ColumnarTopology).Payload!);
 
         await Assert.That(topology.Any(static field => field.Number == TextPresenceReaders.PbfNumbers.TopologyCustomTexts)).IsFalse();
-        await Assert.That(TextPresenceReaders.ReadPbfColumnarTopology(path).All(static row => row.Text is null)).IsTrue();
+        await Assert.That(TextPresenceReaders.ReadPbfColumnarTopology(file).All(static row => row.Text is null)).IsTrue();
     }
 
     #endregion
@@ -222,10 +217,9 @@ internal sealed class LayerTextTests
     public async Task ParquetStoresTheLineOfEveryNodeWithoutAValueAsTheTextExportShowsIt(LayerPacket which)
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("layer_text_parquet");
         Packet packet = _Packet(which, probe);
 
-        List<TextPresenceReaders.TopologyRow> rows = TextPresenceReaders.ReadParquetTopology(_ExportParquet(packet, dir, customText: true));
+        List<TextPresenceReaders.TopologyRow> rows = await TextPresenceReaders.ReadParquetTopologyAsync(_ExportParquet(packet, customText: true));
         string[] lines = _TextLines(packet);
         List<(string Stored, string Line)> pairs = _StoredTextsWithLines(rows, lines);
 
@@ -252,8 +246,8 @@ internal sealed class LayerTextTests
         Packet packet = _Packet(which, probe);
 
         List<TextPresenceReaders.TopologyRow> duckDb = TextPresenceReaders.ReadDuckDbTopology(_ExportDuckDb(packet, dir, customText: true));
-        List<TextPresenceReaders.TopologyRow> parquet = TextPresenceReaders.ReadParquetTopology(_ExportParquet(packet, dir, customText: true));
-        List<TextPresenceReaders.TopologyRow> pbf = TextPresenceReaders.ReadPbfColumnarTopology(_ExportPbfColumnar(packet, dir, customText: true));
+        List<TextPresenceReaders.TopologyRow> parquet = await TextPresenceReaders.ReadParquetTopologyAsync(_ExportParquet(packet, customText: true));
+        List<TextPresenceReaders.TopologyRow> pbf = TextPresenceReaders.ReadPbfColumnarTopology(_ExportPbfColumnar(packet, customText: true));
 
         await Assert.That(duckDb.Count(static row => row.Text is not null)).IsGreaterThan(0);
         await Assert.That(parquet).IsEquivalentTo(duckDb, CollectionOrdering.Matching);
@@ -270,14 +264,13 @@ internal sealed class LayerTextTests
     public async Task ParquetKeepsTheProbeLayerTextAndWritesNoColumnWhenTheTextIsSwitchedOff()
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("layer_text_parquet_probe");
+        
+        MemoryExportTarget on = _ExportParquet(probe.CreateTreePacket(), customText: true);
+        MemoryExportTarget off = _ExportParquet(probe.CreateTreePacket(), customText: false);
+        List<TextPresenceReaders.TopologyRow> rows = await TextPresenceReaders.ReadParquetTopologyAsync(on);
 
-        string on = _ExportParquet(probe.CreateTreePacket(), dir, customText: true);
-        string off = _ExportParquet(probe.CreateTreePacket(), dir, customText: false);
-        List<TextPresenceReaders.TopologyRow> rows = TextPresenceReaders.ReadParquetTopology(on);
-
-        await Assert.That(TextPresenceReaders.ParquetTopologyHasColumn(on, "custom_text")).IsTrue();
-        await Assert.That(TextPresenceReaders.ParquetTopologyHasColumn(off, "custom_text")).IsFalse();
+        await Assert.That(await TextPresenceReaders.ParquetTopologyHasColumnAsync(on, "custom_text")).IsTrue();
+        await Assert.That(await TextPresenceReaders.ParquetTopologyHasColumnAsync(off, "custom_text")).IsFalse();
         await Assert.That(rows.First(row => row.FieldId == probe.IdOf("txp").Value).Text).IsEqualTo(TextProbePacketFactory.LayerText);
         await Assert.That(rows.First(row => row.FieldId == probe.IdOf("txp.group").Value).Text).IsNull();
         await Assert.That(rows.First(row => row.FieldId == probe.IdOf("txp.text").Value).Text).IsNull();

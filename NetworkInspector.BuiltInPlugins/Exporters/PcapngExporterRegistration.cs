@@ -40,7 +40,7 @@ internal static class PcapngExporterRegistration
         Description: "Writes frames as a PCAP Next Generation capture file.",
         FileExtension: ".pcapng",
         RegisterOptions: _RegisterOptions,
-        Create: _TryCreate);
+        Creation: ExporterCreation.ForStreams<IFrameListener>(_TryCreate));
 
     #endregion
 
@@ -60,7 +60,7 @@ internal static class PcapngExporterRegistration
     }
 
     /// <summary>Creates the Core PCAPNG exporter.</summary>
-    private static bool _TryCreate(ExportRequest request, [NotNullWhen(true)] out IFrameListener? listener,
+    private static bool _TryCreate(StreamExportRequest request, [NotNullWhen(true)] out IFrameListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -83,11 +83,11 @@ internal static class PcapngExporterRegistration
             return false;
         }
 
-        return ExporterBuild.TryBuild<IFrameListener>(
+        return ExporterBuild.TryBuildOnTarget<IFrameListener>(
             () =>
             {
                 PcapngExporter.Builder builder = PcapngExporter.CreateBuilder()
-                    .ToFile(request.TargetPath)
+                    .ToTarget(request.Target)
                     .WithTimestampResolution(resolution)
                     .WithCancellationToken(request.CancellationToken);
 
@@ -104,7 +104,7 @@ internal static class PcapngExporterRegistration
 
                 return builder.Build();
             },
-            request.TargetPath, out listener, out error);
+            out listener, out error);
     }
 
     #endregion

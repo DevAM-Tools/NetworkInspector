@@ -6,8 +6,9 @@ Load when `*.cs` is in scope. C# mechanisms for Section 4. Section order matches
 
 - Target `net10.0`, C# 14. Source generators: `netstandard2.0` (`tech-sourcegen.md`).
 - Apply `tech-solution.md` build settings (nullable, analyzers, warnings as errors).
-- ❗ Reference CSharpStyleChecker `1.*` in every SDK-style project (`tech-solution.md`).
-- Line length 160 (`.cs`, `.razor`, `.razor.cs`, `.css`); 4 spaces, no tabs.
+- ❗ Reference CSharpStyleChecker `2.*` in every SDK-style project (`tech-solution.md`).
+- ❗ Reference InvariantStringHelper `1.*` in every SDK-style project that targets `net6.0` or later and interpolates strings (`tech-solution.md`).
+- Line length 130 (`.cs`, `.razor`, `.razor.cs`, `.css`); 4 spaces, no tabs.
 
 ## Naming
 
@@ -26,7 +27,10 @@ Load when `*.cs` is in scope. C# mechanisms for Section 4. Section order matches
 ## Style
 
 - ❗ Pass `CultureInfo.InvariantCulture` to every parse and format call unless another locale is required.
-- Interpolate with `Invariant($"…")` (`global using static System.FormattableString;`). On hot paths use `string.Create(CultureInfo.InvariantCulture, $"…")` or `StringBuilder.Append(CultureInfo.InvariantCulture, $"…")`.
+- ❗ Interpolate with `Invariant($"…")` from the InvariantStringHelper package (`global using static InvariantStringHelper.InvariantText;`).
+- ❗ Interpolate into a `StringBuilder` with `Append(CultureInfo.InvariantCulture, $"…")`.
+- ❗ Never write a bare `$"…"` or `FormattableString.Invariant` in a `net6.0` or later project (CSC009).
+- In a `netstandard2.0` project (analyzer, generator) write `Invariant($"…")` with `global using static System.FormattableString;`.
 
 ```csharp
 string message = Invariant($"Rejection rate: {rate:P1}, count={count}");
@@ -58,53 +62,26 @@ return TryRead(out Item item)
 - Prefer auto-properties; use a field only when it must be `volatile`.
 - Choose the least visibility and the least setter: `get` → `init` → `private set` → `set`.
 - Model data as `record`. Use `readonly record struct` for small fixed values, `record` class for large or polymorphic payloads.
+- Declare a class or struct with a primary constructor when construction only stores its parameters. Document them with `<param>` on the type.
+- Write an explicit constructor when construction must run a statement (guard, event subscription, multi-step setup). Guards return `void` and cannot run in an initializer.
+- Use a primary constructor parameter directly in members. Copy it into a field or property only to expose or change it. Never assign to the parameter; the compiler allows it.
 - Take `ReadOnlySpan<T>` for data the callee must not store.
-
-```csharp
-public readonly record struct InvoiceCount(int Value);
-public record ImportReport(string Path, IReadOnlyList<string> Rejected);
-private volatile int _Generation;
-public int CountInvoices(ReadOnlySpan<char> path) { /* do not store `path` */ }
-```
 
 - ❗ Keep read-only interface properties read-only in every implementation:
   - Interface `{ get; }`: implement with `{ get; }` assigned in the constructor, or `init`. Adding `set`, `private set`, or `protected set` is an Error; the compiler does not catch it. A non-readonly positional `record struct` generates `set` and is an Error here.
   - Declare `{ get; init; }` in the interface only when every implementation must accept object initializers. The compiler then rejects `set` (CS8854). Validate in the `init` body.
 
 ```csharp
-public interface IExportInfo
-{
-    string Name { get; }
-}
+public interface IExportInfo { string Name { get; } }
 
-// Right
-public sealed class ExportInfo(string name) : IExportInfo
-{
-    public string Name { get; } = name;
-}
-
-// Right: the generated init runs only during construction
-public sealed record ExportSnapshot(string Name) : IExportInfo;
-
-// Wrong: invented setter
-public sealed class MutableExportInfo : IExportInfo
-{
-    public string Name { get; set; } = "";
-}
+public sealed class ExportInfo(string name) : IExportInfo { public string Name { get; } = name; } // Right
+public sealed record ExportSnapshot(string Name) : IExportInfo;                                   // Right: init runs only during construction
+public sealed class MutableExportInfo : IExportInfo { public string Name { get; set; } = ""; }    // Wrong: invented setter
 ```
 
 - ❗ Validate parameters at entry with the built-in guards: `ArgumentNullException.ThrowIfNull`, `ArgumentException.ThrowIfNullOrEmpty` / `ThrowIfNullOrWhiteSpace`, `ArgumentOutOfRangeException.ThrowIfNegative` / `ThrowIfNegativeOrZero` / `ThrowIfGreaterThan` / `ThrowIfLessThan`, `ObjectDisposedException.ThrowIf`.
 - ❗ Nullable is on. Use `!` only with a same-line comment that names the invariant.
 - Annotate `Try*` outputs with `[NotNullWhen(true)]`.
-
-```csharp
-public ExportId Create(string name, int maxRows)
-{
-    ArgumentException.ThrowIfNullOrWhiteSpace(name);
-    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRows);
-    // …
-}
-```
 
 - ❗ Return expected failures through `Try*`, result types, or error codes — never exceptions. On `false`, give a code, message, or error type, preferably as `out`. Use thread-local last-error only when `out` is impossible; document the accessor, when it is set and cleared, and that it is per-thread.
 
@@ -160,6 +137,7 @@ ExportLog.ExportRejected(_Logger, name, reason);
 ```
 
 - `IDE1006`: never `NoWarn`; configure the root `.editorconfig` (`tech-solution.md`).
+- `IDE0005` (unnecessary using) is raised to error in the root `.editorconfig` (`tech-solution.md` § Raising a diagnostic to error).
 
 ## Comments and docs
 
@@ -174,37 +152,29 @@ ExportLog.ExportRejected(_Logger, name, reason);
 ```csharp
 /// <summary>Streams one invoice CSV file into an <see cref="InvoiceBatch"/>.</summary>
 /// <remarks>
-/// Reads forward-only; memory stays bounded by the longest row, not the file.
-/// Not thread-safe: create one reader per file.
-/// Architecture: docs/architecture.md § Import.
-/// Sync: README.md § Options (--input).
+/// Memory stays bounded by the longest row, not the file. Not thread-safe: create one reader per file.
+/// Architecture: docs/architecture.md § Import. Sync: README.md § Options (--input).
 /// </remarks>
 /// <seealso cref="InvoiceBatch"/>
-/// <seealso cref="InvoiceFileDetector"/>
 internal sealed class InvoiceReader
 {
     /// <summary>Reads the invoice file at <paramref name="path"/>.</summary>
-    /// <param name="path">Invoice file path; absolute or relative to the working directory.</param>
-    /// <param name="batch">The parsed invoices when the method returns <see langword="true"/>.</param>
+    /// <param name="path">Absolute, or relative to the working directory.</param>
+    /// <param name="batch">The invoices when the method returns <see langword="true"/>.</param>
     /// <param name="error">The reason when the method returns <see langword="false"/>.</param>
     /// <returns><see langword="true"/> when the file is a readable invoice CSV file.</returns>
-    /// <seealso cref="InvoiceReadError"/>
     public bool TryRead(string path, [NotNullWhen(true)] out InvoiceBatch? batch, out InvoiceReadError error)
-```
-
-```csharp
-public int Route(string invoicePath)
-{
-    // Immutable after Build. Ordinal-ignore-case keys match case-insensitive file systems.
-    SupplierIndex index = SupplierIndex.Build(_Root);
-
-    // --supplier wins. Do not consult the index on that branch.
-    if (_OverrideSupplier is not null)
     {
-        return ImportOne(_OverrideSupplier);
-    }
+        // --supplier wins: never consult the index here.
+        if (_OverrideSupplier is not null)
+        {
+            return _TryReadFor(_OverrideSupplier, path, out batch, out error);
+        }
 
-    return index.TryGet(invoicePath);
+        // Immutable after Build. Ordinal-ignore-case keys match case-insensitive file systems.
+        SupplierIndex index = SupplierIndex.Build(_Root);
+        return _TryReadFor(index.Find(path), path, out batch, out error);
+    }
 }
 ```
 
@@ -241,14 +211,7 @@ public static bool TryResolveInside(string root, string relative, [NotNullWhen(t
 
 - **Secrets:** read from configuration (user secrets, environment, vault); never commit them. Generate tokens with `RandomNumberGenerator`; compare with `CryptographicOperations.FixedTimeEquals`.
 - **Web input:** validate on the server (`tech-blazor.md`, `tech-web.md`).
-- **Limits** (Section 4.2): one `sealed record` per boundary with documented defaults and ranges. Validate in a `Try` factory (libraries) or `IValidateOptions<T>` with `ValidateOnStart()` (hosted apps). Host-derived defaults: `GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`, `Environment.ProcessorCount`. Format and protocol facts are `const`. Comment the security decision at the definition:
-
-```csharp
-// Threat: one hostile file exhausts memory. Secure by default: imports come from untrusted senders.
-// End user may set 1 MB to available RAM in Settings. Rejected: a fixed constant (cripples large hosts).
-// Residual risk: a value near RAM size can still stall the app; the setting warns about it.
-public long MaxImportBytes { get; init; } = 1L << 30;
-```
+- **Limits** (`tech-limits.md`): use NuGet `NetworkInspector.Limits` and `NetworkInspector.Settings`. Without them: one `sealed record` per boundary, validated in a `Try` factory (libraries) or `IValidateOptions<T>` with `ValidateOnStart()` (hosted apps); one fixed default per limit for the reference machine of the project; format and protocol facts are `const`. Comment the security decision at the definition.
 
 ## Async
 
@@ -261,22 +224,6 @@ public long MaxImportBytes { get; init; } = 1L << 30;
 - Do not wrap synchronous work in `Task.Run` inside libraries.
 - Use `SemaphoreSlim.WaitAsync` with `try`/`finally` for exclusion across `await`.
 
-```csharp
-public async ValueTask<Export> LoadAsync(string path, CancellationToken cancellationToken = default)
-{
-    ArgumentException.ThrowIfNullOrEmpty(path);
-
-    // Library code: the async dispose is configured too (CA2007).
-    FileStream stream = File.OpenRead(path);
-    await using (stream.ConfigureAwait(false))
-    {
-        Export? export = await JsonSerializer.DeserializeAsync<Export>(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-        return export
-            ?? throw new InvalidDataException(Invariant($"Empty export file: {path}"));
-    }
-}
-```
-
 ## Thread safety
 
 - ❗ Make a field that several threads access **without a lock** `volatile`, or access it only through `Volatile` / `Interlocked`. Lock-protected fields need neither.
@@ -284,16 +231,9 @@ public async ValueTask<Export> LoadAsync(string path, CancellationToken cancella
 - ❗ Pick the cheapest correct primitive (Section 4.3): no sharing → `Interlocked` / `Volatile` → `Lazy<T>` / `LazyInitializer` → `System.Threading.Lock` with a short section (no I/O, `await`, or callbacks inside) → `SemaphoreSlim` / `Channel<T>` only where waiting is the design. `ReaderWriterLockSlim` only for long, read-dominated sections.
 - Name threads; set `CultureInfo.InvariantCulture` as thread culture.
 
-```csharp
-// Wrong
-_Count++;
-// Right
-Interlocked.Increment(ref _Count);
-```
-
 ## Performance and allocation
 
-❗ Every allocation is garbage: the GC must trace and reclaim it, and any allocation can trigger a collection that pauses all threads. Avoid allocations on **every** path. On hot paths (per item, per byte after setup) allocate nothing.
+❗ Any allocation can trigger a collection that pauses all threads. Avoid allocations on **every** path (Section 4.4).
 
 ### Allocation
 
@@ -308,9 +248,9 @@ Interlocked.Increment(ref _Count);
 - Use `GC.AllocateUninitializedArray` only when every element is written before read.
 
 ```csharp
-// Wrong: allocates an array per call and a LINQ iterator
+// Wrong: an array and a LINQ iterator per call
 int[] lengths = names.Select(name => name.Length).ToArray();
-// Right: rent, fill with a loop, return
+// Right: rent, fill with a loop, slice; return in finally
 int[] lengths = ArrayPool<int>.Shared.Rent(names.Count);
 try
 {
@@ -319,6 +259,7 @@ try
         lengths[index] = names[index].Length;
     }
 
+    // Rent may return more: pass only the filled part.
     Process(lengths.AsSpan(0, names.Count));
 }
 finally
@@ -327,16 +268,7 @@ finally
 }
 ```
 
-### GC generations
-
-| Generation | Holds | Cost |
-|------------|-------|------|
-| 0 | New objects | Cheapest; frequent short pauses |
-| 1 | Survivors of one gen-0 collection | Much more expensive than gen 0 |
-| 2 | Long-lived objects | Full collection; can pause the process |
-| LOH | Objects ≳ 85 KB | Collected with gen 2 |
-
-- Let short-lived objects die in gen 0. Do not cache or capture per-item objects “for later” — that promotes them.
+- Let short-lived objects die in gen 0; each promotion costs far more. Do not cache or capture per-item objects “for later”. Objects ≳ 85 KB land on the LOH, collected with gen 2.
 
 ### Representation and I/O
 
@@ -356,11 +288,11 @@ finally
 - `[MethodImpl(AggressiveInlining)]` on tiny measured hot helpers; `[MethodImpl(NoInlining)]` on throw helpers.
 - Source-generate tables and parsers; no reflection on hot paths.
 - Hot-path sharing: single writer, `Volatile` publish, `Interlocked` RMW, copy-on-write for rare writes; no `Concurrent*`, `Channel`, or `lock` per item. Publish related arrays as one object; store the value before its flag. Coalesce wakeups. `SpinLock` only for very short sections, never across `await`.
-- SIMD (`Vector128` / `Vector256`) with a scalar fallback and the same tests, after profiling shows the loop is hot. `BinaryPrimitives` for endianness.
+- SIMD after profiling shows the loop is hot. Branch widest first, each on its `IsHardwareAccelerated`: `Vector512` → `Vector256` → `Vector128` → scalar. Same tests for every path. Never gate 512-bit on `Avx512F.IsSupported`. `BinaryPrimitives` for endianness.
 
 ### Profiling
 
-Load `tech-csharp-profiling.md` when a measurement is needed (Section 3). Never use a profiler that needs admin rights (Section 4.15).
+Load `tech-csharp-profiling.md` when a measurement is needed (Section 3).
 
 ## Console and files
 
@@ -377,7 +309,7 @@ Console.InputEncoding = Encoding.UTF8;
 
 ## Dependencies
 
-New Dependency Protocol: Section 4.7; mechanics: `tech-solution.md`. Check vulnerabilities with `dotnet list package --vulnerable --include-transitive`.
+New Dependency Protocol: Section 4.7; mechanics: `tech-solution.md`. Vulnerable packages: `tech-solution.md` § Vulnerable packages.
 
 ## Copyright
 

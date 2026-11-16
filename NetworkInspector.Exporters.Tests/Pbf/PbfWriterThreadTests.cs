@@ -93,7 +93,7 @@ internal sealed class PbfWriterThreadTests
     public async Task AFailingStreamIsReportedAsALostBlockAndTheTrailerCountsOnlyWrittenPackets(ExportWriteMode mode)
     {
         Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(3000);
-        using FailingStream stream = new(failOnWriteNumber: 4);
+        using TestStreams.FailingStream stream = new(failOnWriteNumber: 4);
         List<ExportErrorEventArgs> events = [];
         using PbfExporter exporter = PbfExporter.CreateBuilder()
             .ToStream(stream)
@@ -135,23 +135,5 @@ internal sealed class PbfWriterThreadTests
     public async Task WriteModeMustBeDefined()
     {
         await Assert.That(() => PbfExporter.CreateBuilder().WithWriteMode((ExportWriteMode)9)).Throws<ArgumentOutOfRangeException>();
-    }
-
-    /// <summary>A stream that throws on the n-th write call (1-based) and accepts all others.</summary>
-    private sealed class FailingStream(int failOnWriteNumber) : MemoryStream
-    {
-        private int _Writes;
-
-        // Only the array overload is overridden: MemoryStream.Write(ReadOnlySpan) of a derived type calls it, so every write is
-        // counted once (overriding both would recurse).
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            if (Interlocked.Increment(ref _Writes) == failOnWriteNumber)
-            {
-                throw new IOException("test write failure");
-            }
-
-            base.Write(buffer, offset, count);
-        }
     }
 }

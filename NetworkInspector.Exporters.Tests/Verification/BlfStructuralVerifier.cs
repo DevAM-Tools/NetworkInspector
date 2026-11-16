@@ -34,9 +34,15 @@ internal sealed class BlfStructuralVerifier
     /// <summary>
     /// Opens and parses a BLF file, returning a verifier with structural information.
     /// </summary>
-    internal static BlfStructuralVerifier Open(string path)
+    internal static BlfStructuralVerifier Open(string path) => FromBytes(File.ReadAllBytes(path));
+
+    /// <summary>
+    /// Parses a BLF file from raw bytes, returning a verifier with structural information.
+    /// </summary>
+    /// <param name="data">The complete BLF file.</param>
+    /// <returns>The verifier.</returns>
+    internal static BlfStructuralVerifier FromBytes(byte[] data)
     {
-        byte[] data = File.ReadAllBytes(path);
         BlfStructuralVerifier verifier = new();
         verifier._Parse(data);
         return verifier;

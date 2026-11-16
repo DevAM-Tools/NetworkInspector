@@ -38,7 +38,7 @@ internal static class JsonExporterRegistration
         Description: "Writes parsed packets as JSON: one object per line, indented objects, or one array.",
         FileExtension: ".json",
         RegisterOptions: _RegisterOptions,
-        Create: _TryCreate);
+        Creation: ExporterCreation.ForStreams<IPacketListener>(_TryCreate));
 
     #endregion
 
@@ -56,7 +56,7 @@ internal static class JsonExporterRegistration
     }
 
     /// <summary>Creates the Core JSON exporter.</summary>
-    private static bool _TryCreate(ExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
+    private static bool _TryCreate(StreamExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -79,15 +79,15 @@ internal static class JsonExporterRegistration
             return false;
         }
 
-        return ExporterBuild.TryBuild<IPacketListener>(
+        return ExporterBuild.TryBuildOnTarget<IPacketListener>(
             () => JsonExporter.CreateBuilder()
-                .ToFile(request.TargetPath)
+                .ToTarget(request.Target)
                 .WithFormat(format)
                 .WithContent(content!) // Invariant: only the CSV "packets" shape has no content.
                 .WithFlushPerPacket(flush)
                 .WithCancellationToken(request.CancellationToken)
                 .Build(),
-            request.TargetPath, out listener, out error);
+            out listener, out error);
     }
 
     #endregion

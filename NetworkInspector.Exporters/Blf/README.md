@@ -53,7 +53,7 @@ static void WriteBlf(IEnumerable<Frame> frames)
 
 | Method | Purpose | Default |
 | --- | --- | --- |
-| `ToFile` / `ToStream` / `ToStdout` | Output target | required |
+| `ToFile` / `ToStream` / `ToStdout` / `ToTarget` | Output target (`ToTarget` takes a host `IExportTarget` and writes the one entry `Main`) | required |
 | `WithUiName` / `WithDescription` | User-facing metadata | — |
 | `WithCompressionLevel` | `None`, `Fast`, `Default`, `Best` | `Default` |
 | `WithTimestampTimeZone` | Zone of the `start_date` civil time | UTC |

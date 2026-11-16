@@ -8,19 +8,35 @@ namespace NetworkInspector.Exporters.Tests.Helpers;
 internal static class TestStreams
 {
     /// <summary>
-    /// Stream that throws <see cref="IOException"/> once the cumulative number of bytes written
-    /// exceeds <see cref="FailingStream.ThrowAfterByte"/>. Used to simulate a broken underlying
-    /// file or socket without touching the real filesystem.
+    /// Write-only, non-seekable stream that simulates a broken underlying file or socket without touching the real filesystem.
+    /// It fails in one or both of two ways, both with <see cref="IOException"/>: the write call with the number
+    /// <c>failOnWriteNumber</c> (counted from 1) throws once and stores nothing while every other call succeeds, and every
+    /// write that would push the cumulative byte count above <see cref="ThrowAfterByte"/> throws for good. Neither failure is
+    /// armed by default. Not thread-safe: the write counters are plain fields, so one writer thread at a time.
     /// </summary>
     internal sealed class FailingStream : Stream
     {
+        /// <summary>Number of the write call (1-based) that fails once; 0 or less never fails by call number.</summary>
+        private readonly int _FailOnWriteNumber;
+
+        /// <summary>Number of bytes accepted so far.</summary>
         private long _BytesWritten;
 
-        /// <summary>Number of bytes accepted before the stream begins throwing.</summary>
+        /// <summary>Number of write calls seen so far, successful or not.</summary>
+        private int _WriteCalls;
+
+        /// <summary>Creates a stream that fails according to the given arguments and <see cref="ThrowAfterByte"/>.</summary>
+        /// <param name="failOnWriteNumber">Number of the write call (1-based) that throws once; 0 arms no call-number failure.</param>
+        internal FailingStream(int failOnWriteNumber = 0)
+        {
+            _FailOnWriteNumber = failOnWriteNumber;
+        }
+
+        /// <summary>Number of bytes accepted before the stream begins throwing; unlimited by default.</summary>
         internal long ThrowAfterByte
         {
             get; init;
-        }
+        } = long.MaxValue;
 
         /// <inheritdoc/>
         public override bool CanRead => false;
@@ -57,26 +73,19 @@ internal static class TestStreams
         public override void SetLength(long value) => throw new NotSupportedException();
 
         /// <inheritdoc/>
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            _CheckThrow(count);
-            _BytesWritten += count;
-        }
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
 
         /// <inheritdoc/>
         public override void Write(ReadOnlySpan<byte> buffer)
         {
-            _CheckThrow(buffer.Length);
-            _BytesWritten += buffer.Length;
-        }
-
-        /// <summary>Throws <see cref="IOException"/> when the cumulative byte count would exceed the threshold.</summary>
-        private void _CheckThrow(int count)
-        {
-            if (_BytesWritten + count > ThrowAfterByte)
+            // One call is counted once whichever overload carried it, so a failing call number means the same for every writer.
+            _WriteCalls++;
+            if (_WriteCalls == _FailOnWriteNumber || _BytesWritten + buffer.Length > ThrowAfterByte)
             {
                 throw new IOException("Simulated I/O failure");
             }
+
+            _BytesWritten += buffer.Length;
         }
     }
 

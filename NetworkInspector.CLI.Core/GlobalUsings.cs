@@ -44,6 +44,11 @@ global using NetworkInspector.Filter.Errors;
 global using PacketFilter = NetworkInspector.Filter.Filter;
 #endregion
 
+#region NetworkInspector.Exporters
+// The export targets (a file or a folder) that FormatSpec hands to the formats that write through streams.
+global using NetworkInspector.Exporters;
+#endregion
+
 #region NetworkInspector.Protocols
 global using NetworkInspector.Protocols;
 #endregion

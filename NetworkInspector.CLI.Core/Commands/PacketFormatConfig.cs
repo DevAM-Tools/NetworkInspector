@@ -106,8 +106,8 @@ internal sealed class PacketFormatConfig
     /// <returns><see langword="true"/> when <paramref name="listener"/> is set.</returns>
     internal bool TryCreate(string fullPath, IStack stack, Func<string, LimitValue?> storedLimit, Action<PluginError> onIgnoredStoredValue,
         [NotNullWhen(true)] out IPacketListener? listener, [NotNullWhen(false)] out PluginError? error, CancellationToken cancellationToken) =>
-        FormatSpec.TryCreate(Registration, OptionTexts, fullPath, stack, storedLimit, onIgnoredStoredValue, out listener, out error,
-            cancellationToken);
+        FormatSpec.TryCreate(Registration, OptionTexts, fullPath, IsDirectoryOutput, stack, storedLimit, onIgnoredStoredValue,
+            out listener, out error, cancellationToken);
 
     #endregion
 }

@@ -39,7 +39,7 @@ internal static class ParquetExporterRegistration
         Description: "Writes parsed packets as an Apache Parquet dataset in a directory.",
         FileExtension: "",
         RegisterOptions: _RegisterOptions,
-        Create: _TryCreate);
+        Creation: ExporterCreation.ForStreams<IPacketListener>(_TryCreate));
 
     #endregion
 
@@ -85,8 +85,8 @@ internal static class ParquetExporterRegistration
                 "and writes the packets in the order they arrive.");
     }
 
-    /// <summary>Creates the Core Parquet exporter for a directory target.</summary>
-    private static bool _TryCreate(ExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
+    /// <summary>Creates the Core Parquet exporter on the host's target.</summary>
+    private static bool _TryCreate(StreamExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -111,9 +111,9 @@ internal static class ParquetExporterRegistration
         ParquetCompressionLevel level = checked((ParquetCompressionLevel)OptionValues.GetEnumNumber(request.Options, _CompressionLevelOption));
 
         BatchingOptions batching = ExportContentOptions.ReadBatching(request.Options);
-        return ExporterBuild.TryBuild<IPacketListener>(
+        return ExporterBuild.TryBuildOnTarget<IPacketListener>(
             () => ParquetExporter.CreateBuilder()
-                .ToDirectory(request.TargetPath)
+                .ToTarget(request.Target)
                 .WithContent(content!) // Invariant: only the CSV "packets" shape has no content.
                 .WithWriteMode(batching.WriteMode)
                 .WithMaxPacketsPerBlock(batching.MaxPacketsPerBatch)
@@ -122,7 +122,7 @@ internal static class ParquetExporterRegistration
                 .WithCompression(compression, level)
                 .WithCancellationToken(request.CancellationToken)
                 .Build(),
-            request.TargetPath, out listener, out error);
+            out listener, out error);
     }
 
     #endregion

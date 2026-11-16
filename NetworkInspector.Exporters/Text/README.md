@@ -156,7 +156,7 @@ static void WriteText(IEnumerable<Packet> packets)
 
 | Method | Purpose | Default |
 | --- | --- | --- |
-| `ToFile` / `ToStream` / `ToStdout` | Output target | required |
+| `ToFile` / `ToStream` / `ToStdout` / `ToTarget` | Output target (`ToTarget` takes a host `IExportTarget` and writes the one entry `Main`) | required |
 | `WithUiName` / `WithDescription` | User-facing metadata | — |
 | `WithDetailLevel(level)` | Summary, Standard, or Full | `Standard` |
 | `WithMaxTextLength(int)` | Truncate string and byte values (`0` = no limit) | 256 |

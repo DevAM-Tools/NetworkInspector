@@ -275,6 +275,7 @@ internal sealed class SessionExportTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task SelectedFieldsWithAFilterWriteTheSameDuckDbRowsAsTheLibraryPipeline()
     {
         using Rig rig = new();

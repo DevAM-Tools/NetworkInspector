@@ -54,7 +54,7 @@ The smallest useful plugin: a protocol `hello` on UDP port 40100 with two fields
   </PropertyGroup>
   <ItemGroup>
     <!-- The application provides the contract and Core at run time. -->
-    <PackageReference Include="NetworkInspector.Plugins" Version="0.21.0" ExcludeAssets="runtime" />
+    <PackageReference Include="NetworkInspector.Plugins" Version="0.22.0" ExcludeAssets="runtime" />
   </ItemGroup>
 </Project>
 ```
@@ -146,7 +146,7 @@ ni plugins list
 
 ```text
 Pre-scan: 1 candidate files, 1 inspected, 0 from cache, 1 plugin assemblies, 21.4 ms
-NetworkInspector.StandardProtocols  0.21.0  core  Loaded  -  …  MIT  load 101.0 ms  Protocol 29, Heuristic 5, Reassembly 5, Setting 44
+NetworkInspector.StandardProtocols  0.22.0  core  Loaded  -  …  MIT  load 101.0 ms  Protocol 29, Heuristic 5, Reassembly 5, Setting 44
 …
 My.Hello  1.0.0  core  Loaded  -  /opt/ni-plugins/hello/My.Hello.dll  MIT  load 6.0 ms  Protocol 1, Setting 1
 ```
@@ -321,16 +321,20 @@ public static ExporterRegistration<IPacketListener> Registration { get; } = new(
     FileExtension: ".sampletxt",            // empty for formats that write a directory
     RegisterOptions: static options =>
         options.RegisterBoolSetting("includeHeader", "Header line", "", true, "Write the column header line."),
-    Create: TryCreate);
+    Creation: ExporterCreation.ForStreams<IPacketListener>(TryCreate));
 ```
 
-- The application prepares the target before `Create` runs: it resolves the path, checks the folder, and decides about
-  `--overwrite`. `ExportRequest.TargetPath` is the full path.
-- `ExportRequest.Stack` is the stack that parsed the packets; resolve field ids by name there once, not per packet.
-- `ExportRequest.ExpectedItemCount` is for progress only, never a stop condition.
-- **No partial output.** A listener that is disposed without `OnFinish` leaves nothing behind: either it deletes its
-  output itself, or the application's export runner deletes the target. A run that ends early (an error or Ctrl+C)
-  therefore never leaves a truncated file that looks complete.
+- The application prepares the output before the creation runs: it resolves the path, checks the folder, and decides about
+  `--overwrite`. A format that writes forward receives `StreamExportRequest.Target`, an `IExportTarget` that hands out one
+  write-only stream per entry: a single-file format opens `ExportEntryName.Main`, a dataset format one named entry per
+  file. The format never sees a path. A format whose library opens the file itself (DuckDB) registers
+  `ExporterCreation.ForFile` and receives `FileExportRequest.FilePath`, the prepared full path.
+- `Stack` of the request is the stack that parsed the packets; resolve field ids by name there once, not per packet.
+- `ExpectedItemCount` of the request is for progress only, never a stop condition.
+- **No partial output.** A listener that is disposed without `OnFinish` leaves nothing behind that looks complete: a format
+  that writes through a target leaves the removal to the host, which owns the target; a format that opens a file itself
+  deletes its file itself, or the host deletes the path afterwards. A run that ends early (an error or Ctrl+C) therefore
+  never leaves a truncated file that looks complete.
 - Statistics and progress come from the Core interfaces `IExporterStatistics`, `IExportByteProgress`, and
   `IErrorTolerantExporter` when the listener implements them.
 
@@ -550,7 +554,7 @@ lower version.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `The plugin was built against NetworkInspector.Plugins 0.22.0.0, but this application provides 0.21.0.0; …` | The plugin was built against a **newer** NetworkInspector (or .NET) version than the running `ni`; a reference cannot bind to a lower version, so the plugin is refused before any of its code runs | Build against the version of the `ni` you run or an older one, or update `ni` |
+| `The plugin was built against NetworkInspector.Plugins 0.23.0.0, but this application provides 0.22.0.0; …` | The plugin was built against a **newer** NetworkInspector (or .NET) version than the running `ni`; a reference cannot bind to a lower version, so the plugin is refused before any of its code runs | Build against the version of the `ni` you run or an older one, or update `ni` |
 | `Entry type '…' was not found in the plugin assembly.` | The pre-scan found the class, but the runtime cannot load it (for example a base type in a dependency that is missing) | Ship the plugin's private dependencies next to it; check `ni plugins list` for the full reason |
 | `… does not implement the loaded IPlugin; the plugin ships its own NetworkInspector.Plugins.` | The plugin loads its own copy of the contract | Remove the contract from the plugin folder; use `ExcludeAssets="runtime"` or `Private="false"` |
 | The plugin does not appear at all | The class lists `IPlugin` only through a base class, is not public, or the folder is not in `plugins.paths` | List `IPlugin` on the entry class itself; check `ni settings get plugins.paths` |
@@ -574,7 +578,7 @@ this order:
 | [`SampleHeuristicParser.cs`](../../samples/Sample.Protocol/SampleHeuristicParser.cs) | Recognizing the payload in TCP data on any port |
 | [`SamplePostParser.cs`](../../samples/Sample.Protocol/SamplePostParser.cs) | Annotating every frame that carries the magic |
 | [`SampleSource.cs`](../../samples/Sample.Protocol/SampleSource.cs), [`SampleFrameSource.cs`](../../samples/Sample.Protocol/SampleFrameSource.cs) | The source kind `SampleGen` with four options and a random-access source with statistics |
-| [`SampleTextExporter.cs`](../../samples/Sample.Protocol/SampleTextExporter.cs), [`SampleTextListener.cs`](../../samples/Sample.Protocol/SampleTextListener.cs) | The packet format `SampleText` with an option, statistics, and partial-output cleanup |
+| [`SampleTextExporter.cs`](../../samples/Sample.Protocol/SampleTextExporter.cs), [`SampleTextListener.cs`](../../samples/Sample.Protocol/SampleTextListener.cs) | The packet format `SampleText` with an option, statistics, and one entry of the host's target |
 
 Try it:
 

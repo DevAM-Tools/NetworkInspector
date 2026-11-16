@@ -78,9 +78,13 @@ internal static class PbfFileScanner
     /// <summary>Reads the header message and the payload messages of all blocks of an uncompressed file.</summary>
     /// <param name="path">The PBF file; it must have been written with compression off.</param>
     /// <returns>The header fields and, per block, the fields of its payload message.</returns>
-    internal static (List<PbfField> Header, List<List<PbfField>> Blocks) Read(string path)
+    internal static (List<PbfField> Header, List<List<PbfField>> Blocks) Read(string path) => FromBytes(File.ReadAllBytes(path));
+
+    /// <summary>Reads the header message and the payload messages of all blocks of an uncompressed file held in memory.</summary>
+    /// <param name="file">The PBF file bytes; it must have been written with compression off.</param>
+    /// <returns>The header fields and, per block, the fields of its payload message.</returns>
+    internal static (List<PbfField> Header, List<List<PbfField>> Blocks) FromBytes(byte[] file)
     {
-        byte[] file = File.ReadAllBytes(path);
         int headerLength = BinaryPrimitives.ReadInt32LittleEndian(file.AsSpan(_MagicLength, 4));
         List<PbfField> header = Fields(file.AsSpan(_MagicLength + 4, headerLength));
 

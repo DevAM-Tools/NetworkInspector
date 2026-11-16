@@ -76,10 +76,12 @@ internal sealed class BlfExporterOutputTests
     }
 
     [Test]
-    public async Task MissingOutputStreamIsReportedAsExportError()
+    public async Task RefusedOutputEntryIsReportedAsExportError()
     {
-        // Stream.Null cannot model a missing stream; a null stream is what ExportOutput.FromStream(null) hands to the exporter.
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(null!).Build(); // null! : deliberately invalid stream
+        // A target that refuses its main entry models an output that cannot be opened.
+        using BlfExporter exporter = BlfExporter.CreateBuilder()
+            .ToTarget(new MemoryExportTarget(refuse: static _ => "offline"))
+            .Build();
         List<ExportErrorEventArgs> events = [];
         exporter.ItemSkipped += (_, args) => events.Add(args);
 

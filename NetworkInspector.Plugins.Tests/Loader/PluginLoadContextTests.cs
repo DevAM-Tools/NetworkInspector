@@ -3,6 +3,7 @@
 namespace NetworkInspector.Plugins.Tests;
 
 /// <summary>Load contexts: one collectible context per plugin assembly, shared contracts, and private dependencies.</summary>
+[Category("Slow")]
 internal sealed class PluginLoadContextTests
 {
     #region Contexts

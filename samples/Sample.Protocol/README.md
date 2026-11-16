@@ -11,7 +11,7 @@ The tier 1 sample plugin of NetworkInspector. It is small on purpose and uses ev
 | Heuristic parser | the magic `NIS1` found in TCP payload on any port through the existing `tcp.heuristic` table | [`SampleHeuristicParser.cs`](SampleHeuristicParser.cs) |
 | Post-parser | `sample.post.magic_offset` on every frame that carries the magic | [`SamplePostParser.cs`](SamplePostParser.cs) |
 | Source `SampleGen` | a Core `IFrameSource` (with random access and statistics) whose options are settings of `NetworkInspector.Settings` | [`SampleSource.cs`](SampleSource.cs), [`SampleFrameSource.cs`](SampleFrameSource.cs) |
-| Exporter `SampleText` | a Core `IPacketListener` with statistics and partial-output cleanup | [`SampleTextExporter.cs`](SampleTextExporter.cs), [`SampleTextListener.cs`](SampleTextListener.cs) |
+| Exporter `SampleText` | a Core `IPacketListener` with statistics that writes the main entry of the host's target | [`SampleTextExporter.cs`](SampleTextExporter.cs), [`SampleTextListener.cs`](SampleTextListener.cs) |
 | Setting `sample.greeting` | an application setting registered with the `SettingsRegistrar` of `NetworkInspector.Settings` | [`SampleProtocolPlugin.cs`](SampleProtocolPlugin.cs) |
 
 The wire format is a 14-byte payload: magic `NIS1` (4 bytes), counter (8 bytes, big endian), gear (1 byte), speed (1 byte).

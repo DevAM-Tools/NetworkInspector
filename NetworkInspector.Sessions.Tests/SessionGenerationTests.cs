@@ -320,6 +320,7 @@ internal sealed class SessionGenerationTests
     #region Reads
 
     [Test]
+    [Category("Slow")]
     public async Task AChunkedReadDuringTwoRestartsNeverReturnsPacketsOfTwoStacks()
     {
         using RestartRig rig = new(frameCount: 10_000);

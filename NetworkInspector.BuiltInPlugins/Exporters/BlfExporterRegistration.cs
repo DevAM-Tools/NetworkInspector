@@ -31,7 +31,7 @@ internal static class BlfExporterRegistration
         Description: "Writes frames as a Vector Binary Logging Format file.",
         FileExtension: ".blf",
         RegisterOptions: _RegisterOptions,
-        Create: _TryCreate);
+        Creation: ExporterCreation.ForStreams<IFrameListener>(_TryCreate));
 
     #endregion
 
@@ -58,7 +58,7 @@ internal static class BlfExporterRegistration
     }
 
     /// <summary>Creates the Core BLF exporter.</summary>
-    private static bool _TryCreate(ExportRequest request, [NotNullWhen(true)] out IFrameListener? listener,
+    private static bool _TryCreate(StreamExportRequest request, [NotNullWhen(true)] out IFrameListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -83,16 +83,16 @@ internal static class BlfExporterRegistration
 
         // The expected item count is progress information; it is never passed as a target count, so the exporter
         // cannot stop early on its own.
-        return ExporterBuild.TryBuild<IFrameListener>(
+        return ExporterBuild.TryBuildOnTarget<IFrameListener>(
             () => BlfExporter.CreateBuilder()
-                .ToFile(request.TargetPath)
+                .ToTarget(request.Target)
                 .WithCompressionLevel(level)
                 .WithWriteMode(ExportContentOptions.ReadWriteMode(values))
                 .WithMaxContainerSize(OptionValues.GetI64(values, _ContainerSizeOption))
                 .WithTimestampTimeZone(zone)
                 .WithCancellationToken(request.CancellationToken)
                 .Build(),
-            request.TargetPath, out listener, out error);
+            out listener, out error);
     }
 
     #endregion

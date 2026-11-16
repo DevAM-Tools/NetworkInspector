@@ -160,11 +160,11 @@ internal sealed class BuffersOrderTests
 
     /// <summary>Exports the three packets of <see cref="_Packets"/> with the buffers on and reads the buffer rows back.</summary>
     /// <param name="scenario">The format and shape.</param>
-    /// <param name="dir">The directory of the output.</param>
+    /// <param name="dir">The directory of the output; only DuckDB needs it (Parquet writes to memory without it).</param>
     /// <param name="maxPacketsPerBatch">The packets per batch; 0 keeps the default.</param>
     /// <returns>The buffer rows the reader found, or <see langword="null"/> when the format has no buffer records.</returns>
     /// <exception cref="InvalidOperationException">The exporter refused a packet.</exception>
-    private static List<BufferRow>? _ExportAndRead(BufferScenario scenario, TestDir dir, int maxPacketsPerBatch = 0)
+    private static async Task<List<BufferRow>?> _ExportAndRead(BufferScenario scenario, TestDir? dir, int maxPacketsPerBatch = 0)
     {
         using BufferProbePacketFactory factory = new();
         OpenBufferExport export = BufferExportScenarios.Open(scenario, BufferMembers.Buffers, dir, "order", maxPacketsPerBatch);
@@ -177,7 +177,7 @@ internal sealed class BuffersOrderTests
         }
 
         (string path, string text) = export.Finish();
-        return BufferExportScenarios.Read(scenario, new BufferRun(path, text, FirstPacketId: 0, []));
+        return await BufferExportScenarios.ReadAsync(scenario, new BufferRun(path, text, FirstPacketId: 0, [], Bytes: export.Bytes, Target: export.Target));
     }
 
     /// <summary>Compares the rows a reader found with the rows the three packets must give, in order.</summary>
@@ -209,9 +209,7 @@ internal sealed class BuffersOrderTests
     [Arguments(BufferScenario.TextTree)]
     public async Task EveryFastFormatWritesTheBuffersInIndexOrderAndAnEmptyBufferAsAnEmptyValue(BufferScenario scenario)
     {
-        using TestDir dir = new("buffers_order");
-
-        List<BufferRow>? read = _ExportAndRead(scenario, dir);
+        List<BufferRow>? read = await _ExportAndRead(scenario, dir: null);
 
         await _AssertExpectedRowsAsync(read);
     }
@@ -225,9 +223,11 @@ internal sealed class BuffersOrderTests
     [Arguments(BufferScenario.ParquetHierarchy)]
     public async Task DuckDbAndParquetWriteTheBuffersInIndexOrderAndAnEmptyBufferAsAnEmptyValue(BufferScenario scenario)
     {
-        using TestDir dir = new("buffers_order_db");
+        using TestDir? dir = scenario == BufferScenario.DuckDbHierarchy
+            ? new("buffers_order_db")
+            : null;
 
-        List<BufferRow>? read = _ExportAndRead(scenario, dir);
+        List<BufferRow>? read = await _ExportAndRead(scenario, dir);
 
         await _AssertExpectedRowsAsync(read);
     }
@@ -243,9 +243,11 @@ internal sealed class BuffersOrderTests
     [Arguments(BufferScenario.PbfColumnarHierarchy)]
     public async Task WithOnePacketPerBatchTheRowsOfEveryPacketAreStillWrittenInOrder(BufferScenario scenario)
     {
-        using TestDir dir = new("buffers_one_per_batch");
+        using TestDir? dir = scenario == BufferScenario.DuckDbHierarchy
+            ? new("buffers_one_per_batch")
+            : null;
 
-        List<BufferRow>? read = _ExportAndRead(scenario, dir, maxPacketsPerBatch: 1);
+        List<BufferRow>? read = await _ExportAndRead(scenario, dir, maxPacketsPerBatch: 1);
 
         await _AssertExpectedRowsAsync(read);
     }
@@ -266,15 +268,15 @@ internal sealed class BuffersOrderTests
     [Arguments(BufferScenario.TextTree)]
     public async Task APacketWithTheMaximumOf255BuffersIsWrittenCompletely(BufferScenario scenario)
     {
-        using TestDir dir = new("buffers_255");
         using BufferProbePacketFactory factory = new();
         byte[][] buffers = [.. Enumerable.Range(0, 255).Select(static i => Enumerable.Repeat(checked((byte)i), i).ToArray())];
-        OpenBufferExport export = BufferExportScenarios.Open(scenario, BufferMembers.Buffers, dir, "max");
+        OpenBufferExport export = BufferExportScenarios.Open(scenario, BufferMembers.Buffers, dir: null, "max");
         Packet packet = factory.CreatePacket(buffers);
 
         bool offered = export.Offer(packet);
         (string path, string text) = export.Finish();
-        List<BufferRow>? read = BufferExportScenarios.Read(scenario, new BufferRun(path, text, FirstPacketId: 0, []));
+        BufferRun run = new(path, text, FirstPacketId: 0, [], Bytes: export.Bytes, Target: export.Target);
+        List<BufferRow>? read = await BufferExportScenarios.ReadAsync(scenario, run);
 
         await Assert.That(offered).IsTrue();
         await Assert.That(packet.BufferCount).IsEqualTo(256);
@@ -296,17 +298,16 @@ internal sealed class BuffersOrderTests
     [Test]
     public async Task WithOnePacketPerBatchEachPbfColumnarBlockHoldsOnlyTheBufferRowsOfItsPacket()
     {
-        using TestDir dir = new("buffers_blocks");
         using BufferProbePacketFactory factory = new();
         OpenBufferExport export = BufferExportScenarios.Open(
-            BufferScenario.PbfColumnarHierarchy, BufferMembers.Buffers, dir, "blocks", maxPacketsPerBatch: 1);
+            BufferScenario.PbfColumnarHierarchy, BufferMembers.Buffers, dir: null, "blocks", maxPacketsPerBatch: 1);
         foreach (Packet packet in _Packets(factory))
         {
             await Assert.That(export.Offer(packet)).IsTrue();
         }
 
-        (string path, _) = export.Finish();
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        _ = export.Finish();
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(export.Bytes!);
 
         await Assert.That(blocks.Count).IsEqualTo(3);
         await Assert.That(blocks[0].Any(static f => f.Number == 16)).IsFalse();
@@ -331,9 +332,8 @@ internal sealed class BuffersOrderTests
     [Test]
     public async Task AnEmptyBufferIsATextBlockWithLengthZeroAndNoDumpLine()
     {
-        using TestDir dir = new("buffers_empty_text");
         using BufferProbePacketFactory factory = new();
-        OpenBufferExport export = BufferExportScenarios.Open(BufferScenario.TextTree, BufferMembers.Buffers, dir);
+        OpenBufferExport export = BufferExportScenarios.Open(BufferScenario.TextTree, BufferMembers.Buffers, dir: null);
         bool offered = export.Offer(factory.CreatePacket([], _B()));
 
         (_, string text) = export.Finish();

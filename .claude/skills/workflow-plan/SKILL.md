@@ -1,6 +1,6 @@
 ---
 name: workflow-plan
-description: Create an implementation plan with locked How, Before/After, schematic API and interface snippets before the steps, first-class TEST-<AREA>-<TOPIC> content, linked requirements (no copied requirement list), and step acceptance. Run requirements first when none exist. Close with a requirements walk and a conversation walk. Use on /plan or before implementation without an approved plan.
+description: Create an implementation plan with locked How, Before/After, schematic API and interface snippets before the steps, TEST-<AREA>-<TOPIC> cards in spec/tests, linked requirements (no copied requirement list), and step acceptance. Interactive, or Autonomous inside /evolve. Run requirements first when none exist. Close with a requirements walk and a conversation walk. Use on /plan or before implementation without an approved plan.
 argument-hint: Briefly describe the feature/change to plan
 ---
 

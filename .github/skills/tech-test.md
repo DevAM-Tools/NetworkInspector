@@ -17,7 +17,7 @@ Cover:
 - `null` / absence when the type allows it
 - concurrency when shared state exists
 - trust-boundary / misuse cases for public APIs
-- each limit (Section 4.2): at the limit, one above, a configured value out of range, and the default when unset
+- each limit (Section 4.2): at the limit, one above, a configured value out of range, `off` when the mechanism offers it, and the default when unset
 
 ```text
 Wrong: [Arguments(0), (1), (2), … (int.MaxValue)] for Clamp
@@ -31,6 +31,10 @@ Do not iterate every integer, every string, or every permutation “to be sure�
 - Each unit test finishes in ≤ 100 ms (Section 4.5). Slower tests carry the stack’s slow or integration marker. Do not `Sleep` / `time.sleep` / `thread::sleep`.
 - Do not use network, real clock waits, or an extra process when a deterministic fake will do.
 - Assert one behavior per test. Parametrize related inputs; do not copy-paste.
+
+## Allocation tests
+
+- ❗ Measure allocation in several rounds and assert on the smallest round. A real per-item allocation shows in every round; one measurement fails under load.
 
 ## Runs
 
@@ -52,11 +56,58 @@ Do **not** skip journeys to keep the suite small. Do **not** assert every pixel,
 
 Trace on failure. No `waitForTimeout` as sync. Mechanics: `tech-playwright.md`. Component logic stays in the component runner (`tech-blazor.md`), not Playwright. **C# project:** `{App}.UiTest`.
 
-## Plan and Grill Me
+## Two layers
 
-Write test **content** as first-class `TEST-<AREA>-<TOPIC>` cards in `workflow-plan.md` (schema there). Agree the **minimum** the plan must cover: important scenarios, edges, special constellations, contradictions, gaps, what is out, and the time budget. Class and Layer may be named. Test code in the plan is allowed; it does not replace Content.
+A suite has two layers. Each catches what the other cannot see.
 
-Implement those cards as steps. Extra tests at implement time are allowed. Do not treat a green build as a test case.
+| Layer | Derived from | Written | Lives |
+|-------|--------------|---------|-------|
+| Card test | A requirement: what an actor observes | Content before the code (`/plan` Stage 6, `/evolve` Stage 2) | Card in `spec/tests/`; the test carries its marker |
+| Code test | The written code: each member, branch, guard | In the step that wrote the code, after its Edit | Test project only; no card, no marker |
+
+- ❗ The cards are the agreed minimum, never the whole suite. All cards `✅` does not mean the code is tested.
+- ❗ A step or finding fix is not done until its code tests exist and its ledger line is written (§ Code tests).
+
+## Card tests
+
+Write test **content** as `TEST-<AREA>-<TOPIC>` cards in `spec/tests/` (`tech-spec.md`). Agree the **minimum**: important scenarios, edges, special constellations, contradictions, gaps, what is out, and the time budget. Test code in the plan is allowed; it does not replace Content.
+
+Implement those cards as steps. Do not treat a green build as a test case.
+
+## Code tests
+
+The plan cannot know every branch; the written code decides how many exist. After each Edit, walk every member the Edit added or changed and book each item:
+
+| Item | Book |
+|------|------|
+| Branch | Each branch and early return |
+| Error path | Each failure result, error code, and guard throw |
+| Parameter guard | Each rejected value, absence where the type allows it, and the first accepted value |
+| Loop | 0, 1, and 2 iterations; first and last element |
+| Arithmetic | Each overflow guard, at the maximum (Section 4.1) |
+| State | Each transition, and one refused transition |
+| Limit | The limit cases of § What exhaustive means |
+| Claim | Each thread-safety claim: a concurrent test. Each allocation claim: § Allocation tests |
+
+- Book each item as one of: a new code test · the card test that already proves it, by ID · `n/a — {reason}`. Never write a second test for what a card test proves.
+- Test a private member through the nearest internal or public member. Never widen visibility for a test (Section 4.9).
+- A code test passes on its first run, because the code exists. Make it able to fail: assert the exact value, error code, or message. `no exception`, `not null`, or `count > 0` alone is no assertion.
+- A code test that shows user-visible behavior no requirement names (a message, a refusal, a default) is a spec gap. Keep the test, then raise the behavior: `/implement` → **Needs you** in the run report; `/evolve` → a proposed card in the next Spec delta. Never let it become an obligation silently.
+- A code test changes only with the member it tests, in a planned step or an accepted finding. Never to get green (Section 4.5).
+
+Record one ledger line where the step or finding closes, next to the Sync check:
+
+```text
+Code tests: Export.Create — empty name, name at limit, one above limit, duplicate (= TEST-EXPORT-NO-DUPLICATE);
+            ExportStore.Contains — absent, case differs · 5 added · n/a: ExportStore.Dispose (no branch)
+```
+
+```text
+Wrong: Every card of Step 2 is ✅, so Step 2 is tested. The overflow guard in `Total.Add` and the empty-file
+       branch in `Reader.Read` have no test.
+Right: After the Edit, walk `Total.Add` and `Reader.Read`. Add `AddAtMaxReturnsOverflow` and
+       `ReadEmptyFileReturnsNoRows`. Write both into the ledger line.
+```
 
 ## Design
 
@@ -64,7 +115,7 @@ Implement those cards as steps. Extra tests at implement time are allowed. Do no
 - Write tests that can fail. A test that cannot fail is not coverage.
 - Name tests `unit_scenario_expected` unless the tech test skill says
   otherwise. **C#:** PascalCase methods (`tech-tunit.md`). The plan ID
-  (`TEST-<AREA>-<TOPIC>`) stays in the plan. Do not use it as the method name.
+  (`TEST-<AREA>-<TOPIC>`) goes into the test's marker (`tech-spec.md` § Trace), never into the method name.
 - Separate Arrange, Act, Assert with a blank line.
 - Cover Windows/Linux/macOS, x64/ARM64 unless the user scoped otherwise.
 

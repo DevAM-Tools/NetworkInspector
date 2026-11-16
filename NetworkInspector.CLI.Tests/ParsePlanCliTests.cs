@@ -37,6 +37,7 @@ internal sealed class ParsePlanCliTests
     #region The verbose line
 
     [Test]
+    [Category("Slow")]
     public async Task AnExportOfTwoFieldsRunsOnAParseWithoutAFieldTree()
     {
         using CliSandbox sandbox = new();

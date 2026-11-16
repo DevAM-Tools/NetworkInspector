@@ -40,9 +40,11 @@ internal sealed class TestDir : IDisposable
         {
             Directory.Delete(_Path, recursive: true);
         }
-        catch
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            // Best-effort cleanup — test temp dirs are in the OS temp folder
+            // Best-effort clean-up: a file still locked (a virus scanner, a handle a failing test left open) or a read-only entry
+            // must not turn a passing test red, and the directory lies in the OS temp folder, which the system purges anyway.
+            // Any other exception type is a bug in the test and propagates.
         }
     }
 }

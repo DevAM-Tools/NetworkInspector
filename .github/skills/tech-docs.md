@@ -1,6 +1,6 @@
 # Documentation Standards
 
-Load whenever code, comments, or project docs are in scope: every `/plan`, `/implement`, `/review`, `/review-loop`, `/complex-task`, `/docs-repair`. The rules are in `copilot-instructions.md` Section 4.6. This skill adds the details and the checks. Language syntax: the language skill’s **Comments and docs** section (§ Language contract). Templates: `tech-docs-templates.md`.
+Load whenever code, comments, or project docs are in scope: every `/plan`, `/implement`, `/review`, `/docs-repair`. The rules are in `copilot-instructions.md` Section 4.6. This skill adds the details and the checks. Language syntax: the language skill’s **Comments and docs** section (§ Language contract). Templates: `tech-docs-templates.md`.
 
 **Goal:** docs and code say the same thing for the whole life of the project, so the next agent decides from facts. Few docs, one job each, each kept true by every change.
 
@@ -11,11 +11,14 @@ Load whenever code, comments, or project docs are in scope: every `/plan`, `/imp
 | `README.md` | What it is, quickstart, build and test, links to the docs | A newcomer needs it first |
 | `docs/architecture.md` | **Overview** (component table: folder, entry, responsibility, may depend on); per component: flows, invariants, **Easy to miss** | It says which part does what and who may call whom |
 | `docs/concepts.md` | Ideas of the solution that span components: models, algorithms, formats, state machines | It explains how our solution works inside |
-| `docs/domain.md` | Glossary, domain rules with their source, external facts | It stays true if the code were rewritten from scratch |
+| `docs/domain/` | Glossary, domain rules with their source, external facts (`tech-spec.md` § Domain knowledge) | It stays true if the code were rewritten from scratch |
 | `docs/decisions/<slug>.md` | One decision record: context, decision, rejected options, consequences | It answers “why A and not B” |
+| `docs/agents.md` | How an agent uses the product (`tech-agent-access.md`) | An agent needs it to call the software |
+| `spec/` | Requirements, test content, trace, loop state (`tech-spec.md`) | It says what the software must do |
 
 - Minimum per project: `README.md` and `docs/architecture.md`. A single-component project may keep the architecture as a `## Architecture` section in `README.md`.
-- Create `concepts.md`, `domain.md`, and a decision record with their first fact. Never create an empty shell.
+- Create `concepts.md`, `docs/domain/`, and a decision record with their first fact. Never create an empty shell.
+- ❗ File references are links relative to the containing file. From `plans/` or `reviews/`: [`src/Foo.cs`](../src/Foo.cs). Bare backticks, absolute `E:\` or `/Users/` paths, and unlinked names are not enough.
 - Also allowed: `docs/guides/<slug>.md` (how to do a task) and `CHANGELOG.md` (user-visible change per release).
 - Code is a home too: the contract sits in the doc comment, the why sits at the code. A doc links the symbol and never copies a signature.
 - `plans/`, `reviews/`, `councils/`, `illustrations/`, `docs-repair/` are workflow history and git-ignored. A product doc never cites them. A durable outcome found there (a decision, a domain fact, a user answer) moves to its home in the same run.
@@ -28,7 +31,7 @@ Pay for context only where the task is. Read a whole doc only when the task cove
 |------|------|------|
 | 1 | `README.md`, architecture **Overview** | Before any plan, edit, or review |
 | 2 | The architecture section of each component in scope | The component is in scope |
-| 3 | Concept, domain, and decision entries | The task uses the term or touches the component: grep the term, read that heading |
+| 3 | Concept, domain, and decision entries | The task uses the term or touches the component: read `docs/domain/index.md`, grep the term, read that heading |
 
 - Keep tier 1 short: the Overview fits on one screen. Detail belongs in component sections.
 - Record what you read in the plan Context Anchor or the review Scope: `Read: architecture Overview, § Import · domain § Credit note`.
@@ -151,7 +154,7 @@ Run at plan-step close, per finding fix, and as the review **Docs** hunt. Scope:
 Record one line where the step or finding closes:
 
 ```text
-Sync check: updated docs/architecture.md § Run (Easy to miss), docs/domain.md § Retention · unaffected README.md (no option change)
+Sync check: updated docs/architecture.md § Run (Easy to miss), docs/domain/billing.md § Retention · unaffected README.md (no option change)
 ```
 
 ## Review severity

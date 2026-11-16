@@ -603,6 +603,12 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IPars
     #region Builder
 
     /// <summary>Fluent builder for constructing a <see cref="PbfExporter"/>.</summary>
+    /// <remarks>
+    /// Output: <c>ToFile</c>, <c>ToStream</c>, <c>ToStdout</c>, and <c>ToTarget</c> replace each other, and the last call before
+    /// <c>Build</c> wins. Nothing is opened before the first item, so a replaced output creates no file and holds no resource.
+    /// The output belongs to the exporter that <c>Build</c> returns: build every further exporter from a new builder, because a
+    /// second <c>Build</c> hands both exporters the same output.
+    /// </remarks>
     public sealed class Builder
     {
         /// <summary>The output target; required before <see cref="Build"/>.</summary>
@@ -662,9 +668,24 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IPars
         /// </summary>
         /// <param name="stream">A writable stream; in background mode the caller must not use it until <see cref="OnFinish"/> returned.</param>
         /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
+        /// <exception cref="ArgumentException"><paramref name="stream"/> is not writable.</exception>
         public Builder ToStream(Stream stream)
         {
             _Output = ExportOutput.FromStream(stream);
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the output to a host target: the exporter opens one entry, <see cref="ExportEntryName.Main"/>, on its first packet
+        /// and never learns where it lands.
+        /// </summary>
+        /// <param name="target">The target; a refused entry becomes an export error of the first packet.</param>
+        /// <returns>This builder.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="target"/> is <see langword="null"/>.</exception>
+        public Builder ToTarget(IExportTarget target)
+        {
+            _Output = ExportOutput.FromTarget(target);
             return this;
         }
 
@@ -853,7 +874,7 @@ public sealed class PbfExporter : IPacketListener, IErrorTolerantExporter, IPars
         {
             if (_Output is null)
             {
-                throw new InvalidOperationException("No output target configured. Call ToFile(), ToStream(), or ToStdout().");
+                throw new InvalidOperationException("No output target configured. Call ToFile(), ToStream(), ToStdout(), or ToTarget().");
             }
 
             // Without WithContent both layouts write the same default content: no layout has a content member the other lacks.

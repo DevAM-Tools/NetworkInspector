@@ -26,7 +26,7 @@ public sealed class HealthyTestPlugin : IPlugin
         builder.AddSource(new SourceRegistration("TestHealthy", "Test healthy", "A source that creates nothing.", [], false,
             static _ => { }, _TryCreateSource));
         builder.AddPacketExporter(new ExporterRegistration<IPacketListener>("TestHealthy", "Test healthy", "Writes nothing.", ".testhealthy",
-            static _ => { }, _TryCreateExporter));
+            static _ => { }, ExporterCreation.ForStreams<IPacketListener>(_TryCreateExporter)));
         builder.AddStackContribution(static stack => stack.RegisterProtocol(new HealthyProtocol()));
         builder.AddSettings(SettingScope.Application, static registrar => _RegisterLevel(registrar));
         builder.AddSettings(SettingScope.Profile, static registrar => _RegisterLevel(registrar));
@@ -62,7 +62,7 @@ public sealed class HealthyTestPlugin : IPlugin
         return false;
     }
 
-    private static bool _TryCreateExporter(ExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
+    private static bool _TryCreateExporter(StreamExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         listener = new NullPacketListener();

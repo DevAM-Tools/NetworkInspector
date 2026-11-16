@@ -15,9 +15,9 @@ internal sealed class BuffersFieldTreeTests
 
     /// <summary>The capture, exported twice from one parse: with frames and buffers, and without either.</summary>
     /// <param name="scenario">The format and shape.</param>
-    /// <param name="dir">The directory of the outputs.</param>
+    /// <param name="dir">The directory of the outputs; only DuckDB and a disk Parquet export need it.</param>
     /// <returns>The output with both members on, and the output with both off.</returns>
-    private static (BufferRun On, BufferRun Off) _ExportTwice(BufferScenario scenario, TestDir dir)
+    private static (BufferRun On, BufferRun Off) _ExportTwice(BufferScenario scenario, TestDir? dir)
     {
         OpenBufferExport on = BufferExportScenarios.Open(scenario, BufferMembers.Frames | BufferMembers.Buffers, dir, "on");
         OpenBufferExport off = BufferExportScenarios.Open(scenario, BufferMembers.None, dir, "off");
@@ -27,8 +27,8 @@ internal sealed class BuffersFieldTreeTests
         (string onPath, string onText) = on.Finish();
         (string offPath, string offText) = off.Finish();
         return (
-            new BufferRun(onPath, onText, fed.FirstPacketId, fed.Expected, fed.PacketCount, fed.PacketsWithFieldTree),
-            new BufferRun(offPath, offText, fed.FirstPacketId, fed.Expected, fed.PacketCount, fed.PacketsWithFieldTree));
+            new BufferRun(onPath, onText, fed.FirstPacketId, fed.Expected, fed.PacketCount, fed.PacketsWithFieldTree, on.Bytes, on.Target),
+            new BufferRun(offPath, offText, fed.FirstPacketId, fed.Expected, fed.PacketCount, fed.PacketsWithFieldTree, off.Bytes, off.Target));
     }
 
     /// <summary>Asserts that two relations (SQL table expressions) hold the same rows: the difference is empty in both directions.</summary>
@@ -172,11 +172,10 @@ internal sealed class BuffersFieldTreeTests
     [Test]
     public async Task PbfColumnarBlocksAreTheSameWithAndWithoutFramesAndBuffersExceptTheirOwnColumns()
     {
-        using TestDir dir = new("tree_leads_pbf_columnar");
-        (BufferRun on, BufferRun off) = _ExportTwice(BufferScenario.PbfColumnarHierarchy, dir);
+        (BufferRun on, BufferRun off) = _ExportTwice(BufferScenario.PbfColumnarHierarchy, dir: null);
 
-        (_, List<List<PbfField>> blocksOn) = PbfFileScanner.Read(on.Path);
-        (_, List<List<PbfField>> blocksOff) = PbfFileScanner.Read(off.Path);
+        (_, List<List<PbfField>> blocksOn) = PbfFileScanner.FromBytes(on.Bytes!);
+        (_, List<List<PbfField>> blocksOff) = PbfFileScanner.FromBytes(off.Bytes!);
 
         await Assert.That(blocksOn.Count).IsEqualTo(blocksOff.Count);
         for (int block = 0; block < blocksOn.Count; block++)
@@ -199,11 +198,10 @@ internal sealed class BuffersFieldTreeTests
     [Test]
     public async Task PbfStandardPacketsAreTheSameWithAndWithoutFramesAndBuffersExceptTheirOwnFields()
     {
-        using TestDir dir = new("tree_leads_pbf_standard");
-        (BufferRun on, BufferRun off) = _ExportTwice(BufferScenario.PbfStandardHierarchy, dir);
+        (BufferRun on, BufferRun off) = _ExportTwice(BufferScenario.PbfStandardHierarchy, dir: null);
 
-        List<List<PbfField>> packetsOn = _Packets(on.Path);
-        List<List<PbfField>> packetsOff = _Packets(off.Path);
+        List<List<PbfField>> packetsOn = _Packets(on.Bytes!);
+        List<List<PbfField>> packetsOff = _Packets(off.Bytes!);
 
         await Assert.That(packetsOn.Count).IsEqualTo(packetsOff.Count);
         await Assert.That(packetsOn.Count).IsEqualTo(7);
@@ -218,11 +216,11 @@ internal sealed class BuffersFieldTreeTests
     }
 
     /// <summary>The packet messages (the length-delimited field 5) of every block of a standard PBF file, in order.</summary>
-    /// <param name="path">The PBF file.</param>
+    /// <param name="file">The bytes of the PBF file.</param>
     /// <returns>The decoded fields of each packet message.</returns>
-    private static List<List<PbfField>> _Packets(string path)
+    private static List<List<PbfField>> _Packets(byte[] file)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         return [.. blocks.SelectMany(static block => block)
             .Where(static f => f.Number == 5 && f.Payload is not null)
             .Select(static f => PbfFileScanner.Fields(f.Payload!))];
@@ -257,8 +255,7 @@ internal sealed class BuffersFieldTreeTests
     [Arguments(BufferScenario.JsonCompactTree)]
     public async Task JsonPacketsAreTheSameWithAndWithoutFramesAndBuffersExceptTheirOwnKeys(BufferScenario scenario)
     {
-        using TestDir dir = new("tree_leads_json");
-        (BufferRun on, BufferRun off) = _ExportTwice(scenario, dir);
+        (BufferRun on, BufferRun off) = _ExportTwice(scenario, dir: null);
 
         List<string> withMembers = _PacketsWithoutByteKeys(on.Text);
         List<string> without = _PacketsWithoutByteKeys(off.Text);
@@ -274,8 +271,7 @@ internal sealed class BuffersFieldTreeTests
     [Test]
     public async Task TextLinesOutsideTheDumpsAreTheSameWithAndWithoutFramesAndBuffers()
     {
-        using TestDir dir = new("tree_leads_text");
-        (BufferRun on, BufferRun off) = _ExportTwice(BufferScenario.TextTree, dir);
+        (BufferRun on, BufferRun off) = _ExportTwice(BufferScenario.TextTree, dir: null);
 
         List<string> withMembers = _LinesWithoutDumps(on.Text);
         List<string> without = _LinesWithoutDumps(off.Text);

@@ -70,15 +70,27 @@ internal sealed class OpenBufferExport
     /// <summary>Finishes the exporter, releases it, and returns what it wrote.</summary>
     private readonly Func<(string Path, string Text)> _Finish;
 
+    /// <summary>The in-memory stream of a PBF export; <see langword="null"/> for the other outputs.</summary>
+    private readonly MemoryStream? _Stream;
+
     /// <summary>Wraps an exporter.</summary>
     /// <param name="listener">The exporter.</param>
     /// <param name="demand">The parse demand of the exporter.</param>
     /// <param name="finish">Finishes the exporter and returns what it wrote: a path (file or directory) or a text.</param>
-    internal OpenBufferExport(IPacketListener listener, ParseDemand demand, Func<(string Path, string Text)> finish)
+    /// <param name="stream">The stream a PBF export writes to; its bytes are kept at the finish.</param>
+    /// <param name="target">The in-memory target a Parquet export writes to.</param>
+    internal OpenBufferExport(
+        IPacketListener listener,
+        ParseDemand demand,
+        Func<(string Path, string Text)> finish,
+        MemoryStream? stream = null,
+        MemoryExportTarget? target = null)
     {
         _Listener = listener;
         Demand = demand;
         _Finish = finish;
+        _Stream = stream;
+        Target = target;
     }
 
     /// <summary>The parse demand of the exporter: the parse options of the run follow from it.</summary>
@@ -89,9 +101,25 @@ internal sealed class OpenBufferExport
     /// <returns>What <see cref="IPacketListener.OnPacket"/> returned.</returns>
     internal bool Offer(Packet packet) => _Listener.OnPacket(packet);
 
+    /// <summary>The bytes a PBF export wrote; <see langword="null"/> before <see cref="Finish"/> and for the other outputs.</summary>
+    internal byte[]? Bytes { get; private set; }
+
+    /// <summary>The in-memory target a Parquet export wrote to; <see langword="null"/> for the other outputs.</summary>
+    internal MemoryExportTarget? Target { get; }
+
     /// <summary>Finishes the exporter.</summary>
     /// <returns>The path of the file or directory a file format wrote, or the text a stream format wrote (the other is empty).</returns>
-    internal (string Path, string Text) Finish() => _Finish();
+    internal (string Path, string Text) Finish()
+    {
+        (string Path, string Text) written = _Finish();
+        if (_Stream is not null)
+        {
+            Bytes = _Stream.ToArray();
+            _Stream.Dispose();
+        }
+
+        return written;
+    }
 }
 
 /// <summary>
@@ -104,8 +132,17 @@ internal sealed class OpenBufferExport
 /// <param name="Expected">The additional buffers of every offered packet, in packet and index order.</param>
 /// <param name="PacketCount">The number of packets that were offered; 0 for a run that was not fed by <see cref="BufferExportScenarios.Feed"/>.</param>
 /// <param name="PacketsWithFieldTree">How many of the offered packets carried a field tree (<see cref="Packet.HasFieldTree"/>).</param>
+/// <param name="Bytes">The bytes a PBF export wrote; <see langword="null"/> for the other outputs.</param>
+/// <param name="Target">The in-memory target a Parquet export wrote to; <see langword="null"/> for the other outputs.</param>
 internal sealed record BufferRun(
-    string Path, string Text, int FirstPacketId, List<BufferRow> Expected, int PacketCount = 0, int PacketsWithFieldTree = 0);
+    string Path,
+    string Text,
+    int FirstPacketId,
+    List<BufferRow> Expected,
+    int PacketCount = 0,
+    int PacketsWithFieldTree = 0,
+    byte[]? Bytes = null,
+    MemoryExportTarget? Target = null);
 
 /// <summary>What feeding a capture to the open exports observed about the packets.</summary>
 /// <param name="FirstPacketId">The id of the first packet that was offered.</param>
@@ -161,12 +198,13 @@ internal static class BufferExportScenarios
     /// <summary>Opens the exporter of a scenario.</summary>
     /// <param name="scenario">The exporter configuration.</param>
     /// <param name="members">Which packet bytes the export writes (CSV: which columns it gets).</param>
-    /// <param name="dir">The directory for file outputs.</param>
+    /// <param name="dir">The directory for file outputs; DuckDB needs it. Parquet writes there when it is given and to memory when it
+    /// is <see langword="null"/>; PBF writes to memory.</param>
     /// <param name="name">Distinguishes two exports of one test in the same directory.</param>
     /// <param name="maxPacketsPerBatch">Packets per batch for the batching formats; 0 keeps the default.</param>
     /// <returns>The open export.</returns>
     internal static OpenBufferExport Open(
-        BufferScenario scenario, BufferMembers members, TestDir dir, string name = "export", int maxPacketsPerBatch = 0)
+        BufferScenario scenario, BufferMembers members, TestDir? dir, string name = "export", int maxPacketsPerBatch = 0)
     {
         bool plain = members == BufferMembers.None && ShapeOf(scenario) == ExportShape.Hierarchy;
         ExportContent content = _ContentOf(scenario, members);
@@ -176,7 +214,7 @@ internal static class BufferExportScenarios
             case BufferScenario.DuckDbHierarchy:
             case BufferScenario.DuckDbSelectedFields:
             {
-                string path = dir.FilePath(baseName + ".duckdb");
+                string path = _Require(dir).FilePath(baseName + ".duckdb");
                 DuckDbExporter.Builder builder = DuckDbExporter.CreateBuilder().ToFile(path).WithWriteMode(ExportWriteMode.Synchronous);
                 if (maxPacketsPerBatch > 0)
                 {
@@ -192,8 +230,15 @@ internal static class BufferExportScenarios
             case BufferScenario.ParquetHierarchy:
             case BufferScenario.ParquetSelectedFields:
             {
-                string path = dir.FilePath(baseName);
-                ParquetExporter.Builder builder = ParquetExporter.CreateBuilder().ToDirectory(path).WithWriteMode(ExportWriteMode.Synchronous);
+                // With a directory the dataset is written to disk (a DuckDB reader needs a path); without it to memory.
+                string path = dir?.FilePath(baseName) ?? string.Empty;
+                MemoryExportTarget? target = dir is null
+                    ? new MemoryExportTarget(seekable: true)
+                    : null;
+                ParquetExporter.Builder builder = ParquetExporter.CreateBuilder().WithWriteMode(ExportWriteMode.Synchronous);
+                builder = target is null
+                    ? builder.ToDirectory(path)
+                    : builder.ToTarget(target);
                 if (maxPacketsPerBatch > 0)
                 {
                     builder.WithMaxPacketsPerBlock(maxPacketsPerBatch);
@@ -202,7 +247,7 @@ internal static class BufferExportScenarios
                 ParquetExporter exporter = (plain
                     ? builder
                     : builder.WithContent(content)).Build();
-                return new OpenBufferExport(exporter, exporter.ParseDemand, () => _Finish(exporter, path, string.Empty));
+                return new OpenBufferExport(exporter, exporter.ParseDemand, () => _Finish(exporter, path, string.Empty), target: target);
             }
 
             case BufferScenario.PbfStandardHierarchy:
@@ -210,11 +255,11 @@ internal static class BufferExportScenarios
             case BufferScenario.PbfColumnarHierarchy:
             case BufferScenario.PbfColumnarSelectedFields:
             {
-                string path = dir.FilePath(baseName + ".pbf");
+                MemoryStream stream = new();
                 PbfExportFormat format = scenario is BufferScenario.PbfStandardHierarchy or BufferScenario.PbfStandardSelectedFields
                     ? PbfExportFormat.Standard
                     : PbfExportFormat.Columnar;
-                PbfExporter.Builder builder = PbfExporter.CreateBuilder().ToFile(path).WithFormat(format).WithCompressed(false)
+                PbfExporter.Builder builder = PbfExporter.CreateBuilder().ToStream(stream).WithFormat(format).WithCompressed(false)
                     .WithWriteMode(ExportWriteMode.Synchronous);
                 if (maxPacketsPerBatch > 0)
                 {
@@ -224,7 +269,7 @@ internal static class BufferExportScenarios
                 PbfExporter exporter = (plain
                     ? builder
                     : builder.WithContent(content)).Build();
-                return new OpenBufferExport(exporter, exporter.ParseDemand, () => _Finish(exporter, path, string.Empty));
+                return new OpenBufferExport(exporter, exporter.ParseDemand, () => _Finish(exporter, string.Empty, string.Empty), stream);
             }
 
             case BufferScenario.CsvPacketRows:
@@ -294,6 +339,20 @@ internal static class BufferExportScenarios
 
         CsvExporter exporter = builder.Build();
         return new OpenBufferExport(exporter, exporter.ParseDemand, () => _FinishStream(exporter, stream));
+    }
+
+    /// <summary>Returns the directory of a scenario that writes a file.</summary>
+    /// <param name="dir">The directory the caller passed.</param>
+    /// <returns>The directory.</returns>
+    /// <exception cref="InvalidOperationException">No directory was passed.</exception>
+    private static TestDir _Require(TestDir? dir)
+    {
+        if (dir is null)
+        {
+            throw new InvalidOperationException("A DuckDB scenario writes a file and needs a TestDir.");
+        }
+
+        return dir;
     }
 
     /// <summary>Finishes a file exporter and disposes it.</summary>
@@ -382,14 +441,14 @@ internal static class BufferExportScenarios
     /// <param name="scenario">The exporter configuration.</param>
     /// <param name="frames">The frames, in capture order.</param>
     /// <param name="members">Which packet bytes the export writes.</param>
-    /// <param name="dir">The directory for file outputs.</param>
+    /// <param name="dir">The directory for file outputs; DuckDB needs it, PBF writes to memory, Parquet writes to memory when it is null.</param>
     /// <returns>What the exporter wrote and what the packets reported.</returns>
-    internal static BufferRun Run(BufferScenario scenario, IReadOnlyList<Frame> frames, BufferMembers members, TestDir dir)
+    internal static BufferRun Run(BufferScenario scenario, IReadOnlyList<Frame> frames, BufferMembers members, TestDir? dir)
     {
         OpenBufferExport export = Open(scenario, members, dir);
         FeedResult fed = Feed(frames, export);
         (string path, string text) = export.Finish();
-        return new BufferRun(path, text, fed.FirstPacketId, fed.Expected, fed.PacketCount, fed.PacketsWithFieldTree);
+        return new BufferRun(path, text, fed.FirstPacketId, fed.Expected, fed.PacketCount, fed.PacketsWithFieldTree, export.Bytes, export.Target);
     }
 
     #endregion
@@ -400,7 +459,7 @@ internal static class BufferExportScenarios
     /// <param name="scenario">The exporter configuration that wrote the output.</param>
     /// <param name="run">What the run wrote.</param>
     /// <returns>The rows in stored order; <see langword="null"/> when the output has no buffer content at all.</returns>
-    internal static List<BufferRow>? Read(BufferScenario scenario, BufferRun run)
+    internal static async Task<List<BufferRow>?> ReadAsync(BufferScenario scenario, BufferRun run)
     {
         switch (scenario)
         {
@@ -409,13 +468,15 @@ internal static class BufferExportScenarios
                 return BufferReaders.ReadDuckDb(run.Path);
             case BufferScenario.ParquetHierarchy:
             case BufferScenario.ParquetSelectedFields:
-                return BufferReaders.ReadParquet(run.Path);
+                return run.Target is not null
+                    ? await BufferReaders.ReadParquetAsync(run.Target)
+                    : BufferReaders.ReadParquet(run.Path);
             case BufferScenario.PbfStandardHierarchy:
             case BufferScenario.PbfStandardSelectedFields:
-                return BufferReaders.ReadPbfStandard(run.Path);
+                return BufferReaders.ReadPbfStandard(run.Bytes ?? throw new InvalidOperationException("The PBF run has no bytes."));
             case BufferScenario.PbfColumnarHierarchy:
             case BufferScenario.PbfColumnarSelectedFields:
-                return BufferReaders.ReadPbfColumnar(run.Path);
+                return BufferReaders.ReadPbfColumnar(run.Bytes ?? throw new InvalidOperationException("The PBF run has no bytes."));
             case BufferScenario.CsvPacketRows:
             case BufferScenario.CsvWide:
                 return BufferReaders.ReadCsv(run.Text);

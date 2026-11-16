@@ -14,6 +14,7 @@ global using System.Reflection.PortableExecutable;
 global using System.Runtime.ExceptionServices;
 global using System.Runtime.InteropServices;
 global using System.Runtime.Loader;
+global using System.Text;
 global using System.Text.Json;
 global using System.Threading;
 global using System.Threading.Tasks;
@@ -55,6 +56,7 @@ global using NetworkInspector.Values;
 
 #region Built-in plugins, sources, and exporters
 global using NetworkInspector.BuiltInPlugins;
+global using NetworkInspector.Exporters;
 global using NetworkInspector.Exporters.Asc;
 global using NetworkInspector.Exporters.Blf;
 global using NetworkInspector.Exporters.Csv;

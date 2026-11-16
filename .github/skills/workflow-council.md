@@ -18,7 +18,7 @@ Vague question → one clarifier, then proceed.
 
 | Mode | When | How | Artifact |
 |------|------|-----|----------|
-| **Sweep** | `/plan` Stage 2, `/review` Stage 4 | Same agent. No file. | none |
+| **Sweep** | `/plan` Stage 2, `/review` Stage 4 | `tech-sweep.md`; this skill is not loaded | none |
 | **Lite** | Plan Decision Loop default; user says `quick`/`lite` | 5 views + chairman | `councils/council_<slug>[_<n>].md` |
 | **Full** | `/council` default; security, public API, irreversible | 5 views (longer) + chairman | same |
 | **Exam** | User says `exam` / `with exam` / `/council exam`; `/implement` Stage 5 runs it after the Closing Review is Ready | Full unless user says `quick`/`lite`. Skeptic uses Exam addendum. | `councils/council_<slug>-exam[_<n>].md` |
@@ -27,15 +27,7 @@ No anonymous peer-review round. Chairman **Blind spots** = what all five views m
 
 ## Views
 
-Skip none. Use these names only.
-
-| View | Ask | Do |
-|------|-----|-----|
-| Skeptic | What kills this? | Assume it cannot work. Find the fatal flaw. Dig if it looks solid. Dumbest user/operator error AND worst abuse + STRIDE at trust boundaries. A limit that cripples a capable host or lets abuse through (§4.2). Do not trust tests, docs, or a green path. |
-| Problem-First | Right problem? | Strip the proposed solution. Rebuild the problem. Say when the question is wrong. |
-| Upside | What extra value sits in scope? | Hunt in-scope gain only. No new product, dependency, or scope. New packages still need the New Dependency Protocol (Section 4.7). |
-| Outsider | Would a first-time user get this? | Drop insider context. Flag jargon, opaque names, missing first-caller steps. Unknown term → treat as unknown. |
-| Builder | What is the first concrete step? | Prove it can ship. Name the first command, plan step, or `Verify`. No first step → say so. |
+The five views live in `tech-sweep.md`. Read it now. Skip none. New packages still need the New Dependency Protocol (Section 4.7).
 
 **Constraint Block** (all except Outsider): §4.13. Loaded test stack (cite skill). New Dependency Protocol (Section 4.7). MIT/Apache-2.0/BSD-like. No scope expand. No edits. Cite path/symbol for code claims.
 
@@ -71,51 +63,9 @@ Other views keep 150–250 words (Lite: 2–5 bullets each). Exam Ask:
 
 **Chairman:** **Holds** · **Does not hold**. Kill shots and §4 violations → Does not hold. Isolated nits that are not fatal and do not violate §4 → risks; still Holds. No "it depends" without Grill Me. Do not emit plan `C{n}`.
 
-Loop status: `done` (Holds) · `exam-fail` (Does not hold) · `grill-me` · `re-council`. Parent implement remediates `exam-fail`, then re-runs Exam as `_<n>`. Cap 2 reruns on the same root cause → blocker per `copilot-instructions.md` Section 4.16.
+Loop status: `done` (Holds) · `exam-fail` (Does not hold) · `grill-me` · `re-council`. Parent implement remediates `exam-fail`, then re-runs Exam as `_<n>`. Cap 2 reruns on the same root cause → blocker per `tech-reporting.md`.
 
-Every kill shot behind **Does not hold** is written like a blocker (Section 4.16): what fails, evidence (path/symbol, command output), impact if shipped, scope, and what must change.
-
-## Sweep
-
-From plan: all five views. From review: **Skeptic and Outsider only**
-(`workflow-review.md`). Do not emit Problem-First, Upside, or Builder rows in a
-review artifact. Do not run Lite/Full/Exam as part of `/review`. Do not paste the
-plan fence into a review file.
-
-Per view: 2–5 bullets. Cite path/symbol for code facts. Empty row → re-run that view.
-
-Classify each bullet as one of: **Grill Me** (user fact) · **Council candidate** (≥2 valid options, high cost of error) · **Act** (plan constraint or review finding).
-
-**Review overlays:** view defect → finding; cite view in `Context`. Skeptic: parts **and** composition per `workflow-review.md` Skeptic pass; hair in the soup; `none` only after both hunts ran. Outsider: first-time caller/reader; `none` only after that hunt ran.
-
-Plan Sweep (five views; `/plan` only):
-
-```markdown
-## Perspective Sweep
-| View | Caught |
-|------|--------|
-| Skeptic | |
-| Problem-First | |
-| Upside | |
-| Outsider | |
-| Builder | |
-
-**Grill Me candidates:** …
-**Council candidates:** … | none
-```
-
-Review Sweep (copy this one on `/review`; two views only):
-
-```markdown
-## Perspective Sweep
-| View | Caught |
-|------|--------|
-| Skeptic | |
-| Outsider | |
-```
-
-Emit: plan chat + Context Anchor (five views). Review Perspective Sweep: Skeptic
-and Outsider only (`workflow-review.md`).
+Every kill shot behind **Does not hold** is written like a blocker (`tech-reporting.md`): what fails, evidence (path/symbol, command output), impact if shipped, scope, and what must change.
 
 ## Grill Me ↔ Council
 
@@ -143,7 +93,7 @@ Same agent throughout. No subagent or delegation tool. No parallel advisors.
    - Schema Full: 150–250 words, no preamble: Position · Argument · Fatal risk / Extra value · Evidence (path/symbol) · Do this. Exam Skeptic: 400–700 words per Exam addendum.
 4. **Chairman** — §4.13. May dissent; explain. No "it depends" without a recorded user fact — emit Grill Me instead.
    - Verdict: Agrees · Clashes (do not smooth) · Blind spots (what all five missed) · Recommendation (one call) · One thing to do first · Grill Me Follow-ups (`Source: Council`; omit if none) · `C{n}` mapping (omit if not in a plan loop). Exam: Holds / Does not hold per **Exam**; omit `C{n}`.
-5. **Ambiguity loop** — Follow-ups → one Grill Me round (`workflow-plan.md` template). Answers change the fork → re-frame, re-run, `_<n>`. User-only facts still missing → stay in Grill Me. Clear recommendation → `C{n}`, stop. From plan Decision Loop: return to Reconcile. Exam: `exam-fail` → parent remediates and re-Exams; do not open a plan Decision Loop.
+5. **Ambiguity loop** — Follow-ups → one Grill Me round (Section 4.16 question form). Answers change the fork → re-frame, re-run, `_<n>`. User-only facts still missing → stay in Grill Me. Clear recommendation → `C{n}`, stop. From plan Decision Loop: return to Reconcile. Exam: `exam-fail` → parent remediates and re-Exams; do not open a plan Decision Loop.
 6. **Output** — `councils/council_<slug>.md`; Exam: `councils/council_<slug>-exam.md`; reruns `_<n>` starting at 2. Slug: lowercase, punctuation/whitespace → `-`. Artifact: framed question, mode, paths/skills as Section 4.6 links, five views, verdict, loop status (`done` / `grill-me` / `re-council` / `exam-fail`). ❗ Write verdicts at full fidelity in chat and in the artifact. Advisor text stays in the artifact. Chat: verdict sections only. No advisor essays. No HTML.
 
 This is structured self-critique, not an independent jury. Compensate by writing Skeptic first and by citing path/symbol for every code claim.

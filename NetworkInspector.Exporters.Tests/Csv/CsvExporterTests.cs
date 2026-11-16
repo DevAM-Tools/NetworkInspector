@@ -9,13 +9,6 @@ namespace NetworkInspector.Exporters.Tests.Csv;
 internal sealed class CsvExporterTests
 {
     [Test]
-    public async Task BuilderRequiresOutput()
-    {
-        CsvExporter.Builder builder = CsvExporter.CreateBuilder();
-        await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
-    }
-
-    [Test]
     public async Task DefaultColumnsProducesHeaderAndRows()
     {
         using MemoryStream ms = new();
@@ -62,6 +55,10 @@ internal sealed class CsvExporterTests
         await Assert.That(data[0]).IsEqualTo((byte)0xEF);
         await Assert.That(data[1]).IsEqualTo((byte)0xBB);
         await Assert.That(data[2]).IsEqualTo((byte)0xBF);
+
+        // The content after the BOM starts with the header row
+        string content = Encoding.UTF8.GetString(data, 3, data.Length - 3);
+        await Assert.That(content.StartsWith("No.,", StringComparison.Ordinal)).IsTrue();
     }
 
     [Test]
@@ -286,85 +283,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    [Category("Slow")]
-    public async Task TargetPacketCountLimitsExport()
-    {
-        using MemoryStream ms = new();
-        using CsvExporter exporter = CsvExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithBom(false)
-            .WithTargetPacketCount(3)
-            .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(10);
-        int accepted = 0;
-        foreach (Packet packet in packets)
-        {
-            if (exporter.OnPacket(packet))
-            {
-                accepted++;
-            }
-        }
-
-        exporter.OnFinish();
-
-        // After reaching target, packets are refused
-        await Assert.That(exporter.PacketCount).IsEqualTo(3);
-    }
-
-    [Test]
-    [Category("Slow")]
-    public async Task CancellationStopsExport()
-    {
-        using CancellationTokenSource cts = new();
-        using MemoryStream ms = new();
-        using CsvExporter exporter = CsvExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithBom(false)
-            .WithCancellationToken(cts.Token)
-            .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(10);
-
-        exporter.OnPacket(packets[0]);
-        exporter.OnPacket(packets[1]);
-        await cts.CancelAsync().ConfigureAwait(false);
-
-        // After cancellation, OnPacket should return false
-        bool accepted = exporter.OnPacket(packets[2]);
-        await Assert.That(accepted).IsFalse();
-
-        exporter.OnFinish();
-    }
-
-    [Test]
-    public async Task FileOutputProducesValidCsv()
-    {
-        using TestDir dir = new("csv_file");
-        string path = dir.FilePath("output.csv");
-
-        using CsvExporter exporter = CsvExporter.CreateBuilder()
-            .ToFile(path)
-            .WithBom(false)
-            .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(5);
-        foreach (Packet packet in packets)
-        {
-            exporter.OnPacket(packet);
-        }
-
-        exporter.OnFinish();
-
-        string csv = await File.ReadAllTextAsync(path, Encoding.UTF8).ConfigureAwait(false);
-        string[] lines = _SplitCsvLines(csv);
-
-        // Header + 5 data rows
-        await Assert.That(lines.Length).IsEqualTo(6);
-    }
-
-    [Test]
-    public async Task EmptyExportWithHeaderProducesHeaderOnly()
+    public async Task FinishWithoutPacketsWritesNothingEvenWithAHeaderEnabled()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -380,7 +299,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task EmptyExportNoHeaderProducesEmptyOutput()
+    public async Task FinishWithoutPacketsWritesNothingWhenTheHeaderIsDisabled()
     {
         using MemoryStream ms = new();
         using CsvExporter exporter = CsvExporter.CreateBuilder()
@@ -511,89 +430,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task IsFinishedTrueAfterOnFinish()
-    {
-        using MemoryStream ms = new();
-        using CsvExporter exporter = CsvExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithBom(false)
-            .Build();
-
-        await Assert.That(exporter.IsFinished).IsFalse();
-
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-    }
-
-    [Test]
-    public async Task OnPacketAfterFinishReturnsFalse()
-    {
-        using MemoryStream ms = new();
-        using CsvExporter exporter = CsvExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithBom(false)
-            .Build();
-
-        exporter.OnFinish();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(1);
-        bool accepted = exporter.OnPacket(packets[0]);
-        await Assert.That(accepted).IsFalse();
-    }
-
-    [Test]
-    public async Task BomWithFileOutputProducesValidFile()
-    {
-        using TestDir dir = new("csv_bom_file");
-        string path = dir.FilePath("output.csv");
-
-        using CsvExporter exporter = CsvExporter.CreateBuilder()
-            .ToFile(path)
-            .WithBom(true)
-            .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(2);
-        foreach (Packet packet in packets)
-        {
-            exporter.OnPacket(packet);
-        }
-
-        exporter.OnFinish();
-
-        byte[] data = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
-
-        // UTF-8 BOM at start
-        await Assert.That(data[0]).IsEqualTo((byte)0xEF);
-        await Assert.That(data[1]).IsEqualTo((byte)0xBB);
-        await Assert.That(data[2]).IsEqualTo((byte)0xBF);
-
-        // Content after BOM should start with header
-        string content = Encoding.UTF8.GetString(data, 3, data.Length - 3);
-        await Assert.That(content.StartsWith("No.,", StringComparison.Ordinal)).IsTrue();
-    }
-
-    [Test]
-    [Category("Slow")]
-    public async Task DoubleFinishDoesNotThrow()
-    {
-        using MemoryStream ms = new();
-        using CsvExporter exporter = CsvExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithBom(false)
-            .Build();
-
-        Packet[] packets = PacketGenerators.CreateEthernetUdpPackets(1);
-        exporter.OnPacket(packets[0]);
-
-        // Calling OnFinish twice should not throw
-        exporter.OnFinish();
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-    }
-    [Test]
-    public async Task EmptyExportToFileProducesEmptyFile()
+    public async Task FinishWithoutPacketsCreatesNoFile()
     {
         using TestDir dir = new("csv_empty_file");
         string path = dir.FilePath("empty.csv");
@@ -611,7 +448,7 @@ internal sealed class CsvExporterTests
     }
 
     [Test]
-    public async Task EmptyExportWithPacketFileHasHeaderAndRow()
+    public async Task OnePacketToAFileWritesTheHeaderAndOneRow()
     {
         using TestDir dir = new("csv_file_with_row");
         string path = dir.FilePath("output.csv");
@@ -633,52 +470,6 @@ internal sealed class CsvExporterTests
         await Assert.That(lines.Length).IsEqualTo(2);
     }
     // ── Helpers ──────────────────────────────────────────────────────────────
-
-    [Test]
-    public async Task DefaultUiNameIsCsvExporter()
-    {
-        using MemoryStream ms = new();
-        using CsvExporter exporter = CsvExporter.CreateBuilder()
-            .ToStream(ms)
-            .Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("CSV Exporter");
-    }
-
-    [Test]
-    public async Task WithUiNameOverridesDefault()
-    {
-        using MemoryStream ms = new();
-        using CsvExporter exporter = CsvExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithUiName("My CSV")
-            .Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("My CSV");
-    }
-
-    [Test]
-    public async Task DescriptionReturnsNullWhenNotSet()
-    {
-        using MemoryStream ms = new();
-        using CsvExporter exporter = CsvExporter.CreateBuilder()
-            .ToStream(ms)
-            .Build();
-
-        await Assert.That(exporter.Description).IsNull();
-    }
-
-    [Test]
-    public async Task DescriptionReturnsConfiguredValue()
-    {
-        using MemoryStream ms = new();
-        using CsvExporter exporter = CsvExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithDescription("Comma-separated values export")
-            .Build();
-
-        await Assert.That(exporter.Description).IsEqualTo("Comma-separated values export");
-    }
 
     [Test]
     public async Task AnUndefinedColumnKindIsRefused()

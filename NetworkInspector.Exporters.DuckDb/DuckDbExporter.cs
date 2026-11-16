@@ -407,6 +407,11 @@ public sealed class DuckDbExporter : IPacketListener, IErrorTolerantExporter, IP
     #region Builder
 
     /// <summary>Fluent builder for constructing a <see cref="DuckDbExporter"/>.</summary>
+    /// <remarks>
+    /// Output: a later call of <c>ToFile</c> replaces the path of an earlier one, and the last call before <c>Build</c> wins. The
+    /// file is created by the first item, not by the builder. Build every further exporter from a new builder: a second
+    /// <c>Build</c> would let two exporters write the same database file.
+    /// </remarks>
     public sealed class Builder
     {
         /// <summary>The full path of the output file; <see langword="null"/> until <see cref="ToFile"/> was called.</summary>

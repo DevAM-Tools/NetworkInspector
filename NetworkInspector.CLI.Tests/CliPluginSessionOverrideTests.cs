@@ -3,6 +3,7 @@
 namespace NetworkInspector.CLI.Tests;
 
 /// <summary>How the <c>--set</c> overrides reach the settings that a session and the stack of a command read.</summary>
+[Category("Slow")]
 internal sealed class CliPluginSessionOverrideTests
 {
     [Test]

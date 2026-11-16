@@ -58,6 +58,7 @@ internal sealed class CliSettingsTests
     #region Plugin settings
 
     [Test]
+    [Category("Slow")]
     public async Task APluginSettingSurvivesSeparateRuns()
     {
         using CliSandbox sandbox = new();
@@ -89,6 +90,7 @@ internal sealed class CliSettingsTests
     #region Listing
 
     [Test]
+    [Category("Slow")]
     public async Task ListShowsOneLinePerSettingWithScopeTypeAndValue()
     {
         using CliSandbox sandbox = new();
@@ -115,6 +117,7 @@ internal sealed class CliSettingsTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task JsonListHasTheDocumentedPropertiesAndStoredFlags()
     {
         using CliSandbox sandbox = new();
@@ -146,6 +149,7 @@ internal sealed class CliSettingsTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task AStringValueWithControlCharactersStaysOneListLineButGetPrintsItAsItIs()
     {
         using CliSandbox sandbox = new();
@@ -194,6 +198,7 @@ internal sealed class CliSettingsTests
     #region Scope and group
 
     [Test]
+    [Category("Slow")]
     public async Task ASettingChangesOnlyTheFileOfItsProfileAndScope()
     {
         using CliSandbox sandbox = new();
@@ -220,6 +225,7 @@ internal sealed class CliSettingsTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task ASettingOfBothScopesIsAddressedByScopeAndGroup()
     {
         using CliSandbox sandbox = new();
@@ -292,6 +298,7 @@ internal sealed class CliSettingsTests
     #region Stored values of plugins that are not loaded
 
     [Test]
+    [Category("Slow")]
     public async Task AStoredValueWithoutItsPluginIsListedReadAndChangedAsJson()
     {
         using CliSandbox sandbox = new();
@@ -332,6 +339,7 @@ internal sealed class CliSettingsTests
     #region Errors
 
     [Test]
+    [Category("Slow")]
     public async Task EveryMistakeIsOneErrorLineAndChangesNoFile()
     {
         using CliSandbox sandbox = new();

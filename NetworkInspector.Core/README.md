@@ -130,8 +130,9 @@ an id again is a re-parse and gives the same result.
 | `SettingsRegistrar` | Registers groups and settings into a `SettingsManager`; the public constructor lets plugins register the option settings of their own short-lived managers (package `NetworkInspector.Settings`) |
 | `SettingScope` | The one scope enumeration: `Application`, `Profile`, `Session` (stays in Core) |
 | `CoreSettingsLayout`, `CoreLimitPolicy` | The storage names of NetworkInspector and the hit sentence with the `ni` change hint |
+| `IExportTarget`, `ExportEntryName` | Where an export writes: the host hands an exporter a target that opens one write-only stream per named entry (`Main` for a single-file format); the exporters of `NetworkInspector.Exporters` take it with `ToTarget` |
 
-Namespaces: `NetworkInspector.Core` (stack, frame, packet, options), `.Fields`, `.Ids`, `.Infos`, `.Settings` (scope and layout), `.Limits` (hit hint),
+Namespaces: `NetworkInspector.Core` (stack, frame, packet, options), `.Interfaces` (listener and export-target contracts), `.Fields`, `.Ids`, `.Infos`, `.Settings` (scope and layout), `.Limits` (hit hint),
 `.Index`, `.ValueCaches`, `.Protocols` (dissector interfaces); value types are in `NetworkInspector.Values`.
 
 ## Common Tasks

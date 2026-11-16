@@ -79,6 +79,7 @@ internal sealed class BuiltInExporterTests
     #region Formats
 
     [Test]
+    [Category("Slow")]
     public async Task AllNineRegistrationsWriteTheSameTwentyPackets()
     {
         using TempFolder folder = new("exp-formats");
@@ -257,6 +258,7 @@ internal sealed class BuiltInExporterTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task AnOverlongPcapngCommentIsAnOptionError()
     {
         using TempFolder folder = new("exp-pcapng-comment");
@@ -393,22 +395,104 @@ internal sealed class BuiltInExporterTests
     }
 
     [Test]
-    public async Task ABadTargetIsAnErrorAndSettingBoundsStopBadNumbersEarly()
+    public async Task OnlyDuckDbReceivesAPathAndEveryOtherFormatReceivesATarget()
+    {
+        (List<ExporterRegistration<IFrameListener>> frames, List<ExporterRegistration<IPacketListener>> packets) = _Registrations();
+
+        string[] pathFormats =
+        [
+            .. frames.Where(static r => r.Creation.WritesFile).Select(static r => r.Format),
+            .. packets.Where(static r => r.Creation.WritesFile).Select(static r => r.Format),
+        ];
+        string[] streamFormats =
+        [
+            .. frames.Where(static r => r.Creation.TryGetForStreams(out _)).Select(static r => r.Format),
+            .. packets.Where(static r => r.Creation.TryGetForStreams(out _)).Select(static r => r.Format),
+        ];
+
+        await Assert.That(pathFormats).IsEquivalentTo(["DuckDB"]);
+        await Assert.That(streamFormats.Length).IsEqualTo(frames.Count + packets.Count - 1);
+        await Assert.That(streamFormats.Contains("DuckDB")).IsFalse();
+    }
+
+    [Test]
+    [Category("Slow")]
+    public async Task EveryStreamFormatWritesToTheTargetItIsGiven()
+    {
+        using TempFolder folder = new("exp-stream-targets");
+        (Stack stack, List<Frame> frames, List<Packet> packets) = _Traffic(5, 21);
+        (List<ExporterRegistration<IFrameListener>> frameRegistrations, List<ExporterRegistration<IPacketListener>> packetRegistrations) = _Registrations();
+
+        foreach (ExporterRegistration<IFrameListener> registration in frameRegistrations)
+        {
+            using MemoryStream memory = new();
+            using SettingsManager options = RegistrationOptions.CreateDefaults(registration.RegisterOptions);
+            registration.Creation.TryGetForStreams(out StreamExporterCreate<IFrameListener>? create);
+            // Invariant: the built-in frame formats register ForStreams, so create is set.
+            create!(new StreamExportRequest(new StreamExportTarget(memory), options.ReadOnly, stack, 0, CancellationToken.None),
+                out IFrameListener? listener, out PluginError? error);
+            _Write(_Ok((listener, error)), frames);
+            _Dispose(listener);
+            await Assert.That(Invariant($"{registration.Format}:{memory.Length > 0}")).IsEqualTo(Invariant($"{registration.Format}:True"));
+        }
+
+        foreach (ExporterRegistration<IPacketListener> registration in packetRegistrations.Where(static r => !r.Creation.WritesFile))
+        {
+            using MemoryStream memory = new();
+            string dataset = folder.FilePath("dataset-" + registration.Format);
+            bool isDataset = registration.FileExtension.Length == 0;
+            IExportTarget target = isDataset
+                ? new DirectoryExportTarget(dataset)
+                : new StreamExportTarget(memory);
+            using SettingsManager options = RegistrationOptions.CreateDefaults(registration.RegisterOptions);
+            registration.Creation.TryGetForStreams(out StreamExporterCreate<IPacketListener>? create);
+            // Invariant: only DuckDB registers ForFile and is filtered out above, so create is set.
+            create!(new StreamExportRequest(target, options.ReadOnly, stack, 0, CancellationToken.None),
+                out IPacketListener? listener, out PluginError? error);
+            _Write(_Ok((listener, error)), packets);
+            _Dispose(listener);
+            bool written = isDataset
+                ? Directory.EnumerateFiles(dataset, "*.parquet", SearchOption.AllDirectories).Any()
+                : memory.Length > 0;
+            await Assert.That(Invariant($"{registration.Format}:{written}")).IsEqualTo(Invariant($"{registration.Format}:True"));
+        }
+    }
+
+    [Test]
+    [Category("Slow")]
+    public async Task TheDuckDbFormatGetsAFreshPathAndWritesTheDatabaseThere()
+    {
+        using TempFolder folder = new("exp-duckdb-path");
+        (Stack stack, _, List<Packet> packets) = _Traffic(5, 22);
+        string path = folder.FilePath("out.duckdb");
+
+        IPacketListener listener = _Ok(RegistrationRunner.Create(_Packet("DuckDB"), path, stack));
+        _Write(listener, packets);
+        _Dispose(listener);
+
+        await Assert.That(new FileInfo(path).Length).IsGreaterThan(0L);
+    }
+
+    [Test]
+    public async Task ADuckDbPathInAMissingFolderIsAFileNotFoundError()
     {
         using TempFolder folder = new("exp-target-errors");
         (Stack stack, _, _) = _Traffic(1, 9);
         string missingFolder = Path.Combine(folder.Path, "no-such-folder", "out");
 
-        foreach (ExporterRegistration<IPacketListener> registration in _Registrations().Packets.Where(static r => r.Format is "JSON" or "CSV" or "PBF"))
-        {
-            (IPacketListener? listener, PluginError? error) = RegistrationRunner.Create(registration, missingFolder + registration.FileExtension, stack);
-            _Dispose(listener);
-            await Assert.That(Invariant($"{registration.Format}:{error?.Code}")).IsEqualTo(Invariant($"{registration.Format}:FileNotFound"));
-        }
+        // Only the DuckDB registration receives a path and checks its folder; a format that writes through a target opens its
+        // entry with the first item, and the missing folder of a path is the host's check (ExportTargets).
+        ExporterRegistration<IPacketListener> duckDb = _Packet("DuckDB");
+        (IPacketListener? listener, PluginError? error) = RegistrationRunner.Create(duckDb, missingFolder + duckDb.FileExtension, stack);
+        _Dispose(listener);
+        await Assert.That(Expect.NotNull(error).Code).IsEqualTo(PluginErrorCode.FileNotFound);
+    }
 
-        (IFrameListener? blf, PluginError? blfError) = RegistrationRunner.Create(_Frame("BLF"), missingFolder + ".blf", stack);
-        _Dispose(blf);
-        await Assert.That(Expect.NotNull(blfError).Code).IsEqualTo(PluginErrorCode.FileNotFound);
+    [Test]
+    public async Task AnAscDecimalsSettingOutOfRangeIsRefusedAndAPcapngSnapLengthOfZeroIsAccepted()
+    {
+        using TempFolder folder = new("exp-setting-bounds");
+        (Stack stack, _, _) = _Traffic(1, 9);
 
         // The ASC decimals bound equals the builder range, so a wrong number never reaches Create.
         await Assert.That(() => RegistrationRunner.Create(_Frame("ASC"), folder.FilePath("a.asc"), stack,
@@ -420,20 +504,6 @@ internal sealed class BuiltInExporterTests
         IFrameListener snap = _Ok(RegistrationRunner.Create(_Frame("PCAPNG"), folder.FilePath("s.pcapng"), stack, ("snapLength", SettingValue.U64(0))));
         _Dispose(snap);
         await Assert.That(snap).IsNotNull();
-    }
-
-    [Test]
-    public async Task ADirectoryTargetWithATrailingSeparatorStillFindsItsParentFolder()
-    {
-        using TempFolder folder = new("exp-trailing");
-        (Stack stack, _, _) = _Traffic(1, 12);
-        string target = folder.FilePath("dataset") + Path.DirectorySeparatorChar;
-
-        (IPacketListener? listener, PluginError? error) = RegistrationRunner.Create(_Packet("Parquet"), target, stack);
-        _Dispose(listener);
-
-        await Assert.That(error).IsNull();
-        await Assert.That(listener).IsNotNull();
     }
 
     [Test]
@@ -454,6 +524,7 @@ internal sealed class BuiltInExporterTests
     #region Listeners
 
     [Test]
+    [Category("Slow")]
     public async Task EveryListenerIsTheCoreExporterItself()
     {
         using TempFolder folder = new("exp-listeners");

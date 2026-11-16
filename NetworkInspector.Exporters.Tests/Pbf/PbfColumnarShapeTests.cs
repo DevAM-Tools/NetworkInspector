@@ -12,9 +12,9 @@ internal sealed class PbfColumnarShapeTests
 {
     #region Helpers
 
-    private static PbfExporter _Build(string path, ExportContent content) =>
+    private static PbfExporter _Build(Stream stream, ExportContent content) =>
         PbfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithFormat(PbfExportFormat.Columnar)
             .WithCompressed(false)
             .WithContent(content)
@@ -63,20 +63,19 @@ internal sealed class PbfColumnarShapeTests
     [Arguments(ExportShape.Hierarchy, 0UL)]
     public async Task TheFileHeaderCarriesFormatVersionOneAndTheShapeCode(ExportShape shape, ulong expectedCode)
     {
-        using TestDir dir = new("pbf_shape_header");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
         ExportContent content = shape == ExportShape.SelectedFields
             ? ExportContents.Selected(new FieldRequest("udp.dstport"))
             : new ExportContent { Shape = shape };
 
-        using (PbfExporter exporter = _Build(path, content))
+        using (PbfExporter exporter = _Build(stream, content))
         {
             _ = TreeFreeFeed.Run(exporter, ShapeFrames.TunnelUdpCan());
             exporter.OnFinish();
         }
 
-        PbfVerifier verifier = PbfVerifier.Open(path);
-        (List<PbfField> header, _) = PbfFileScanner.Read(path);
+        PbfVerifier verifier = PbfVerifier.FromBytes(stream.ToArray());
+        (List<PbfField> header, _) = PbfFileScanner.FromBytes(stream.ToArray());
 
         await Assert.That(verifier.HasValidHeaderMagic).IsTrue();
         await Assert.That(verifier.HasValidFooterMagic).IsTrue();
@@ -87,18 +86,16 @@ internal sealed class PbfColumnarShapeTests
     [Test]
     public async Task FlatShapesWriteNoTopologyAndTheHierarchyDoes()
     {
-        using TestDir dir = new("pbf_shape_topology");
-
         foreach ((ExportShape shape, bool expectTopology) in new[] { (ExportShape.AllFields, false), (ExportShape.Hierarchy, true) })
         {
-            string path = dir.FilePath(Invariant($"{shape}.pbf"));
-            using (PbfExporter exporter = _Build(path, new ExportContent { Shape = shape }))
+            using MemoryStream stream = new();
+            using (PbfExporter exporter = _Build(stream, new ExportContent { Shape = shape }))
             {
                 _ = TreeFreeFeed.Run(exporter, ShapeFrames.TunnelUdpCan());
                 exporter.OnFinish();
             }
 
-            (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+            (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(stream.ToArray());
             bool hasTopology = blocks.Exists(static block => block.Exists(static field => field.Number == PbfFieldNumbers.ColumnarTopology));
 
             await Assert.That(blocks.Count).IsGreaterThan(0);
@@ -112,16 +109,15 @@ internal sealed class PbfColumnarShapeTests
     [Arguments(Occurrences.All, new[] { 0, 1 })]
     public async Task TheTunnelPacketWritesOccurrenceNumbersInThePositionColumn(Occurrences choice, int[] expected)
     {
-        using TestDir dir = new("pbf_shape_occurrence");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
 
-        using (PbfExporter exporter = _Build(path, ExportContents.Selected(new FieldRequest("ip.src", choice))))
+        using (PbfExporter exporter = _Build(stream, ExportContents.Selected(new FieldRequest("ip.src", choice))))
         {
             _ = TreeFreeFeed.Run(exporter, [PacketGenerators.CreateTunnelFrame(0)]);
             exporter.OnFinish();
         }
 
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(stream.ToArray());
 
         await Assert.That(_Positions(blocks, _FieldId("ip.src"))).IsEquivalentTo(expected);
     }
@@ -129,12 +125,11 @@ internal sealed class PbfColumnarShapeTests
     [Test]
     public async Task ATreePacketTheObserverDidNotSeeWritesTheSameFileAsTheTreeFreeFeed()
     {
-        using TestDir dir = new("pbf_shape_feed");
-        string treeFreePath = dir.FilePath("free.pbf");
-        string treePath = dir.FilePath("tree.pbf");
+        using MemoryStream treeFreeStream = new();
+        using MemoryStream treeStream = new();
         ExportContent content = ExportContents.Selected(new FieldRequest("ip.src"), new FieldRequest("udp.dstport"));
 
-        using (PbfExporter exporter = _Build(treeFreePath, content))
+        using (PbfExporter exporter = _Build(treeFreeStream, content))
         {
             _ = TreeFreeFeed.Run(exporter, ShapeFrames.TunnelUdpCan());
             exporter.OnFinish();
@@ -142,7 +137,7 @@ internal sealed class PbfColumnarShapeTests
 
         // A library user who ignores the parse demand passes ordinary tree packets: the exporter reads the selected fields
         // straight from the tree and must write what the tree-free feed wrote.
-        using (PbfExporter exporter = _Build(treePath, content))
+        using (PbfExporter exporter = _Build(treeStream, content))
         {
             foreach (Frame frame in ShapeFrames.TunnelUdpCan())
             {
@@ -154,22 +149,21 @@ internal sealed class PbfColumnarShapeTests
             exporter.OnFinish();
         }
 
-        (_, List<List<PbfField>> freeBlocks) = PbfFileScanner.Read(treeFreePath);
-        (_, List<List<PbfField>> treeBlocks) = PbfFileScanner.Read(treePath);
+        (_, List<List<PbfField>> freeBlocks) = PbfFileScanner.FromBytes(treeFreeStream.ToArray());
+        (_, List<List<PbfField>> treeBlocks) = PbfFileScanner.FromBytes(treeStream.ToArray());
 
         await Assert.That(string.Join(",", _Positions(treeBlocks, _FieldId("ip.src")))).IsEqualTo(string.Join(",", _Positions(freeBlocks, _FieldId("ip.src"))));
         await Assert.That(string.Join(",", _Positions(treeBlocks, _FieldId("udp.dstport")))).IsEqualTo(string.Join(",", _Positions(freeBlocks, _FieldId("udp.dstport"))));
-        await Assert.That(File.ReadAllBytes(treePath).Length).IsEqualTo(File.ReadAllBytes(treeFreePath).Length);
+        await Assert.That(treeStream.ToArray().Length).IsEqualTo(treeFreeStream.ToArray().Length);
     }
 
     [Test]
     public async Task APacketTheFilterRejectedLeavesNoRowsInTheBlock()
     {
-        using TestDir dir = new("pbf_shape_commit");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
         List<Frame> frames = [ShapeFrames.TunnelUdpCan()[1], ShapeFrames.TunnelUdpCan()[1], ShapeFrames.TunnelUdpCan()[1]];
 
-        using (PbfExporter exporter = _Build(path, ExportContents.Selected(new FieldRequest("udp.dstport"))))
+        using (PbfExporter exporter = _Build(stream, ExportContents.Selected(new FieldRequest("udp.dstport"))))
         {
             int index = 0;
             _ = TreeFreeFeed.Run(exporter, frames, offer: _ => index++ != 1);
@@ -178,7 +172,7 @@ internal sealed class PbfColumnarShapeTests
             await Assert.That(exporter.PacketCount).IsEqualTo(2);
         }
 
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(stream.ToArray());
 
         await Assert.That(_Positions(blocks, _FieldId("udp.dstport")).Count).IsEqualTo(2);
     }
@@ -190,14 +184,13 @@ internal sealed class PbfColumnarShapeTests
     [Test]
     public async Task AHierarchyPacketWithoutAFieldTreeIsSkippedAsASerializationError()
     {
-        using TestDir dir = new("pbf_shape_no_tree");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
         ParseOptions noTree = new(FieldTreeMode.Skip);
         Packet packet = TestHarness.ParseFrame(ShapeFrames.TunnelUdpCan()[1], in noTree);
         List<ExportErrorEventArgs> events = [];
         bool accepted;
 
-        using (PbfExporter exporter = _Build(path, new ExportContent { Shape = ExportShape.Hierarchy }))
+        using (PbfExporter exporter = _Build(stream, new ExportContent { Shape = ExportShape.Hierarchy }))
         {
             exporter.ItemSkipped += (_, args) => events.Add(args);
 
@@ -208,7 +201,7 @@ internal sealed class PbfColumnarShapeTests
             await Assert.That(exporter.WrittenCount).IsEqualTo(0);
         }
 
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(stream.ToArray());
 
         await Assert.That(packet.HasFieldTree).IsFalse();
         await Assert.That(accepted).IsTrue(); // tolerant mode: the packet is skipped and the export goes on

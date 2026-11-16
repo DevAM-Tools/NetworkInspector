@@ -20,6 +20,7 @@ internal sealed class PluginLoaderPrescanTests
 
     [Test]
     [ClassDataSource<RuntimeDllFolder>(Shared = SharedType.PerTestSession)]
+    [Category("Slow")]
     public async Task OnlyThePluginAssemblyIsLoadedFromAFolderWithTwoHundredOtherDlls(RuntimeDllFolder runtime)
     {
         using LoaderHarness harness = new("prescan");
@@ -48,6 +49,7 @@ internal sealed class PluginLoaderPrescanTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task JunkFilesAreSkippedQuietly()
     {
         using LoaderHarness harness = new("junk");
@@ -78,6 +80,7 @@ internal sealed class PluginLoaderPrescanTests
     #region Entry types by interface
 
     [Test]
+    [Category("Slow")]
     public async Task TwoEntryTypesOfOneAssemblyLoadIntoOneContext()
     {
         using LoaderHarness harness = new("two-entries");

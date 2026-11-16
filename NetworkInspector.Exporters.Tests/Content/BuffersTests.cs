@@ -47,13 +47,11 @@ internal sealed class BuffersTests
     [Arguments(BufferScenario.TextAllFields)]
     public async Task NoBufferRecordsAreWrittenByDefaultInTheFastFormats(BufferScenario scenario)
     {
-        using TestDir dir = new("buffers_default");
-
-        BufferRun run = BufferExportScenarios.Run(scenario, BufferTrace.Create(), BufferMembers.None, dir);
+        BufferRun run = BufferExportScenarios.Run(scenario, BufferTrace.Create(), BufferMembers.None, dir: null);
 
         // The packets do carry additional buffers, so an empty result is the switch and not an empty capture.
         await Assert.That(run.Expected.Count).IsGreaterThan(0);
-        await Assert.That(BufferExportScenarios.Read(scenario, run)).IsNull();
+        await Assert.That(await BufferExportScenarios.ReadAsync(scenario, run)).IsNull();
     }
 
     /// <summary>Proves that DuckDB and Parquet write no buffer table or file unless the buffers member is on, although the packets carry buffers.</summary>
@@ -67,12 +65,14 @@ internal sealed class BuffersTests
     [Arguments(BufferScenario.ParquetSelectedFields)]
     public async Task NoBufferRecordsAreWrittenByDefaultInDuckDbAndParquet(BufferScenario scenario)
     {
-        using TestDir dir = new("buffers_default_db");
+        using TestDir? dir = scenario is BufferScenario.DuckDbHierarchy or BufferScenario.DuckDbSelectedFields
+            ? new("buffers_default_db")
+            : null;
 
         BufferRun run = BufferExportScenarios.Run(scenario, BufferTrace.Create(), BufferMembers.None, dir);
 
         await Assert.That(run.Expected.Count).IsGreaterThan(0);
-        await Assert.That(BufferExportScenarios.Read(scenario, run)).IsNull();
+        await Assert.That(await BufferExportScenarios.ReadAsync(scenario, run)).IsNull();
     }
 
     #endregion
@@ -104,9 +104,7 @@ internal sealed class BuffersTests
     [Test]
     public async Task TheCaptureBindsTheReassembledDatagramThePduTheDecodedBodyAndTheUnmaskedPayload()
     {
-        using TestDir dir = new("buffers_fixture");
-
-        BufferRun run = BufferExportScenarios.Run(BufferScenario.JsonArrayTree, BufferTrace.Create(), BufferMembers.None, dir);
+        BufferRun run = BufferExportScenarios.Run(BufferScenario.JsonArrayTree, BufferTrace.Create(), BufferMembers.None, dir: null);
 
         // Packet 1 completes the datagram, packet 3 the request PDU, packet 4 holds the response PDU and its decoded body, packet 5
         // the upgrade response with the masked frame (PDU) and the unmasked payload.
@@ -142,11 +140,9 @@ internal sealed class BuffersTests
     [Arguments(BufferScenario.TextAllFields)]
     public async Task BuffersOnWriteTheBuffersOfEveryPacketInTheFastFormats(BufferScenario scenario)
     {
-        using TestDir dir = new("buffers_on");
+        BufferRun run = BufferExportScenarios.Run(scenario, BufferTrace.Create(), BufferMembers.Buffers, dir: null);
 
-        BufferRun run = BufferExportScenarios.Run(scenario, BufferTrace.Create(), BufferMembers.Buffers, dir);
-
-        await _AssertRowsAsync(BufferExportScenarios.Read(scenario, run), run.Expected);
+        await _AssertRowsAsync(await BufferExportScenarios.ReadAsync(scenario, run), run.Expected);
     }
 
     /// <summary>Proves that DuckDB and Parquet with the buffers member on write the buffers of every packet as the packets reported them.</summary>
@@ -160,11 +156,13 @@ internal sealed class BuffersTests
     [Arguments(BufferScenario.ParquetSelectedFields)]
     public async Task BuffersOnWriteTheBuffersOfEveryPacketInDuckDbAndParquet(BufferScenario scenario)
     {
-        using TestDir dir = new("buffers_on_db");
+        using TestDir? dir = scenario is BufferScenario.DuckDbHierarchy or BufferScenario.DuckDbSelectedFields
+            ? new("buffers_on_db")
+            : null;
 
         BufferRun run = BufferExportScenarios.Run(scenario, BufferTrace.Create(), BufferMembers.Buffers, dir);
 
-        await _AssertRowsAsync(BufferExportScenarios.Read(scenario, run), run.Expected);
+        await _AssertRowsAsync(await BufferExportScenarios.ReadAsync(scenario, run), run.Expected);
     }
 
     /// <summary>
@@ -181,12 +179,10 @@ internal sealed class BuffersTests
     [Arguments(BufferScenario.TextTree)]
     public async Task FramesAndBuffersTogetherWriteTheSameBufferRowsAsBuffersAlone(BufferScenario scenario)
     {
-        using TestDir dir = new("buffers_with_frames");
-
         BufferRun run = BufferExportScenarios.Run(
-            scenario, BufferTrace.Create(), BufferMembers.Frames | BufferMembers.Buffers, dir);
+            scenario, BufferTrace.Create(), BufferMembers.Frames | BufferMembers.Buffers, dir: null);
 
-        await _AssertRowsAsync(BufferExportScenarios.Read(scenario, run), run.Expected);
+        await _AssertRowsAsync(await BufferExportScenarios.ReadAsync(scenario, run), run.Expected);
     }
 
     #endregion
@@ -208,9 +204,7 @@ internal sealed class BuffersTests
     [Arguments(BufferScenario.TextTree, BufferScenario.TextSelectedFields)]
     public async Task TheTreeFreeParseGivesTheSameBufferRowsAsTheTreeParseInTheFastFormats(BufferScenario tree, BufferScenario treeFree)
     {
-        using TestDir dir = new("buffers_tree_free");
-
-        await _AssertSameRowsAsync(tree, treeFree, dir);
+        await _AssertSameRowsAsync(tree, treeFree, dir: null);
     }
 
     /// <summary>Proves that the tree-free parse gives the same buffer rows as the parse with a field tree in DuckDB and Parquet.</summary>
@@ -223,7 +217,9 @@ internal sealed class BuffersTests
     [Arguments(BufferScenario.ParquetHierarchy, BufferScenario.ParquetSelectedFields)]
     public async Task TheTreeFreeParseGivesTheSameBufferRowsAsTheTreeParseInDuckDbAndParquet(BufferScenario tree, BufferScenario treeFree)
     {
-        using TestDir dir = new("buffers_tree_free_db");
+        using TestDir? dir = tree == BufferScenario.DuckDbHierarchy
+            ? new("buffers_tree_free_db")
+            : null;
 
         await _AssertSameRowsAsync(tree, treeFree, dir);
     }
@@ -231,15 +227,15 @@ internal sealed class BuffersTests
     /// <summary>Runs both scenarios on their own capture and asserts that the buffer rows are the same relative to the first packet.</summary>
     /// <param name="tree">The scenario that parses with a field tree.</param>
     /// <param name="treeFree">The scenario of the same format that parses without a field tree.</param>
-    /// <param name="dir">The directory of the outputs.</param>
+    /// <param name="dir">The directory of the outputs; only DuckDB needs it.</param>
     /// <returns>A task that completes when the assertions have passed.</returns>
-    private static async Task _AssertSameRowsAsync(BufferScenario tree, BufferScenario treeFree, TestDir dir)
+    private static async Task _AssertSameRowsAsync(BufferScenario tree, BufferScenario treeFree, TestDir? dir)
     {
         BufferRun treeRun = BufferExportScenarios.Run(tree, BufferTrace.Create(), BufferMembers.Buffers, dir);
         BufferRun freeRun = BufferExportScenarios.Run(treeFree, BufferTrace.Create(), BufferMembers.Buffers, dir);
 
-        List<BufferRow>? treeRows = BufferExportScenarios.Read(tree, treeRun);
-        List<BufferRow>? freeRows = BufferExportScenarios.Read(treeFree, freeRun);
+        List<BufferRow>? treeRows = await BufferExportScenarios.ReadAsync(tree, treeRun);
+        List<BufferRow>? freeRows = await BufferExportScenarios.ReadAsync(treeFree, freeRun);
 
         await Assert.That(treeRows).IsNotNull();
         await Assert.That(freeRows).IsNotNull();

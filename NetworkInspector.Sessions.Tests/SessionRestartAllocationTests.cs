@@ -3,6 +3,7 @@
 namespace NetworkInspector.Sessions.Tests;
 
 /// <summary>Allocation behaviour of the restart re-parse: it must recycle one packet instead of allocating one per frame.</summary>
+[Category("Slow")]
 internal sealed class SessionRestartAllocationTests
 {
     /// <summary>

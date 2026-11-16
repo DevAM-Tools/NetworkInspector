@@ -107,7 +107,7 @@ static void WriteJson(IEnumerable<Packet> packets)
 
 | Method | Purpose | Default |
 | --- | --- | --- |
-| `ToFile` / `ToStream` / `ToStdout` | Output target | required |
+| `ToFile` / `ToStream` / `ToStdout` / `ToTarget` | Output target (`ToTarget` takes a host `IExportTarget` and writes the one entry `Main`) | required |
 | `WithUiName` / `WithDescription` | User-facing metadata (not written to the output) | — |
 | `WithFormat(format)` | JSON style | `Compact` |
 | `WithFlushPerPacket(bool)` | Flush after each packet for live consumers | `false` |

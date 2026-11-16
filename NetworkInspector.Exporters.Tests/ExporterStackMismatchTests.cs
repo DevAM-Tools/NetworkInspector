@@ -60,10 +60,9 @@ internal sealed class ExporterStackMismatchTests
     [Category("Slow")]
     public async Task ParquetRefusesAPacketOfAnotherStackAndKeepsTheEarlierRowsValid()
     {
-        using TestDir dir = new("parquet_stack_mismatch");
-        string outputPath = Path.Combine(dir.DirectoryPath, "dataset");
+        MemoryExportTarget target = new(seekable: true);
         (Packet[] first, Packet other) = _TwoStacks();
-        using ParquetExporter exporter = ParquetExporter.CreateBuilder().ToDirectory(outputPath).Build();
+        using ParquetExporter exporter = ParquetExporter.CreateBuilder().ToTarget(target).Build();
         List<ExportErrorEventArgs> events = _Collect(exporter);
 
         bool a = exporter.OnPacket(first[0]);
@@ -71,7 +70,8 @@ internal sealed class ExporterStackMismatchTests
         bool refused = exporter.OnPacket(other);
         exporter.OnFinish();
 
-        await using ParquetReader reader = await ParquetReader.CreateAsync(Path.Combine(outputPath, "packets.parquet"));
+        using MemoryStream stream = new(target.Bytes("packets.parquet"));
+        await using ParquetReader reader = await ParquetReader.CreateAsync(stream);
         long rows = 0;
         for (int i = 0; i < reader.RowGroupCount; i++)
         {
@@ -176,11 +176,10 @@ internal sealed class ExporterStackMismatchTests
     [Test]
     public async Task PbfColumnarRefusesAPacketOfAnotherStackAndFinishesAValidFile()
     {
-        using TestDir dir = new("pbf_stack_mismatch");
-        string path = dir.FilePath("output.pbf");
+        using MemoryStream stream = new();
         (Packet[] first, Packet other) = _TwoStacks();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithFormat(PbfExportFormat.Columnar)
             .WithCompressed(false)
             .Build();
@@ -191,7 +190,7 @@ internal sealed class ExporterStackMismatchTests
         bool refused = exporter.OnPacket(other);
         exporter.OnFinish();
 
-        PbfVerifier verifier = PbfVerifier.Open(path);
+        PbfVerifier verifier = PbfVerifier.FromBytes(stream.ToArray());
         await Assert.That(a && b).IsTrue();
         await Assert.That(refused).IsFalse();
         await Assert.That(events.Count).IsEqualTo(1);
@@ -206,11 +205,10 @@ internal sealed class ExporterStackMismatchTests
     [Test]
     public async Task PbfStandardFormatDoesNotCheckTheStackBecauseItCarriesNoCatalog()
     {
-        using TestDir dir = new("pbf_standard_two_stacks");
-        string path = dir.FilePath("output.pbf");
+        using MemoryStream stream = new();
         (Packet[] first, Packet other) = _TwoStacks();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithFormat(PbfExportFormat.Standard)
             .WithCompressed(false)
             .Build();

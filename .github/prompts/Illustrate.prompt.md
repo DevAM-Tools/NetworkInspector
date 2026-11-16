@@ -1,6 +1,6 @@
 ---
 name: illustrate
-description: Build an HTML illustration. Use on /illustrate. Ask before vendoring libraries.
+description: Build a didactic HTML illustration that makes a person understand one thing. Teaching design and storyboard first; every motion shows a real state change of the subject, driven by real logic and real values; the learner can change the input. Use on /illustrate. Ask before vendoring libraries.
 argument-hint: Name the item of interest (plan, requirements, API, concept)
 agent: agent
 ---

@@ -8,6 +8,7 @@ namespace NetworkInspector.Sessions.Tests;
 /// the generation counts every restart, no retired stack is left, every handler saw every notification in order, and after the
 /// last restart the whole capture reads on the last stack.
 /// </summary>
+[Category("Slow")]
 internal sealed class SessionRestartStressTests
 {
     private static readonly TimeSpan _Timeout = TimeSpan.FromSeconds(60);

@@ -1,28 +1,28 @@
 # Implement Workflow
 
-Load on `/implement`. Apply `copilot-instructions.md` for all quality, tech, git, and communication rules.
+Load on `/implement`, or from `/docs-repair`, `/port-dotnet-rust`, `/port-dotnet-rust-loop`, or `/evolve`. Also load now: `tech-spec.md`, `tech-reqtrace.md`, `tech-docs.md`. Apply `copilot-instructions.md`.
 
-**Purpose:** Implement approved plan steps or accepted review findings **exactly**. Complete every item in scope. Review each step, write an **extensive briefing**, then run one **Closing Review** of the whole result. End **every** run, complete or not, with the run report (Section 4.16).
+**Purpose:** Implement approved plan steps or accepted review findings **exactly**. Complete every item in scope. Review each step, write the briefing, run one Closing Review. End every run with the run report.
 
-## Stage Order
+## Stages
 
 1. Prepare
 2. Execute Steps
 3. Final Verification
-4. Briefing
+4. Briefing (read `tech-reporting.md` now)
 5. Closing Review
 6. Run report
 
 ## Gates
 
-Each gate catches a different class of defect. None repeats another’s work. Never skip a gate because a later one will run.
+Each gate catches a different defect class. Never skip one because a later one will run.
 
 | Gate | Scope | Catches |
 |------|-------|---------|
 | Sync check | Touched code and docs | Docs and comments that no longer state the truth |
 | `Verify` | The step’s claim | The step does not do what it says |
-| Step `{n}R` | The step’s change and its direct callers | Defects inside the step |
-| Closing Review | Everything the run built, with plan and requirements | Defects that exist only when steps combine; requirements that fail end to end |
+| Step `{n}R` | The step’s change and direct callers | Defects inside the step |
+| Closing Review | Everything built, with plan and requirements | Defects that exist only when steps combine; requirements that hold per step but fail end to end |
 
 ```mermaid
 flowchart TD
@@ -40,159 +40,104 @@ flowchart TD
 
 ## Stage 1 — Prepare
 
-- Require an approved plan or accepted review findings (Section 6); stop otherwise.
-- ❗ Read the **entire** plan (or finding file) **before the first edit**. Do not skim Step Overview and skip `How`. Read the requirements artifact and every linked architecture doc, guide, or doc **in full**.
-- Run the Tech Load Protocol (Section 3); it always includes `tech-docs.md`. Read before acting (Section 4.6, `tech-docs.md` § Reading tiers).
-- Resume at the first `⚠️`, else the first `🚧`, else the first `⬜`.
+- Require an approved plan, accepted findings, or a passed Gate A (Section 6). Stop otherwise.
+- ❗ Read the entire plan or finding file before the first edit. Never read only the Step Overview and skip the `How` blocks. Read the linked requirement entries, test cards, and every linked doc in full.
+- Run the Tech Load Protocol (Section 3). Read before acting (`tech-docs.md` § Reading tiers).
+- Resume at the first `⚠️`, else `🚧`, else `⬜`.
 
 ## Stage 2 — Execute Steps
 
-Process every step, dedicated test step, and finding in scope, in topological order. Skip none. Per item:
+Process every step, test step, and finding in scope, in topological order. Skip none. Read `tech-reporting.md` § Progress note now. Per item:
 
-1. **Start:** set `🚧` on every status surface before the first edit (Section 5). Plan: Step Overview, Shared Block, Task Checklist. Finding: its `Status` line and the Summary **Findings** Status cell.
-2. **Edit:** implement only the current scope. Match `What` and `How` exactly, including plan Before/After or finding Problem/Fix. Do not substitute, simplify, or extend without user approval. Run the Impact search (`tech-docs.md` § Impact search) before the first edit in each file. A needed break of a documented boundary, flow, or invariant that the plan did not agree is a stop (Stage 6 **Needs you**).
-3. **Tests:** implement the **Content** of each `TEST-<AREA>-<TOPIC>` on the step. Mark its row `✅` when the Content exists as a test that can fail. Extra tests that prove agreed behavior are allowed.
-4. **Docs:** update every file in the step `Docs` field and every Impact-search hit in the same item. Run the Sync check (`tech-docs.md` § Sync check) and record its line in the Implementation Status Table.
-5. **Verify:** run the item’s `Verify`; require pass. Run only the tests that cover the item (`tech-test.md`). On failure follow Section 4.15 and the step `Debug` block.
-6. **UI:** a product web UI change → use the integrated browser on the running UI (Section 4.8).
-7. **Align:** compare target and actual; no silent deviation. Confirm the step `Acceptance` boxes and, for new public APIs, the plan’s misuse/abuse checklist.
-8. **Requirements (step close):** re-read the **linked** requirements file. Run Done-when for each requirement ID still `⬜` that this step could have made true. Tick `Met` in that file only when the check **ran**, never because `How` alluded to the outcome. Never write requirement or test IDs into code or comments.
-9. **Step `{n}R`** (plan steps): run `/review` on the step’s change — the files it touched, their direct callers, and its `Docs` files. A full review may reuse this step’s `Verify` run when no file changed since; say so in **Test Execution**. Zero Errors and zero High Performance findings before the next step; remediate here and re-review. Complex-task: persist per `workflow-complex-task.md`.
-10. **Close:** set `✅` on every surface after `Verify`, alignment, requirement and test ticks, the Sync check, and a clean Step `{n}R` (findings: no Step `{n}R`). Do not rewrite a review’s **Release** or **Counts**; they stay the review-time verdict. A deferred finding stays `⬜`. Chat-only review: record the finding in the Implementation Status Table and say the Summary Status cell was not persisted.
+Under `/evolve` with a Builder, items 2, 3, 4, and 6 of a plan step run in the Builder; the Lead checks the handoff, then continues from item 7 (`workflow-evolve.md` § Builder).
 
-- **Phase close:** when the plan has phases, run the phase’s `How to try` from **Expected Experience** after its last step. A mismatch with `They should see` is a Problem (Stage 6).
-- **Stop:** two failed remediations of the same Error root cause → blocker (Section 4.16), set the item to `⚠️` on every status surface, then Stage 6. An item left without a blocker (pause, user abort) stays `🚧`. Any other stop (out-of-scope discovery, unexpected diff, missing decision, user abort) → Stage 6.
+1. **Start:** set `🚧` on every status surface before the first edit. Plan step: Step Overview, Shared Block, Task Checklist. Finding: its `Status` line and the Summary **Findings** cell.
+2. **Edit:** implement only the current scope. Match `What`, `How`, and Before/After or Problem/Fix exactly: the same types, names, signatures, visibility, control flow, and error paths. Do not substitute, simplify, or extend without approval. Details the plan left open (a private name, a local, the test layout): decide (Section 4.16). Run the Impact search (`tech-docs.md` § Impact search) before the first edit in each file. An `After` that cannot work as written: a correction that keeps every signature and behavior is a Deviation, record it; any other change needs approval first. A needed break of a documented boundary the plan did not agree: Decision class; stop this item, ask, continue items that do not depend on it.
+3. **Tests:** read `tech-test.md` § Two layers and § Code tests now. Both layers, in this order:
+   - **Card tests:** implement each card’s **Content**. Add the card’s marker to the test (`tech-spec.md` § Trace). Mark `Status ✅` when the Content exists as a test that can fail.
+   - **Code tests:** walk every member this item’s Edit added or changed. Book each branch, error path, parameter guard, loop, overflow guard, state transition, limit, and thread-safety or allocation claim as a new code test, a covering card test, or `n/a — {reason}`. Record the ledger line. All cards `✅` never ends this item.
+4. **Docs:** update every file in `Docs` and every Impact-search hit. Run the Sync check and record its line.
+5. **Knowledge:** write each domain fact learned in this item (a user answer, a rule from a third-party spec, a fact an error message revealed) to its `docs/domain/` page, or to `docs/domain/inbox.md` when no page fits (`tech-spec.md` § Domain knowledge).
+6. **Verify:** run `Verify`; require pass. Run only the tests that cover the item (`tech-test.md`). On failure: Section 4.15 and the `Debug` block.
+7. **UI:** the item changes a product web UI → open the running UI in the integrated browser, walk the changed page, and read the console (Section 4.8, `tech-playwright.md`). No UI change: skip.
+8. **Align:** re-read the item’s `How` and `After` (or Fix) next to the code written. Remove each difference, or record it as a Deviation (Stage 6); none stays silent. Tick each `Acceptance` box only after its check ran. A new public API: walk the plan’s misuse and abuse vectors against the code.
+9. **Requirements:** re-read the linked entries. Run Done-when for each still `⬜` that this step could have made true. Tick `Met` and fill `Built in` only when the check **ran**, never because `How` alluded to the outcome or a test with that name exists. Run `reqtrace check`; with .NET tests and a `Met` ticked in this step, run those tests with TRX first and `reqtrace check --results artifacts/trace-results` (`tech-reqtrace.md` § Test evidence). → Zero Errors, except L4 and L6 on cards a later step writes. Every card this step wrote has its marked test.
+10. **Step `{n}R`** (plan steps; skipped only for `/evolve` size M, where the Closing Review covers the one step): `/review` on the step’s change: files touched, direct callers, `Docs` files. It may reuse this step’s `Verify` when no file changed since; say so in **Test Execution**. Zero Errors and zero High Performance findings before the next step: remediate them in this step, then review again until clean.
+11. **Close:** set `✅` on every surface after `Verify`, alignment, ticks, the Code tests ledger line, the Sync check, and a clean Step `{n}R`. Do not rewrite a review’s **Release** or **Counts**. A deferred finding stays `⬜`. Chat-only review: record the finding in the status table.
+12. **Report:** ❗ print a progress note (`tech-reporting.md` § Progress note). `{Items}`: **Steps**, or **Findings** for a finding run, from the Step Overview or the Summary. Under `/evolve`, fill it per `workflow-evolve.md` § Progress note. Under `/docs-repair` and the port workflows, skip it: their own chat line applies.
+
+```text
+Wrong: The plan says `bool TryAdd(string name, out ExportId id)`. The agent writes `Result<ExportId> Add(string name)` because it reads better.
+Right: Write `TryAdd` as planned. A better shape is a Deviation that needs approval before the edit.
+Wrong: `Met ✅` because a test named `CreateTwice…` exists and `How` mentions duplicates.
+Right: Run the Done-when (“the operator submits Report again and still sees one row”), observe one row, then tick.
+Wrong: `Verify` is red. The agent weakens the assertion, or marks `✅` and moves on.
+Right: Reproduce, debug, fix the code. After two failed remedies: blocker, `⚠️`, continue with independent items.
+Wrong: Step 2R finds an Error. The agent notes it for the Closing Review and starts Step 3.
+Right: Fix it in Step 2, review again, start Step 3 at zero Errors.
+Wrong: The card test for TEST-EXPORT-NO-DUPLICATE is green, so item 3 is done.
+Right: Also walk `Export.Create`: the empty-name guard and the name-length limit need code tests. Add them,
+       write the ledger line, then go on.
+```
+
+- **Phase close:** after the last step of a phase, run its `How to try`. A mismatch with `They should see` is a Problem.
+- **Stop:** two failed remedies of one root cause (`tech-reporting.md` § Blocker) → `⚠️` on every surface, item 12; continue with items that do not depend on it. A pause or abort leaves `🚧`. An unexpected diff (Section 4.14) stops the run.
 
 ## Stage 3 — Final Verification
 
-- Confirm **every** scoped step, test ID, and finding is `✅` on every status surface. Leftover `⬜` / `🚧` / `⚠️` = blocker (Section 4.16).
-- Re-run alignment: every requirement ID with Done-when Met ✅, every test ID ✅, or every accepted finding resolved.
-- Run the full build and all tests in optimized/Release. Commands from the loaded tech skill.
-- Web UI: run the planned Playwright journeys and walk the changed pages in the integrated browser (Section 4.8).
-- Output the Implementation Status Table (every step, finding, and test ID).
-- Do not enter Stage 4 until this stage is green.
-
-## Stage 4 — Briefing
-
-Write the briefing before Stage 5, also when Stage 5 is skipped. No complete without it. Call it a **briefing**, never a “review brief”.
-
-The briefing is the human packet for what shipped. It must be **extensive**: a reader who did not watch implementation knows what shipped, why it had to, how to try it, what to inspect in each file, which acceptance checks now hold, and what is out of scope. English (Section 4.6). ❗ Incomplete without contribution, how to try the result, and what to inspect. Do not compress **How it serves**, **Why needed**, or header **Why**.
-
-- Path: `reviews/briefing_<slug>.md`. Single item: `reviews/briefing_<slug>_<item>.md` (`step{n}` / finding ID). Before the Closing Review: full-scope file.
-- List every created, edited, or deleted path, docs included. Omit none. Rewrite on remediation.
-- Describe the built result: symbols, behavior, contracts. Small illustrative snippets (signatures, usage) help; a raw diff does not.
-- Requirement IDs, test IDs, and `E{n}` links belong in the briefing (reader aid), never in product code. Requirement links use the plan **Requirements** path (default `requirements/req_{slug}.md`). Test-ID links use the plan path and the lowercased ID as fragment (`#test-export-no-duplicate`).
-- Card heading: clickable relative link (Section 4.6), label = repo-root path in backticks. Deleted: same link + `(deleted)`. Sibling files may share one card. Walkthrough steps that name a file use the same link form.
-- Field order per card: **Changed** → **Why needed** → **How it serves** → **Look at** → **Depends on** → **Serves**.
-- **How it serves:** per linked requirement ID / test ID / `E{n}`, full sentences: which symbols, what exists or is gone, what a caller can or cannot do, which Done-when this file owns. Unique to this file. Ban slogans, ID-only, “as planned”, empty purpose.
-- **Look at:** where a reader should spend time (type, method, invariant).
-- Reading order: contracts/types → implementations → cutover → tests → docs.
-
-```markdown
-# Briefing — {scope}
-
-**Expect:** {outcome}
-**Done when:** {checks the reader can run}
-**Why:** {problem without this work; what stays wrong if it does not ship}
-**Out:** {exclusions}
-**Open:** {Stage 6 **Not done**, **Needs you**, and **Problems** items; or `none`}
-
-**Try this:** {exact commands, Playwright spec, or usage snippet; expected observable}
-
-**Acceptance evidence:**
-- REQ-EXPORT-CREATE ({short outcome}): {command/UI/API and what was observed} · [REQ-EXPORT-CREATE](../requirements/req_{slug}.md)
-- TEST-EXPORT-NO-DUPLICATE ({case}): {test filter or spec and result}
-
-**Public API:** {short snippet or "unchanged"}
-
-**Performance:** {hot-path allocation notes, or "not in hot path"}
-
-**Docs:** {docs and comment sets updated, with links; Sync check result}
-
-**Requirements:** [REQ-EXPORT-CREATE](../requirements/req_{slug}.md) {short outcome} · [REQ-EXPORT-TIME-BUDGET](../requirements/req_{slug}.md) {short property}
-
-**Test cases:** [TEST-EXPORT-NO-DUPLICATE](../plans/plans_{slug}.md#test-export-no-duplicate) {short name} · [TEST-EXPORT-EMPTY-NAME](../plans/plans_{slug}.md#test-export-empty-name) {short name}
-
-## Walkthrough
-
-1. {Open this file; confirm this symbol / AC}
-2. {Then this}
-
-## Files
-
-1. [`{path}`](../{path})
-   - **Changed:** {symbols/behavior}
-   - **Why needed:** {what fails without this file — several sentences if needed}
-   - **How it serves:** [REQ-EXPORT-CREATE](../requirements/req_{slug}.md): {causal contribution unique to this file}. [TEST-EXPORT-NO-DUPLICATE](../plans/plans_{slug}.md#test-export-no-duplicate): {how this file makes that test ID’s Content possible}
-   - **Look at:** {symbol and what to verify}
-   - **Depends on:** —
-   - **Serves:** [REQ-EXPORT-CREATE](../requirements/req_{slug}.md), [TEST-EXPORT-NO-DUPLICATE](../plans/plans_{slug}.md#test-export-no-duplicate)
-
-2. `{path}` (deleted)
-   - **Changed:** {what went away}
-   - **Why needed:** {what the deleted type blocked or enabled wrongly}
-   - **How it serves:** {type is gone; callers must use …; Done-when this deletion closes}
-   - **Look at:** callers listed in Depends on / Serves
-   - **Depends on:** 1
-   - **Serves:** [REQ-EXPORT-CREATE](../requirements/req_{slug}.md)
-```
-
-## Stage 5 — Closing Review
-
-- Run `workflow-review.md` in **Closing Review** mode on the full built scope: every path in the briefing, their callers, the plan, the requirements file, and the Step `{n}R` reviews. File mode: `reviews/review_<slug>-closing_<n>.md`, `n` from 1.
-- **Ready** → Stage 6.
-- **Blocked** → remediate each Error and High Performance finding through Stage 2 (status ticks, `Verify`, Sync check). Re-run Stage 3 for the touched scope, rewrite Stage 4, then run the Closing Review again as `_<n+1>`. Two failed remediations of the same root cause → blocker (Section 4.16).
-- Cosmetic, Refactoring, and other Performance findings are in scope: fix them the same way unless the user defers them. A deferred finding stays `⬜` and appears under **Not done** in Stage 6. `/complex-task` defers them per its Stage 5.
-- Skip this stage when the parent is `workflow-complex-task.md` per item, `workflow-review-loop.md`, or `workflow-docs-repair.md` (each runs its own closing review). Still run Stage 4.
-- **Exam (on request only):** when the user asks for it (`exam`, `with exam`, `/council exam`), run `workflow-council.md` Exam after the Closing Review is Ready. `quick` / `lite` → Lite Exam. **Holds** → Stage 6. **Does not hold** → remediate the kill shots like Blocked findings, then re-Exam `_<n>`.
-- Grill Me follow-ups → ask the user (Section 4.16 question form); the run is not complete.
-
-## Stage 6 — Run report
-
-Write the run report of Section 4.16 on **every** exit: complete, blocked, failed, paused, aborted. It is the last chat message of the run, in the user’s language (Section 2). A parent (`workflow-complex-task.md`, `workflow-review-loop.md`, `workflow-docs-repair.md`) reports once, at its end or at its first stop.
-
-What goes where:
-
-- **Not done:** steps, test IDs, and findings still `⬜`, `🚧`, or `⚠️`; deferred findings; checks that did not run (Final Verification, Closing Review, phase `How to try`).
-- **Needs you:** unresolved `C{n}`, plan Open Questions, Grill Me follow-ups, out-of-scope discoveries, deviations that need approval.
-- **Problems:** failed `Verify`, red build or test, unmet Done-when, Closing Review **Blocked**, Exam **Does not hold**, phase mismatch, two-attempt cap, environment collision. One entry per root cause.
-- **Deviations:** a step built differently from its `How` or Before/After, or a finding fixed differently from its Fix.
-
-Link each item to the plan step, finding, or file (Section 4.6, from repo root). Do not paste Shared Blocks or the briefing. Mirror **Not done**, **Needs you**, and **Problems** in the briefing **Open** field when a briefing exists.
-
-Copy the depth, not the content:
-
-```markdown
-**Implement ⚠️ stopped at Step 3** — export: 2 of 5 steps ✅ · Plan [`plans/plans_export.md`](plans/plans_export.md) · Briefing [`reviews/briefing_export.md`](reviews/briefing_export.md)
-
-**Not done**
-1. ⚠️ [Step 3 — Add store](plans/plans_export.md#step-3---add-store): stopped; `Verify` failed twice (Problem 1).
-2. ⬜ [Step 4 — Wire UI](plans/plans_export.md#step-4---wire-ui), [Step 5 — Requirements fit](plans/plans_export.md#step-5---requirements-fit): not started; depend on Step 3.
-3. ⬜ Final Verification, Briefing, Closing Review: not run.
-
-**Needs you**
-1. Context: export, Step 3 adds the store. The plan says names are unique per user ([requirements](requirements/req_export.md) REQ-EXPORT-NO-DUPLICATE); `IExportStore` in [`src/Store.cs`](src/Store.cs) has no atomic add, so two parallel requests can both pass the check. Why it matters: decides whether Step 3 needs a store change. Question: may Step 3 add `IExportStore.TryAdd`? Options: A) add `TryAdd` (atomic, one more interface member, one more test) · B) keep check-then-add and document the race (duplicates possible under load). Recommendation: A, because B ships a known violation of REQ-EXPORT-NO-DUPLICATE. Or answer in your own words.
-
-**Problems**
-1. ❌ Requirement not met: [REQ-EXPORT-NO-DUPLICATE](requirements/req_export.md) Done-when “a second create with the same name returns `DuplicateName`”. Ran `dotnet test --treenode-filter "/*/*/ExportStoreTests/*"`: `CreateTwiceInParallel` → 2 rows. Gap: no atomic check-and-add. Impact: duplicate exports for users who double-click. Scope: Step 3 blocked; Steps 1–2 stand. To unblock: decision 1.
-
-**Deviations**
-none
-```
-
-- When everything is `✅`, **Not done**, **Needs you**, **Problems**, and **Deviations** each say `none`.
-
-## Implementation Status Table
+- Confirm every scoped step, test ID, and finding is `✅`. Leftovers are blockers.
+- Confirm every step and finding row carries its Code tests ledger line. A member in the diff (`git diff --stat`, then the file) that no ledger line books is a leftover.
+- Re-run alignment: every requirement Met ✅, every test ID ✅, or every finding resolved.
+- Run the full build and all tests in Release, with the commands of the loaded tech skill. Filter the output to errors (Section 4.17). .NET: write TRX (`tech-reqtrace.md` § Test evidence).
+- `reqtrace check` (.NET: `--results artifacts/trace-results`) → `Result: 0 errors`. A remaining Error is a leftover; an exit `2` is a check that did not run.
+- Web UI: run the planned journeys; walk the changed pages in the integrated browser.
+- Output the status table with every step, test ID, requirement, and finding in scope. Do not enter Stage 4 until green.
 
 ```markdown
 | Step / Finding | Status |
 |----------------|--------|
-| Step 1 - {title} | ✅ Complete · Sync check: updated `docs/architecture.md` § Run |
-| Step 1R - Review Step 1 | ✅ Clean - 0 Errors |
-| TEST-EXPORT-NO-DUPLICATE - {case} | ✅ |
-| Step {N} - Requirements fit | ✅ Every requirement with Done-when Met |
-| REQ-EXPORT-CREATE - {outcome} | ✅ Met |
-| E1 - {title} | ✅ Fixed · Sync check: none needed (private helper, no doc claim) |
+| Step 1 - {title} | ✅ · Code tests: 4 added · Sync check: updated `docs/architecture.md` § Run |
+| Step 1R | ✅ Clean - 0 Errors |
+| TEST-EXPORT-NO-DUPLICATE | ✅ |
+| REQ-EXPORT-CREATE | ✅ Met |
+| E1 - {title} | ✅ Fixed · Code tests: 1 added · Sync check: none needed (private helper) |
 | Briefing | ✅ reviews/briefing_<slug>.md |
 | Closing Review | ✅ Ready · reviews/review_<slug>-closing_1.md |
 ```
+
+## Stage 4 — Briefing
+
+Read `tech-reporting.md` now. Write the briefing per its § Briefing before Stage 5, also when Stage 5 is skipped. A run without a briefing is not complete.
+
+## Stage 5 — Closing Review
+
+- Run `workflow-review.md` in **Closing Review** mode on the full built scope. File: `reviews/review_<slug>-closing_<n>.md`, `n` from 1.
+- **Ready** → Stage 6.
+- **Blocked** → remediate each Error and High Performance finding through Stage 2. Re-run Stage 3 for the touched scope, rewrite Stage 4, review again as `_<n+1>`. Two failed remedies of one root cause → blocker.
+- Cosmetic, Refactoring, and other Performance findings are in scope unless the user defers them. A deferred finding stays `⬜` and appears under **Not done**.
+- Skip this stage when the parent is `workflow-docs-repair.md` or § Review until clean runs. Still run Stage 4.
+- **Exam (on request only):** `exam`, `with exam`, `/council exam` → `workflow-council.md` Exam after Ready. `quick` or `lite` → Lite Exam. **Holds** → Stage 6. **Does not hold** → remediate kill shots like Blocked findings, re-Exam `_<n>`.
+- Grill Me follow-ups from the Closing Review or the Exam → ask per Section 4.16; the run is not complete.
+
+## Stage 6 — Run report
+
+Write per `tech-reporting.md` § Run report on every exit. A parent reports once, at its end or first stop.
+
+- **Not done:** steps, test IDs, findings still `⬜`, `🚧`, or `⚠️`; deferred findings; checks that did not run.
+- **Needs you:** unresolved `C{n}`, Open Questions, out-of-scope discoveries, deviations needing approval, user-visible behavior a code test showed that no requirement names. Not under `/evolve`, with new marked tests: "Reply `accept` to record the built state; until then, deleting one of the new tests stays an open gap instead of an error." On that reply: `reqtrace accept` (`tech-reqtrace.md` § Accept).
+- **Problems:** failed `Verify`, red build or test, unmet Done-when, Closing Review **Blocked**, Exam **Does not hold**, phase mismatch, two-attempt cap, collision.
+- **Deviations:** a step built differently from `How` or Before/After, or a finding fixed differently from its Fix.
+
+Mirror **Not done**, **Needs you**, and **Problems** in the briefing **Open** field.
+
+## Review until clean
+
+`workflow-docs-repair.md` and the port workflows run this on a named scope. No plan is needed.
+
+1. Run `workflow-review.md` on the scope in file mode: `reviews/review_<slug>_<n>.md`, `n` from 1.
+2. Finish when the latest review has no open finding (`⬜`, `🚧`, `⚠️`) in any bucket, or the user deferred each remaining one in the review Summary. Zero Errors alone is not enough while a Cosmetic, Refactoring, or Performance finding is open.
+3. Remediate every open finding through Stage 2 in Priority Action List order. Run Stage 3 for the touched scope, write the briefing (Stage 4), increase `n`, go to 1.
+
+- Stop: two failed remedies of one root cause → blocker (`tech-reporting.md`). After 10 reviews, report every open finding as a blocker.
+- Resume at the first open finding of the latest file. Keep the numbering. Without a scope argument, take the scope from that file’s **Scope** section.
+- End with the run report (Stage 6). **Not done** lists every open and every deferred finding.

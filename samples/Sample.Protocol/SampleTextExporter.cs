@@ -27,7 +27,7 @@ public static class SampleTextExporter
         Description: "One line per sample packet: id, counter, gear, speed.",
         FileExtension: ".sampletxt",
         RegisterOptions: RegisterOptions,
-        Create: TryCreate);
+        Creation: ExporterCreation.ForStreams<IPacketListener>(TryCreate));
 
     /// <summary>Registers the option settings: <c>includeHeader</c> (Bool, default true).</summary>
     /// <param name="options">The registrar over the fresh option manager of one request.</param>
@@ -37,55 +37,22 @@ public static class SampleTextExporter
     }
 
     /// <summary>
-    /// Creates the listener. The application prepared the target (overwrite is its decision), so an existing file is still
-    /// refused here as <see cref="PluginErrorCode.TargetExists"/>: the listener opens the file with
-    /// <see cref="FileMode.CreateNew"/> and never replaces anything on its own.
+    /// Creates the listener. The format never sees a path: the host prepared the target (where the output lands and whether an
+    /// earlier output is replaced are its decisions), and the format opens its one entry,
+    /// <see cref="ExportEntryName.Main"/>. A refused entry is an error value, never an exception.
     /// </summary>
-    /// <param name="request">The request: target path, applied options, and the stack that parsed the packets.</param>
+    /// <param name="request">The request: target, applied options, and the stack that parsed the packets.</param>
     /// <param name="listener">The created listener; <see langword="null"/> on failure.</param>
     /// <param name="error">Why no listener was created; <see langword="null"/> on success.</param>
     /// <returns><see langword="true"/> when <paramref name="listener"/> is set.</returns>
-    public static bool TryCreate(ExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
+    public static bool TryCreate(StreamExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         ArgumentNullException.ThrowIfNull(request);
         listener = null;
 
-        // 1. Target: a path is required, and the parent folder must exist.
-        if (string.IsNullOrWhiteSpace(request.TargetPath))
-        {
-            error = new PluginError(PluginErrorCode.InvalidOption, "An output path is required.");
-            return false;
-        }
-
-        // GetFullPath throws for paths the file system cannot express; that is bad input, not a bug, so it becomes an error value.
-        string fullPath;
-        string? folder;
-        try
-        {
-            fullPath = Path.GetFullPath(request.TargetPath);
-            folder = Path.GetDirectoryName(fullPath);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            error = new PluginError(PluginErrorCode.InvalidOption, Invariant($"'{request.TargetPath}' is not a valid output path: {ex.Message}"));
-            return false;
-        }
-
-        // A path without a parent folder (a drive or file system root) cannot name an output file.
-        if (folder is null)
-        {
-            error = new PluginError(PluginErrorCode.InvalidOption, Invariant($"'{fullPath}' is not an output file path."));
-            return false;
-        }
-
-        if (!Directory.Exists(folder))
-        {
-            error = new PluginError(PluginErrorCode.FileNotFound, Invariant($"Folder '{folder}' does not exist."));
-            return false;
-        }
-
-        // 2. Fields: the stack must know the sample protocol, otherwise there is nothing to write.
+        // 1. Fields: the stack must know the sample protocol, otherwise there is nothing to write. They are checked before the
+        // target is touched, so a failure here opens no entry.
         if (!_TryGetField(request.Stack, "sample.counter", out FieldId counter, out error)
             || !_TryGetField(request.Stack, "sample.gear", out FieldId gear, out error)
             || !_TryGetField(request.Stack, "sample.speed", out FieldId speed, out error))
@@ -93,25 +60,15 @@ public static class SampleTextExporter
             return false;
         }
 
-        // 3. File: CreateNew refuses an existing file; the exists check only tells the two IOException causes apart.
+        // 2. Entry: the host's target hands out the stream; a refusal carries the host's reason.
         bool includeHeader = request.Options.GetBoolSetting(_IncludeHeaderOption) ?? true;
-        FileStream stream;
-        try
+        if (!request.Target.TryOpenWrite(ExportEntryName.Main, out Stream? stream, out string failure))
         {
-            stream = new FileStream(fullPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        }
-        catch (IOException) when (File.Exists(fullPath))
-        {
-            error = new PluginError(PluginErrorCode.TargetExists, Invariant($"Output '{fullPath}' exists."));
-            return false;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            error = new PluginError(PluginErrorCode.FileUnreadable, Invariant($"Cannot create '{fullPath}': {ex.Message}"));
+            error = new PluginError(PluginErrorCode.FileUnreadable, failure);
             return false;
         }
 
-        listener = new SampleTextListener(stream, fullPath, includeHeader, counter, gear, speed);
+        listener = new SampleTextListener(stream, includeHeader, counter, gear, speed);
         error = null;
         return true;
     }

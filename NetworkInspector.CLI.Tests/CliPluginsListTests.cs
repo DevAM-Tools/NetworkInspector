@@ -14,6 +14,7 @@ internal sealed class CliPluginsListTests
     #region List
 
     [Test]
+    [Category("Slow")]
     public async Task TheTextListShowsTheSummaryAndOneRowPerPlugin()
     {
         using CliSandbox sandbox = new();
@@ -71,6 +72,7 @@ internal sealed class CliPluginsListTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task TheSecondRunReadsTheScanCache()
     {
         using CliSandbox sandbox = new();

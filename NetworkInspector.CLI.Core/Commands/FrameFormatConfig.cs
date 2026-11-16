@@ -137,7 +137,7 @@ internal sealed class FrameFormatConfig
     /// <returns><see langword="true"/> when <paramref name="listener"/> is set.</returns>
     internal bool TryCreate(string fullPath, IStack stack, Func<string, LimitValue?> storedLimit, Action<PluginError> onIgnoredStoredValue,
         [NotNullWhen(true)] out IFrameListener? listener, [NotNullWhen(false)] out PluginError? error, CancellationToken cancellationToken) =>
-        FormatSpec.TryCreate(Registration, OptionTexts, fullPath, stack, storedLimit, onIgnoredStoredValue, out listener, out error,
+        FormatSpec.TryCreate(Registration, OptionTexts, fullPath, false, stack, storedLimit, onIgnoredStoredValue, out listener, out error,
             cancellationToken);
 
     #endregion

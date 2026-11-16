@@ -109,7 +109,7 @@ When the loop reports **Complete** or **Waiting**:
 1. Re-run the inventory. New or changed source members since Phase 0 become open rows and go back to Phase 2.
 2. Run the balance check (Section 7). Any difference is an Error.
 3. Run the full Rust suite in Release, all oracle fixtures, and the benchmark comparison.
-4. Run `/review-loop` per crate with this skill loaded. Review hunts simplification first (Section 2 list).
+4. Run `workflow-implement.md` § Review until clean per crate with this skill loaded. Review hunts simplification first (Section 2 list).
 5. Write `port/REPORT.md` (template in books): balance, deviations, blockers, suspected source bugs, performance.
 
 The human reviews deviations and blockers. Approval releases the port. “It builds” is not acceptance.

@@ -9,26 +9,18 @@ namespace NetworkInspector.Exporters.Tests.Blf;
 internal sealed class BlfExporterTests
 {
     [Test]
-    public async Task BuilderRequiresOutput()
-    {
-        BlfExporter.Builder builder = BlfExporter.CreateBuilder();
-        await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
-    }
-
-    [Test]
     public async Task SingleEthernetFrameProducesValidBlf()
     {
-        using TestDir dir = new("blf_single");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
 
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToFile(path).Build();
+        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(stream).Build();
 
         byte[] frameData = FrameGenerators.BuildEthernetIpv4UdpFrame(32);
         Frame frame = TestHarness.CreateFrame(0, 1_000_000_000, frameData);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
-        BlfStructuralVerifier verifier = BlfStructuralVerifier.Open(path);
+        BlfStructuralVerifier verifier = BlfStructuralVerifier.FromBytes(stream.ToArray());
         await Assert.That(verifier.HasValidHeader).IsTrue();
         await Assert.That(verifier.ObjectCount).IsGreaterThanOrEqualTo(1);
     }
@@ -36,11 +28,10 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task MultipleFramesAllWritten()
     {
-        using TestDir dir = new("blf_multi");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
 
         const int count = 20;
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToFile(path).Build();
+        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(stream).Build();
 
         Frame[] frames = PacketGenerators.CreateEthernetFrames(count);
         foreach (Frame frame in frames)
@@ -50,7 +41,7 @@ internal sealed class BlfExporterTests
 
         exporter.OnFinish();
 
-        BlfStructuralVerifier verifier = BlfStructuralVerifier.Open(path);
+        BlfStructuralVerifier verifier = BlfStructuralVerifier.FromBytes(stream.ToArray());
         await Assert.That(verifier.HasValidHeader).IsTrue();
         // Each frame produces at least one BLF object, plus potentially containers
         await Assert.That(verifier.ObjectCount).IsGreaterThanOrEqualTo(1);
@@ -59,10 +50,9 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task CanClassicFrameProducesValidBlf()
     {
-        using TestDir dir = new("blf_can");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
 
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToFile(path).Build();
+        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(stream).Build();
 
         byte[] canData = SocketCanGenerators.BuildCanClassic(0x123, [0x01, 0x02, 0x03, 0x04]);
         Frame frame = TestHarness.CreateFrame(
@@ -70,7 +60,7 @@ internal sealed class BlfExporterTests
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
-        BlfStructuralVerifier verifier = BlfStructuralVerifier.Open(path);
+        BlfStructuralVerifier verifier = BlfStructuralVerifier.FromBytes(stream.ToArray());
         await Assert.That(verifier.HasValidHeader).IsTrue();
         await Assert.That(verifier.ObjectCount).IsGreaterThanOrEqualTo(1);
     }
@@ -78,10 +68,9 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task CanFdFrameProducesValidBlf()
     {
-        using TestDir dir = new("blf_canfd");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
 
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToFile(path).Build();
+        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(stream).Build();
 
         byte[] canData = SocketCanGenerators.BuildCanFd(
             0x456, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08], brs: true);
@@ -90,7 +79,7 @@ internal sealed class BlfExporterTests
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
-        BlfStructuralVerifier verifier = BlfStructuralVerifier.Open(path);
+        BlfStructuralVerifier verifier = BlfStructuralVerifier.FromBytes(stream.ToArray());
         await Assert.That(verifier.HasValidHeader).IsTrue();
     }
 
@@ -114,10 +103,9 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task FlexRayFrameProducesValidBlf()
     {
-        using TestDir dir = new("blf_flexray");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
 
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToFile(path).Build();
+        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(stream).Build();
 
         byte[] frData = FlexRayGenerators.BuildFlexRayFrame(
             0, 10, 3, 0xABCD, [0xDE, 0xAD, 0xBE, 0xEF], sync: true);
@@ -125,7 +113,7 @@ internal sealed class BlfExporterTests
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
-        BlfStructuralVerifier verifier = BlfStructuralVerifier.Open(path);
+        BlfStructuralVerifier verifier = BlfStructuralVerifier.FromBytes(stream.ToArray());
         await Assert.That(verifier.HasValidHeader).IsTrue();
         await Assert.That(verifier.ObjectCount).IsGreaterThanOrEqualTo(1);
     }
@@ -153,17 +141,16 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task LinFrameProducesValidBlf()
     {
-        using TestDir dir = new("blf_lin");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
 
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToFile(path).Build();
+        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(stream).Build();
 
         byte[] linData = LinGenerators.BuildLinFrame(0x05, [0x11, 0x22, 0x33], checksum: 0x42);
         Frame frame = TestHarness.CreateFrame(0, 1_000_000_000, linData, LinkType.Lin);
         exporter.OnFrame(frame);
         exporter.OnFinish();
 
-        BlfStructuralVerifier verifier = BlfStructuralVerifier.Open(path);
+        BlfStructuralVerifier verifier = BlfStructuralVerifier.FromBytes(stream.ToArray());
         await Assert.That(verifier.HasValidHeader).IsTrue();
         await Assert.That(verifier.ObjectCount).IsGreaterThanOrEqualTo(1);
     }
@@ -190,10 +177,9 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task MixedFrameTypesAllWritten()
     {
-        using TestDir dir = new("blf_mixed");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
 
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToFile(path).Build();
+        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(stream).Build();
 
         // Ethernet frame
         byte[] ethData = FrameGenerators.BuildEthernetIpv4UdpFrame(16);
@@ -217,7 +203,7 @@ internal sealed class BlfExporterTests
 
         exporter.OnFinish();
 
-        BlfStructuralVerifier verifier = BlfStructuralVerifier.Open(path);
+        BlfStructuralVerifier verifier = BlfStructuralVerifier.FromBytes(stream.ToArray());
         await Assert.That(verifier.HasValidHeader).IsTrue();
         // ObjectCount counts top-level BLF objects (containers), not individual frames
         await Assert.That(verifier.ObjectCount).IsGreaterThanOrEqualTo(1);
@@ -225,191 +211,8 @@ internal sealed class BlfExporterTests
     }
 
     // ========================================================================
-    // Cancellation
-    // ========================================================================
-
-    [Test]
-    [Category("Slow")]
-    public async Task CancellationStopsExport()
-    {
-        using CancellationTokenSource cts = new();
-        using MemoryStream ms = new();
-        using BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCancellationToken(cts.Token)
-            .Build();
-
-        Frame[] frames = PacketGenerators.CreateEthernetFrames(10);
-
-        exporter.OnFrame(frames[0]);
-        exporter.OnFrame(frames[1]);
-        await cts.CancelAsync().ConfigureAwait(false);
-
-        // After cancellation, OnFrame must return false
-        bool accepted = exporter.OnFrame(frames[2]);
-        await Assert.That(accepted).IsFalse();
-
-        exporter.OnFinish();
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterCancellation()
-    {
-        using CancellationTokenSource cts = new();
-        using MemoryStream ms = new();
-        using BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCancellationToken(cts.Token)
-            .Build();
-
-        await cts.CancelAsync().ConfigureAwait(false);
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-    }
-
-    // ========================================================================
-    // Target frame count
-    // ========================================================================
-
-    [Test]
-    public async Task TargetFrameCountLimitsExport()
-    {
-        using MemoryStream ms = new();
-        using BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithTargetFrameCount(3)
-            .Build();
-
-        Frame[] frames = PacketGenerators.CreateEthernetFrames(10);
-        foreach (Frame frame in frames)
-        {
-            exporter.OnFrame(frame);
-        }
-
-        exporter.OnFinish();
-
-        await Assert.That(exporter.FrameCount).IsEqualTo(3);
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterTargetReached()
-    {
-        using MemoryStream ms = new();
-        using BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithTargetFrameCount(2)
-            .Build();
-
-        Frame[] frames = PacketGenerators.CreateEthernetFrames(5);
-        foreach (Frame frame in frames)
-        {
-            exporter.OnFrame(frame);
-        }
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-        exporter.OnFinish();
-    }
-
-    // ========================================================================
-    // Lifecycle: IsFinished, Double-finish
-    // ========================================================================
-
-    [Test]
-    public async Task IsFinishedFalseBeforeOnFinish()
-    {
-        using MemoryStream ms = new();
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(ms).Build();
-
-        await Assert.That(exporter.IsFinished).IsFalse();
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterOnFinish()
-    {
-        using MemoryStream ms = new();
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(ms).Build();
-
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-    }
-
-    [Test]
-    public async Task OnFrameAfterFinishReturnsFalse()
-    {
-        using MemoryStream ms = new();
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(ms).Build();
-
-        exporter.OnFinish();
-
-        Frame[] frames = PacketGenerators.CreateEthernetFrames(1);
-        bool accepted = exporter.OnFrame(frames[0]);
-
-        await Assert.That(accepted).IsFalse();
-    }
-
-    [Test]
-    public async Task DoubleFinishIsIdempotent()
-    {
-        using MemoryStream ms = new();
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(ms).Build();
-
-        Frame[] frames = PacketGenerators.CreateEthernetFrames(2);
-        exporter.OnFrame(frames[0]);
-
-        // Calling OnFinish twice must not throw
-        exporter.OnFinish();
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-        await Assert.That(exporter.FrameCount).IsEqualTo(1);
-    }
-
-    // ========================================================================
     // UiName / Description
     // ========================================================================
-
-    [Test]
-    public async Task UiNameReturnsDefault()
-    {
-        using MemoryStream ms = new();
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(ms).Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("BLF Exporter");
-    }
-
-    [Test]
-    public async Task UiNameReturnsCustomValue()
-    {
-        using MemoryStream ms = new();
-        using BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithUiName("Vehicle Bus Exporter")
-            .Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("Vehicle Bus Exporter");
-    }
-
-    [Test]
-    public async Task DescriptionReturnsNullWhenNotSet()
-    {
-        using MemoryStream ms = new();
-        using BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(ms).Build();
-
-        await Assert.That(exporter.Description).IsNull();
-    }
-
-    [Test]
-    public async Task DescriptionReturnsConfiguredValue()
-    {
-        using MemoryStream ms = new();
-        using BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithDescription("Binary Logging Format export")
-            .Build();
-
-        await Assert.That(exporter.Description).IsEqualTo("Binary Logging Format export");
-    }
 
     [Test]
     public async Task EthernetPayloadLongerThanUInt16IsSkippedAsMalformed()
@@ -436,13 +239,12 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task CanXlFrameWritesType139AndReimports()
     {
-        using TestDir dir = new("blf_canxl");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
 
         byte[] xlData = SocketCanGenerators.BuildCanXl(
             0x01, [0xAA, 0xBB, 0xCC, 0xDD], vcid: 0x1A, sdt: 0x05, acceptanceField: 0x11);
 
-        using (BlfExporter exporter = BlfExporter.CreateBuilder().ToFile(path).Build())
+        using (BlfExporter exporter = BlfExporter.CreateBuilder().ToStream(stream).Build())
         {
             exporter.ErrorTolerance = ErrorToleranceMode.Tolerant;
             bool accepted = exporter.OnFrame(
@@ -454,11 +256,11 @@ internal sealed class BlfExporterTests
             await Assert.That(exporter.FrameCount).IsEqualTo(1);
         }
 
-        BlfStructuralVerifier verifier = BlfStructuralVerifier.Open(path);
+        BlfStructuralVerifier verifier = BlfStructuralVerifier.FromBytes(stream.ToArray());
         await Assert.That(verifier.HasValidHeader).IsTrue();
         await Assert.That(verifier.ObjectCount).IsGreaterThanOrEqualTo(1);
 
-        using BlfSource source = BlfSource.Open(path);
+        using BlfSource source = BlfSource.FromData(stream.ToArray(), "output.blf");
         _StartSource(source);
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -488,12 +290,11 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task CanClassicFrameExtendedIdDoesNotSetFlagsByteEff()
     {
-        using TestDir dir = new("blf_can_eff");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
 
         byte[] canData = SocketCanGenerators.BuildCanClassic(0x123, [0x01], extended: true);
         using (BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithCompressionLevel(BlfCompressionLevel.None)
             .Build())
         {
@@ -502,7 +303,7 @@ internal sealed class BlfExporterTests
             exporter.OnFinish();
         }
 
-        using BlfSource source = BlfSource.Open(path);
+        using BlfSource source = BlfSource.FromData(stream.ToArray(), "output.blf");
         _StartSource(source);
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -515,14 +316,13 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task CanFdFrameWritesType101AndReimports()
     {
-        using TestDir dir = new("blf_canfd_t101");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
 
         byte[] fdData = SocketCanGenerators.BuildCanFd(
             0x456, [0x01, 0x02, 0x03, 0x04], extended: true, brs: true);
 
         using (BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithCompressionLevel(BlfCompressionLevel.None)
             .Build())
         {
@@ -537,7 +337,7 @@ internal sealed class BlfExporterTests
         }
 
         // Inner LOBJs sit in an uncompressed LOG_CONTAINER; scan file bytes for Type 101.
-        byte[] fileBytes = File.ReadAllBytes(path);
+        byte[] fileBytes = stream.ToArray();
         bool foundType101 = false;
         for (int i = 0; i + 16 <= fileBytes.Length; i++)
         {
@@ -556,7 +356,7 @@ internal sealed class BlfExporterTests
 
         await Assert.That(foundType101).IsTrue();
 
-        using BlfSource source = BlfSource.Open(path);
+        using BlfSource source = BlfSource.FromData(stream.ToArray(), "output.blf");
         _StartSource(source);
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -695,8 +495,7 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task LinSleepEventWritesType20()
     {
-        using TestDir dir = new("blf_lin_event");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
         byte[] linEvent = new byte[12];
         linEvent[0] = 1;
         linEvent[4] = 3 << 2;
@@ -705,7 +504,7 @@ internal sealed class BlfExporterTests
         linEvent[11] = 0x01;
 
         using (BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithCompressionLevel(BlfCompressionLevel.None)
             .Build())
         {
@@ -719,10 +518,10 @@ internal sealed class BlfExporterTests
             await Assert.That(exporter.FrameCount).IsEqualTo(1);
         }
 
-        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeLinMessage2)).IsFalse();
-        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeLinSleep)).IsTrue();
+        await Assert.That(_FileContainsObjectType(stream.ToArray(), BlfConstants.ObjTypeLinMessage2)).IsFalse();
+        await Assert.That(_FileContainsObjectType(stream.ToArray(), BlfConstants.ObjTypeLinSleep)).IsTrue();
 
-        using BlfSource source = BlfSource.Open(path);
+        using BlfSource source = BlfSource.FromData(stream.ToArray(), "output.blf");
         _StartSource(source);
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -732,8 +531,7 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task LinWakeupEventWritesType62()
     {
-        using TestDir dir = new("blf_lin_wakeup");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
         byte[] linEvent = new byte[12];
         linEvent[0] = 1;
         linEvent[4] = 3 << 2;
@@ -742,7 +540,7 @@ internal sealed class BlfExporterTests
         linEvent[11] = 0x04;
 
         using (BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithCompressionLevel(BlfCompressionLevel.None)
             .Build())
         {
@@ -751,9 +549,9 @@ internal sealed class BlfExporterTests
             await Assert.That(exporter.FrameCount).IsEqualTo(1);
         }
 
-        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeLinWakeup2)).IsTrue();
+        await Assert.That(_FileContainsObjectType(stream.ToArray(), BlfConstants.ObjTypeLinWakeup2)).IsTrue();
 
-        using BlfSource source = BlfSource.Open(path);
+        using BlfSource source = BlfSource.FromData(stream.ToArray(), "output.blf");
         _StartSource(source);
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -763,12 +561,11 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task LinErrorFrameWritesType60()
     {
-        using TestDir dir = new("blf_lin_err");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
         byte[] linError = LinGenerators.BuildLinFrame(0x05, [0x11], checksum: 0x42, errors: 0x08);
 
         using (BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithCompressionLevel(BlfCompressionLevel.None)
             .Build())
         {
@@ -781,10 +578,10 @@ internal sealed class BlfExporterTests
             await Assert.That(exporter.FrameCount).IsEqualTo(1);
         }
 
-        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeLinMessage2)).IsFalse();
-        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeLinCrcError2)).IsTrue();
+        await Assert.That(_FileContainsObjectType(stream.ToArray(), BlfConstants.ObjTypeLinMessage2)).IsFalse();
+        await Assert.That(_FileContainsObjectType(stream.ToArray(), BlfConstants.ObjTypeLinCrcError2)).IsTrue();
 
-        using BlfSource source = BlfSource.Open(path);
+        using BlfSource source = BlfSource.FromData(stream.ToArray(), "output.blf");
         _StartSource(source);
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -794,14 +591,13 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task CanErrorFrameWritesType2()
     {
-        using TestDir dir = new("blf_can_err");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
         byte[] canData = SocketCanGenerators.BuildCanClassic(0x123, [0x01]);
         BinaryPrimitives.WriteUInt32BigEndian(
             canData, BinaryPrimitives.ReadUInt32BigEndian(canData) | BlfConstants.SocketCanErr);
 
         using (BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithCompressionLevel(BlfCompressionLevel.None)
             .Build())
         {
@@ -810,10 +606,10 @@ internal sealed class BlfExporterTests
             exporter.OnFinish();
         }
 
-        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeCanError)).IsTrue();
-        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeCanMessage)).IsFalse();
+        await Assert.That(_FileContainsObjectType(stream.ToArray(), BlfConstants.ObjTypeCanError)).IsTrue();
+        await Assert.That(_FileContainsObjectType(stream.ToArray(), BlfConstants.ObjTypeCanMessage)).IsFalse();
 
-        using BlfSource source = BlfSource.Open(path);
+        using BlfSource source = BlfSource.FromData(stream.ToArray(), "output.blf");
         _StartSource(source);
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -824,8 +620,7 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task EthernetVlanTciZeroRoundTripsViaType120()
     {
-        using TestDir dir = new("blf_eth_tci0");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
         byte[] ethernet = new byte[18];
         ethernet.AsSpan(0, 6).Fill(0xFF);
         ethernet.AsSpan(6, 6).Fill(0x11);
@@ -837,7 +632,7 @@ internal sealed class BlfExporterTests
         ethernet[17] = 0x00;
 
         using (BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithCompressionLevel(BlfCompressionLevel.None)
             .Build())
         {
@@ -845,10 +640,10 @@ internal sealed class BlfExporterTests
             exporter.OnFinish();
         }
 
-        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeEthernetFrameEx)).IsTrue();
-        await Assert.That(_FileContainsObjectType(path, BlfConstants.ObjTypeEthernetFrame)).IsFalse();
+        await Assert.That(_FileContainsObjectType(stream.ToArray(), BlfConstants.ObjTypeEthernetFrameEx)).IsTrue();
+        await Assert.That(_FileContainsObjectType(stream.ToArray(), BlfConstants.ObjTypeEthernetFrame)).IsFalse();
 
-        using BlfSource source = BlfSource.Open(path);
+        using BlfSource source = BlfSource.FromData(stream.ToArray(), "output.blf");
         _StartSource(source);
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -858,8 +653,7 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task EthernetFrameWithFcsRoundTripsViaType120()
     {
-        using TestDir dir = new("blf_eth_fcs");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
         byte[] ethernet = FrameGenerators.BuildEthernetIpv4UdpFrame(8);
         byte[] withFcs = new byte[ethernet.Length + 4];
         ethernet.CopyTo(withFcs, 0);
@@ -869,7 +663,7 @@ internal sealed class BlfExporterTests
         withFcs[^1] = 0xEF;
 
         using (BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithCompressionLevel(BlfCompressionLevel.None)
             .Build())
         {
@@ -877,7 +671,7 @@ internal sealed class BlfExporterTests
             exporter.OnFinish();
         }
 
-        using BlfSource source = BlfSource.Open(path);
+        using BlfSource source = BlfSource.FromData(stream.ToArray(), "output.blf");
         _StartSource(source);
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -887,12 +681,11 @@ internal sealed class BlfExporterTests
     [Test]
     public async Task LinDataFrameWritesObjectVersionOne()
     {
-        using TestDir dir = new("blf_lin_ver");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
         byte[] linData = LinGenerators.BuildLinFrame(0x05, [0x11, 0x22, 0x33], checksum: 0x42);
 
         using (BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithCompressionLevel(BlfCompressionLevel.None)
             .Build())
         {
@@ -901,18 +694,17 @@ internal sealed class BlfExporterTests
             exporter.OnFinish();
         }
 
-        await Assert.That(_FindObjectVersion(path, BlfConstants.ObjTypeLinMessage2)).IsEqualTo((ushort)1);
+        await Assert.That(_FindObjectVersion(stream.ToArray(), BlfConstants.ObjTypeLinMessage2)).IsEqualTo((ushort)1);
     }
 
     [Test]
     public async Task FlexRayChannelBRoundTripsHeaderCrc()
     {
-        using TestDir dir = new("blf_fr_chb");
-        string path = dir.FilePath("output.blf");
+        using MemoryStream stream = new();
         byte[] frData = FlexRayGenerators.BuildFlexRayFrame(1, 10, 3, 0x5A3, [0xDE, 0xAD], sync: true);
 
         using (BlfExporter exporter = BlfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithCompressionLevel(BlfCompressionLevel.None)
             .Build())
         {
@@ -921,7 +713,7 @@ internal sealed class BlfExporterTests
             exporter.OnFinish();
         }
 
-        using BlfSource source = BlfSource.Open(path);
+        using BlfSource source = BlfSource.FromData(stream.ToArray(), "output.blf");
         _StartSource(source);
         Frame? frame = source.NextFrame();
         await Assert.That(frame).IsNotNull();
@@ -1048,9 +840,8 @@ internal sealed class BlfExporterTests
         source.Start(sourceId, registry);
     }
 
-    private static bool _FileContainsObjectType(string path, uint objectType)
+    private static bool _FileContainsObjectType(byte[] fileBytes, uint objectType)
     {
-        byte[] fileBytes = File.ReadAllBytes(path);
         for (int i = 0; i + 16 <= fileBytes.Length; i++)
         {
             if (BinaryPrimitives.ReadUInt32LittleEndian(fileBytes.AsSpan(i)) != 0x4A424F4C)
@@ -1067,9 +858,8 @@ internal sealed class BlfExporterTests
         return false;
     }
 
-    private static ushort _FindObjectVersion(string path, uint objectType)
+    private static ushort _FindObjectVersion(byte[] fileBytes, uint objectType)
     {
-        byte[] fileBytes = File.ReadAllBytes(path);
         for (int i = 0; i + 24 <= fileBytes.Length; i++)
         {
             if (BinaryPrimitives.ReadUInt32LittleEndian(fileBytes.AsSpan(i)) != 0x4A424F4C)

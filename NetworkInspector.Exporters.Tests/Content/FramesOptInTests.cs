@@ -136,15 +136,26 @@ internal sealed class FramesOptInTests
     #region Export
 
     /// <summary>
+    /// What an export left behind: its path (DuckDB file or a Parquet directory on disk), its text (stream formats), its bytes (PBF),
+    /// or its Parquet target.
+    /// </summary>
+    /// <param name="Path">The output file or directory; empty for the stream formats and the in-memory outputs.</param>
+    /// <param name="Text">The text a stream format wrote; empty for the others.</param>
+    /// <param name="Bytes">The bytes a PBF export wrote; <see langword="null"/> for the others.</param>
+    /// <param name="Target">The in-memory target a Parquet export wrote to; <see langword="null"/> for the others.</param>
+    private sealed record Output(string Path, string Text, byte[]? Bytes = null, MemoryExportTarget? Target = null);
+
+    /// <summary>
     /// Exports the frames with the scenario's exporter, finishes it, and returns what it wrote: a path for the file formats, a text
     /// for the stream formats.
     /// </summary>
     /// <param name="scenario">The exporter configuration.</param>
     /// <param name="frames">The frames to export.</param>
     /// <param name="mode">Whether the frame member is on.</param>
-    /// <param name="dir">The directory for file outputs.</param>
-    /// <returns>The path (file or directory) and the text of a stream format (empty for the file formats).</returns>
-    private static (string Path, string Text) _Export(Scenario scenario, IReadOnlyList<Frame> frames, FrameMode mode, TestDir dir)
+    /// <param name="dir">The directory for file outputs; DuckDB needs it. Parquet writes there when it is given and to memory when it
+    /// is <see langword="null"/>.</param>
+    /// <returns>What the export wrote: a path (DuckDB), a text (stream formats), bytes (PBF), or a Parquet target.</returns>
+    private static Output _Export(Scenario scenario, IReadOnlyList<Frame> frames, FrameMode mode, TestDir? dir)
     {
         bool on = mode == FrameMode.On;
         bool plain = mode == FrameMode.Default && _ShapeOf(scenario) == ExportShape.Hierarchy;
@@ -161,28 +172,35 @@ internal sealed class FramesOptInTests
             case Scenario.DuckDbAllFields:
             case Scenario.DuckDbSelectedFields:
             {
-                string path = dir.FilePath(name + ".duckdb");
+                string path = _Require(dir).FilePath(name + ".duckdb");
                 DuckDbExporter.Builder builder = DuckDbExporter.CreateBuilder().ToFile(path).WithWriteMode(ExportWriteMode.Synchronous);
                 using DuckDbExporter exporter = (plain
                     ? builder
                     : builder.WithContent(content)).Build();
                 _ = TreeFreeFeed.Run(exporter, frames);
                 exporter.OnFinish();
-                return (path, string.Empty);
+                return new Output(path, string.Empty);
             }
 
             case Scenario.ParquetHierarchy:
             case Scenario.ParquetAllFields:
             case Scenario.ParquetSelectedFields:
             {
-                string path = dir.FilePath(name);
-                ParquetExporter.Builder builder = ParquetExporter.CreateBuilder().ToDirectory(path).WithWriteMode(ExportWriteMode.Synchronous);
+                // Without a directory the dataset goes to memory; with one to disk.
+                MemoryExportTarget? target = dir is null
+                    ? new MemoryExportTarget(seekable: true)
+                    : null;
+                string path = dir?.FilePath(name) ?? string.Empty;
+                ParquetExporter.Builder builder = ParquetExporter.CreateBuilder().WithWriteMode(ExportWriteMode.Synchronous);
+                builder = target is null
+                    ? builder.ToDirectory(path)
+                    : builder.ToTarget(target);
                 using ParquetExporter exporter = (plain
                     ? builder
                     : builder.WithContent(content)).Build();
                 _ = TreeFreeFeed.Run(exporter, frames);
                 exporter.OnFinish();
-                return (path, string.Empty);
+                return new Output(path, string.Empty, Target: target);
             }
 
             case Scenario.PbfStandardHierarchy:
@@ -192,18 +210,18 @@ internal sealed class FramesOptInTests
             case Scenario.PbfColumnarAllFields:
             case Scenario.PbfColumnarSelectedFields:
             {
-                string path = dir.FilePath(name + ".pbf");
+                using MemoryStream stream = new();
                 PbfExportFormat format = scenario is Scenario.PbfStandardHierarchy or Scenario.PbfStandardAllFields or Scenario.PbfStandardSelectedFields
                     ? PbfExportFormat.Standard
                     : PbfExportFormat.Columnar;
-                PbfExporter.Builder builder = PbfExporter.CreateBuilder().ToFile(path).WithFormat(format).WithCompressed(false)
+                PbfExporter.Builder builder = PbfExporter.CreateBuilder().ToStream(stream).WithFormat(format).WithCompressed(false)
                     .WithWriteMode(ExportWriteMode.Synchronous);
                 using PbfExporter exporter = (plain
                     ? builder
                     : builder.WithContent(content)).Build();
                 _ = TreeFreeFeed.Run(exporter, frames);
                 exporter.OnFinish();
-                return (path, string.Empty);
+                return new Output(string.Empty, string.Empty, stream.ToArray());
             }
 
             case Scenario.CsvPacketRows:
@@ -234,7 +252,7 @@ internal sealed class FramesOptInTests
                     exporter.OnFinish();
                 }
 
-                return (string.Empty, Encoding.UTF8.GetString(stream.ToArray()));
+                return new Output(string.Empty, Encoding.UTF8.GetString(stream.ToArray()));
             }
 
             case Scenario.TextTree:
@@ -251,7 +269,7 @@ internal sealed class FramesOptInTests
                     exporter.OnFinish();
                 }
 
-                return (string.Empty, Encoding.UTF8.GetString(stream.ToArray()));
+                return new Output(string.Empty, Encoding.UTF8.GetString(stream.ToArray()));
             }
 
             default:
@@ -272,7 +290,7 @@ internal sealed class FramesOptInTests
                     exporter.OnFinish();
                 }
 
-                return (string.Empty, Encoding.UTF8.GetString(stream.ToArray()));
+                return new Output(string.Empty, Encoding.UTF8.GetString(stream.ToArray()));
             }
         }
     }
@@ -280,6 +298,20 @@ internal sealed class FramesOptInTests
     #endregion
 
     #region Readers
+
+    /// <summary>Returns the directory of a scenario that writes a file.</summary>
+    /// <param name="dir">The directory the caller passed.</param>
+    /// <returns>The directory.</returns>
+    /// <exception cref="InvalidOperationException">No directory was passed.</exception>
+    private static TestDir _Require(TestDir? dir)
+    {
+        if (dir is null)
+        {
+            throw new InvalidOperationException("A DuckDB scenario writes a file and needs a TestDir.");
+        }
+
+        return dir;
+    }
 
     /// <summary>
     /// Reads the frame of every packet back with the format's own reader.
@@ -290,7 +322,7 @@ internal sealed class FramesOptInTests
     /// <see langword="null"/> when the output has no frame content at all (no column, key, field, record, or block); otherwise one
     /// entry per packet: its frame, or <see langword="null"/> for a packet whose frame is missing or NULL.
     /// </returns>
-    private static List<byte[]?>? _Read(Scenario scenario, (string Path, string Text) output)
+    private static async Task<List<byte[]?>?> _ReadAsync(Scenario scenario, Output output)
     {
         switch (scenario)
         {
@@ -301,15 +333,15 @@ internal sealed class FramesOptInTests
             case Scenario.ParquetHierarchy:
             case Scenario.ParquetAllFields:
             case Scenario.ParquetSelectedFields:
-                return _ReadParquet(output.Path);
+                return await _ReadParquetAsync(output.Target ?? throw new InvalidOperationException("The Parquet run wrote to disk."));
             case Scenario.PbfStandardHierarchy:
             case Scenario.PbfStandardAllFields:
             case Scenario.PbfStandardSelectedFields:
-                return _ReadPbfStandard(output.Path);
+                return _ReadPbfStandard(output.Bytes!);
             case Scenario.PbfColumnarHierarchy:
             case Scenario.PbfColumnarAllFields:
             case Scenario.PbfColumnarSelectedFields:
-                return _ReadPbfColumnar(output.Path);
+                return _ReadPbfColumnar(output.Bytes!);
             case Scenario.CsvPacketRows:
             case Scenario.CsvWide:
                 return _ReadCsv(output.Text);
@@ -364,32 +396,28 @@ internal sealed class FramesOptInTests
         return _ReadBlobs(connection, "SELECT frame_bytes FROM packets ORDER BY packet_id");
     }
 
-    /// <summary>Reads <c>frame_bytes</c> of <c>packets.parquet</c> through an in-memory DuckDB; <see langword="null"/> without the column.</summary>
-    /// <param name="directory">The dataset directory.</param>
+    /// <summary>Reads <c>frame_bytes</c> of <c>packets.parquet</c> of an in-memory dataset; <see langword="null"/> without the column.</summary>
+    /// <param name="target">The target after the export.</param>
     /// <returns>One entry per packet in packet-id order, or <see langword="null"/> when there is no frame column.</returns>
-    private static List<byte[]?>? _ReadParquet(string directory)
+    private static async Task<List<byte[]?>?> _ReadParquetAsync(MemoryExportTarget target)
     {
-        string file = Path.Combine(directory, "packets.parquet");
-        using DuckDBConnection connection = new("Data Source=:memory:");
-        connection.Open();
-        using (DuckDBCommand schema = connection.CreateCommand())
+        byte[] file = target.Bytes("packets.parquet");
+        if (!await ParquetReads.HasColumnAsync(file, "frame_bytes"))
         {
-            schema.CommandText = Invariant($"SELECT COUNT(*) FROM parquet_schema('{file}') WHERE name = 'frame_bytes'");
-            if (Convert.ToInt64(schema.ExecuteScalar(), CultureInfo.InvariantCulture) == 0)
-            {
-                return null;
-            }
+            return null;
         }
 
-        return _ReadBlobs(connection, Invariant($"SELECT frame_bytes FROM read_parquet('{file}') ORDER BY packet_id"));
+        int[] packetIds = await ParquetReads.IntsAsync(file, "packet_id");
+        byte[][] frames = await ParquetReads.BinariesAsync(file, "frame_bytes");
+        return [.. Enumerable.Range(0, packetIds.Length).OrderBy(i => packetIds[i]).Select(i => (byte[]?)frames[i])];
     }
 
     /// <summary>The packet messages of every standard block of a PBF file.</summary>
-    /// <param name="path">The PBF file.</param>
+    /// <param name="file">The bytes of the PBF file.</param>
     /// <returns>The decoded fields of each packet message.</returns>
-    private static List<List<PbfField>> _StandardPackets(string path)
+    private static List<List<PbfField>> _StandardPackets(byte[] file)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         List<List<PbfField>> packets = [];
         foreach (List<PbfField> block in blocks)
         {
@@ -407,13 +435,13 @@ internal sealed class FramesOptInTests
     }
 
     /// <summary>Reads the packet field 6 of every packet of a standard PBF file; <see langword="null"/> when no packet has it.</summary>
-    /// <param name="path">The PBF file.</param>
+    /// <param name="file">The bytes of the PBF file.</param>
     /// <returns>One entry per packet, or <see langword="null"/> when no packet has a frame field.</returns>
-    private static List<byte[]?>? _ReadPbfStandard(string path)
+    private static List<byte[]?>? _ReadPbfStandard(byte[] file)
     {
         List<byte[]?> frames = [];
         bool any = false;
-        foreach (List<PbfField> packet in _StandardPackets(path))
+        foreach (List<PbfField> packet in _StandardPackets(file))
         {
             PbfField? frame = null;
             foreach (PbfField field in packet)
@@ -434,11 +462,11 @@ internal sealed class FramesOptInTests
     }
 
     /// <summary>Reads the frame column (13) of every columnar block of a PBF file; <see langword="null"/> when no block has it.</summary>
-    /// <param name="path">The PBF file.</param>
+    /// <param name="file">The bytes of the PBF file.</param>
     /// <returns>One entry per packet in block order, or <see langword="null"/> when no block has a frame column.</returns>
-    private static List<byte[]?>? _ReadPbfColumnar(string path)
+    private static List<byte[]?>? _ReadPbfColumnar(byte[] file)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         List<byte[]?> frames = [];
         bool any = false;
         foreach (List<PbfField> block in blocks)
@@ -598,9 +626,7 @@ internal sealed class FramesOptInTests
     [Arguments(Scenario.TextAllFields)]
     public async Task NoFrameBytesAreWrittenByDefaultInTheFastFormats(Scenario scenario)
     {
-        using TestDir dir = new("frames_default");
-
-        List<byte[]?>? frames = _Read(scenario, _Export(scenario, _Frames(), FrameMode.Default, dir));
+        List<byte[]?>? frames = await _ReadAsync(scenario, _Export(scenario, _Frames(), FrameMode.Default, dir: null));
 
         await Assert.That(frames).IsNull();
     }
@@ -618,9 +644,11 @@ internal sealed class FramesOptInTests
     [Arguments(Scenario.ParquetSelectedFields)]
     public async Task NoFrameBytesAreWrittenByDefaultInDuckDbAndParquet(Scenario scenario)
     {
-        using TestDir dir = new("frames_default_db");
+        using TestDir? dir = scenario is Scenario.DuckDbHierarchy or Scenario.DuckDbAllFields or Scenario.DuckDbSelectedFields
+            ? new("frames_default_db")
+            : null;
 
-        List<byte[]?>? frames = _Read(scenario, _Export(scenario, _Frames(), FrameMode.Default, dir));
+        List<byte[]?>? frames = await _ReadAsync(scenario, _Export(scenario, _Frames(), FrameMode.Default, dir));
 
         await Assert.That(frames).IsNull();
     }
@@ -667,10 +695,9 @@ internal sealed class FramesOptInTests
     [Arguments(Scenario.TextAllFields)]
     public async Task FrameBytesOnWriteTheExactFrameOfEveryPacketInTheFastFormats(Scenario scenario)
     {
-        using TestDir dir = new("frames_on");
         List<Frame> frames = _Frames();
 
-        List<byte[]?>? read = _Read(scenario, _Export(scenario, frames, FrameMode.On, dir));
+        List<byte[]?>? read = await _ReadAsync(scenario, _Export(scenario, frames, FrameMode.On, dir: null));
 
         await _AssertFramesAsync(read, frames);
     }
@@ -688,10 +715,12 @@ internal sealed class FramesOptInTests
     [Arguments(Scenario.ParquetSelectedFields)]
     public async Task FrameBytesOnWriteTheExactFrameOfEveryPacketInDuckDbAndParquet(Scenario scenario)
     {
-        using TestDir dir = new("frames_on_db");
+        using TestDir? dir = scenario is Scenario.DuckDbHierarchy or Scenario.DuckDbAllFields or Scenario.DuckDbSelectedFields
+            ? new("frames_on_db")
+            : null;
         List<Frame> frames = _Frames();
 
-        List<byte[]?>? read = _Read(scenario, _Export(scenario, frames, FrameMode.On, dir));
+        List<byte[]?>? read = await _ReadAsync(scenario, _Export(scenario, frames, FrameMode.On, dir));
 
         await _AssertFramesAsync(read, frames);
     }
@@ -708,7 +737,6 @@ internal sealed class FramesOptInTests
     [Arguments(Scenario.PbfColumnarHierarchy)]
     public async Task IdenticalFramesAreEachWrittenInFull(Scenario scenario)
     {
-        using TestDir dir = new("frames_identical");
         byte[] bytes = FrameGenerators.BuildEthernetIpv4UdpFrame(18);
         List<Frame> frames =
         [
@@ -717,7 +745,7 @@ internal sealed class FramesOptInTests
             TestHarness.CreateFrame(2, 3_000_000, bytes),
         ];
 
-        List<byte[]?>? read = _Read(scenario, _Export(scenario, frames, FrameMode.On, dir));
+        List<byte[]?>? read = await _ReadAsync(scenario, _Export(scenario, frames, FrameMode.On, dir: null));
 
         await _AssertFramesAsync(read, frames);
     }
@@ -727,11 +755,10 @@ internal sealed class FramesOptInTests
     [Test]
     public async Task TheJsonFrameIsStandardBase64WithPadding()
     {
-        using TestDir dir = new("frames_json_text");
         byte[] frame = [0xFB, 0xFF, 0x00, 0x01];
         List<Frame> frames = [TestHarness.CreateFrame(0, 1_000_000, frame)];
 
-        string json = _Export(Scenario.JsonArrayTree, frames, FrameMode.On, dir).Text;
+        string json = _Export(Scenario.JsonArrayTree, frames, FrameMode.On, dir: null).Text;
         using JsonDocument document = JsonDocument.Parse(json);
 
         // "+/" are the standard alphabet's 62nd and 63rd characters (the URL-safe form would write "-_"), and four bytes need "=" padding.
@@ -743,10 +770,9 @@ internal sealed class FramesOptInTests
     [Test]
     public async Task TheCsvFrameIsUpperCaseHexWithoutSeparators()
     {
-        using TestDir dir = new("frames_csv_hex");
         List<Frame> frames = [TestHarness.CreateFrame(0, 1_000_000, [0xAB, 0x00, 0x0F, 0xFF])];
 
-        string csv = _Export(Scenario.CsvPacketRows, frames, FrameMode.On, dir).Text;
+        string csv = _Export(Scenario.CsvPacketRows, frames, FrameMode.On, dir: null).Text;
 
         // The packet number is the dense id of the test thread's parse, so only the header and the end of the row are fixed.
         string[] lines = csv.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);

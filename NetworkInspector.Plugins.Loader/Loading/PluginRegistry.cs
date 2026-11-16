@@ -709,8 +709,9 @@ public sealed class PluginRegistry : IPluginBuilderFactory, IDisposable
         {
             ArgumentNullException.ThrowIfNull(exporter);
             _ThrowIfSealed();
+            ArgumentNullException.ThrowIfNull(exporter.Creation);
             _ValidateExporter(exporter.Format, exporter.UiName, exporter.Description, exporter.FileExtension, exporter.RegisterOptions,
-                exporter.Create);
+                exporter.Creation.WritesFile);
             _Staged.FrameExporters.Add(exporter);
         }
 
@@ -719,8 +720,9 @@ public sealed class PluginRegistry : IPluginBuilderFactory, IDisposable
         {
             ArgumentNullException.ThrowIfNull(exporter);
             _ThrowIfSealed();
+            ArgumentNullException.ThrowIfNull(exporter.Creation);
             _ValidateExporter(exporter.Format, exporter.UiName, exporter.Description, exporter.FileExtension, exporter.RegisterOptions,
-                exporter.Create);
+                exporter.Creation.WritesFile);
             _Staged.PacketExporters.Add(exporter);
         }
 
@@ -780,9 +782,10 @@ public sealed class PluginRegistry : IPluginBuilderFactory, IDisposable
         /// <param name="description">Description.</param>
         /// <param name="fileExtension">File extension with the leading dot; empty for a directory output.</param>
         /// <param name="registerOptions">The option registration.</param>
-        /// <param name="create">The listener factory.</param>
+        /// <param name="writesFile">Whether the format receives a prepared file path, so it needs a file extension.</param>
+        /// <exception cref="ArgumentException">A name, text, or extension rule is broken, or the format is registered twice.</exception>
         private void _ValidateExporter(string format, string uiName, string description, string fileExtension, Action<SettingsRegistrar> registerOptions,
-            Delegate create)
+            bool writesFile)
         {
             _ValidateName(format, "Format");
             _ValidateText(uiName, description, "Format", format);
@@ -792,8 +795,14 @@ public sealed class PluginRegistry : IPluginBuilderFactory, IDisposable
                 throw new ArgumentException(Invariant($"File extension '{fileExtension}' of format '{format}' must be empty or start with '.'."));
             }
 
+            // A format that receives a file path has a file to name; an empty extension marks a directory output, which only a
+            // target of named streams can serve.
+            if (writesFile && fileExtension.Length == 0)
+            {
+                throw new ArgumentException(Invariant($"Format '{format}' writes a file, so it needs a file extension."));
+            }
+
             ArgumentNullException.ThrowIfNull(registerOptions);
-            ArgumentNullException.ThrowIfNull(create);
 
             // Formats share one name space across frame and packet exporters.
             foreach (string staged in _Staged.FrameExporters.Select(static e => e.Format).Concat(_Staged.PacketExporters.Select(static e => e.Format)))

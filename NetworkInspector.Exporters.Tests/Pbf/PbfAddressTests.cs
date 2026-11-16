@@ -16,17 +16,18 @@ internal sealed class PbfAddressTests
 {
     #region Exporting and decoding files
 
-    /// <summary>Exports the packets of a factory to an uncompressed PBF file of the all-fields shape (flat records, no nesting).</summary>
-    /// <param name="path">The target file.</param>
+    /// <summary>Exports the packets of a factory to an uncompressed PBF file in memory, of the all-fields shape (flat records, no nesting).</summary>
     /// <param name="factory">The factory that built the packets (and owns their stack).</param>
     /// <param name="values">The address values of each packet, in packet order.</param>
     /// <param name="format">The PBF layout.</param>
     /// <param name="maxPacketsPerBlock">The block size in packets.</param>
-    private static void _Export(
-        string path, AddressProbePacketFactory factory, IReadOnlyList<AddressValues> values, PbfExportFormat format, int maxPacketsPerBlock = 50_000)
+    /// <returns>The bytes of the finished file.</returns>
+    private static byte[] _Export(
+        AddressProbePacketFactory factory, IReadOnlyList<AddressValues> values, PbfExportFormat format, int maxPacketsPerBlock = 50_000)
     {
+        using MemoryStream stream = new();
         using PbfExporter exporter = PbfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithFormat(format)
             .WithCompressed(false)
             .WithContent(factory.Content(ExportShape.AllFields))
@@ -39,15 +40,17 @@ internal sealed class PbfAddressTests
         }
 
         exporter.OnFinish();
+
+        return stream.ToArray();
     }
 
     /// <summary>The field records of every packet of a standard-layout file: per packet, the registered name and the fields of each record.</summary>
-    /// <param name="path">The PBF file.</param>
+    /// <param name="file">The bytes of the PBF file.</param>
     /// <param name="factory">The factory that names the field ids.</param>
     /// <returns>One list per packet, in file order; a record is its field name and its decoded fields.</returns>
-    private static List<List<(string Name, List<PbfField> Fields)>> _StandardPackets(string path, AddressProbePacketFactory factory)
+    private static List<List<(string Name, List<PbfField> Fields)>> _StandardPackets(byte[] file, AddressProbePacketFactory factory)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         List<List<(string Name, List<PbfField> Fields)>> packets = [];
         foreach (List<PbfField> block in blocks)
         {
@@ -114,14 +117,14 @@ internal sealed class PbfAddressTests
     }
 
     /// <summary>The packed values of a column field for every block of a columnar file, in file order, per registered field name.</summary>
-    /// <param name="path">The PBF file (columnar layout).</param>
+    /// <param name="file">The bytes of the PBF file (columnar layout).</param>
     /// <param name="factory">The factory that names the field ids.</param>
     /// <param name="number">The column number: 19, 20, or 21.</param>
     /// <param name="width">4 for fixed32, 8 for fixed64.</param>
     /// <returns>The values of that column per field name; a field without that column is not in the map.</returns>
-    private static Dictionary<string, List<ulong>> _Columns(string path, AddressProbePacketFactory factory, int number, int width)
+    private static Dictionary<string, List<ulong>> _Columns(byte[] file, AddressProbePacketFactory factory, int number, int width)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         Dictionary<string, List<ulong>> result = [];
         foreach (List<PbfField> block in blocks)
         {
@@ -149,14 +152,14 @@ internal sealed class PbfAddressTests
     }
 
     /// <summary>Whether any field column of a columnar file carries a field with the given number for the named field.</summary>
-    /// <param name="path">The PBF file (columnar layout).</param>
+    /// <param name="file">The bytes of the PBF file (columnar layout).</param>
     /// <param name="factory">The factory that names the field ids.</param>
     /// <param name="name">The registered field name.</param>
     /// <param name="number">The column number.</param>
     /// <returns><see langword="true"/> when some block's column of that field has the number.</returns>
-    private static bool _HasColumn(string path, AddressProbePacketFactory factory, string name, int number)
+    private static bool _HasColumn(byte[] file, AddressProbePacketFactory factory, string name, int number)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         foreach (List<PbfField> block in blocks)
         {
             foreach (PbfField columnField in block.Where(static field => field.Number == PbfFieldNumbers.ColumnarFieldColumns))
@@ -186,15 +189,13 @@ internal sealed class PbfAddressTests
     [Test]
     public async Task StandardRecordsCarryEachAddressAsAnIntegerOfTheDocumentedWireType()
     {
-        using TestDir dir = new("pbf_address_standard");
         using AddressProbePacketFactory factory = new();
-        string path = dir.FilePath("addresses.pbf");
         AddressValues values = AddressProbePacketFactory.Readable;
 
-        _Export(path, factory, [values], PbfExportFormat.Standard);
+        byte[] file = _Export(factory, [values], PbfExportFormat.Standard);
 
-        (List<PbfField> header, _) = PbfFileScanner.Read(path);
-        List<(string Name, List<PbfField> Fields)> packet = _StandardPackets(path, factory).Single();
+        (List<PbfField> header, _) = PbfFileScanner.FromBytes(file);
+        List<(string Name, List<PbfField> Fields)> packet = _StandardPackets(file, factory).Single();
         Dictionary<string, List<PbfField>> record = packet.ToDictionary(static entry => entry.Name, static entry => entry.Fields);
         PbfField ipv4 = _Find(record["adp.ipv4"], PbfFieldNumbers.FieldValue)!.Value;
         PbfField mac = _Find(record["adp.mac"], PbfFieldNumbers.FieldValue)!.Value;
@@ -227,13 +228,11 @@ internal sealed class PbfAddressTests
     [Test]
     public async Task OnlyIPv6AndUuidRecordsCarryTheLowHalfField()
     {
-        using TestDir dir = new("pbf_address_standard_low");
         using AddressProbePacketFactory factory = new();
-        string path = dir.FilePath("addresses.pbf");
 
-        _Export(path, factory, [AddressProbePacketFactory.Readable], PbfExportFormat.Standard);
+        byte[] file = _Export(factory, [AddressProbePacketFactory.Readable], PbfExportFormat.Standard);
 
-        List<string> withLow = _StandardPackets(path, factory).Single()
+        List<string> withLow = _StandardPackets(file, factory).Single()
             .Where(static entry => _Find(entry.Fields, PbfFieldNumbers.FieldValueLow) is not null)
             .Select(static entry => entry.Name)
             .ToList();
@@ -249,17 +248,15 @@ internal sealed class PbfAddressTests
     [Test]
     public async Task ARepeated128BitValueOmitsBothHalvesWithOneSameFlag()
     {
-        using TestDir dir = new("pbf_address_standard_same");
         using AddressProbePacketFactory factory = new();
-        string path = dir.FilePath("same.pbf");
         AddressValues first = AddressProbePacketFactory.Readable;
         AddressValues changedLow = first with { IPv6 = new IPv6Address(first.IPv6.High, first.IPv6.Low + 1) };
 
         // The same address twice, then one that differs only in the low half: a reader that restored only the high half would show the
         // first packet's low half for the third packet.
-        _Export(path, factory, [first, first, changedLow], PbfExportFormat.Standard);
+        byte[] file = _Export(factory, [first, first, changedLow], PbfExportFormat.Standard);
 
-        List<List<(string Name, List<PbfField> Fields)>> packets = _StandardPackets(path, factory);
+        List<List<(string Name, List<PbfField> Fields)>> packets = _StandardPackets(file, factory);
         List<PbfField> second = packets[1].Single(static entry => entry.Name == "adp.ipv6").Fields;
         List<PbfField> third = packets[2].Single(static entry => entry.Name == "adp.ipv6").Fields;
 
@@ -279,15 +276,13 @@ internal sealed class PbfAddressTests
     [Test]
     public async Task StandardBoundaryAddressesRoundTripInFeedOrderAndSortInAddressOrder()
     {
-        using TestDir dir = new("pbf_address_standard_order");
         using AddressProbePacketFactory factory = new();
-        string path = dir.FilePath("boundaries.pbf");
         AddressValues[] feed = AddressProbePacketFactory.ShuffledBoundaries();
         AddressValues[] ascending = AddressProbePacketFactory.AscendingBoundaries();
 
-        _Export(path, factory, feed, PbfExportFormat.Standard, maxPacketsPerBlock: 2);
+        byte[] file = _Export(factory, feed, PbfExportFormat.Standard, maxPacketsPerBlock: 2);
 
-        List<List<(string Name, List<PbfField> Fields)>> packets = _StandardPackets(path, factory);
+        List<List<(string Name, List<PbfField> Fields)>> packets = _StandardPackets(file, factory);
         List<ulong> ipv4 = _StandardValues(packets, "adp.ipv4", PbfFieldNumbers.FieldValue);
         List<ulong> mac = _StandardValues(packets, "adp.mac", PbfFieldNumbers.FieldValue);
         List<ulong> eui64 = _StandardValues(packets, "adp.eui64", PbfFieldNumbers.FieldValue);
@@ -340,17 +335,15 @@ internal sealed class PbfAddressTests
     [Test]
     public async Task ColumnarColumnsCarryEachAddressAsPackedFixedWidthIntegers()
     {
-        using TestDir dir = new("pbf_address_columnar");
         using AddressProbePacketFactory factory = new();
-        string path = dir.FilePath("addresses.pbf");
         AddressValues values = AddressProbePacketFactory.Readable;
 
-        _Export(path, factory, [values], PbfExportFormat.Columnar);
+        byte[] file = _Export(factory, [values], PbfExportFormat.Columnar);
 
-        (List<PbfField> header, _) = PbfFileScanner.Read(path);
-        Dictionary<string, List<ulong>> fixed32 = _Columns(path, factory, PbfFieldNumbers.ColumnFixed32Values, 4);
-        Dictionary<string, List<ulong>> high = _Columns(path, factory, PbfFieldNumbers.ColumnFixed64Values, 8);
-        Dictionary<string, List<ulong>> low = _Columns(path, factory, PbfFieldNumbers.ColumnFixed64LowValues, 8);
+        (List<PbfField> header, _) = PbfFileScanner.FromBytes(file);
+        Dictionary<string, List<ulong>> fixed32 = _Columns(file, factory, PbfFieldNumbers.ColumnFixed32Values, 4);
+        Dictionary<string, List<ulong>> high = _Columns(file, factory, PbfFieldNumbers.ColumnFixed64Values, 8);
+        Dictionary<string, List<ulong>> low = _Columns(file, factory, PbfFieldNumbers.ColumnFixed64LowValues, 8);
 
         await Assert.That(fixed32["adp.ipv4"]).IsEquivalentTo(new List<ulong> { values.IPv4.RawValue });
         await Assert.That(high["adp.mac"]).IsEquivalentTo(new List<ulong> { values.Mac.RawValue });
@@ -364,7 +357,7 @@ internal sealed class PbfAddressTests
         await Assert.That(low.Keys.Order().ToList()).IsEquivalentTo(new List<string> { "adp.ipv6", "adp.ipv6dst", "adp.uuid" });
         foreach (string name in AddressProbePacketFactory.FieldNames)
         {
-            await Assert.That(_HasColumn(path, factory, name, PbfFieldNumbers.ColumnBytesValues)).IsFalse();
+            await Assert.That(_HasColumn(file, factory, name, PbfFieldNumbers.ColumnBytesValues)).IsFalse();
         }
 
         await Assert.That(PbfFileScanner.Value(header, PbfFieldNumbers.HeaderVersion)).IsEqualTo(1UL);
@@ -378,18 +371,16 @@ internal sealed class PbfAddressTests
     [Test]
     public async Task ColumnarBoundaryAddressesRoundTripInFeedOrderAcrossBlocksAndSortInAddressOrder()
     {
-        using TestDir dir = new("pbf_address_columnar_order");
         using AddressProbePacketFactory factory = new();
-        string path = dir.FilePath("boundaries.pbf");
         AddressValues[] feed = AddressProbePacketFactory.ShuffledBoundaries();
         AddressValues[] ascending = AddressProbePacketFactory.AscendingBoundaries();
 
         // Two packets per block gives three blocks, so a column is written more than once per field.
-        _Export(path, factory, feed, PbfExportFormat.Columnar, maxPacketsPerBlock: 2);
+        byte[] file = _Export(factory, feed, PbfExportFormat.Columnar, maxPacketsPerBlock: 2);
 
-        Dictionary<string, List<ulong>> fixed32 = _Columns(path, factory, PbfFieldNumbers.ColumnFixed32Values, 4);
-        Dictionary<string, List<ulong>> high = _Columns(path, factory, PbfFieldNumbers.ColumnFixed64Values, 8);
-        Dictionary<string, List<ulong>> low = _Columns(path, factory, PbfFieldNumbers.ColumnFixed64LowValues, 8);
+        Dictionary<string, List<ulong>> fixed32 = _Columns(file, factory, PbfFieldNumbers.ColumnFixed32Values, 4);
+        Dictionary<string, List<ulong>> high = _Columns(file, factory, PbfFieldNumbers.ColumnFixed64Values, 8);
+        Dictionary<string, List<ulong>> low = _Columns(file, factory, PbfFieldNumbers.ColumnFixed64LowValues, 8);
 
         await Assert.That(fixed32["adp.ipv4"]).IsEquivalentTo(feed.Select(static v => (ulong)v.IPv4.RawValue).ToList(), CollectionOrdering.Matching);
         await Assert.That(high["adp.mac"]).IsEquivalentTo(feed.Select(static v => v.Mac.RawValue).ToList(), CollectionOrdering.Matching);

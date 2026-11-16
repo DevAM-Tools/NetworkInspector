@@ -2,7 +2,7 @@
 
 namespace NetworkInspector.Plugins.Tests;
 
-/// <summary>The <c>SampleText</c> exporter created through its registration: lines, statistics, option, target rules, cleanup.</summary>
+/// <summary>The <c>SampleText</c> exporter created through its registration: lines, statistics, option, target rules, lifecycle.</summary>
 internal sealed class SampleTextExporterTests
 {
     #region Constants
@@ -19,12 +19,33 @@ internal sealed class SampleTextExporterTests
 
     #region Helpers
 
-    private static ExportRequest _Request(string path, Stack stack, SettingsManager options) =>
-        new(path, options.ReadOnly, stack, 4, CancellationToken.None);
-
-    private static IPacketListener _Create(string path, Stack stack, SettingsManager options)
+    /// <summary>A target that refuses its entry and counts how often the format asked for it.</summary>
+    private sealed class RefusingTarget : IExportTarget
     {
-        if (!SampleTextExporter.Registration.Create(_Request(path, stack, options), out IPacketListener? listener, out PluginError? error))
+        /// <summary>How many times <see cref="TryOpenWrite"/> was called.</summary>
+        internal int OpenCount { get; private set; }
+
+        /// <inheritdoc/>
+        public bool TryOpenWrite(ExportEntryName name, [NotNullWhen(true)] out Stream? stream, out string failure)
+        {
+            OpenCount++;
+            stream = null;
+            failure = "share offline";
+            return false;
+        }
+    }
+
+    private static StreamExportRequest _Request(IExportTarget target, Stack stack, SettingsManager options) =>
+        new(target, options.ReadOnly, stack, 4, CancellationToken.None);
+
+    private static IPacketListener _Create(IExportTarget target, Stack stack, SettingsManager options)
+    {
+        if (!SampleTextExporter.Registration.Creation.TryGetForStreams(out StreamExporterCreate<IPacketListener>? create))
+        {
+            throw new InvalidOperationException("The sample exporter writes through streams.");
+        }
+
+        if (!create(_Request(target, stack, options), out IPacketListener? listener, out PluginError? error))
         {
             throw new InvalidOperationException(Expect.NotNull(error).Message);
         }
@@ -41,6 +62,9 @@ internal sealed class SampleTextExporterTests
         SampleStack.Parse(stack, SampleStack.MakeFrame(stack, RawFrames.Udp("\0\u0001\u0001\0\0\u0001\0\0\0\0\0\0"u8, 50000, 53), 3)),
     ];
 
+    private static string[] _Lines(MemoryStream memory) =>
+        Encoding.UTF8.GetString(memory.ToArray()).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
     #endregion
 
     #region Output
@@ -48,11 +72,10 @@ internal sealed class SampleTextExporterTests
     [Test]
     public async Task WritesHeaderAndOneLinePerSamplePacket()
     {
-        using TempFolder folder = new("sample-text");
         using Stack stack = SampleStack.Build();
         using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
-        string path = folder.FilePath("out.sampletxt");
-        IPacketListener listener = _Create(path, stack, options);
+        using MemoryStream memory = new();
+        IPacketListener listener = _Create(new StreamExportTarget(memory), stack, options);
 
         foreach (Packet packet in _Packets(stack))
         {
@@ -62,18 +85,16 @@ internal sealed class SampleTextExporterTests
         listener.OnFinish();
         ((IDisposable)listener).Dispose();
 
-        string[] lines = (await File.ReadAllTextAsync(path)).Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        await Assert.That(lines).IsEquivalentTo(_ExpectedLines, CollectionOrdering.Matching);
+        await Assert.That(_Lines(memory)).IsEquivalentTo(_ExpectedLines, CollectionOrdering.Matching);
     }
 
     [Test]
     public async Task StatisticsAndByteProgressDescribeTheOutput()
     {
-        using TempFolder folder = new("sample-text");
         using Stack stack = SampleStack.Build();
         using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
-        string path = folder.FilePath("out.sampletxt");
-        IPacketListener listener = _Create(path, stack, options);
+        using MemoryStream memory = new();
+        IPacketListener listener = _Create(new StreamExportTarget(memory), stack, options);
 
         foreach (Packet packet in _Packets(stack))
         {
@@ -89,18 +110,17 @@ internal sealed class SampleTextExporterTests
         await Assert.That(statistics.SkippedCount).IsEqualTo(1);
         await Assert.That(statistics.ErrorCount).IsEqualTo(0);
         await Assert.That(statistics.IsFinished).IsTrue();
-        await Assert.That(progress.EstimatedOutputBytes).IsEqualTo(new FileInfo(path).Length);
+        await Assert.That(progress.EstimatedOutputBytes).IsEqualTo(memory.Length);
     }
 
     [Test]
     public async Task HeaderCanBeSwitchedOff()
     {
-        using TempFolder folder = new("sample-text");
         using Stack stack = SampleStack.Build();
         using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
         OptionManager.Set(options, "includeHeader", SettingValue.Bool(false));
-        string path = folder.FilePath("out.sampletxt");
-        IPacketListener listener = _Create(path, stack, options);
+        using MemoryStream memory = new();
+        IPacketListener listener = _Create(new StreamExportTarget(memory), stack, options);
 
         foreach (Packet packet in _Packets(stack))
         {
@@ -110,7 +130,7 @@ internal sealed class SampleTextExporterTests
         listener.OnFinish();
         ((IDisposable)listener).Dispose();
 
-        string[] lines = (await File.ReadAllTextAsync(path)).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        string[] lines = _Lines(memory);
         await Assert.That(lines.Length).IsEqualTo(3);
         await Assert.That(lines[0]).IsEqualTo("0\t10\t1\t20");
     }
@@ -120,117 +140,60 @@ internal sealed class SampleTextExporterTests
     #region Target rules
 
     [Test]
-    public async Task ExistingFileIsRefusedAndLeftUnchanged()
+    public async Task ARefusedMainEntryIsFileUnreadableWithTheReasonOfTheTarget()
     {
-        using TempFolder folder = new("sample-text");
         using Stack stack = SampleStack.Build();
         using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
-        string path = folder.FilePath("out.sampletxt");
-        await File.WriteAllTextAsync(path, "keep");
+        RefusingTarget target = new();
+        SampleTextExporter.Registration.Creation.TryGetForStreams(out StreamExporterCreate<IPacketListener>? create);
 
-        bool created = SampleTextExporter.Registration.Create(_Request(path, stack, options), out IPacketListener? listener, out PluginError? error);
+        // Invariant: the sample registers ForStreams, so create is set.
+        bool created = create!(_Request(target, stack, options), out IPacketListener? listener, out PluginError? error);
 
         await Assert.That(created).IsFalse();
         await Assert.That(listener).IsNull();
-        await Assert.That(Expect.NotNull(error).Code).IsEqualTo(PluginErrorCode.TargetExists);
-        await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo("keep");
+        await Assert.That(Expect.NotNull(error).Code).IsEqualTo(PluginErrorCode.FileUnreadable);
+        await Assert.That(Expect.NotNull(error).Message).IsEqualTo("share offline");
+        await Assert.That(target.OpenCount).IsEqualTo(1);
     }
 
     [Test]
-    public async Task MissingFolderIsFileNotFound()
+    public async Task StackWithoutTheSampleProtocolFailsNamingTheFieldBeforeTheTargetIsTouched()
     {
-        using TempFolder folder = new("sample-text");
-        using Stack stack = SampleStack.Build();
-        using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
-
-        bool created = SampleTextExporter.Registration.Create(_Request(folder.FilePath("missing/out.sampletxt"), stack, options),
-            out _, out PluginError? error);
-
-        await Assert.That(created).IsFalse();
-        await Assert.That(Expect.NotNull(error).Code).IsEqualTo(PluginErrorCode.FileNotFound);
-    }
-
-    [Test]
-    public async Task EmptyTargetIsInvalidOption()
-    {
-        using Stack stack = SampleStack.Build();
-        using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
-
-        bool created = SampleTextExporter.Registration.Create(_Request(" ", stack, options), out _, out PluginError? error);
-
-        await Assert.That(created).IsFalse();
-        await Assert.That(Expect.NotNull(error).Code).IsEqualTo(PluginErrorCode.InvalidOption);
-    }
-
-    [Test]
-    public async Task PathWithNullCharacterIsInvalidOptionNotAnException()
-    {
-        using Stack stack = SampleStack.Build();
-        using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
-
-        // The contract: expected failures are returned, never thrown.
-        bool created = SampleTextExporter.Registration.Create(_Request("out\0.sampletxt", stack, options), out _, out PluginError? error);
-
-        await Assert.That(created).IsFalse();
-        await Assert.That(Expect.NotNull(error).Code).IsEqualTo(PluginErrorCode.InvalidOption);
-    }
-
-    [Test]
-    public async Task FileSystemRootIsInvalidOptionBecauseItNamesNoFile()
-    {
-        using Stack stack = SampleStack.Build();
-        using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
-        string root = Path.GetPathRoot(Path.GetTempPath()) ?? "/";
-
-        bool created = SampleTextExporter.Registration.Create(_Request(root, stack, options), out _, out PluginError? error);
-
-        await Assert.That(created).IsFalse();
-        await Assert.That(Expect.NotNull(error).Code).IsEqualTo(PluginErrorCode.InvalidOption);
-    }
-
-    [Test]
-    public async Task StackWithoutTheSampleProtocolFailsNamingTheField()
-    {
-        using TempFolder folder = new("sample-text");
         using Stack stack = SampleStack.Build(withSample: false);
         using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
-        string path = folder.FilePath("out.sampletxt");
+        RefusingTarget target = new();
+        SampleTextExporter.Registration.Creation.TryGetForStreams(out StreamExporterCreate<IPacketListener>? create);
 
-        bool created = SampleTextExporter.Registration.Create(_Request(path, stack, options), out _, out PluginError? error);
+        // Invariant: the sample registers ForStreams, so create is set.
+        bool created = create!(_Request(target, stack, options), out _, out PluginError? error);
 
         await Assert.That(created).IsFalse();
         PluginError failure = Expect.NotNull(error);
         await Assert.That(failure.Code).IsEqualTo(PluginErrorCode.Failed);
         await Assert.That(failure.Message).Contains("sample.counter");
-        await Assert.That(File.Exists(path)).IsFalse();
+        await Assert.That(target.OpenCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TheRegistrationWritesThroughStreamsAndNotThroughAPath()
+    {
+        await Assert.That(SampleTextExporter.Registration.Creation.WritesFile).IsFalse();
+        await Assert.That(SampleTextExporter.Registration.Creation.TryGetForStreams(out _)).IsTrue();
+        await Assert.That(SampleTextExporter.Registration.Creation.TryGetForFile(out _)).IsFalse();
     }
 
     #endregion
 
-    #region Partial output
-
-    [Test]
-    public async Task DisposeWithoutFinishDeletesThePartialFile()
-    {
-        using TempFolder folder = new("sample-text");
-        using Stack stack = SampleStack.Build();
-        using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
-        string path = folder.FilePath("out.sampletxt");
-        IPacketListener listener = _Create(path, stack, options);
-        listener.OnPacket(_Packets(stack)[0]);
-
-        ((IDisposable)listener).Dispose();
-
-        await Assert.That(File.Exists(path)).IsFalse();
-    }
+    #region Lifecycle
 
     [Test]
     public async Task PacketAfterFinishIsRefused()
     {
-        using TempFolder folder = new("sample-text");
         using Stack stack = SampleStack.Build();
         using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
-        IPacketListener listener = _Create(folder.FilePath("out.sampletxt"), stack, options);
+        using MemoryStream memory = new();
+        IPacketListener listener = _Create(new StreamExportTarget(memory), stack, options);
         Packet packet = _Packets(stack)[0];
         listener.OnFinish();
 
@@ -241,10 +204,10 @@ internal sealed class SampleTextExporterTests
     [Test]
     public async Task PacketAfterDisposeIsRefused()
     {
-        using TempFolder folder = new("sample-text");
         using Stack stack = SampleStack.Build();
         using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
-        IPacketListener listener = _Create(folder.FilePath("out.sampletxt"), stack, options);
+        using MemoryStream memory = new();
+        IPacketListener listener = _Create(new StreamExportTarget(memory), stack, options);
         Packet packet = _Packets(stack)[0];
         ((IDisposable)listener).Dispose();
 
@@ -252,20 +215,19 @@ internal sealed class SampleTextExporterTests
     }
 
     [Test]
-    public async Task DisposeAfterFinishKeepsTheFile()
+    public async Task DisposeAfterFinishKeepsTheOutputAndASecondDisposeIsHarmless()
     {
-        using TempFolder folder = new("sample-text");
         using Stack stack = SampleStack.Build();
         using SettingsManager options = OptionManager.Create(SampleTextExporter.RegisterOptions);
-        string path = folder.FilePath("out.sampletxt");
-        IPacketListener listener = _Create(path, stack, options);
+        using MemoryStream memory = new();
+        IPacketListener listener = _Create(new StreamExportTarget(memory), stack, options);
         listener.OnPacket(_Packets(stack)[0]);
         listener.OnFinish();
 
         ((IDisposable)listener).Dispose();
         ((IDisposable)listener).Dispose();
 
-        await Assert.That(File.Exists(path)).IsTrue();
+        await Assert.That(_Lines(memory).Length).IsEqualTo(2);
     }
 
     #endregion

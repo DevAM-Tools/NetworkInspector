@@ -9,7 +9,7 @@ If `custom_instructions.md` exists at the repository root, read and apply it (Se
 ## Workflow entry in Claude Code
 
 - Skills live in `.claude/skills/<name>/SKILL.md`. Each is a pointer to its `.github/skills/<name>.md` file. Cursor and VS Code read the same folder, so there is one set of pointers for all three tools.
-- Invoke a workflow by skill name (`/workflow-plan`, `/workflow-implement`, `/workflow-review`, `/workflow-review-loop`, `/workflow-docs-repair`, `/workflow-port-dotnet-rust`, `/workflow-port-dotnet-rust-loop`, …) or by its natural-language trigger from Section 6 above. Short names such as `/review` or `/plan` may belong to built-in Claude Code commands; the `/workflow-*` name always reaches the repository workflow.
+- Invoke a workflow by skill name (`/workflow-evolve`, `/workflow-dream`, `/workflow-plan`, `/workflow-implement`, `/workflow-review`, `/workflow-docs-repair`, `/workflow-port-dotnet-rust`, `/workflow-port-dotnet-rust-loop`, …) or by its natural-language trigger from Section 6 above. Short names such as `/review` or `/plan` may belong to built-in Claude Code commands; the `/workflow-*` name always reaches the repository workflow.
 - Before planning, implementation, or review edits, run the Tech Load Protocol (Section 3) by reading the matching `.github/skills/*.md` files with `Read`.
 
 ## Tool mapping

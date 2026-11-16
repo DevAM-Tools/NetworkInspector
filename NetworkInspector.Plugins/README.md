@@ -68,7 +68,7 @@ From then on every `ni` command decodes the protocol, filters on its fields, and
 | `IPluginBuilder` | declares stack contributions, settings, sources, and exporters while the plugin is configured |
 | `IPluginContext`, `IPluginLog` | what a started plugin gets: log, data folder, settings, stop signal |
 | `SourceRegistration`, `SourceCreate`, `SourceRequest` | a source kind that creates a Core `IFrameSource` |
-| `ExporterRegistration<TListener>`, `ExporterCreate<TListener>`, `ExportRequest` | an export format that creates a Core listener |
+| `ExporterRegistration<TListener>`, `ExporterCreation<TListener>`, `StreamExportRequest`, `FileExportRequest` | an export format that creates a Core listener from a target of streams or a prepared file path |
 | `PluginError`, `PluginErrorCode` | expected failures of registrations, returned instead of thrown |
 
 The sample plugin [`samples/Sample.Protocol`](../samples/Sample.Protocol/README.md) uses every part of the contract.

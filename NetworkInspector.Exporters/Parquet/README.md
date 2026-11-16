@@ -24,6 +24,9 @@ tree-free parse of `ParseDemand` (see Export Shapes).
   dissector assemblies.
 - **Clean re-exports.** Exporting into an existing directory removes the previous dataset files first, so no
   orphan field files remain.
+- **Host streams.** `ToTarget` hands every table file to the host as a named write-only stream (`packets.parquet`,
+  `fields/field_{id}.parquet`, …) that need not seek, so a dataset can land on a network share or in memory without a
+  temporary folder.
 
 ## Quick Start
 
@@ -152,7 +155,7 @@ ParseDemand demand = exporter.ParseDemand;   // combine with other demands in a 
 
 | Method | Purpose | Default |
 | --- | --- | --- |
-| `ToDirectory(path)` | Output directory, created on the first packet | required |
+| `ToDirectory(path)` / `ToTarget(IExportTarget)` | Output directory, created on the first packet and cleared of an earlier dataset; or a host target that receives one named stream per file as given (no clearing) | one of the two is required |
 | `WithUiName` / `WithDescription` | User-facing metadata | — |
 | `WithMaxPacketsPerBlock(int)` | Flush a row group after N packets (1 – `int.MaxValue`) | 50 000 |
 | `WithMaxBlockSize(long)` | Flush a row group at this estimated size (1 – `long.MaxValue`) | 16 MiB |
@@ -205,9 +208,12 @@ allowed values; the CLI refuses an option text outside the tables with the allow
   thread ("Parquet export writer") encodes and writes each full row group while the caller fills the next batch; counters
   and `ItemSkipped` stay on the caller's thread. A failed batch is reported by the next `OnPacket` call that finds it (at
   the latest by `OnFinish`) in background mode and by the completing call in `Synchronous` mode.
-- There is no stream or stdout target; the output is always a directory.
-- If no packets arrive, no directory is created. The first packet creates the directory and clears old dataset
-  files, even when that packet is then skipped.
+- The entries may be write-only, non-seekable streams: Parquet.Net writes forward and never reads the stream back. A target
+  that refuses an entry makes the export report an `ExportErrorKind.IoError` with the target's reason; a target that limits
+  its entries or open streams refuses the entry beyond the limit, and the entries opened before stay readable. Every entry is
+  opened once and closed by the end of `OnFinish`. There is no stdout target.
+- If no packets arrive, no entry is opened and, with `ToDirectory`, no directory is created. The first packet opens the
+  first entry (with `ToDirectory`: creates the directory and clears old dataset files), even when that packet is then skipped.
 - A hierarchy packet without a field tree is skipped and counted: `ItemSkipped` carries `ExportErrorKind.SerializationError`
   and the message `Skip packets cannot be exported (HasFieldTree is false).`
 - A packet that cannot be added to a batch leaves the batch unchanged and is skipped. When writing a batch fails, the

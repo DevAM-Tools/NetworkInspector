@@ -28,7 +28,7 @@ internal static class AscExporterRegistration
         Description: "Writes CAN and CAN FD frames as a Vector CANalyzer ASCII log.",
         FileExtension: ".asc",
         RegisterOptions: _RegisterOptions,
-        Create: _TryCreate);
+        Creation: ExporterCreation.ForStreams<IFrameListener>(_TryCreate));
 
     #endregion
 
@@ -42,20 +42,20 @@ internal static class AscExporterRegistration
             description: "Fraction digits of the line timestamps: 6 (microseconds, what CANoe writes) to 9 (nanoseconds).");
 
     /// <summary>Creates the Core ASC exporter.</summary>
-    private static bool _TryCreate(ExportRequest request, [NotNullWhen(true)] out IFrameListener? listener,
+    private static bool _TryCreate(StreamExportRequest request, [NotNullWhen(true)] out IFrameListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         // The bounds of the setting equal the builder range, so the cast is safe.
         int decimals = (int)OptionValues.GetI64(request.Options, _DecimalsOption);
-        return ExporterBuild.TryBuild<IFrameListener>(
+        return ExporterBuild.TryBuildOnTarget<IFrameListener>(
             () => AscExporter.CreateBuilder()
-                .ToFile(request.TargetPath)
+                .ToTarget(request.Target)
                 .WithTimestampDecimals(decimals)
                 .WithCancellationToken(request.CancellationToken)
                 .Build(),
-            request.TargetPath, out listener, out error);
+            out listener, out error);
     }
 
     #endregion

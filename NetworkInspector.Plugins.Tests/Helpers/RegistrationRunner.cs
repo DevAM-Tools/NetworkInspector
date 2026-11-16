@@ -34,13 +34,36 @@ internal static class RegistrationRunner
     /// <param name="stack">The stack that parsed the packets.</param>
     /// <param name="options">Option values to set; options not listed keep their default.</param>
     /// <returns>The listener on success, otherwise the error; exactly one of the two is set.</returns>
+    /// <remarks>
+    /// Builds the request the way the host does: a format that opens the file itself gets the path; every other format gets a
+    /// target on the path, a folder for a format without a file extension (a dataset), one file otherwise.
+    /// </remarks>
     internal static (TListener? Listener, PluginError? Error) Create<TListener>(ExporterRegistration<TListener> registration,
         string target, IStack stack, params (string Name, SettingValue Value)[] options)
         where TListener : class
     {
         using SettingsManager manager = _Apply(registration.RegisterOptions, options);
-        ExportRequest request = new(target, manager.ReadOnly, stack, 0, CancellationToken.None);
-        return registration.Create(request, out TListener? listener, out PluginError? error)
+        TListener? listener;
+        PluginError? error;
+        bool created;
+        if (registration.Creation.TryGetForFile(out FileExporterCreate<TListener>? forFile))
+        {
+            created = forFile(new FileExportRequest(target, manager.ReadOnly, stack, 0, CancellationToken.None), out listener, out error);
+        }
+        else if (registration.Creation.TryGetForStreams(out StreamExporterCreate<TListener>? forStreams))
+        {
+            IExportTarget exportTarget = registration.FileExtension.Length == 0
+                ? new NetworkInspector.Exporters.DirectoryExportTarget(target)
+                : new NetworkInspector.Exporters.FileExportTarget(target);
+            created = forStreams(new StreamExportRequest(exportTarget, manager.ReadOnly, stack, 0, CancellationToken.None),
+                out listener, out error);
+        }
+        else
+        {
+            throw new InvalidOperationException("An exporter creation holds exactly one way to create.");
+        }
+
+        return created
             ? (listener, null)
             : (null, error);
     }

@@ -5,7 +5,7 @@ namespace NetworkInspector.Exporters.Tests.Pbf;
 /// <summary>
 /// The three export shapes of the PBF standard layout, fed by a tree-free parse with the exporter's own observer. The hierarchy
 /// shape keeps nested packet records; the flat shapes write a flat list of field records per packet (field id, occurrence, value,
-/// texts), and the file header says which of the two a reader meets. Files are written uncompressed and read with the shared
+/// texts), and the file header says which of the two a reader meets. The output is written uncompressed into memory and read with the shared
 /// protobuf scanner.
 /// </summary>
 internal sealed class PbfStandardShapeTests
@@ -13,12 +13,12 @@ internal sealed class PbfStandardShapeTests
     #region Building exports and decoding files
 
     /// <summary>Builds a synchronous, uncompressed standard-layout PBF exporter for the content.</summary>
-    /// <param name="path">The target file.</param>
+    /// <param name="stream">The target stream.</param>
     /// <param name="content">What the export contains, including its shape.</param>
     /// <returns>The exporter; the caller disposes it.</returns>
-    private static PbfExporter _Build(string path, ExportContent content) =>
+    private static PbfExporter _Build(Stream stream, ExportContent content) =>
         PbfExporter.CreateBuilder()
-            .ToFile(path)
+            .ToStream(stream)
             .WithFormat(PbfExportFormat.Standard)
             .WithCompressed(false)
             .WithContent(content)
@@ -32,11 +32,11 @@ internal sealed class PbfStandardShapeTests
         ExportContents.Selected(requests) with { FrameBytes = false };
 
     /// <summary>The packet messages of all blocks, each as its decoded fields.</summary>
-    /// <param name="path">The PBF file.</param>
+    /// <param name="file">The bytes of the PBF file.</param>
     /// <returns>One list of decoded fields per packet, in file order.</returns>
-    private static List<List<PbfField>> _Packets(string path)
+    private static List<List<PbfField>> _Packets(byte[] file)
     {
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         List<List<PbfField>> packets = [];
         foreach (List<PbfField> block in blocks)
         {
@@ -142,19 +142,18 @@ internal sealed class PbfStandardShapeTests
     [Arguments(ExportShape.Hierarchy, 0UL)]
     public async Task TheFileHeaderCarriesFormatVersionOneAndTheShapeCode(ExportShape shape, ulong expectedCode)
     {
-        using TestDir dir = new("pbf_standard_header");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
         ExportContent content = shape == ExportShape.SelectedFields
             ? _Selected(new FieldRequest("udp.dstport"))
             : new ExportContent { Shape = shape, FrameBytes = false };
 
-        using (PbfExporter exporter = _Build(path, content))
+        using (PbfExporter exporter = _Build(stream, content))
         {
             _ = TreeFreeFeed.Run(exporter, ShapeFrames.TunnelUdpCan());
             exporter.OnFinish();
         }
 
-        (List<PbfField> header, _) = PbfFileScanner.Read(path);
+        (List<PbfField> header, _) = PbfFileScanner.FromBytes(stream.ToArray());
 
         await Assert.That(PbfFileScanner.Value(header, PbfFieldNumbers.HeaderVersion)).IsEqualTo(1UL);
         await Assert.That(PbfFileScanner.Value(header, PbfFieldNumbers.HeaderShape)).IsEqualTo(expectedCode);
@@ -174,10 +173,9 @@ internal sealed class PbfStandardShapeTests
     [Arguments(Occurrences.All, new[] { "0=10.0.0.1", "1=192.168.0.1" })]
     public async Task TheTunnelPacketWritesFlatRecordsWithOccurrenceNumbers(Occurrences choice, string[] expected)
     {
-        using TestDir dir = new("pbf_standard_occurrence");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
 
-        using (PbfExporter exporter = _Build(path, _Selected(new FieldRequest("ip.src", choice))))
+        using (PbfExporter exporter = _Build(stream, _Selected(new FieldRequest("ip.src", choice))))
         {
             List<bool> hadTree = TreeFreeFeed.Run(exporter, [PacketGenerators.CreateTunnelFrame(0)]);
             exporter.OnFinish();
@@ -185,7 +183,7 @@ internal sealed class PbfStandardShapeTests
             await Assert.That(hadTree.Contains(true)).IsFalse();
         }
 
-        List<List<PbfField>> records = _Records(_Packets(path).Single());
+        List<List<PbfField>> records = _Records(_Packets(stream.ToArray()).Single());
         List<string> actual = records.Select(static record => Invariant($"{_Occurrence(record)}={_Address(record)}")).ToList();
 
         // A flat record carries no nested children: the shape code is what tells a reader to expect that.
@@ -198,16 +196,15 @@ internal sealed class PbfStandardShapeTests
     [Test]
     public async Task APlainPacketGivesOneRecordAndAPacketWithoutTheFieldGivesNone()
     {
-        using TestDir dir = new("pbf_standard_plain");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
 
-        using (PbfExporter exporter = _Build(path, _Selected(new FieldRequest("ip.src"))))
+        using (PbfExporter exporter = _Build(stream, _Selected(new FieldRequest("ip.src"))))
         {
             _ = TreeFreeFeed.Run(exporter, [ShapeFrames.TunnelUdpCan()[1], ShapeFrames.TunnelUdpCan()[2]]);
             exporter.OnFinish();
         }
 
-        List<List<PbfField>> packets = _Packets(path);
+        List<List<PbfField>> packets = _Packets(stream.ToArray());
 
         await Assert.That(packets.Count).IsEqualTo(2);
         await Assert.That(_Records(packets[0]).Count).IsEqualTo(1);
@@ -219,17 +216,16 @@ internal sealed class PbfStandardShapeTests
     [Test]
     public async Task ARepeatedValueIsFlaggedAsSameAsPreviousAndOmitted()
     {
-        using TestDir dir = new("pbf_standard_same");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
         List<Frame> frames = [ShapeFrames.TunnelUdpCan()[1], ShapeFrames.TunnelUdpCan()[1]];
 
-        using (PbfExporter exporter = _Build(path, _Selected(new FieldRequest("udp.dstport"))))
+        using (PbfExporter exporter = _Build(stream, _Selected(new FieldRequest("udp.dstport"))))
         {
             _ = TreeFreeFeed.Run(exporter, frames);
             exporter.OnFinish();
         }
 
-        List<List<PbfField>> packets = _Packets(path);
+        List<List<PbfField>> packets = _Packets(stream.ToArray());
         List<PbfField> first = _Records(packets[0]).Single();
         List<PbfField> second = _Records(packets[1]).Single();
 
@@ -250,9 +246,8 @@ internal sealed class PbfStandardShapeTests
     [Test]
     public async Task TheTreeFreeFeedAndTheTreeFeedWriteIdenticalRecords()
     {
-        using TestDir dir = new("pbf_standard_feeds");
-        string freePath = dir.FilePath("free.pbf");
-        string treePath = dir.FilePath("tree.pbf");
+        using MemoryStream freeStream = new();
+        using MemoryStream treeStream = new();
         List<Frame> frames =
         [
             .. ShapeFrames.TunnelUdpCan(),
@@ -260,14 +255,14 @@ internal sealed class PbfStandardShapeTests
         ];
         ExportContent content = _Selected(new FieldRequest("ip.src"), new FieldRequest("udp.length"), new FieldRequest("dns.qry.name"));
 
-        using (PbfExporter exporter = _Build(freePath, content))
+        using (PbfExporter exporter = _Build(freeStream, content))
         {
             _ = TreeFreeFeed.Run(exporter, frames);
             exporter.OnFinish();
         }
 
         // The library user ignores the parse demand and passes tree packets: the exporter walks them with the same rules.
-        using (PbfExporter exporter = _Build(treePath, content))
+        using (PbfExporter exporter = _Build(treeStream, content))
         {
             foreach (Frame frame in frames)
             {
@@ -278,16 +273,16 @@ internal sealed class PbfStandardShapeTests
         }
 
         // Packet ids and timestamps differ between the runs; the records (field, occurrence, value, texts, flags) must not.
-        static List<string> RecordsOf(string path) =>
-            _Packets(path).SelectMany(static packet => _Records(packet))
+        static List<string> RecordsOf(MemoryStream stream) =>
+            _Packets(stream.ToArray()).SelectMany(static packet => _Records(packet))
                 .Select(static record => string.Join(
                     ';', record.Select(static field => Invariant($"{field.Number}:{field.Varint}:{Convert.ToHexString(field.Payload ?? [])}"))))
                 .ToList();
 
-        List<string> free = RecordsOf(freePath);
+        List<string> free = RecordsOf(freeStream);
 
         await Assert.That(free.Count).IsGreaterThan(4);
-        await Assert.That(string.Join('|', RecordsOf(treePath))).IsEqualTo(string.Join('|', free));
+        await Assert.That(string.Join('|', RecordsOf(treeStream))).IsEqualTo(string.Join('|', free));
     }
 
     /// <summary>A packet that the filter rejected leaves no packet in the file and is not counted.</summary>
@@ -295,11 +290,10 @@ internal sealed class PbfStandardShapeTests
     [Test]
     public async Task APacketTheFilterRejectedLeavesNoRecord()
     {
-        using TestDir dir = new("pbf_standard_commit");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
         List<Frame> frames = [ShapeFrames.TunnelUdpCan()[1], ShapeFrames.TunnelUdpCan()[1], ShapeFrames.TunnelUdpCan()[1]];
 
-        using (PbfExporter exporter = _Build(path, _Selected(new FieldRequest("udp.dstport"))))
+        using (PbfExporter exporter = _Build(stream, _Selected(new FieldRequest("udp.dstport"))))
         {
             int index = 0;
             _ = TreeFreeFeed.Run(exporter, frames, offer: _ => index++ != 1);
@@ -308,7 +302,7 @@ internal sealed class PbfStandardShapeTests
             await Assert.That(exporter.PacketCount).IsEqualTo(2);
         }
 
-        await Assert.That(_Packets(path).Count).IsEqualTo(2);
+        await Assert.That(_Packets(stream.ToArray()).Count).IsEqualTo(2);
     }
 
     #endregion
@@ -320,16 +314,15 @@ internal sealed class PbfStandardShapeTests
     [Test]
     public async Task HierarchyKeepsNestedRecordsWithChildren()
     {
-        using TestDir dir = new("pbf_standard_hierarchy");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
 
-        using (PbfExporter exporter = _Build(path, new ExportContent { FrameBytes = false }))
+        using (PbfExporter exporter = _Build(stream, new ExportContent { FrameBytes = false }))
         {
             _ = TreeFreeFeed.Run(exporter, [ShapeFrames.TunnelUdpCan()[1]]);
             exporter.OnFinish();
         }
 
-        List<List<PbfField>> records = _Records(_Packets(path).Single());
+        List<List<PbfField>> records = _Records(_Packets(stream.ToArray()).Single());
 
         await Assert.That(records.Exists(static record => record.Exists(static field => field.Number == PbfFieldNumbers.FieldChild))).IsTrue();
     }
@@ -346,12 +339,11 @@ internal sealed class PbfStandardShapeTests
     [Test]
     public async Task FrameBytesAreAcceptedForTheStandardLayoutInEitherOrderOfTheBuilderCalls()
     {
-        using TestDir dir = new("pbf_standard_framebytes");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
         ExportContent withFrames = new() { FrameBytes = true };
 
-        PbfExporter.Builder contentFirst = PbfExporter.CreateBuilder().ToFile(path).WithContent(withFrames);
-        PbfExporter.Builder formatFirst = PbfExporter.CreateBuilder().ToFile(path).WithFormat(PbfExportFormat.Standard);
+        PbfExporter.Builder contentFirst = PbfExporter.CreateBuilder().ToStream(stream).WithContent(withFrames);
+        PbfExporter.Builder formatFirst = PbfExporter.CreateBuilder().ToStream(stream).WithFormat(PbfExportFormat.Standard);
 
         await Assert.That(() => formatFirst.WithContent(withFrames)).ThrowsNothing();
         await Assert.That(() => contentFirst.WithFormat(PbfExportFormat.Standard)).ThrowsNothing();
@@ -363,17 +355,16 @@ internal sealed class PbfStandardShapeTests
     [Test]
     public async Task TheStandardLayoutWithoutWithContentWritesNoFrameBytes()
     {
-        using TestDir dir = new("pbf_standard_default");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
 
         // A plain builder writes the default content, which has no frame bytes in either layout.
-        using (PbfExporter exporter = PbfExporter.CreateBuilder().ToFile(path).WithFormat(PbfExportFormat.Standard).WithCompressed(false).Build())
+        using (PbfExporter exporter = PbfExporter.CreateBuilder().ToStream(stream).WithFormat(PbfExportFormat.Standard).WithCompressed(false).Build())
         {
             _ = TreeFreeFeed.Run(exporter, [ShapeFrames.TunnelUdpCan()[1]]);
             exporter.OnFinish();
         }
 
-        List<PbfField> packet = _Packets(path).Single();
+        List<PbfField> packet = _Packets(stream.ToArray()).Single();
 
         await Assert.That(packet.Exists(static field => field.Number == PbfFieldNumbers.PacketInfo)).IsTrue();
         await Assert.That(packet.Exists(static field => field.Number == PbfFieldNumbers.PacketFrameBytes)).IsFalse();
@@ -391,20 +382,19 @@ internal sealed class PbfStandardShapeTests
     [Arguments(ExportShape.SelectedFields)]
     public async Task TheStandardLayoutWritesTheExactFrameAsPacketField6(ExportShape shape)
     {
-        using TestDir dir = new("pbf_standard_frames_on");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
         List<Frame> frames = ShapeFrames.TunnelUdpCan();
         ExportContent content = shape == ExportShape.SelectedFields
             ? _Selected(new FieldRequest("udp.dstport")) with { FrameBytes = true }
             : new ExportContent { Shape = shape, FrameBytes = true };
 
-        using (PbfExporter exporter = _Build(path, content))
+        using (PbfExporter exporter = _Build(stream, content))
         {
             _ = TreeFreeFeed.Run(exporter, frames);
             exporter.OnFinish();
         }
 
-        List<List<PbfField>> packets = _Packets(path);
+        List<List<PbfField>> packets = _Packets(stream.ToArray());
 
         await Assert.That(packets.Count).IsEqualTo(frames.Count);
         for (int i = 0; i < packets.Count; i++)
@@ -421,17 +411,16 @@ internal sealed class PbfStandardShapeTests
     [Test]
     public async Task AnEmptyFrameIsAZeroLengthPacketField6()
     {
-        using TestDir dir = new("pbf_standard_empty_frame");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
         ExportContent content = _Selected(new FieldRequest("udp.dstport")) with { FrameBytes = true };
 
-        using (PbfExporter exporter = _Build(path, content))
+        using (PbfExporter exporter = _Build(stream, content))
         {
             _ = TreeFreeFeed.Run(exporter, [TestHarness.CreateFrame(3, 4_000_000, [])]);
             exporter.OnFinish();
         }
 
-        List<PbfField> packet = _Packets(path).Single();
+        List<PbfField> packet = _Packets(stream.ToArray()).Single();
         PbfField frameField = packet.Single(static field => field.Number == PbfFieldNumbers.PacketFrameBytes);
 
         await Assert.That(frameField.WireType).IsEqualTo(2);
@@ -450,14 +439,13 @@ internal sealed class PbfStandardShapeTests
     [Test]
     public async Task AHierarchyPacketWithoutAFieldTreeIsSkippedAsASerializationError()
     {
-        using TestDir dir = new("pbf_standard_no_tree");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
         ParseOptions noTree = new(FieldTreeMode.Skip);
         Packet packet = TestHarness.ParseFrame(ShapeFrames.TunnelUdpCan()[1], in noTree);
         List<ExportErrorEventArgs> events = [];
         bool accepted;
 
-        using (PbfExporter exporter = _Build(path, new ExportContent { FrameBytes = false }))
+        using (PbfExporter exporter = _Build(stream, new ExportContent { FrameBytes = false }))
         {
             exporter.ItemSkipped += (_, args) => events.Add(args);
 
@@ -473,7 +461,7 @@ internal sealed class PbfStandardShapeTests
         await Assert.That(events.Count).IsEqualTo(1);
         await Assert.That(events[0].Kind).IsEqualTo(ExportErrorKind.SerializationError);
         await Assert.That(events[0].Message).IsEqualTo("Skip packets cannot be exported (HasFieldTree is false).");
-        await Assert.That(_Packets(path).Count).IsEqualTo(0);
+        await Assert.That(_Packets(stream.ToArray()).Count).IsEqualTo(0);
     }
 
     #endregion
@@ -518,17 +506,16 @@ internal sealed class PbfStandardShapeTests
     [Test]
     public async Task ABytesFieldOfTheStandardFlatShapeIsWrittenAndRepeatedAsSameAsPrevious()
     {
-        using TestDir dir = new("pbf_standard_bytes");
-        string path = dir.FilePath("capture.pbf");
+        using MemoryStream stream = new();
         List<Frame> frames = [PacketGenerators.CreateCanFrame(0), PacketGenerators.CreateCanFrame(1)];
 
-        using (PbfExporter exporter = _Build(path, _Selected(new FieldRequest("can.data"))))
+        using (PbfExporter exporter = _Build(stream, _Selected(new FieldRequest("can.data"))))
         {
             _ = TreeFreeFeed.Run(exporter, frames);
             exporter.OnFinish();
         }
 
-        List<List<PbfField>> packets = _Packets(path);
+        List<List<PbfField>> packets = _Packets(stream.ToArray());
         List<PbfField> first = _Records(packets[0]).Single();
         List<PbfField> second = _Records(packets[1]).Single();
         PbfField value = first.Single(static field => field.Number == PbfFieldNumbers.FieldValue);

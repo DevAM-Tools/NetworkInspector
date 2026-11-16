@@ -279,6 +279,7 @@ internal sealed class SessionValueCacheTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task TryAddValueCache_WhileRunning_CatchesLiveTail()
     {
         using Stack stack = TestHarness.CreateStack();
@@ -755,6 +756,7 @@ internal sealed class SessionValueCacheTests
     }
 
     [Test]
+    [Category("Slow")]
     public async Task Unsubscribe_RuntimeCache_StopsRecording()
     {
         using Stack stack = TestHarness.CreateStack();

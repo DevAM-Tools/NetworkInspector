@@ -42,9 +42,15 @@ internal sealed class PbfVerifier
     /// <summary>
     /// Opens and validates a PBF file.
     /// </summary>
-    internal static PbfVerifier Open(string path)
+    internal static PbfVerifier Open(string path) => FromBytes(File.ReadAllBytes(path));
+
+    /// <summary>
+    /// Validates a PBF file from raw bytes.
+    /// </summary>
+    /// <param name="data">The complete PBF file.</param>
+    /// <returns>The verifier.</returns>
+    internal static PbfVerifier FromBytes(byte[] data)
     {
-        byte[] data = File.ReadAllBytes(path);
         PbfVerifier verifier = new();
         verifier._Parse(data);
         return verifier;

@@ -9,7 +9,8 @@ Load on `/docs-repair`. Also load `tech-docs.md`, `tech-docs-templates.md`, and 
 - Neither side is presumed right. Running code is not proof of intent. A doc is not proof either.
 - Fix doc-side drift in this workflow. Code-side drift becomes a review finding that `workflow-implement.md` executes; a behavior change needs tests and a review.
 - Write only what the source shows. Never invent a motivation. An unknown reason on a non-obvious choice is a card (`why-unknown`), not a guess.
-- State lives in the ledger, never only in chat. Any run resumes from it. The ledger is workflow history (git-ignored): every durable outcome — an answer, a domain fact, a decision — also lands in its home (`docs/domain.md`, `docs/decisions/`, `docs/architecture.md`) when it is applied.
+- State lives in the ledger, never only in chat. Any run resumes from it. The ledger is workflow history (git-ignored): every durable outcome — an answer, a domain fact, a decision — also lands in its home (`docs/domain/`, `docs/decisions/`, `docs/architecture.md`) when it is applied.
+- Scope: docs against code. Requirements, test content, and the trace: `/dream`.
 - Git stays read-only (Section 4.11). `git log -S`, `git log --follow`, `git blame`, `git show` are evidence tools.
 
 ## 2) Phases
@@ -131,7 +132,7 @@ private const int MaxAttempts = 6; // first try + 5 retries
 **Applied:**
 ````
 
-- ID: `DRIFT-<AREA>-<TOPIC>`, token rules of `workflow-requirements.md`. Stable. Never in code or comments.
+- ID: `DRIFT-<AREA>-<TOPIC>`, token rules of `tech-spec.md`. Stable. Never in code or comments.
 - Quote the doc verbatim. Show the code as a fenced snippet with path link and symbol.
 - Name every evidence source checked, including the silent ones.
 - Every option names what changes, for whom, and what it risks.
@@ -168,25 +169,25 @@ Continue with the next unit while cards wait. A unit waits only for its own card
 
 ## 9) Phase 3 — Apply decisions
 
-- Doc-side answer: edit, run the Sync check, fill **Applied** with the files and the Sync-check line, status `applied`. An answer that states a domain fact goes into `docs/domain.md`; an answer that settles a design choice gets a decision record.
-- Code-side answer: write a finding in the `workflow-review.md` Shared Block format (Problem/Fix plus the test that must fail before the fix) to `reviews/review_docs-repair-<slug>_<n>.md`. The card answer is the acceptance. Run `workflow-implement.md` on those findings (Stage 5 skipped). Then fix the doc side, fill **Applied**, status `applied`.
+- Doc-side answer: edit, run the Sync check, fill **Applied** with the files and the Sync-check line, status `applied`. An answer that states a domain fact goes into `docs/domain/` (`tech-spec.md`); an answer that settles a design choice gets a decision record.
+- Code-side answer: write a finding in the `workflow-review-templates.md` Shared Block format (Problem/Fix plus the test that must fail before the fix) to `reviews/review_docs-repair-<slug>_<n>.md`. The card answer is the acceptance. Run `workflow-implement.md` on those findings (Stage 5 skipped). Then fix the doc side, fill **Applied**, status `applied`.
 - Answer needs a feature or a new limit (option C above): record it as out of scope for this run, status `excluded`, and name `/plan` as the next step in the report.
 - Re-open the unit and return to Phase 1 step 7 for it.
 
 ## 10) Phase 4 — Close
 
-1. Write or refresh `docs/architecture.md` (Overview on one screen), and `docs/concepts.md` and `docs/domain.md` when they have content, from the units (templates). Each component’s entry type links its architecture section. Refresh `README.md` Documentation links.
+1. Write or refresh `docs/architecture.md` (Overview on one screen), and `docs/concepts.md` and `docs/domain/` when they have content, from the units (templates). Each component’s entry type links its architecture section. Refresh `README.md` Documentation links.
 2. Run the Sync check over the whole scope: every link, path, symbol, documented command.
-3. Run `workflow-review-loop.md` on the repair scope (file mode) with `tech-docs.md` loaded. Its findings go through Phase 3.
+3. Run `workflow-implement.md` § Review until clean on the repair scope with `tech-docs.md` loaded. Its findings go through Phase 3.
 4. Ledger status `done` when every unit is `aligned` or `excluded` and every card is `applied` or `excluded`. Else `waiting`.
 
 ## 11) Completion
 
-Chat: ledger path, counts per drift kind and status, waiting cards (ID, title, question; full card in the ledger), findings files, excluded items with the next workflow. Then the run report (Section 4.16): **Not done** lists units not `aligned` and cards not `applied`; **Needs you** holds the waiting cards. Do not recap fixed items.
+Chat: ledger path, counts per drift kind and status, each waiting card in full, findings files, excluded items with the next workflow. Then the run report (`tech-reporting.md`): **Not done** lists units not `aligned` and cards not `applied`; **Needs you** holds the waiting cards. Do not recap fixed items.
 
 ## 12) Loop rules
 
 - One writer per ledger.
 - Same tool call with the same result twice: change strategy (Section 4.14).
-- Two failed fixes of the same root cause: card or blocker per Section 4.16; continue elsewhere.
+- Two failed fixes of the same root cause: card or blocker per `tech-reporting.md`; continue elsewhere.
 - Never delete a doc the inventory lists without a `doc-orphan` or `doc-misplaced` card that shows where its facts went.

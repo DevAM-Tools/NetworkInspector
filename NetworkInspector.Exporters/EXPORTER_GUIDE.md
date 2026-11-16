@@ -150,10 +150,14 @@ NetworkInspector.Exporters.DuckDb/      ← Standalone DuckDB package (native Du
 
 Shared utilities live in the root `NetworkInspector.Exporters` namespace (not a physical `Shared/` folder).
 
-**Output targets:** most exporters use `ToFile` / `ToStream` / `ToStdout`. Columnar
+**Output targets:** every exporter except DuckDB writes through an `IExportTarget` of named, write-only streams that need
+not seek; `ToFile` / `ToStream` / `ToStdout` are shortcuts that build a target, and `ToTarget(target)` takes the host's own.
+A single-file format opens one entry, `ExportEntryName.Main`; the Parquet exporter opens one entry per table file. Columnar
 analytics exporters differ:
-- `ParquetExporter` → `ToDirectory(path)` (Option-C directory dataset)
-- `DuckDbExporter` → `ToFile(path.duckdb)` (single database file; package `NetworkInspector.Exporters.DuckDb`)
+- `ParquetExporter` → `ToDirectory(path)` (a folder dataset that clears an earlier one) or `ToTarget(target)` (the entries
+  as named streams, the host decides where they land)
+- `DuckDbExporter` → `ToFile(path.duckdb)` (single database file; package `NetworkInspector.Exporters.DuckDb`); its native
+  library opens the file itself, so it has no target and the plugin contract hands it a prepared path (`ExporterCreation.ForFile`)
 - `PbfExporter` Columnar → same file target as Standard PBF
 
 ---
@@ -167,7 +171,7 @@ analytics exporters differ:
 | Writer class | `XxxWriter` | `PcapngWriter`, `BlfWriter` |
 | Static factory | `CreateBuilder()` | — |
 | Builder methods | `WithXxx()` or `Xxx()` | `WithUiName()`, `WithDescription()` |
-| Output methods | `ToFile()`, `ToStream()`, `ToStdout()` | — |
+| Output methods | `ToFile()`, `ToStream()`, `ToStdout()`, `ToTarget()` | — |
 | Build method | `Build()` | — |
 | Display name | `UiName` | — |
 | Format enum | `XxxExportFormat` | `PbfExportFormat` |
@@ -246,6 +250,13 @@ public sealed class XxxExporter : IPacketListener, IErrorTolerantExporter, IDisp
             return this;
         }
 
+        /// <summary>Writes the main entry to a host target; the exporter never learns where it lands.</summary>
+        public Builder ToTarget(IExportTarget target)
+        {
+            _Output = ExportOutput.FromTarget(target);
+            return this;
+        }
+
         /// <summary>Writes to stdout.</summary>
         public Builder ToStdout()
         {
@@ -306,7 +317,7 @@ public sealed class XxxExporter : IPacketListener, IErrorTolerantExporter, IDisp
             if (_Output is null)
             {
                 throw new InvalidOperationException(
-                    "Output target is required. Call ToFile(), ToStream(), or ToStdout().");
+                    "Output target is required. Call ToFile(), ToStream(), ToStdout(), or ToTarget().");
             }
 
             return new XxxExporter(
@@ -418,17 +429,23 @@ produce a **valid but empty** output file where the format supports it:
 
 ## 8. Output Targets
 
-Use `ExportOutput` as the abstraction for output targets:
+Use `ExportOutput` as the abstraction for the output of a single-file format. It opens the one entry,
+`ExportEntryName.Main`, of an `IExportTarget` on the first write, so an export that writes nothing opens nothing:
 
 ```csharp
-ExportOutput.File(path)         // FileStream + BufferedStream (4 MiB), owns stream
-ExportOutput.FromStream(stream) // Wraps existing stream, caller retains ownership
-ExportOutput.Stdout()           // Console.OpenStandardOutput(), owns stream
+ExportOutput.File(path)         // FileExportTarget: FileStream + BufferedStream (4 MiB), owns stream
+ExportOutput.FromStream(stream) // StreamExportTarget: wraps existing stream, caller retains ownership
+ExportOutput.Stdout()           // StreamExportTarget.Stdout(): Console.OpenStandardOutput(), owns stream
+ExportOutput.FromTarget(target) // The host's own target; it decides where the entry lands
 ```
+
+`IExportTarget.TryOpenWrite` hands out a write-only stream that need not seek or report a position; a refused open is
+`false` plus a reason, never an exception. A dataset format (Parquet) calls the target once per table file instead of using
+`ExportOutput`; it never calls a file-system API itself.
 
 **Rules:**
 - Store `ExportOutput?` (nullable) — it becomes available after `Build()`.
-- Access the underlying stream via `_Output.GetOrCreateUnderlyingStream()` in `Start()` — this creates the file on demand.
+- Access the underlying stream via `_Output.TryGetOrCreateUnderlyingStream(out stream, out failure)` in `Start()` — this opens the entry on demand and reports a refusal as a result, not an exception.
 - To inspect the stream without creating it (e.g. for finalization calls), use `_Output.TryGetExistingStream()` — returns `null` if no data has been written yet.
 - Dispose `_Output` in `OnFinish` / `Dispose` — this correctly handles ownership.
 - After disposing, set `_Output = null` to prevent double-dispose.
@@ -1278,7 +1295,13 @@ NetworkInspector.Exporters.Tests/
     InProcessRoundtripTests.cs       ← bus fields, channels, time zone, ASC precision, PCAPNG options, link types
     BlfRoundtripTests.cs, PcapngRoundtripTests.cs  ← verified with a reference reader (BLF exports local time for it)
     RoundtripAssertions.cs, RoundtripFrameFactory.cs
-  Helpers/TestStreams.cs             ← Failing / non-seekable streams for I/O error tests
+  Shared/                            ← Tests every exporter must pass, one row per exporter:
+    ExporterHarness.cs, ExporterContractTests.cs (abstract, the tests), FastExporterContractTests.cs, SlowExporterContractTests.cs, ShortcutsTests.cs
+                                     ← a new exporter adds a row to the `ExporterKind` enum of the harness (and its builder cases there) and to the `Kinds()` of the fast or the slow class
+  Targets/                           ← FileExportTarget, DirectoryExportTarget, SingleFileTarget, StreamExportTarget
+  Helpers/TestStreams.cs             ← FailingStream (fails on write call number `failOnWriteNumber` and/or after `ThrowAfterByte` bytes), FailOnceStream
+  Helpers/ForwardOnlyStream.cs       ← Write-only stream without seek, read, length, position (a pipe or HTTP body)
+  Helpers/MemoryExportTarget.cs      ← In-memory IExportTarget that records every entry; entries can be refused
   Helpers/ExportContents.cs, TreeFreeFeed.cs, CustomFieldPacketFactory.cs, InterfaceFrameFactory.cs
                                      ← Export content builders, tree-free feed, packets with chosen field values, frames with interface data
   Helpers/TextProbePacketFactory.cs, TextPresenceReaders.cs
@@ -1302,6 +1325,7 @@ NetworkInspector.Exporters.Tests/
 **Speed.** A test above 100 ms carries `[Category("Slow")]` (class level where every test of the class opens a database,
 writes a dataset, round-trips a file, or runs a writer thread; method level otherwise). The fast run excludes them:
 `dotnet test NetworkInspector.Exporters.Tests/NetworkInspector.Exporters.Tests.csproj -c Release -- --treenode-filter "/*/*/*/*[Category!=Slow]"`.
+Measure durations one test at a time (`-- --maximum-parallel-tests 1`, smallest of three runs): parallel runs inflate them under load.
 
 ### 18.2 Required Test Scenarios
 
@@ -1309,7 +1333,7 @@ Every exporter **must** have tests for:
 
 | Category | Scenario | Description |
 |----------|----------|-------------|
-| **Builder** | Requires output target | `Build()` throws without `ToFile/ToStream/ToStdout` |
+| **Builder** | Requires output target | `Build()` throws without `ToFile/ToStream/ToStdout/ToTarget` |
 | **Basic write** | Single item → verify output | Write one packet/frame, verify the output format |
 | **Multi-item** | Multiple items → verify count | Write several items, check `WrittenCount` |
 | **Empty export** | No items → valid empty output | Call `OnFinish()` without writing items |
@@ -1344,7 +1368,7 @@ Where feasible, use external tools to verify exported files:
 - [ ] Implement `IErrorTolerantExporter` and `IDisposable`
 - [ ] Add `WithUiName`, `WithDescription`, `WithCancellationToken`, and
       `WithTargetPacketCount` (packet exporters) or `WithTargetFrameCount` (frame exporters) to builder
-- [ ] Use `ExportOutput` for output targets (`ToFile`, `ToStream`, `ToStdout`)
+- [ ] Use `ExportOutput` for output targets (`ToFile`, `ToStream`, `ToStdout`, `ToTarget`)
 - [ ] Use lazy initialisation (open stream on first item)
 - [ ] Implement error tolerance (try/catch in HandlePacket/HandleFrame, `HandleSkip`)
 - [ ] Exporters are single-threaded; use plain reads/writes and saturating increments for counters (see §9.3, §10)

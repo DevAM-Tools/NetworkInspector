@@ -142,7 +142,7 @@ static void WritePbf(IEnumerable<Packet> packets)
 
 | Method | Purpose | Default |
 | --- | --- | --- |
-| `ToFile` / `ToStream` / `ToStdout` | Output target | required |
+| `ToFile` / `ToStream` / `ToStdout` / `ToTarget` | Output target (`ToTarget` takes a host `IExportTarget` and writes the one entry `Main`) | required |
 | `WithUiName` / `WithDescription` | User-facing metadata | — |
 | `WithFormat(format)` | `Standard` or `Columnar` | `Standard` |
 | `WithCompressed(bool)` | LZ4 block compression | `true` |

@@ -5,7 +5,7 @@ Load when `*.rs`, `Cargo.toml`, or `Cargo.lock` is in scope. Rust mechanisms for
 ## Language
 
 - Edition 2024; `rust-version = "1.85"` in `[workspace.package]`; stable features only.
-- ❗ Add `rustfmt.toml` with `max_width = 160`. Let `rustfmt` format; 4 spaces.
+- ❗ Add `rustfmt.toml` with `max_width = 130`. Let `rustfmt` format; 4 spaces.
 - Type public signatures fully. Annotate locals when inference hides a conversion or a heap type.
 
 ## Naming
@@ -57,7 +57,7 @@ impl TryFrom<u32> for Port {
     type Error = PortError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        // 0 is reserved; values above u16 cannot be ports.
+        // 0 is reserved; values above u16 cannot be ports. `as u16` would wrap silently.
         let narrowed = u16::try_from(value).map_err(|_| PortError::OutOfRange(value))?;
         if narrowed == 0 {
             return Err(PortError::OutOfRange(value));
@@ -87,6 +87,7 @@ pub enum PortError {
     OutOfRange(u32),
 }
 
+// Without an approved `thiserror`, write Display and Error by hand.
 impl std::fmt::Display for PortError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -199,14 +200,7 @@ fn resolve_inside(root: &Path, relative: &Path) -> Option<PathBuf> {
 - **Deserialization:** `#[serde(deny_unknown_fields)]` on boundary types; bound input size first; validate into newtypes.
 - **Hash maps:** keep SipHash for untrusted keys (HashDoS); fast hashers only for internal keys.
 - **SQL:** bind parameters; never format values into queries.
-- **Limits** (Section 4.2): a limits struct with private fields, a documented `Default`, and `TryFrom` / a builder that rejects out-of-range values. Host-derived defaults: `std::thread::available_parallelism()`. Format and protocol facts are `const`. Comment the security decision at the definition:
-
-```rust
-// Threat: deeply nested input overflows the parser stack. Secure by default: input is remote.
-// Operator may set 16..=1024 in config. Rejected: unbounded recursion (stack overflow aborts the process).
-// Residual risk: 1024 levels still cost CPU per request; the rate limit covers that.
-max_depth: u16,
-```
+- **Limits** (`tech-limits.md`): no reference implementation yet; implement the mechanism as a limits struct with private fields, a documented `Default`, and `TryFrom` / a builder that rejects out-of-range values; one fixed default per limit for the reference machine of the project. Format and protocol facts are `const`. Comment the security decision at the definition.
 - **Secrets:** redacting `Debug`; no secrets in `Display` or errors. `subtle` / `zeroize` only through the New Dependency Protocol.
 - **`unsafe`:** only at approved sites, opened with `#[expect(unsafe_code, reason = "…")]`; `// SAFETY:` on every block (aliasing, lifetimes, validity, `Send`/`Sync`). Validate FFI and I/O input first.
 - ❗ No `unsafe impl Send` / `Sync` without a documented invariant.
@@ -252,7 +246,7 @@ send(next).await;
 
 ## Performance and allocation
 
-❗ Every heap allocation costs allocator time and fragments memory. Avoid allocations on **every** path. On hot paths (per item, per byte after setup) allocate nothing.
+❗ Avoid heap allocations on **every** path. Hot paths allocate nothing (Section 4.4).
 
 - Allocate in this order: stack and borrows → reused buffers → arena / bump → heap.
 - Avoid on all paths: `clone` of heap data, intermediate `Vec` / `String`, `collect()` that only feeds another loop, `format!` where `write!` into a buffer works, `Box<dyn Fn>` where a generic works. Pre-size with `with_capacity`.
@@ -264,7 +258,7 @@ send(next).await;
 
 ### Profiling
 
-Load `tech-rust-profiling.md` when a measurement is needed (Section 3). Never use a profiler that needs admin rights (Section 4.15).
+Load `tech-rust-profiling.md` when a measurement is needed (Section 3).
 
 ## Console and files
 

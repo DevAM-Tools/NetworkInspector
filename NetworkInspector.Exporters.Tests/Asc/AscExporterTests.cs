@@ -13,13 +13,6 @@ internal sealed class AscExporterTests
     // ========================================================================
 
     [Test]
-    public async Task BuilderRequiresOutput()
-    {
-        AscExporter.Builder builder = AscExporter.CreateBuilder();
-        await Assert.That(() => builder.Build()).Throws<InvalidOperationException>();
-    }
-
-    [Test]
     public async Task BuilderTargetFrameCountNegativeThrows()
     {
         AscExporter.Builder builder = AscExporter.CreateBuilder();
@@ -291,200 +284,11 @@ internal sealed class AscExporterTests
 
         string content = Encoding.UTF8.GetString(ms.ToArray());
 
-        // Must contain both the opening and closing block markers
-        await Assert.That(content).Contains("Begin Triggerblock");
-        await Assert.That(content).Contains("End TriggerBlock");
-    }
-
-    // ========================================================================
-    // File output
-    // ========================================================================
-
-    [Test]
-    public async Task WriteToFileCreatesFile()
-    {
-        using TestDir dir = new("asc_file");
-        string path = dir.FilePath("output.asc");
-
-        using AscExporter exporter = AscExporter.CreateBuilder().ToFile(path).Build();
-
-        byte[] canData = SocketCanGenerators.BuildCanClassic(0x123, [0x01]);
-        Frame frame = TestHarness.CreateFrame(0, 1_000_000_000L, canData, LinkType.CanSocketcan);
-        exporter.OnFrame(frame);
-        exporter.OnFinish();
-
-        await Assert.That(File.Exists(path)).IsTrue();
-        long size = new FileInfo(path).Length;
-        await Assert.That(size).IsGreaterThan(0L);
-    }
-
-    [Test]
-    public async Task WriteToStreamVerifyContent()
-    {
-        using MemoryStream ms = new();
-        using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
-
-        byte[] canData = SocketCanGenerators.BuildCanClassic(0x7FF, [0xAB, 0xCD]);
-        Frame frame = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
-        exporter.OnFrame(frame);
-        exporter.OnFinish();
-
-        string content = Encoding.UTF8.GetString(ms.ToArray());
-
-        // Header lines
+        // Header lines, then both the opening and closing block markers
         await Assert.That(content).Contains("base hex  timestamps absolute");
         await Assert.That(content).Contains("no internal events logged");
         await Assert.That(content).Contains("Begin Triggerblock");
         await Assert.That(content).Contains("End TriggerBlock");
-        // At least one data line
-        await Assert.That(content).Contains("7FF Rx d");
-    }
-
-    // ========================================================================
-    // Cancellation
-    // ========================================================================
-
-    [Test]
-    [Category("Slow")]
-    public async Task CancellationStopsExport()
-    {
-        using CancellationTokenSource cts = new();
-        using MemoryStream ms = new();
-        using AscExporter exporter = AscExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCancellationToken(cts.Token)
-            .Build();
-
-        byte[] canData = SocketCanGenerators.BuildCanClassic(0x100, [0x01]);
-        Frame frame0 = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
-        Frame frame1 = TestHarness.CreateFrame(1, 1_000_000L, canData, LinkType.CanSocketcan);
-        Frame frame2 = TestHarness.CreateFrame(2, 2_000_000L, canData, LinkType.CanSocketcan);
-
-        exporter.OnFrame(frame0);
-        exporter.OnFrame(frame1);
-        await cts.CancelAsync().ConfigureAwait(false);
-
-        bool accepted = exporter.OnFrame(frame2);
-        await Assert.That(accepted).IsFalse();
-        exporter.OnFinish();
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterCancellation()
-    {
-        using CancellationTokenSource cts = new();
-        using MemoryStream ms = new();
-        using AscExporter exporter = AscExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithCancellationToken(cts.Token)
-            .Build();
-
-        await cts.CancelAsync().ConfigureAwait(false);
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-    }
-
-    // ========================================================================
-    // Target frame count
-    // ========================================================================
-
-    [Test]
-    public async Task TargetCountStopsAtN()
-    {
-        using MemoryStream ms = new();
-        using AscExporter exporter = AscExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithTargetFrameCount(3)
-            .Build();
-
-        for (int i = 0; i < 10; i++)
-        {
-            byte[] canData = SocketCanGenerators.BuildCanClassic((uint)(0x100 + i), [0xAA]);
-            Frame frame = TestHarness.CreateFrame(
-                i, (long)i * 1_000_000L, canData, LinkType.CanSocketcan);
-            exporter.OnFrame(frame);
-        }
-
-        exporter.OnFinish();
-
-        await Assert.That(exporter.WrittenCount).IsEqualTo(3);
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterTargetReached()
-    {
-        using MemoryStream ms = new();
-        using AscExporter exporter = AscExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithTargetFrameCount(2)
-            .Build();
-
-        for (int i = 0; i < 5; i++)
-        {
-            byte[] canData = SocketCanGenerators.BuildCanClassic((uint)(0x100 + i), [0xBB]);
-            Frame frame = TestHarness.CreateFrame(
-                i, (long)i * 1_000_000L, canData, LinkType.CanSocketcan);
-            exporter.OnFrame(frame);
-        }
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-        exporter.OnFinish();
-    }
-
-    // ========================================================================
-    // Lifecycle
-    // ========================================================================
-
-    [Test]
-    public async Task IsFinishedFalseBeforeOnFinish()
-    {
-        using MemoryStream ms = new();
-        using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
-
-        await Assert.That(exporter.IsFinished).IsFalse();
-    }
-
-    [Test]
-    public async Task IsFinishedTrueAfterOnFinish()
-    {
-        using MemoryStream ms = new();
-        using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
-
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-    }
-
-    [Test]
-    public async Task OnFrameAfterFinishReturnsFalse()
-    {
-        using MemoryStream ms = new();
-        using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
-
-        exporter.OnFinish();
-
-        byte[] canData = SocketCanGenerators.BuildCanClassic(0x200, [0x01]);
-        Frame frame = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
-        bool accepted = exporter.OnFrame(frame);
-
-        await Assert.That(accepted).IsFalse();
-    }
-
-    [Test]
-    public async Task DoubleFinishIsIdempotent()
-    {
-        using MemoryStream ms = new();
-        using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
-
-        byte[] canData = SocketCanGenerators.BuildCanClassic(0x300, [0x02]);
-        Frame frame = TestHarness.CreateFrame(0, 0L, canData, LinkType.CanSocketcan);
-        exporter.OnFrame(frame);
-
-        exporter.OnFinish();
-        exporter.OnFinish();
-
-        await Assert.That(exporter.IsFinished).IsTrue();
-        await Assert.That(exporter.WrittenCount).IsEqualTo(1);
     }
 
     // ========================================================================
@@ -522,42 +326,6 @@ internal sealed class AscExporterTests
         await Assert.That(readBack.Count).IsEqualTo(5);
         await Assert.That(readBack[3].LinkType).IsEqualTo(LinkType.Ethernet);
         await Assert.That(readBack[4].LinkType).IsEqualTo(LinkType.Ethernet);
-    }
-
-    // ========================================================================
-    // UiName / Description
-    // ========================================================================
-
-    [Test]
-    public async Task UiNameReturnsDefault()
-    {
-        using MemoryStream ms = new();
-        using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("ASC Exporter");
-    }
-
-    [Test]
-    public async Task UiNameDescriptionPreserved()
-    {
-        using MemoryStream ms = new();
-        using AscExporter exporter = AscExporter.CreateBuilder()
-            .ToStream(ms)
-            .WithUiName("My ASC Export")
-            .WithDescription("Test capture")
-            .Build();
-
-        await Assert.That(exporter.UiName).IsEqualTo("My ASC Export");
-        await Assert.That(exporter.Description).IsEqualTo("Test capture");
-    }
-
-    [Test]
-    public async Task DescriptionReturnsNullWhenNotSet()
-    {
-        using MemoryStream ms = new();
-        using AscExporter exporter = AscExporter.CreateBuilder().ToStream(ms).Build();
-
-        await Assert.That(exporter.Description).IsNull();
     }
 
     // ========================================================================

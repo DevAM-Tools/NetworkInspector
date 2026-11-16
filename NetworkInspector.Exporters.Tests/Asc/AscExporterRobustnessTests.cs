@@ -320,9 +320,11 @@ internal sealed class AscExporterRobustnessTests
     }
 
     [Test]
-    public async Task MissingOutputStreamIsReportedAsExportError()
+    public async Task RefusedOutputEntryIsReportedAsExportError()
     {
-        using AscExporter exporter = AscExporter.CreateBuilder().ToStream(null!).Build(); // null! : deliberately invalid stream
+        using AscExporter exporter = AscExporter.CreateBuilder()
+            .ToTarget(new MemoryExportTarget(refuse: static _ => "offline"))
+            .Build();
         List<ExportErrorEventArgs> events = [];
         exporter.ItemSkipped += (_, args) => events.Add(args);
 

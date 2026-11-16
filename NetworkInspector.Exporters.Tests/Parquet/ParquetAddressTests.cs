@@ -17,14 +17,14 @@ internal sealed class ParquetAddressTests
     #region Writing and reading back a dataset
 
     /// <summary>Exports the packets of a factory to a Parquet dataset.</summary>
-    /// <param name="directory">The target directory.</param>
+    /// <param name="output">The builder with its output already set (a directory or a target).</param>
     /// <param name="factory">The factory that built the packets (and owns their stack).</param>
     /// <param name="values">The address values of each packet, in packet order.</param>
     /// <param name="maxPacketsPerBlock">The batch size in packets (one row group per batch).</param>
-    private static void _Export(string directory, AddressProbePacketFactory factory, IReadOnlyList<AddressValues> values, int maxPacketsPerBlock = 50_000)
+    private static void _Export(
+        ParquetExporter.Builder output, AddressProbePacketFactory factory, IReadOnlyList<AddressValues> values, int maxPacketsPerBlock = 50_000)
     {
-        using ParquetExporter exporter = ParquetExporter.CreateBuilder()
-            .ToDirectory(directory)
+        using ParquetExporter exporter = output
             .WithContent(factory.Content(ExportShape.Hierarchy))
             .WithWriteMode(ExportWriteMode.Synchronous)
             .WithMaxPacketsPerBlock(maxPacketsPerBlock)
@@ -37,6 +37,14 @@ internal sealed class ParquetAddressTests
         exporter.OnFinish();
     }
 
+    /// <summary>Exports the packets of a factory to a Parquet dataset in a directory.</summary>
+    /// <param name="directory">The target directory.</param>
+    /// <param name="factory">The factory that built the packets (and owns their stack).</param>
+    /// <param name="values">The address values of each packet, in packet order.</param>
+    /// <param name="maxPacketsPerBlock">The batch size in packets (one row group per batch).</param>
+    private static void _Export(string directory, AddressProbePacketFactory factory, IReadOnlyList<AddressValues> values, int maxPacketsPerBlock = 50_000) =>
+        _Export(ParquetExporter.CreateBuilder().ToDirectory(directory), factory, values, maxPacketsPerBlock);
+
     /// <summary>The path of the Parquet file of an address field.</summary>
     /// <param name="directory">The dataset directory.</param>
     /// <param name="factory">The factory that names the field ids.</param>
@@ -45,12 +53,15 @@ internal sealed class ParquetAddressTests
     private static string _File(string directory, AddressProbePacketFactory factory, string name) =>
         Path.Combine(directory, "fields", factory.TableOf(name) + ".parquet");
 
-    /// <summary>The columns of a Parquet file with the CLR type Parquet.Net maps each to.</summary>
-    /// <param name="path">The Parquet file.</param>
+    /// <summary>The columns of the Parquet file of an address field in memory, with the CLR type Parquet.Net maps each to.</summary>
+    /// <param name="target">The target after the export.</param>
+    /// <param name="factory">The factory that names the field ids.</param>
+    /// <param name="name">The field name, for example <c>adp.mac</c>.</param>
     /// <returns>Column name to CLR type.</returns>
-    private static async Task<Dictionary<string, Type>> _Columns(string path)
+    private static async Task<Dictionary<string, Type>> _Columns(MemoryExportTarget target, AddressProbePacketFactory factory, string name)
     {
-        await using ParquetReader reader = await ParquetReader.CreateAsync(path);
+        using MemoryStream stream = new(target.Bytes("fields/" + factory.TableOf(name) + ".parquet"));
+        await using ParquetReader reader = await ParquetReader.CreateAsync(stream);
         return reader.Schema.GetDataFields().ToDictionary(static field => field.Name, static field => field.ClrType);
     }
 
@@ -86,16 +97,16 @@ internal sealed class ParquetAddressTests
     [Test]
     public async Task AddressFilesHaveTheDocumentedIntegerColumns()
     {
-        using TestDir dir = new("parquet_address_schema");
         using AddressProbePacketFactory factory = new();
+        MemoryExportTarget target = new(seekable: true);
 
-        _Export(dir.DirectoryPath, factory, [AddressProbePacketFactory.Readable]);
+        _Export(ParquetExporter.CreateBuilder().ToTarget(target), factory, [AddressProbePacketFactory.Readable]);
 
-        Dictionary<string, Type> ipv4 = await _Columns(_File(dir.DirectoryPath, factory, "adp.ipv4"));
-        Dictionary<string, Type> mac = await _Columns(_File(dir.DirectoryPath, factory, "adp.mac"));
-        Dictionary<string, Type> eui64 = await _Columns(_File(dir.DirectoryPath, factory, "adp.eui64"));
-        Dictionary<string, Type> ipv6 = await _Columns(_File(dir.DirectoryPath, factory, "adp.ipv6"));
-        Dictionary<string, Type> uuid = await _Columns(_File(dir.DirectoryPath, factory, "adp.uuid"));
+        Dictionary<string, Type> ipv4 = await _Columns(target, factory, "adp.ipv4");
+        Dictionary<string, Type> mac = await _Columns(target, factory, "adp.mac");
+        Dictionary<string, Type> eui64 = await _Columns(target, factory, "adp.eui64");
+        Dictionary<string, Type> ipv6 = await _Columns(target, factory, "adp.ipv6");
+        Dictionary<string, Type> uuid = await _Columns(target, factory, "adp.uuid");
 
         await Assert.That(ipv4["value"]).IsEqualTo(typeof(uint));
         await Assert.That(mac["value"]).IsEqualTo(typeof(ulong));

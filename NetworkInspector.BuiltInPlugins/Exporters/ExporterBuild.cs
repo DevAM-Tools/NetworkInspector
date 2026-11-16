@@ -70,6 +70,37 @@ internal static class ExporterBuild
         return false;
     }
 
+    /// <summary>
+    /// Builds an exporter on a host target. Nothing is opened here (the exporters open their entry with the first item), so only
+    /// the builder's refusals of an option value are expected; they map to <see cref="PluginErrorCode.InvalidOption"/>. Exceptions
+    /// that are not listed here are bugs and propagate.
+    /// </summary>
+    /// <typeparam name="TListener">The listener type of the contract.</typeparam>
+    /// <param name="build">Runs the builder chain of the Core exporter, ending in <c>ToTarget</c>, and returns the built exporter.</param>
+    /// <param name="listener">The built exporter; <see langword="null"/> on failure.</param>
+    /// <param name="error">Why no exporter was built; <see langword="null"/> on success.</param>
+    /// <returns><see langword="true"/> when <paramref name="listener"/> is set.</returns>
+    internal static bool TryBuildOnTarget<TListener>(Func<TListener> build, [NotNullWhen(true)] out TListener? listener,
+        [NotNullWhen(false)] out PluginError? error)
+        where TListener : class
+    {
+        ArgumentNullException.ThrowIfNull(build);
+        try
+        {
+            listener = build();
+            error = null;
+            return true;
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            // The Core builders reject a value they cannot write (an out-of-range option) with these types. The registration cannot
+            // tell which option was at fault here; registrations that can name it check it themselves before this step.
+            listener = null;
+            error = new PluginError(PluginErrorCode.InvalidOption, exception.Message);
+            return false;
+        }
+    }
+
     #endregion
 
     #region Private Helpers

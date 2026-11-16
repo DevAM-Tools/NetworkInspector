@@ -8,7 +8,7 @@
 
   <ItemGroup>
     <!-- 1.2.0 or later: 1.1.0 reports Invariant($"…") from InvariantStringHelper as CSC009. -->
-    <PackageVersion Include="CSharpStyleChecker" Version="1.2.0" />
+    <PackageVersion Include="CSharpStyleChecker" Version="2.0.0" />
     <!-- .NET 6 and later only (netstandard2.0 has no handler overload). -->
     <PackageVersion Include="InvariantStringHelper" Version="1.0.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="4.14.0" />

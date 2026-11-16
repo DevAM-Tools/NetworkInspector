@@ -41,7 +41,7 @@ internal static class PbfExporterRegistration
         Description: "Writes parsed packets in the PBF block format (row or column layout, optionally LZ4-compressed).",
         FileExtension: ".pbf",
         RegisterOptions: _RegisterOptions,
-        Create: _TryCreate);
+        Creation: ExporterCreation.ForStreams<IPacketListener>(_TryCreate));
 
     #endregion
 
@@ -64,7 +64,7 @@ internal static class PbfExporterRegistration
     }
 
     /// <summary>Creates the Core PBF exporter.</summary>
-    private static bool _TryCreate(ExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
+    private static bool _TryCreate(StreamExportRequest request, [NotNullWhen(true)] out IPacketListener? listener,
         [NotNullWhen(false)] out PluginError? error)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -90,9 +90,9 @@ internal static class PbfExporterRegistration
         }
 
         BatchingOptions batching = ExportContentOptions.ReadBatching(values);
-        return ExporterBuild.TryBuild<IPacketListener>(
+        return ExporterBuild.TryBuildOnTarget<IPacketListener>(
             () => PbfExporter.CreateBuilder()
-                .ToFile(request.TargetPath)
+                .ToTarget(request.Target)
                 .WithFormat(format)
                 .WithContent(content!) // Invariant: only the CSV "packets" shape has no content.
                 .WithWriteMode(batching.WriteMode)
@@ -103,7 +103,7 @@ internal static class PbfExporterRegistration
                 .WithTimestampSorted(sorted)
                 .WithCancellationToken(request.CancellationToken)
                 .Build(),
-            request.TargetPath, out listener, out error);
+            out listener, out error);
     }
 
     #endregion

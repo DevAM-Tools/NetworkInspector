@@ -3,6 +3,7 @@
 namespace NetworkInspector.Sessions.Tests;
 
 /// <summary>Covers the adaptive switch of the matching-read pre-check.</summary>
+[Category("Slow")]
 internal sealed class MatchingPrecheckTests
 {
     #region Helpers

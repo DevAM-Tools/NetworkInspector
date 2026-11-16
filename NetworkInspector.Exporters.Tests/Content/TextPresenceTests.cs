@@ -80,10 +80,26 @@ internal sealed class TextPresenceTests
         JsonAllFields,
     }
 
-    /// <summary>What an export left behind: its path (file or directory) and, for the stream formats, its text.</summary>
-    /// <param name="Path">The output file or directory; empty for the stream formats.</param>
-    /// <param name="Text">The output of a stream format (CSV, JSON); empty for the file formats.</param>
-    private sealed record Output(string Path, string Text);
+    /// <summary>What an export left behind: its path (DuckDB file), its text (stream formats), its bytes (PBF), or its Parquet target.</summary>
+    /// <param name="Path">The output file; empty for the other outputs.</param>
+    /// <param name="Text">The output of a stream format (CSV, JSON); empty for the others.</param>
+    /// <param name="Bytes">The bytes a PBF export wrote; <see langword="null"/> for the others.</param>
+    /// <param name="Target">The in-memory target a Parquet export wrote to; <see langword="null"/> for the others.</param>
+    private sealed record Output(string Path, string Text, byte[]? Bytes = null, MemoryExportTarget? Target = null);
+
+    /// <summary>Returns the directory of a scenario that writes a file.</summary>
+    /// <param name="dir">The directory the caller passed.</param>
+    /// <returns>The directory.</returns>
+    /// <exception cref="InvalidOperationException">No directory was passed.</exception>
+    private static TestDir _Require(TestDir? dir)
+    {
+        if (dir is null)
+        {
+            throw new InvalidOperationException("A DuckDB scenario writes a file and needs a TestDir.");
+        }
+
+        return dir;
+    }
 
     /// <summary>The shape of a scenario.</summary>
     /// <param name="scenario">The exporter configuration.</param>
@@ -104,12 +120,12 @@ internal sealed class TextPresenceTests
     /// </summary>
     /// <param name="scenario">The exporter configuration.</param>
     /// <param name="probe">The probe factory (its stack parsed the packet).</param>
-    /// <param name="dir">The directory for file outputs.</param>
+    /// <param name="dir">The directory for file outputs; only DuckDB needs it (Parquet and PBF are exported to memory).</param>
     /// <param name="text">Whether custom texts are written.</param>
     /// <param name="representation">Whether custom representations are written.</param>
     /// <param name="treeFree">Whether the packet is parsed tree-free with the exporter's own demand.</param>
     /// <returns>The output.</returns>
-    private static Output _Export(Scenario scenario, TextProbePacketFactory probe, TestDir dir, bool text, bool representation, bool treeFree)
+    private static Output _Export(Scenario scenario, TextProbePacketFactory probe, TestDir? dir, bool text, bool representation, bool treeFree)
     {
         ExportContent content = probe.FlatContent(_ShapeOf(scenario), text, representation);
         string name = Invariant($"{scenario}_{treeFree}_{text}_{representation}");
@@ -119,7 +135,7 @@ internal sealed class TextPresenceTests
             case Scenario.DuckDbAllFields:
             case Scenario.DuckDbSelectedFields:
             {
-                string path = dir.FilePath(name + ".duckdb");
+                string path = _Require(dir).FilePath(name + ".duckdb");
                 using DuckDbExporter exporter = DuckDbExporter.CreateBuilder().ToFile(path).WithContent(content)
                     .WithWriteMode(ExportWriteMode.Synchronous).Build();
                 probe.Feed(exporter, treeFree);
@@ -131,12 +147,12 @@ internal sealed class TextPresenceTests
             case Scenario.ParquetAllFields:
             case Scenario.ParquetSelectedFields:
             {
-                string path = dir.FilePath(name);
-                using ParquetExporter exporter = ParquetExporter.CreateBuilder().ToDirectory(path).WithContent(content)
+                MemoryExportTarget target = new(seekable: true);
+                using ParquetExporter exporter = ParquetExporter.CreateBuilder().ToTarget(target).WithContent(content)
                     .WithWriteMode(ExportWriteMode.Synchronous).Build();
                 probe.Feed(exporter, treeFree);
                 exporter.OnFinish();
-                return new Output(path, string.Empty);
+                return new Output(string.Empty, string.Empty, Target: target);
             }
 
             case Scenario.PbfStandardHierarchy:
@@ -146,15 +162,15 @@ internal sealed class TextPresenceTests
             case Scenario.PbfColumnarAllFields:
             case Scenario.PbfColumnarSelectedFields:
             {
-                string path = dir.FilePath(name + ".pbf");
+                using MemoryStream stream = new();
                 PbfExportFormat format = scenario is Scenario.PbfStandardHierarchy or Scenario.PbfStandardAllFields or Scenario.PbfStandardSelectedFields
                     ? PbfExportFormat.Standard
                     : PbfExportFormat.Columnar;
-                using PbfExporter exporter = PbfExporter.CreateBuilder().ToFile(path).WithFormat(format).WithCompressed(false)
+                using PbfExporter exporter = PbfExporter.CreateBuilder().ToStream(stream).WithFormat(format).WithCompressed(false)
                     .WithContent(content).WithWriteMode(ExportWriteMode.Synchronous).Build();
                 probe.Feed(exporter, treeFree);
                 exporter.OnFinish();
-                return new Output(path, string.Empty);
+                return new Output(string.Empty, string.Empty, stream.ToArray());
             }
 
             case Scenario.CsvWide:
@@ -196,7 +212,7 @@ internal sealed class TextPresenceTests
     /// <param name="output">What the export wrote.</param>
     /// <param name="probe">The probe factory.</param>
     /// <returns>The texts per probe field name.</returns>
-    private static Dictionary<string, Texts> _Read(Scenario scenario, Output output, TextProbePacketFactory probe)
+    private static async Task<Dictionary<string, Texts>> _ReadAsync(Scenario scenario, Output output, TextProbePacketFactory probe)
     {
         switch (scenario)
         {
@@ -207,15 +223,15 @@ internal sealed class TextPresenceTests
             case Scenario.ParquetHierarchy:
             case Scenario.ParquetAllFields:
             case Scenario.ParquetSelectedFields:
-                return TextPresenceReaders.ReadParquet(output.Path, probe);
+                return await TextPresenceReaders.ReadParquetAsync(output.Target ?? throw new InvalidOperationException("The Parquet run wrote to disk."), probe);
             case Scenario.PbfStandardHierarchy:
             case Scenario.PbfStandardAllFields:
             case Scenario.PbfStandardSelectedFields:
-                return TextPresenceReaders.ReadPbfStandard(output.Path, probe);
+                return TextPresenceReaders.ReadPbfStandard(output.Bytes!, probe);
             case Scenario.PbfColumnarHierarchy:
             case Scenario.PbfColumnarAllFields:
             case Scenario.PbfColumnarSelectedFields:
-                return TextPresenceReaders.ReadPbfColumnar(output.Path, probe);
+                return TextPresenceReaders.ReadPbfColumnar(output.Bytes!, probe);
             case Scenario.CsvWide:
                 return TextPresenceReaders.ReadCsvWide(output.Text);
             case Scenario.CsvLong:
@@ -291,10 +307,11 @@ internal sealed class TextPresenceTests
     public async Task AbsentTextsAreAbsenceAndSetTextsAreTheirTextInEveryFastFormat(Scenario scenario)
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("text_presence");
 
-        Dictionary<string, Texts> tree = _Read(scenario, _Export(scenario, probe, dir, text: true, representation: true, treeFree: false), probe);
-        Dictionary<string, Texts> free = _Read(scenario, _Export(scenario, probe, dir, text: true, representation: true, treeFree: true), probe);
+        Output treeOutput = _Export(scenario, probe, dir: null, text: true, representation: true, treeFree: false);
+        Output freeOutput = _Export(scenario, probe, dir: null, text: true, representation: true, treeFree: true);
+        Dictionary<string, Texts> tree = await _ReadAsync(scenario, treeOutput, probe);
+        Dictionary<string, Texts> free = await _ReadAsync(scenario, freeOutput, probe);
 
         // The expectation is the dissector's own setting: nothing is replaced by a default text, nothing is invented for an absent
         // one, and an empty text stays distinguishable from an absent one in the same packet.
@@ -321,10 +338,12 @@ internal sealed class TextPresenceTests
     public async Task AbsentTextsAreNullAndSetTextsAreTheirTextInDuckDbAndParquet(Scenario scenario)
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("text_presence_columnar");
+        using TestDir? dir = scenario is Scenario.DuckDbHierarchy or Scenario.DuckDbAllFields or Scenario.DuckDbSelectedFields
+            ? new("text_presence_columnar")
+            : null;
 
-        Dictionary<string, Texts> tree = _Read(scenario, _Export(scenario, probe, dir, text: true, representation: true, treeFree: false), probe);
-        Dictionary<string, Texts> free = _Read(scenario, _Export(scenario, probe, dir, text: true, representation: true, treeFree: true), probe);
+        Dictionary<string, Texts> tree = await _ReadAsync(scenario, _Export(scenario, probe, dir, text: true, representation: true, treeFree: false), probe);
+        Dictionary<string, Texts> free = await _ReadAsync(scenario, _Export(scenario, probe, dir, text: true, representation: true, treeFree: true), probe);
 
         await Assert.That(_Render(tree)).IsEqualTo(_Render(TextProbePacketFactory.Expected));
         await Assert.That(_Render(free)).IsEqualTo(_Render(tree));
@@ -433,15 +452,14 @@ internal sealed class TextPresenceTests
 
     /// <summary>Exports three probe packets (texts, no texts, texts again) with a PBF exporter of the given layout.</summary>
     /// <param name="probe">The probe factory.</param>
-    /// <param name="dir">The directory of the output file.</param>
     /// <param name="format">The PBF layout.</param>
-    /// <returns>The path of the finished file.</returns>
+    /// <returns>The bytes of the finished file.</returns>
     /// <exception cref="InvalidOperationException">The exporter refused a probe packet.</exception>
-    private static string _ExportThreeProbePackets(TextProbePacketFactory probe, TestDir dir, PbfExportFormat format)
+    private static byte[] _ExportThreeProbePackets(TextProbePacketFactory probe, PbfExportFormat format)
     {
-        string path = dir.FilePath(Invariant($"three_{format}.pbf"));
+        using MemoryStream stream = new();
         ExportContent content = probe.FlatContent(ExportShape.AllFields);
-        using PbfExporter exporter = PbfExporter.CreateBuilder().ToFile(path).WithFormat(format).WithCompressed(false)
+        using PbfExporter exporter = PbfExporter.CreateBuilder().ToStream(stream).WithFormat(format).WithCompressed(false)
             .WithContent(content).WithWriteMode(ExportWriteMode.Synchronous).Build();
         foreach (bool omit in new[] { false, true, false })
         {
@@ -452,7 +470,7 @@ internal sealed class TextPresenceTests
         }
 
         exporter.OnFinish();
-        return path;
+        return stream.ToArray();
     }
 
     /// <summary>
@@ -464,10 +482,9 @@ internal sealed class TextPresenceTests
     public async Task APbfColumnarColumnHoldsOneEntryPerRowWithAbsentRowsBetweenThePresentOnes()
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("text_rows_pbf_columnar");
 
-        string path = _ExportThreeProbePackets(probe, dir, PbfExportFormat.Columnar);
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        byte[] file = _ExportThreeProbePackets(probe, PbfExportFormat.Columnar);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         Dictionary<string, string> rows = [];
         Dictionary<string, bool> hasTextColumn = [];
         foreach (PbfField columnField in blocks.SelectMany(static block => block).Where(static field => field.Number == Numbers.ColumnarFieldColumns))
@@ -499,10 +516,9 @@ internal sealed class TextPresenceTests
     public async Task APbfStandardRecordHasATextFieldOnlyInThePacketsWhoseDissectorSetOne()
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("text_rows_pbf_standard");
 
-        string path = _ExportThreeProbePackets(probe, dir, PbfExportFormat.Standard);
-        (_, List<List<PbfField>> blocks) = PbfFileScanner.Read(path);
+        byte[] file = _ExportThreeProbePackets(probe, PbfExportFormat.Standard);
+        (_, List<List<PbfField>> blocks) = PbfFileScanner.FromBytes(file);
         int textFieldId = probe.IdOf("txp.text").Value;
         List<string> perPacket = [];
         IEnumerable<PbfField> packets = blocks.SelectMany(static block => block)
@@ -544,11 +560,10 @@ internal sealed class TextPresenceTests
     public async Task AnEmptyTextIsAQuotedEmptyCsvCellAndAnAbsentTextIsAnEmptyUnquotedCell()
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("text_empty_csv");
 
         foreach (Scenario scenario in new[] { Scenario.CsvWide, Scenario.CsvLong, Scenario.CsvHierarchy })
         {
-            Output output = _Export(scenario, probe, dir, text: true, representation: true, treeFree: false);
+            Output output = _Export(scenario, probe, dir: null, text: true, representation: true, treeFree: false);
             Dictionary<string, TextPresenceReaders.CsvCell[]> cells = _CsvTextCells(scenario, output.Text);
 
             // txp.empty has an empty text and an empty representation: the cell is ""; txp.plain has none: nothing between the delimiters.
@@ -676,12 +691,11 @@ internal sealed class TextPresenceTests
     public async Task TheJsonTreeWritesAnEmptyTextAsAnEmptyStringAndNoKeyForAnAbsentOne()
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("text_empty_json");
 
         foreach (Scenario scenario in new[] { Scenario.JsonPrettyTree, Scenario.JsonArrayTree, Scenario.JsonCompactTree })
         {
-            string json = _Export(scenario, probe, dir, text: true, representation: true, treeFree: false).Text;
-            Dictionary<string, Texts> texts = _Read(scenario, new Output(string.Empty, json), probe);
+            string json = _Export(scenario, probe, dir: null, text: true, representation: true, treeFree: false).Text;
+            Dictionary<string, Texts> texts = await _ReadAsync(scenario, new Output(string.Empty, json), probe);
 
             await Assert.That(texts["txp.empty"].Text).IsEqualTo(string.Empty);
             await Assert.That(texts["txp.empty"].Representation).IsEqualTo(string.Empty);
@@ -704,15 +718,14 @@ internal sealed class TextPresenceTests
     public async Task PbfStandardWritesNoTextFieldsWhenTheSwitchesAreOff(Scenario scenario)
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("text_switch_pbf_standard");
 
-        Output off = _Export(scenario, probe, dir, text: false, representation: false, treeFree: false);
-        Output on = _Export(scenario, probe, dir, text: true, representation: true, treeFree: false);
+        Output off = _Export(scenario, probe, dir: null, text: false, representation: false, treeFree: false);
+        Output on = _Export(scenario, probe, dir: null, text: true, representation: true, treeFree: false);
 
-        await Assert.That(TextPresenceReaders.PbfStandardHasField(off.Path, Numbers.FieldValueText)).IsFalse();
-        await Assert.That(TextPresenceReaders.PbfStandardHasField(off.Path, Numbers.FieldCustomText)).IsFalse();
-        await Assert.That(TextPresenceReaders.PbfStandardHasField(on.Path, Numbers.FieldValueText)).IsTrue();
-        await Assert.That(TextPresenceReaders.PbfStandardHasField(on.Path, Numbers.FieldCustomText)).IsTrue();
+        await Assert.That(TextPresenceReaders.PbfStandardHasField(off.Bytes!, Numbers.FieldValueText)).IsFalse();
+        await Assert.That(TextPresenceReaders.PbfStandardHasField(off.Bytes!, Numbers.FieldCustomText)).IsFalse();
+        await Assert.That(TextPresenceReaders.PbfStandardHasField(on.Bytes!, Numbers.FieldValueText)).IsTrue();
+        await Assert.That(TextPresenceReaders.PbfStandardHasField(on.Bytes!, Numbers.FieldCustomText)).IsTrue();
     }
 
     /// <summary>Proves that PBF columnar writes no text or representation column when both switches are off, and writes both when on.</summary>
@@ -725,15 +738,14 @@ internal sealed class TextPresenceTests
     public async Task PbfColumnarWritesNoTextColumnsWhenTheSwitchesAreOff(Scenario scenario)
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("text_switch_pbf_columnar");
 
-        Output off = _Export(scenario, probe, dir, text: false, representation: false, treeFree: false);
-        Output on = _Export(scenario, probe, dir, text: true, representation: true, treeFree: false);
+        Output off = _Export(scenario, probe, dir: null, text: false, representation: false, treeFree: false);
+        Output on = _Export(scenario, probe, dir: null, text: true, representation: true, treeFree: false);
 
-        await Assert.That(TextPresenceReaders.PbfColumnarHasColumn(off.Path, Numbers.ColumnCustomRepresentations)).IsFalse();
-        await Assert.That(TextPresenceReaders.PbfColumnarHasColumn(off.Path, Numbers.ColumnCustomTexts)).IsFalse();
-        await Assert.That(TextPresenceReaders.PbfColumnarHasColumn(on.Path, Numbers.ColumnCustomRepresentations)).IsTrue();
-        await Assert.That(TextPresenceReaders.PbfColumnarHasColumn(on.Path, Numbers.ColumnCustomTexts)).IsTrue();
+        await Assert.That(TextPresenceReaders.PbfColumnarHasColumn(off.Bytes!, Numbers.ColumnCustomRepresentations)).IsFalse();
+        await Assert.That(TextPresenceReaders.PbfColumnarHasColumn(off.Bytes!, Numbers.ColumnCustomTexts)).IsFalse();
+        await Assert.That(TextPresenceReaders.PbfColumnarHasColumn(on.Bytes!, Numbers.ColumnCustomRepresentations)).IsTrue();
+        await Assert.That(TextPresenceReaders.PbfColumnarHasColumn(on.Bytes!, Numbers.ColumnCustomTexts)).IsTrue();
     }
 
     /// <summary>Proves that CSV writes no text or representation column when both switches are off, and writes them when on.</summary>
@@ -746,11 +758,10 @@ internal sealed class TextPresenceTests
     public async Task CsvWritesNoTextColumnsWhenTheSwitchesAreOff(Scenario scenario)
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("text_switch_csv");
 
-        string header = _Export(scenario, probe, dir, text: false, representation: false, treeFree: false)
+        string header = _Export(scenario, probe, dir: null, text: false, representation: false, treeFree: false)
             .Text.Split("\r\n", StringSplitOptions.RemoveEmptyEntries)[0];
-        string onHeader = _Export(scenario, probe, dir, text: true, representation: true, treeFree: false)
+        string onHeader = _Export(scenario, probe, dir: null, text: true, representation: true, treeFree: false)
             .Text.Split("\r\n", StringSplitOptions.RemoveEmptyEntries)[0];
 
         // The long and hierarchy layouts name their text columns "custom_repr" and "custom_text"; the wide layout writes "<field>.repr"
@@ -785,11 +796,10 @@ internal sealed class TextPresenceTests
     public async Task JsonWritesNoTextKeyWhenTheSwitchesAreOff(Scenario scenario, string textKey, string representationKey)
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("text_switch_json");
 
-        string off = _Export(scenario, probe, dir, text: false, representation: false, treeFree: false).Text;
-        string treeFreeOff = _Export(scenario, probe, dir, text: false, representation: false, treeFree: true).Text;
-        string on = _Export(scenario, probe, dir, text: true, representation: true, treeFree: false).Text;
+        string off = _Export(scenario, probe, dir: null, text: false, representation: false, treeFree: false).Text;
+        string treeFreeOff = _Export(scenario, probe, dir: null, text: false, representation: false, treeFree: true).Text;
+        string on = _Export(scenario, probe, dir: null, text: true, representation: true, treeFree: false).Text;
 
         await Assert.That(off.Contains(textKey, StringComparison.Ordinal)).IsFalse();
         await Assert.That(off.Contains(representationKey, StringComparison.Ordinal)).IsFalse();
@@ -834,20 +844,19 @@ internal sealed class TextPresenceTests
     /// <summary>Proves that Parquet writes no text or representation column when both switches are off, and writes them when on.</summary>
     /// <returns>A task that completes when the assertions have passed.</returns>
     [Test]
-    [Category("Slow")]
     public async Task ParquetWritesNoTextColumnsWhenTheSwitchesAreOff()
     {
         using TextProbePacketFactory probe = new();
-        using TestDir dir = new("text_switch_parquet");
 
-        Output off = _Export(Scenario.ParquetHierarchy, probe, dir, text: false, representation: false, treeFree: false);
-        Output on = _Export(Scenario.ParquetHierarchy, probe, dir, text: true, representation: true, treeFree: false);
+        Output off = _Export(Scenario.ParquetHierarchy, probe, dir: null, text: false, representation: false, treeFree: false);
+        Output on = _Export(Scenario.ParquetHierarchy, probe, dir: null, text: true, representation: true, treeFree: false);
 
         // txp.both has a representation and a text (see the DuckDB test): the switched-on file is the positive control.
-        string offFile = Path.Combine(off.Path, "fields", Invariant($"field_{probe.IdOf("txp.both").Value}.parquet"));
-        string onFile = Path.Combine(on.Path, "fields", Invariant($"field_{probe.IdOf("txp.both").Value}.parquet"));
-        await using ParquetReader offReader = await ParquetReader.CreateAsync(offFile);
-        await using ParquetReader onReader = await ParquetReader.CreateAsync(onFile);
+        string entry = Invariant($"fields/field_{probe.IdOf("txp.both").Value}.parquet");
+        using MemoryStream offStream = new(off.Target!.Bytes(entry));
+        using MemoryStream onStream = new(on.Target!.Bytes(entry));
+        await using ParquetReader offReader = await ParquetReader.CreateAsync(offStream);
+        await using ParquetReader onReader = await ParquetReader.CreateAsync(onStream);
 
         await Assert.That(string.Join(',', offReader.Schema.GetDataFields().Select(static field => field.Name)))
             .IsEqualTo("packet_id,node_id,value");
